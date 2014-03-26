@@ -1,0 +1,1361 @@
+= V4 Outline MultiLine NoSorting TabWidth=30
+
+H="Medicare costs last 5 years to merge with oop costs"
+/* This file totals Medicare costs in last 5 years of life and merges it with the out of pocket spending data file C:\data\oop\oop_resp_sp_restri_24m
+
+out of pocket spending data file oop_resp_sp_restri_24m.dta created in code in "adjusted oop" heading section of oop_05_21_2013.txt in C:\code
+
+Merges on variable id from oop dataset. This variable is defined in the file oop_05_21_2013.txt in tab "income,assest and wealth for resp in -2 core,-1core in SAS,part1" as
+id=hhid*1000+pn;
+
+*/
+
+
+/*Set up file paths that will be used*/
+
+*Working data directory defined;
+%let work_folder=C:\data\oop\mc_working;
+libname int_data "&work_folder";
+
+*Final data directory defined;
+%let final_folder=C:\data\oop\mc_final;
+libname fnl_data "&final_folder";
+
+%let report_path=C:\projects\oop\report;
+
+/*new hrs cms id cross walk from cms 02/08/2012
+RG updated file path for CMS crosswalk file*/
+libname medi "C:\data\cms_DUA_25000";
+proc contents data=medi.hrscms2008;
+run;
+
+*File path for oop data;
+%let oop_folder=C:\data\oop;
+libname oop "&oop_folder";
+
+/*File path for raw data
+These are copied from the Hospice impact project documents saved here:
+C:\projects\Hospice_impact_on_utilization\raw_data
+Copied over on 9/26/2013 by RG
+Folder contains reference wage index adjustment files*/
+%let raw_folder=C:\data\oop\raw_data;
+libname raw_data "&raw_folder";
+
+H="Check xwalk ID vs oop ID"
+
+*Check for missing ID values in xwalk, none found;
+data BID_MTSI_1;
+set medi.hrscms2008 ;
+*create id variable to be comparable with id in oop data;
+id=hhidpn+0;
+run;
+proc sql;
+select * from BID_MTSI_1
+where id=.;
+quit;
+
+*Check for duplicate IDs in xwalk, none found;
+proc sort data=BID_MTSI_1 nodupkey;
+by id;
+run;
+
+*SAS Output;
+proc sql;
+*Count of observations with xwalk ID in xwalk file only;
+select count(*) from BID_MTSI_1
+where id>0;
+*Count of observations with missing xwalk ID;
+select count(*) from BID_MTSI_1
+where id=.;
+quit;
+
+
+/****************************************************/
+/****************************************************/
+/*Create tables that merge oop with xwalk file on id*/
+/****************************************************/
+/****************************************************/
+
+proc sql;
+create table test1 as
+select * from oop.oop_resp_sp_restri_24m
+where id not in (select id from BID_MTSI_1);
+quit;
+*Note 999 observations in oop data file do not have xwalk id number;
+
+proc sql;
+create table test2 as
+select medicare_id_yes_n2, hhidpn_n2,age_died_ge65 from test1;
+quit;
+
+
+/*exit_re_0 table created to match oop file w/ xwalk  file by id
+table has 5 columns: id , birth_date and death_date, death_year, merged_year from oop files and bid_hrs_10 from xwalk file
+Bring in additional variables to be used later*/
+proc sql;
+create table exit_re_0 as
+select a.id,a.birth_date,a.death_date,a.merged_year,a.death_year,b.bid_hrs_10 from 
+oop.oop_resp_sp_restri_24m a
+left join 
+bid_mtsi_1 b
+on a.id=b.id;
+quit;
+
+
+
+
+H="Set up denominator file data, check vs oop, keep age ge 70 at death"
+/************************************************************************
+*************************************************************************
+Create merged Medicare denominator file 2000-2008, set year variable
+Clean BID field removing HRS prefix
+*************************************************************************
+************************************************************************/
+
+data int_data.dn_2000_2008;
+set  medi.dn_2000 medi.dn_2001 medi.dn_2002 medi.dn_2003 
+medi.dn_2004 medi.dn_2005 medi.dn_2006 medi.dn_2007 medi.dn_2008;
+year=2000+RFRNC_YR;
+bid_n=substr(trim(left(BID_HRS)),4,6)+0;
+BID=bid_n;
+
+/************************************************************************
+*************************************************************************
+Clean birth_date, death_date in date format from denominator file
+*************************************************************************
+************************************************************************/
+
+/*note we can't use dob dod from CMS denominator file since a lot of them are missing,they should come from restricted file*/
+if substr(trim(left(DEATH_DT)),1,1)~="0"  then do;
+death_year=substr(trim(left(DEATH_DT)),1,4)+0;
+death_month=substr(trim(left(DEATH_DT)),5,2)+0;
+death_day=substr(trim(left(DEATH_DT)),7,2)+0;
+death_date=mdy(death_month,death_day,death_year);
+end;
+if substr(trim(left(BENE_DOB)),1,1)~="0"  then do;
+birth_year=substr(trim(left(BENE_DOB)),1,4)+0;
+birth_month=substr(trim(left(BENE_DOB)),5,2)+0;
+birth_day=substr(trim(left(BENE_DOB)),7,2)+0;
+birth_date=mdy(birth_month,birth_day,birth_year);
+end;
+run;
+
+/************************************************************************
+*************************************************************************
+Identify those observatons that 1. died during the survey time period
+2. are over 70 years old and 3. have medicare xwalk ids
+per the denominator file and HRS.
+*************************************************************************
+************************************************************************/
+
+*Temp file created in Work for denominator file 2000-2008;
+*sorts by ID and year;
+proc sort data=int_data.dn_2000_2008 out=dn_2000_20082  nodupkey;
+by BID_HRS year;
+run;
+
+*Temp file of last (latest year) entry in denominator file;
+*Outputs a count of observations;
+data dn_last_year;
+set dn_2000_20082;
+by BID_HRS year;
+if last.BID_HRS then output;
+run;
+
+*Frequency table from denominator file of last entries;
+*11,000+ obs in 2008 for last year, because those are people who don't have a death date;
+proc freq data=dn_last_year;
+table death_year year;
+run;
+
+/*3998 meet the age >=70*/
+*create table of observations 70 or older of age when died;
+proc sql;
+create table oop_re_age_ge70 as
+select * from exit_re_0
+where (death_date-birth_date)/365.25>=70;
+quit;
+
+/*3631 ids of 3998 have the cross walk ids.*/
+*create table of observations that have died that have xwalk id;
+proc sql;
+create table oop_age_ge70_in_mc as
+select * from oop_re_age_ge70 
+where id in 
+(select id from BID_MTSI_1);
+quit;
+
+/************************************************************************
+*************************************************************************
+merge observations that died, age>70 with the xwalk file
+*************************************************************************
+************************************************************************/
+
+*frequency of merged_year variable from oop_re_age_ge70_in_mc above;
+proc freq;
+table merged_year;
+run;
+
+/*inner join because if one don't have the cross walk in bid, we won't know whether they met dn's medicare part a and part b eligibility,then drop those ids*/
+ proc sql;
+create table hrsid_bid as 
+select a.*
+ from 
+ oop_re_age_ge70 a inner join
+ BID_MTSI_1 b
+ on a.id=b.id;
+ quit;
+
+*frequency of obs that died with mc xwalk id;
+ proc freq data=hrsid_bid;
+ table merged_year;
+ run;
+/*3631 have the corresponding bid in medicare data
+That is all of the age 70 or older when died observations*/
+ /*Note that we get the death date and birth dates come from oop data, don't use the dates that are in the dn file*/
+
+
+H="Check to see if medicare and no hmo for 5 yrs before death"
+/***********************************************************
+************************************************************
+Determine which observations get dropped from sample because they either (a) don't have medicare the whole 60 months before death or (b) have HMO sometime in the last 60 months before death
+************************************************************
+***********************************************************/
+
+/*Count of oop observations with entries in denominator file: 3602*/
+ proc sql;
+ select count(distinct BID_hrs_10) from hrsid_bid
+ where BID_hrs_10 in (select distinct bid_hrs from dn_2000_20082) ;
+ quit;
+
+/*new table adding mc monthly buyin and hmo status to hrs file w/ xwalk id added, for year of death per hrs
+Count observations in denominator file with death year: 3534*/
+proc sql;
+create table dn_death_y as select
+a.*,b.buyin12,b.year,b.HMOIND12,b.bid_n
+from hrsid_bid a inner join
+dn_2000_20082 b
+on trim(left(a.BID_hrs_10))=trim(left(b.BID_hrs))
+and a.death_year=b.year;
+quit;
+
+proc freq data=dn_death_y;
+table death_year;
+run;
+proc sql;
+select count(distinct bid_n) from dn_death_y;
+quit;
+
+/*Since look back is 5 years, create table of observations with death year is 2005 and later: 1575 observations left*/
+proc sql;
+create table dn_death_y_05 as
+select * from dn_death_y 
+where death_year>2004 ;
+quit;
+
+/*note death month should from restricted file
+This trims the buyin12 and hmo12 variables to only have values
+entered prior to the patient's death using the death date from HRS*/
+data dn_death_y2;
+set dn_death_y_05;
+death_month=month(death_date);
+if length(trim(left(buyin12)))=12 and death_month>0 then do;
+buyin_dy=substr(trim(left(buyin12)),1,death_month);
+hmo_dy=substr(trim(left(HMOIND12)),1,death_month);
+end;
+else do;
+buyin_dy=trim(left(buyin12));
+hmo_dy=trim(left(HMOIND12));
+end;
+run;
+*all observations have death month;
+proc means n;
+var death_month;
+run;
+*freq table of death month;
+proc freq data=dn_death_y2;
+table death_month;
+run;
+
+/*Now match dn files from 1 year before death
+Matches hrs entry for year died with the previous year's mc denominator file, pulling in buy in and hmo indicator
+to determine mc elgible throughout study time period*/
+proc sql;
+create table dn_death_y_1bef as select
+a.*,
+b.year as death_year_l1,
+b.buyin12 as buyin12_l1,
+b.HMOIND12 as HMOIND12_l1
+from dn_death_y2 a inner join
+dn_2000_20082 b
+on trim(left(a.BID_hrs_10))=trim(left(b.BID_hrs))
+and 0<a.year-b.year<=1 order by a.bid_n,year;
+quit;
+
+/*Now match dn files from 2 years before death
+Matches hrs entry for year died with the previous year's mc denominator file, pulling in buy in and hmo indicator
+to determine mc elgible throughout study time period
+Use _l2 to denote year prior to death (death year less 2)
+Don't lose any observations*/
+proc sql;
+create table dn_death_y_2bef as select
+a.*,
+b.year as death_year_l2,
+b.buyin12 as buyin12_l2,
+b.HMOIND12 as HMOIND12_l2
+from dn_death_y_1bef a inner join
+dn_2000_20082 b
+on trim(left(a.BID_hrs_10))=trim(left(b.BID_hrs))
+and 1<a.year-b.year<=2 order by a.bid_n,year;
+quit;
+
+/*Now match dn files from 3 years before death
+Matches hrs entry for year died with the previous year's mc denominator file, pulling in buy in and hmo indicator
+to determine mc elgible throughout study time period
+Use _l2 to denote 2 years prior to death (death year less 2)
+Don't lose any observations*/
+proc sql;
+create table dn_death_y_3bef as select
+a.*,
+b.year as death_year_l3,
+b.buyin12 as buyin12_l3,
+b.HMOIND12 as HMOIND12_l3
+from dn_death_y_2bef a inner join
+dn_2000_20082 b
+on trim(left(a.BID_hrs_10))=trim(left(b.BID_hrs))
+and 2<a.year-b.year<=3 order by a.bid_n,year;
+quit;
+
+/*Now match dn files from 4 years before death
+Matches hrs entry for year died with the previous year's mc denominator file, pulling in buy in and hmo indicator
+to determine mc elgible throughout study time period
+Use _l3 to denote 3 years prior to death (death year less 2)
+Lose one observations: 1574*/
+proc sql;
+create table dn_death_y_4bef as select
+a.*,
+b.year as death_year_l4,
+b.buyin12 as buyin12_l4,
+b.HMOIND12 as HMOIND12_l4
+from dn_death_y_3bef a inner join
+dn_2000_20082 b
+on trim(left(a.BID_hrs_10))=trim(left(b.BID_hrs))
+and 3<a.year-b.year<=4 order by a.bid_n,year;
+quit;
+
+/*Finally, match dn files from 5 years before death
+Matches hrs entry for year died with the previous year's mc denominator file, pulling in buy in and hmo indicator
+to determine mc elgible throughout study time period
+Use _l5 to denote 5 years prior to death (death year less 5)
+Don't lose any observations*/
+proc sql;
+create table dn_death_y_5bef as select
+a.*,
+b.year as death_year_l5,
+b.buyin12 as buyin12_l5,
+b.HMOIND12 as HMOIND12_l5
+from dn_death_y_4bef a inner join
+dn_2000_20082 b
+on trim(left(a.BID_hrs_10))=trim(left(b.BID_hrs))
+and 4<a.year-b.year<=5 order by a.bid_n,year;
+quit;
+
+**************************************************
+**************************************************
+**************************************************
+**************************************************
+/*create variable that has entries for full 60 months pre-death for buyin and hmo variables by combining death year and years prior to death*/
+data all_insurance;
+set dn_death_y_5bef;
+*merge individual year variables into single variable;
+buyin_60_l=trim(left(buyin12_l5))||trim(left(buyin12_l4))||trim(left(buyin12_l3))||trim(left(buyin12_l2))||trim(left(buyin12_l1))||trim(left(buyin_dy));
+hmo_60_l=trim(left(hmoind12_l5))||trim(left(hmoind12_l4))||trim(left(hmoind12_l3))||trim(left(hmoind12_l2))||trim(left(hmoind12_l1))||trim(left(hmo_dy));
+buylength=length(buyin_60_l);
+hlength=length(hmo_60_l);
+*trim so merged variable is 60 char long to reflect 60 months before death;
+buyin_60_lr=reverse(trim(buyin_60_l));
+hmo_60_lr=reverse(trim(hmo_60_l));
+buyin_60r=substr(trim(left(buyin_60_lr)),1,60);
+hmo_60r=substr(trim(left(hmo_60_lr)),1,60);
+buyin_60=reverse(trim(buyin_60r));
+hmo_60=reverse(trim(hmo_60r));
+buylength2=length(buyin_60);
+hlength2=length(hmo_60);
+*create indicator variable for mc coverage 0=no, 1=yes;
+if length(buyin_60)=60 then do;
+if indexc(buyin_60,"0","1","2","A","B") then part_ab_5y=0;
+if indexc(buyin_60,"0","1","2","A","B")=0 then part_ab_5y=1;
+end;
+*create indicator variable for hmo coverage 0=no, 1=yes;
+if length(hmo_60)=60 then do;
+if index(hmo_60,"000000000000000000000000000000000000000000000000000000000000") then hmo_5y=0;
+if index(hmo_60,"000000000000000000000000000000000000000000000000000000000000")=0 then hmo_5y=1;
+end;
+
+proc freq;
+table death_year*hmo_5y;
+run;
+
+proc freq;
+table death_year*part_ab_5y;
+run;
+
+proc sql outobs=100;
+select hmo_60,buyin_60,count(*) from all_insurance
+where  part_ab_5y=1 and hmo_5y=1;
+quit;
+
+proc means n;
+var hmo_5y part_ab_5y;
+run;
+
+/*1154 of the 1574 observations meet the mc parts a and b coverage and no hmo criteria
+Save this as a permanent dataset in the final data subfolder for the project*/
+*create table of observations meeting mc and no hmo requirement;
+
+proc sql;
+create table fnl_data.meet_criteria_5yr as
+select * from all_insurance
+where part_ab_5y=1 and hmo_5y=0;
+quit;
+
+
+
+H="Report on how to get final sample size"
+/*report on how to get to final sample size
+Requirements are:
+1. age at death => 70
+2. have xwalk id
+3. have medicare parts a and b for 60 months prior to death
+4. do not have hmo coverage for 60 months prior to death*/
+
+ods rtf body ="&report_path.\oop_N_ids_eligible.rtf";
+proc sql;
+title "total N from oop 2002-2008 dataset";
+select count(*) from oop.oop_resp_sp_restri_24m;
+
+*age requirement;
+title "meet age>=70";
+/*3998 meet the age >=70*/
+select count(*) from exit_re_0
+where (death_date-birth_date)/365.25>=70;
+
+*mc xwalk id requirement;
+/*3631 ids of 3998 have xwalk ids.*/
+title "have the corresponding cross walk bid-hrsid";
+select count(*) from oop_re_age_ge70 
+where id in 
+(select id from BID_MTSI_1);
+
+*death date Jan 1 2005 and later to get full 60 month mc claims information;
+/* 1574 ids of 3631*/
+title "those who died on or after 01/01/2005 since the earliest available cms data is 2000";
+select count(*) from dn_death_y 
+where death_year>2004 ;
+
+*have insurance information for last 60 months of life;
+title "have dn information on last 60 months insurance ";
+select count(*) from all_insurance;
+title "those with hmo in the last 60 months";
+select count(*) from all_insurance where hmo_5y=1 ;
+title "those with no hmo without part a and part b in the whole last 60 months";
+select count(*) from all_insurance where hmo_5y<1 and part_ab_5y<=0 ;
+
+title "final N, 1574-394-41=1139";
+select count(*) from fnl_data.meet_criteria_5yr; 
+quit;
+ods rtf close;
+
+
+H="Set up medpar mc data"
+/************************************************************************
+*************************************************************************
+Medpar 2000-2008 files
+Starts with individual year files mp_2000, etc. saved in 
+*************************************************************************
+************************************************************************/
+
+*note there is no SGMT_CNT in medpar so commented out below;
+%let source=mp;
+*/prints first 10 rows of mp_2000 file, just select variables listed below;
+proc sql outobs=10;
+select BID_HRS, ADMSNDT,DSCHRGDT,loscnt/*,SGMT_CNT*/ from medi.&source._2000;
+quit;
+
+*creates merged medpar file 2000-2008 years;
+data int_data.&source._2000_2008;
+set medi.&source._2000 medi.&source._2001 medi.&source._2002 medi.&source._2003 
+medi.&source._2004 medi.&source._2005 medi.&source._2006 medi.&source._2007 medi.&source._2008;
+*formats dates for admission and discharge;
+admit_date=datejul(ADMSNDT);
+if substr(trim(left(DSCHRGDT)),1,1) in ("1","2") then do;
+disch_date=datejul(DSCHRGDT);
+end;
+
+admit_year=year(admit_date);
+
+*calculate discharge date if null from admit date and los;
+if disch_date=. then disch_date=admit_date+loscnt;
+*format ID in this medpar file to match xwalk file;
+bid_n=substr(trim(left(BID_HRS)),4,6)+0;
+disch_year=year(disch_date);
+
+run;
+
+*Check for and remove dupicates;
+proc sort data=int_data.&source._2000_2008 out=temp2  nodupkey;
+by BID_n admit_date disch_date pmt_amt;
+run;
+
+/*create table bid of just observations that had multiple observations
+that match on id, admit date and discharge date
+They have different payment amounts though b/c of previous step*/
+proc sql;
+create table bid as
+select BID_n,admit_date, disch_date,count(*)
+from int_data.&source._2000_2008 group by
+BID_n,admit_date, disch_date having count(*)>1;
+
+*prints list of observations where match on id, admit date and disch date;
+select BID_n,admit_date, disch_date from int_data.&source._2000_2008
+where bid_n in (select bid_n from bid)
+;
+quit;
+
+* Variable list:
+MSNDT ADMSNDT CHAR Documentation 
+MEDPAR_ADMSN_DT: MEDPAR Admission Date 
+DSCHRGDT DSCHRGDT CHAR Documentation 
+MEDPAR_DSCHRG_DT: MEDPAR Discharge Date 
+loscnt;
+
+*identify observatons where discharge year is null;
+proc sql outobs=10;
+select BID_HRS, ADMSNDT,DSCHRGDT,loscnt from int_data.&source._2000_2008 where 
+disch_year=.;
+quit;
+*frequency table of admit and disch year vars;
+proc freq data=int_data.&source._2000_2008;
+table admit_year disch_year;
+run;
+
+
+H="Set up outpatient (op) mc data"
+/************************************************************************
+*************************************************************************
+Outpatient 2000-2008 files *************************************************************************
+************************************************************************/
+
+*print first 10 observations from op 2000 file;
+%let source=op;
+proc sql outobs=10;
+select BID_HRS, FROM_DT,thru_DT,pmt_amt from medi.&source._2000;
+quit;
+
+*create op merged file of 2000-2008 years;
+data int_data.&source._2000_2008;
+set medi.&source._2000 medi.&source._2001 medi.&source._2002 medi.&source._2003 
+medi.&source._2004 medi.&source._2005 medi.&source._2006 medi.&source._2007 medi.&source._2008;
+*create clean admit and discharge date variables;
+admit_date=mdy(substr(trim(left(FROM_DT)),5,2),substr(trim(left(FROM_DT)),7,2),substr(trim(left(FROM_DT)),1,4));
+disch_date=mdy(substr(trim(left(thru_DT)),5,2),substr(trim(left(thru_DT)),7,2),substr(trim(left(thru_DT)),1,4));
+
+admit_year=year(admit_date);
+
+*format ID number;
+bid_n=substr(trim(left(BID_HRS)),4,6)+0;
+if SGMT_NUM=1;
+run;
+
+/**************************************************************/
+/*The rest of these sorting steps create temp datasets to perform
+checks of the code, do not need to run them when doing final analysis
+and calculating totals for mc claims
+The dataset is so big that SAS crashes when doing all these
+sort and temp dataset steps*/
+/**************************************************************/
+
+*Check for and remove dupicates;
+proc sort data=int_data.&source._2000_2008 out=temp2  nodupkey;
+by BID_HRS admit_date disch_date pmt_amt;
+run;
+
+/*create table bid of just observations that had multiple observations
+that match on id, admit date and discharge date
+They have different payment amounts though b/c of previous step*/
+proc sql;
+create table bid as
+select bid_n,admit_date, disch_date,count(*)
+from int_data.&source._2000_2008 group by
+BID_n,admit_date, disch_date having count(*)>1;
+
+quit;
+
+proc sql;
+create table temp3 as
+select * from int_data.&source._2000_2008
+where bid_n in (select bid_n from bid) group by bid_n,admit_date having count(*)>1 order by BID_n,admit_date, disch_date;
+
+quit;
+
+H="Set up carrier (pb) mc data"
+/************************************************************************
+*************************************************************************
+Carrier (pb) 2000-2008 files 
+These claims datasets are very large so the 2000-2008 file created only
+has the variables needed in order to get the total claims charges
+This is different from the other merged claims datasets created here
+*************************************************************************
+************************************************************************/
+
+
+%let source=pb;
+proc sql outobs=10;
+select BID_HRS, FROM_DT,thru_DT,pmt_amt from medi.&source._2000;
+quit;
+
+*create individual years files with just variables that are needed;
+%macro yrs(yr=);
+data int_data.&source._&yr.temp;
+set medi.&source._&yr (keep=BID_HRS FROM_DT thru_DT pmt_amt SGMT_NUM);
+run;
+%mend;
+
+%yrs(yr=2000);
+%yrs(yr=2001);
+%yrs(yr=2002);
+%yrs(yr=2003);
+%yrs(yr=2004);
+%yrs(yr=2005);
+%yrs(yr=2006);
+%yrs(yr=2007);
+%yrs(yr=2008);
+
+
+*create combined years file;
+*Note this is different from other combined files;
+data int_data.&source._2000_2008;
+set int_data.&source._2000temp int_data.&source._2001temp 
+int_data.&source._2002temp int_data.&source._2003temp 
+int_data.&source._2004temp int_data.&source._2005temp 
+int_data.&source._2006temp int_data.&source._2007temp 
+int_data.&source._2008temp ;
+
+*create clean admit date, discharge date and admit year vars;
+admit_date=mdy(substr(trim(left(FROM_DT)),5,2),substr(trim(left(FROM_DT)),7,2),substr(trim(left(FROM_DT)),1,4));
+disch_date=mdy(substr(trim(left(thru_DT)),5,2),substr(trim(left(thru_DT)),7,2),substr(trim(left(thru_DT)),1,4));
+
+admit_year=year(admit_date);
+
+*format ID variable;
+bid_n=substr(trim(left(BID_HRS)),4,6)+0;
+if SGMT_NUM=1;
+run;
+
+
+
+
+H="Set up home health (hh) mc data"
+/************************************************************************
+*************************************************************************
+Home health (hh) 2000-2008 files *************************************************************************
+************************************************************************/
+
+%let source=hh;
+proc sql outobs=10;
+select BID_HRS, FROM_DT,thru_DT,pmt_amt from medi.&source._2000;
+quit;
+
+*create combined 2000-2008 data file;
+data int_data.&source._2000_2008;
+set medi.&source._2000 medi.&source._2001 medi.&source._2002 medi.&source._2003 
+medi.&source._2004 medi.&source._2005 medi.&source._2006 medi.&source._2007 medi.&source._2008;
+
+*clean admit and discharge date and admit year variables;
+admit_date=mdy(substr(trim(left(FROM_DT)),5,2),substr(trim(left(FROM_DT)),7,2),substr(trim(left(FROM_DT)),1,4));
+disch_date=mdy(substr(trim(left(thru_DT)),5,2),substr(trim(left(thru_DT)),7,2),substr(trim(left(thru_DT)),1,4));
+
+admit_year=year(admit_date);
+
+*format ID variable;
+bid_n=substr(trim(left(BID_HRS)),4,6)+0;
+if SGMT_NUM=1;
+run;
+
+H="Set up durable medical equip. (dm) mc data"
+\*******************************************************
+*******************************************************
+Durable medical equipment (DM) medicare claim records clean up
+*******************************************************
+*******************************************************/
+
+%let source=dm;
+proc sql outobs=10;
+select BID_HRS, FROM_DT,thru_DT,pmt_amt from medi.&source._2000;
+quit;
+
+*create combined 2000-2008 data file;
+data int_data.&source._2000_2008;
+set medi.&source._2000 medi.&source._2001 medi.&source._2002 medi.&source._2003 
+medi.&source._2004 medi.&source._2005 medi.&source._2006 medi.&source._2007 medi.&source._2008;
+
+*clean admit date, discharge date and admit year variables;
+admit_date=mdy(substr(trim(left(FROM_DT)),5,2),substr(trim(left(FROM_DT)),7,2),substr(trim(left(FROM_DT)),1,4));
+disch_date=mdy(substr(trim(left(thru_DT)),5,2),substr(trim(left(thru_DT)),7,2),substr(trim(left(thru_DT)),1,4));
+
+admit_year=year(admit_date);
+disch_year=year(disch_date);
+
+*Format ID variable;
+bid_n=substr(trim(left(BID_HRS)),4,6)+0;
+if SGMT_NUM=1;
+run;
+
+*Check for and remove duplicates;
+proc sort data=int_data.&source._2000_2008 out=temp2  nodupkey;
+by BID_HRS admit_date disch_date pmt_amt;
+run;
+
+proc sql outobs=10;
+select distinct SGMT_CNT,count(*) from int_data.&source._2000_2008 group by SGMT_CNT;
+quit;
+
+* Find observations with null for discharge year;
+proc sql outobs=10;
+select BID_HRS, admit_date,disch_date  from int_data.&source._2000_2008 where 
+disch_year=.;
+quit;
+* Table of discharge year and admit year;
+proc freq;
+table admit_year disch_year;
+run;
+
+H="Set up hospice (hs) mc data"
+\*******************************************************
+*******************************************************
+Hospice (HS) medicare claim records clean up
+*******************************************************
+*******************************************************/
+
+%let source=hs;
+proc sql outobs=10;
+select BID_HRS, FROM_DT,thru_DT,pmt_amt from medi.&source._2000;
+quit;
+
+*create combined 2000-2008 data file;
+data int_data.&source._2000_2008;
+set medi.&source._2000 medi.&source._2001 medi.&source._2002 medi.&source._2003 
+medi.&source._2004 medi.&source._2005 medi.&source._2006 medi.&source._2007 medi.&source._2008;
+
+*clean admit date, discharge date and admit year variables;
+admit_date=mdy(substr(trim(left(FROM_DT)),5,2),substr(trim(left(FROM_DT)),7,2),substr(trim(left(FROM_DT)),1,4));
+disch_date=mdy(substr(trim(left(thru_DT)),5,2),substr(trim(left(thru_DT)),7,2),substr(trim(left(thru_DT)),1,4));
+
+admit_year=year(admit_date);
+disch_year=year(disch_date);
+
+
+*Format ID variable;
+bid_n=substr(trim(left(BID_HRS)),4,6)+0;
+if SGMT_NUM=1;
+run;
+
+*Check for and remove duplicates;
+proc sort data=int_data.&source._2000_2008 out=temp2  nodupkey;
+by BID_HRS admit_date disch_date pmt_amt;
+run;
+
+proc sql outobs=10;
+select distinct SGMT_CNT,count(*) from int_data.&source._2000_2008 group by SGMT_CNT;
+quit;
+
+
+* Find observations with null for discharge year;
+proc sql outobs=10;
+select BID_HRS, ADMSNDT,DSCHRGDT,loscnt from int_data.&source._2000_2008 where 
+disch_year=.;
+quit;
+* Table of discharge year and admit year;
+proc freq;
+table admit_year disch_year;
+run;
+
+H="Medpar mc spending total"
+*Check to make sure all obs in hrsid_bid are in oop file;
+proc sql ;
+create table test3 as
+select id from hrsid_bid where id not in 
+(select id from oop.oop_resp_sp_restri_24m);
+quit;
+
+*Check to see 3602 observations in hrsid_bid are observations in the denominator file;
+proc sql;
+select count(distinct BID_hrs_10) from hrsid_bid
+where BID_hrs_10 in (select distinct bid_hrs from dn_2000_20082) ;
+quit;
+
+
+/**********************************************************/
+/**********************************************************/
+/*totals from mp file*/
+/*Note: variable SSLSSNF from mp claims is N=Skilled nursing facility*/
+/*Two totals are calculated - one for skilled nursing facility claims
+and one for all other claims in the mp file (inpatient claims)*/
+/**********************************************************/
+/**********************************************************/
+
+%macro mp(month_n=,days_start=,days_bef_death=,source=,equ=);
+%let source0=mp;
+
+/*identify claims where entire claim is within the 60 months prior to death*/
+proc sql;
+create table &source._meet as select a.*,b.death_date
+from int_data.&source0._2000_2008(where=(trim(left(SSLSSNF))&equ.="N")) a inner join
+fnl_data.meet_criteria_5yr b
+on trim(left(a.bid_hrs))=trim(left(b.BID_hrs_10))
+and &days_start<=b.death_date-a.admit_date<=&days_bef_death;
+quit;
+
+/*identify claims that span 60 months prior to death (admission date is prior to start 
+of 60 months but discharge date is within the 60 month window*/
+proc sql;
+create table &source._meet2 as select a.*,b.death_date
+from int_data.&source0._2000_2008(where=(trim(left(SSLSSNF))&equ.="N")) a inner join
+fnl_data.meet_criteria_5yr b
+on trim(left(a.bid_hrs))=trim(left(b.BID_hrs_10))
+and b.death_date-a.admit_date>&days_bef_death and b.death_date-a.disch_date<=&days_bef_death;
+quit;
+
+/*identify fraction of claims that span 60 month period that should be attributed to the 60 month period
+by just using the fraction of time that was included in the span*/
+data &source._meet3;
+set &source._meet2;
+pct_6m=(disch_date-(death_date-&days_bef_death))/(disch_date-admit_date);
+array list pmt_amt passthru;
+do over list;
+if list=. then list=0;
+/*scale the partial claims by the time within the 60 month period*/
+list=list*pct_6m;
+end;
+
+run;
+
+/*
+adjust for inflation,
+1.502	1999
+1.447	2000
+1.381	2001
+1.314	2002
+1.258	2003
+1.198	2004
+1.143	2005
+1.098	2006
+1.042	2007
+1.000	2008
+*/
+
+/*create table merging both the claims fully in the 5 year period and those partially in that time
+adjust for inflation here also*/
+data &source._cost;
+set &source._meet &source._meet3;
+array list pmt_amt passthru;
+do over list;
+if list=. then list=0;
+end;
+if year(admit_date)>=2008 then rate=1;
+if year(admit_date)=2007 then rate=1.042;
+if year(admit_date)=2006 then rate=1.098;
+if year(admit_date)=2005 then rate=1.143;
+if year(admit_date)=2004 then rate=1.198;
+if year(admit_date)=2003 then rate=1.258;
+if year(admit_date)=2002 then rate=1.314;
+if year(admit_date)=2001 then rate=1.381;
+if year(admit_date)=2000 then rate=1.447;
+if year(admit_date)<=1999 then rate=1.502;
+
+
+&source._paid_by_mc=rate*(pmt_amt+passthru);
+run;
+
+*calculates total of mc charges for the claim type by hrs bid;
+proc sql;
+create table &source._pay as select distinct bid_hrs,sum(&source._paid_by_mc) as &source._paid_by_mc
+from &source._cost group by bid_hrs;
+quit;
+
+*merges the totals above with the hrs dataset that meets the 5 year criteria;
+proc sql;
+create table &source as select
+a.bid_hrs_10,a.id,coalesce(b.&source._paid_by_mc,0) as &source._paid_by_mc_5yr
+from fnl_data.meet_criteria_5yr a
+left join
+ &source._pay b
+ on trim(left(a.BID_hrs_10))=trim(left(b.bid_hrs));
+ quit;
+
+  proc sort data=&source ;
+ by BID_hrs_10;
+ run;
+%mend;
+;
+
+/*Runs macro to get total for the SNF claims*/
+%mp(days_start=0,days_bef_death=(365.25*5),source=snf,equ= );
+/*Runs macro to get total for the inpatient (not SNF) claims*/
+%mp(days_start=0,days_bef_death=(365.25*5),source=ip,equ=~ );
+
+/*************************************************************************/
+/*Simple check to view one of the HRS id's claims that are totaled to get the snf number
+Just picked an ID number to use*/
+/*************************************************************************/
+
+proc sql;
+create table test25 as
+select * from int_data.mp_2000_2008 
+where bid_hrs="HRS000108";
+quit;
+
+proc sql;
+create table test26 as
+select * from test25 
+where SSLSSNF="N";
+quit;
+
+
+H="Other types of mc spending totals"
+/*macro to calculate totals for the claims that are not in medpar files*/
+%Macro all_other(source=,month_n=,days_start=,days_bef_death=);
+
+/*identify claims where entire claim is within the 60 months prior to death*/
+proc sql;
+create table &source._meet as select a.*
+from int_data.&source._2000_2008 a inner join
+fnl_data.meet_criteria_5yr b
+on trim(left(a.BID_hrs))=trim(left(b.BID_hrs_10))
+and &days_start<=b.death_date-a.admit_date<=&days_bef_death;
+quit;
+
+/*Convert by inflation*/
+data &source._meet2;
+set &source._meet;
+/*adjust to 2008 dollar*/
+if year(admit_date)>=2008 then rate=1;
+if year(admit_date)=2007 then rate=1.042;
+if year(admit_date)=2006 then rate=1.098;
+if year(admit_date)=2005 then rate=1.143;
+if year(admit_date)=2004 then rate=1.198;
+if year(admit_date)=2003 then rate=1.258;
+if year(admit_date)=2002 then rate=1.314;
+if year(admit_date)=2001 then rate=1.381;
+if year(admit_date)=2000 then rate=1.447;
+if year(admit_date)<=1999 then rate=1.502;
+
+&source._paid_by_mc=rate*(pmt_amt);
+run;
+
+/*Calculate total mc payments by ID*/
+proc sql;
+create table &source._pay as select distinct BID_hrs,sum(&source._paid_by_mc) as &source._paid_by_mc
+from &source._meet2 group by BID_hrs;
+quit;
+
+/*merge in mc totals with full oop dataset*/
+proc sql;
+create table &source&month_n as select
+a.BID_hrs_10,coalesce(b.&source._paid_by_mc,0) as &source._paid_by_mc&month_n 
+from fnl_data.meet_criteria_5yr a
+left join
+ &source._pay b
+ on trim(left(a.BID_hrs_10))=trim(left(b.BID_hrs));
+ quit;
+
+ proc sort data=&source&month_n ;
+ by BID_hrs_10;
+ run;
+ %mend;
+
+/******************************************************************/
+/* Run the macro over the mc claims files for 5 years prior to death*/
+/******************************************************************/
+
+ %all_other(source=op,month_n=_5yr,days_start=0,days_bef_death=(365*5));
+  %all_other(source=pb,month_n=_5yr,days_start=0,days_bef_death=(365*5));
+   %all_other(source=hh,month_n=_5yr,days_start=0,days_bef_death=(365*5));
+    %all_other(source=hs,month_n=_5yr,days_start=0,days_bef_death=(365*5));
+     %all_other(source=dm,month_n=_5yr,days_start=0,days_bef_death=(365*5));
+
+
+H="Merge mc spending subtotals into single data file"
+/******************************************************************/
+/* Merge all subtotals into a single data file */
+/******************************************************************/
+	 data int_data.costs_all;
+	 merge ip snf hh_5yr hs_5yr pb_5yr op_5yr dm_5yr;
+	 by BID_hrs_10;
+	 run;
+
+
+
+
+
+
+
+H="Adjust for wage index by patient zip code"
+/******************************************************************/
+/* Adjust subtotals for wage index */
+/******************************************************************/
+
+/******************************************************************/
+/* Pull in wage index file and clean up for states that are missing WI*/
+/******************************************************************/
+/*bring in 2008 wage index file
+Note, this pulls in a bunch of blank lines so that is why the dataset
+is so much smaller in the next step*/
+proc import datafile="C:\data\oop\raw_data\wage_index_cbsa_2008.xls"  out=int_data.wage_index 
+replace;
+run;
+
+/*deal with states that were missing wage index values in the 2008 file
+These values are the state averages using the individual cbsa values 
+data in the 2008 excel file came from, I couldn't find that exact table online*/
+data wage_index2;
+set int_data.wage_index;
+cbsa_n=cbsa_code+0;
+if trim(left(cbsa_code))~="";
+wage_index_2008=Full_Wage_Index_;
+if index(trim(left(Urban_Area_Title)),", MA")>0 then MA=1;
+if index(trim(left(Urban_Area_Title)),", NJ")>0 then NJ=1;
+if index(trim(left(Urban_Area_Title)),", RI")>0 then RI=1;
+*state 25=MA;
+if state_in_wage_index=25 then wage_index_2008=1.0953286;
+*state 34=NJ; 
+if state_in_wage_index=34 then wage_index_2008=1.092057; 
+*state 44=RI;
+if state_in_wage_index=44 then wage_index_2008=1.0783000; 
+run;
+
+*Look at observations from Rhode Island;
+proc freq data=wage_index2(where=(ri=1));
+table Urban_Area_Title;
+run;
+
+%let var=ri;
+proc means data=wage_index2;
+class &var;
+var wage_index_2008;
+run;
+
+/******************************************************************/
+/* Link CBSA codes and zip codes from the WI file*/
+/******************************************************************/
+/*Bring in xwalk file between CBSA codes and zip codes
+Note only keep variables needed from xwalk file because formats 
+are missing for some of the other text variables*/
+data zip_cb;
+set raw_data.xtract(keep=zip5 cbsa state);
+zip_n=zip5+0;
+cbsa_n=cbsa+0;
+/*If zip code is missing, add state code*/
+if zip_n~=.;
+state_n=state+0;
+run;
+
+*Remove duplicate entries for zip5 and cbsa from xwalk file;
+*Goes from 39904 to 49289 rows;
+proc sort data=zip_cb out=zip_cb2 nodupkey;
+by zip_n cbsa_n;
+run;
+
+*Check to see zip codes in a cbsa code for Rochester, NY;
+proc sql;
+select zip5, cbsa from zip_cb2
+where cbsa_n in (40380);
+quit;
+
+/*note several zip codes have multiple cbsa*/
+/*create dataset with just one entry for each zip code
+8029 zip codes have more than one cbsa code
+Just use the first one when sort*/
+proc sort data=zip_cb2 out=cbsa_zip_final nodupkey;
+by zip_n;
+run;
+
+*Check to see zip codes in a cbsa code for Rochester, NY;
+proc sql;
+select zip_n, cbsa from cbsa_zip_final
+where cbsa_n in (40380);
+quit;
+
+/******************************************************************/
+/* Create dataset with cbsa, wage index and zip code */
+/******************************************************************/
+proc sql;
+create table zip_cbsa_wage_index as
+select a.*,b.wage_index_2008 from
+cbsa_zip_final a
+left join
+wage_index2 b
+on a.cbsa_n=b.cbsa_n;
+quit;
+
+/*Check for and remove duplicates by zip - no duplicates*/
+proc sort data=zip_cbsa_wage_index out=zip_cbsa_wage_index2 nodupkey;
+by zip_n;
+run;
+
+
+/******************************************************************/
+/* Pull in zip code from oop data */
+/******************************************************************/
+
+/*Add zip code to the cost table by id*/
+proc sql;
+create table cost_zip as
+select a.*,b.zip_exit_n from 
+int_data.costs_all a
+left join 
+oop.oop_resp_sp_restri_24m b
+on a.id=b.id;
+quit;
+
+/*check for missing zip code - none missing*/
+proc means data=cost_zip NMISS N;
+var zip_exit_n;
+run;
+
+/******************************************************************/
+/* Check zip codes in oop data for matching entries in the cbsa file*/
+/******************************************************************/
+
+/* 1 observation has a zip code without an associated cbsa */
+proc sql; 
+select count(distinct cbsa) from cbsa_zip_final;
+select count(distinct zip_exit_n) from cost_zip
+where zip_exit_n not in 
+(select zip_n from cbsa_zip_final);
+quit;
+
+proc sql; 
+select count(distinct zip_n) from zip_cbsa_wage_index2
+where wage_index_2008 is null ;
+quit;
+
+proc sql; 
+select count(distinct zip_exit_n) from cost_zip
+where zip_exit_n not in 
+(select zip_n from wi_zip);
+quit;
+
+
+/******************************************************************/
+/* Bring wage index and state code into cost file by zip-cbsa*/
+/******************************************************************/
+proc sql;
+create table cost_id_wage_index as
+select a.*,b.wage_index_2008,b.state_n from 
+cost_zip a
+left join 
+zip_cbsa_wage_index2 b
+on a.zip_exit_n=b.zip_n;
+quit;
+
+/*555 observations do not have wage id by cbsa-zip*/
+proc sql; 
+select count(distinct id) from cost_id_wage_index
+where wage_index_2008 is null ;
+quit;
+
+/******************************************************************/
+/* Bring wage index into cost file by state if missing above*/
+/******************************************************************/
+/*Check for duplicates in wage index file by state*/
+proc sort data=wage_index2 out=wage_index3 nodupkey;
+by state_in_wage_index;
+run;
+
+/*Merges in wage index if there's one for the state but was missing for the zip*/
+proc sql;
+create table cost_id_wage_index2 
+as select a.*,coalesce(a.wage_index_2008,b.wage_index_2008) as wage_index_20082
+from
+cost_id_wage_index a
+left join
+wage_index3 b
+on a.state_n=b.state_in_wage_index;
+quit;
+
+/*check for missing values*/
+proc means;
+var wage_index_2008 wage_index_20082;
+run;
+
+proc sql;
+select distinct state_n ,count(*) from cost_id_wage_index2
+where wage_index_20082=. group by state_n;
+quit;
+
+proc sql;
+select distinct zip_exit_n ,count(*) from cost_id_wage_index2
+where wage_index_20082=. group by zip_exit_n;
+quit;
+
+/******************************************************************/
+/* Scale individual costs by wage index*/
+/******************************************************************/
+
+/*drop observations with no state or zip code in exit_zip_n
+since those costs cannot be scaled and other regional data cannot
+be brought in for those obs
+2 observations dropped*/
+proc sql;
+create table cost_id_wage_index3 as
+select * from cost_id_wage_index2
+where wage_index_20082~=.;
+quit;
+
+proc sort data=cost_id_wage_index3 ;
+by BID_hrs_10;
+run;
+
+/*macro to adjust prices by wage index
+Have two subtotals now - one without wage index adjustment and one with _wi is adjusted*/
+%macro wageind(ctype=);
+data costs_&ctype._wi (keep=BID_HRS_10 id &ctype._paid_by_mc_5yr &ctype._paid_by_mc_5yr_wi);
+set cost_id_wage_index3;
+&ctype._paid_by_mc_5yr_wi=&ctype._paid_by_mc_5yr/wage_index_20082;
+run;
+
+proc sort data=costs_&ctype._wi ;
+by BID_hrs_10 id;
+run;
+
+%mend;
+
+%wageind(ctype=ip);
+%wageind(ctype=snf);
+%wageind(ctype=hh);
+%wageind(ctype=hs);
+%wageind(ctype=pb);
+%wageind(ctype=op);
+%wageind(ctype=dm);
+
+/*merge individual adjusted costs into single dataset*/
+data int_data.costs_all_wi;
+merge costs_ip_wi costs_snf_wi costs_hh_wi costs_hs_wi costs_pb_wi
+ costs_op_wi costs_dm_wi;
+by BID_hrs_10 id;
+run;
+
+
+
+
+
+
+
+H="Calculate total spending "
+/******************************************************************/
+/* Create new variable for total mc spending of all types */
+/******************************************************************/
+
+data fnl_data.mc_costs_5yr;
+set int_data.costs_all_wi;
+/*total not adjusted for wage index*/
+tot_paid_by_mc_5yr=sum(of ip_paid_by_mc_5yr snf_paid_by_mc_5yr hh_paid_by_mc_5yr hs_paid_by_mc_5yr
+pb_paid_by_mc_5yr op_paid_by_mc_5yr dm_paid_by_mc_5yr);
+/*total adjusted for wage index*/
+tot_paid_by_mc_5yr_wi=sum(of ip_paid_by_mc_5yr_wi snf_paid_by_mc_5yr_wi hh_paid_by_mc_5yr_wi hs_paid_by_mc_5yr_wi
+pb_paid_by_mc_5yr_wi op_paid_by_mc_5yr_wi dm_paid_by_mc_5yr_wi);
+run;
+
+/*save version to Stata*/
+proc export data=fnl_data.mc_costs_5yr 
+outfile="C:\data\oop\mc_costs_5yr.dta" replace;
+run;
+
+H="Merge mc spending into oop file"
+/* 
+Merges subtotals and total medicare spending in last 5 years
+of life into oop dataset
+
+Two sets of totals are brought in:
+1. Adjusted for inflation only (2008 dollars)
+2. Adjusetd for inflation and wage index
+
+Note: This step is done in Stata
+
+oop+medicare totals saved as C:\data\oop\oop_resp_sp_restri_60m_mc.dta
+*/
+
+
+capture log close
+clear all
+set more off
+
+log using "C:\data\oop\report\rg_oop_mc_outline.txt", text replace
+
+cd "C:\data\oop"
+use oop_resp_sp_restri_24m.dta
+
+merge 1:1 id using mc_costs_5yr
+//check merge to see that observations with costs were merged
+sum _merge if(tot_paid_by_mc_5yr==.)
+sum _merge if(tot_paid_by_mc_5yr~=.)
+
+//Create indicator variable to indciate medicare totals present
+gen mc_total_d=0
+replace mc_total_d=1 if(_merge==3)
+drop _merge
+tab mc_total_d
+
+//Label variables for mc spending totals
+la var tot_paid_by_mc_5yr "Total mc payments in last 5 years of life"
+la var ip_paid_by_mc_5yr "Inpatient mc payments in last 5 years of life"
+la var snf_paid_by_mc_5yr "SNF mc payments in last 5 years of life"
+la var hh_paid_by_mc_5yr "Home health mc payments in last 5 years of life"
+la var hs_paid_by_mc_5yr "Hospice mc payments in last 5 years of life"
+la var pb_paid_by_mc_5yr "Carrier mc payments in last 5 years of life"
+la var op_paid_by_mc_5yr "Outpatient mc payments in last 5 years of life"
+la var dm_paid_by_mc_5yr "DME mc payments in last 5 years of life"
+
+la var tot_paid_by_mc_5yr_wi "Total wage index adj. mc payments in last 5 years of life"
+la var ip_paid_by_mc_5yr_wi "Wage index adj. Inpatient mc payments in last 5 years of life"
+la var snf_paid_by_mc_5yr_wi "Wage index adj. SNF mc payments in last 5 years of life"
+la var hh_paid_by_mc_5yr_wi "Wage index adj. Home health mc payments in last 5 years of life"
+la var hs_paid_by_mc_5yr_wi "Wage index adj. Hospice mc payments in last 5 years of life"
+la var pb_paid_by_mc_5yr_wi "Wage index adj. Carrier mc payments in last 5 years of life"
+la var op_paid_by_mc_5yr_wi "Wage index adj. Outpatient mc payments in last 5 years of life"
+la var dm_paid_by_mc_5yr_wi "Wage index adj. DME mc payments in last 5 years of life"
+
+//save dataset with costs merged in
+save oop_resp_sp_restri_60m_mc.dta,replace
+
+//local for mc costs adjusted by wage index
+local mccost tot_paid_by_mc_5yr_wi ip_paid_by_mc_5yr_wi snf_paid_by_mc_5yr_wi ///
+hh_paid_by_mc_5yr_wi hs_paid_by_mc_5yr_wi pb_paid_by_mc_5yr_wi op_paid_by_mc_5yr_wi ///
+ dm_paid_by_mc_5yr_wi 
+tabstat `mccost' if(mc_total_d==1), stat(mean sd count) col(stat)
+
+tabout death_year female race age_at_death if(mc_total_d==1) ///
+using "C:\data\oop\report\sumstats1.csv", ///
+replace sum c(mean tot_paid_by_mc_5yr_wi N tot_paid_by_mc_5yr_wi ) style(csv)
+
+//local for comorbidities present in last 24 months
+local comorb comorb_1_0d_n24m comorb_2_0d_n24m comorb_3_0d_n24m ///
+comorb_4_0d_n24m comorb_5_0d_n24m comorb_6_0d_n24m comorb_7_0d_n24m ///
+comorb_8_0d_n24m comorb_9_0d_n24m comorb_10_0d_n24m comorb_11_0d_n24m ///
+comorb_12_0d_n24m comorb_13_0d_n24m comorb_14_0d_n24m comorb_15_0d_n24m ///
+comorb_16_0d_n24m comorb_17_0d_n24m comorb_18_0d_n24m comorb_19_0d_n24m ///
+comorb_20_0d_n24m comorb_21_0d_n24m ///
+comorb_22_0d_n24m comorb_23_0d_n24m comorb_24_0d_n24m comorb_25_0d_n24m ///
+comorb_26_0d_n24m comorb_27_0d_n24m comorb_28_0d_n24m comorb_29_0d_n24m ///
+
+tabout `comorb'  if(mc_total_d==1) ///
+using "C:\data\oop\report\sumstats2.csv", ///
+replace sum c(mean tot_paid_by_mc_5yr_wi N tot_paid_by_mc_5yr_wi ) style(csv)
+
+log close
+
+
+
+
+

@@ -1,0 +1,1920 @@
+= V4 Outline MultiLine NoSorting TabWidth=30
+
+H="Medicare costs last 2 years to merge with oop costs"
+/* 
+Medicare claims 2000-2010
+Core Interviews 1998-2010
+Exit interviews 2002-2010
+OOP data 1992-2010
+
+This file gets OOP costs in last 2 years of life and Medicare costs last 2 years of life
+Merges with exit, restricted, n1 and n2 core interviews from HRS
+
+All $ are adjusted for inflation to 2010 dollars
+
+Workflow is as follows:
+1. Get dataset of interviews with mc xwalk for all decedents, exit+restricted+mc xwalk
++core n1 + core n2 (dataset is oop_int.r_x_r_n1_n2)
+2. Get dataset of OOP data for all decedents from exit and core n1 and n2 core ivws
+
+
+*/
+
+
+/*Set up file paths that will be used*/
+
+/*source dataset for OOP information 1992-2010*/
+libname oop_src "E:\data\hrs_oop_2010\received_data";
+
+/*Project working data directory */
+libname oop_int "E:\data\hrs_oop_2010\int_data";
+
+/*Final data directory */
+libname oop_fnl "E:\data\hrs_oop_2010\final_data";
+
+/*Medicare claims files - 2010*/
+libname medi 'E:\data\cms_DUA_25000_2010';
+proc contents data=medi.cmsxref2010;
+run;
+
+/*Cleaned HRS 2000-2010 datasets (core, exit and restricted SAS datasets)*/
+libname hrs_cln 'E:\data\hrs_cleaned';
+
+/*dementia probabilities*/
+libname hrs_dem 'E:\data\hrs_public_2010\dementia';
+
+/*File path for raw data
+Some are copied from the Hospice impact project documents saved here:
+C:\projects\Hospice_impact_on_utilization\raw_data
+Copied over on 9/26/2013 by RG
+Folder contains reference wage index adjustment files
+Wage index 2010 downloaded from CMS 3/24/14*/
+
+libname raw_data "C:\data\oop\raw_data";
+
+H="Pull exit and restricted interviews and mc xwalk id"
+/*
+Create respondant dataset with exit, restricted HRS,
+and medicare xwalk
+
+Resulting dataset is:
+oop_int.exit_restricted_02_to_10_v1
+*/
+
+/*******************************************************************/
+/*******************************************************************/
+/*  Bring medicare xwalk id to exit interview dataset              */
+/*******************************************************************/
+/*******************************************************************/
+
+proc contents data=hrs_cln.exit_02_to_10_dt(keep=id);
+run;
+
+data exit_1;
+set hrs_cln.exit_02_to_10_dt;
+run;
+
+/*just keep cleaned variables from exit interview*/
+data exit;
+set exit_1(keep=ID EXIT_YEAR PROXY_EXIT FEMALE MARITAL MARRIED MARITAL_SEP MARITAL_DIV MARITAL_WID MARITAL_NEV
+MARITAL_SD MARITAL_MISSING MEDICARE MEDICAREB MEDICAID CHAMPUS HMO MEDIGAP CATINSUR NHRES
+HOSPICE FREQRELG CHILD GCHIL ALLCHIL RESCHIL RESCHIL_D RESSPOUSE HHM LIVEALONE LOCATION LOC_HOSP
+ICU VENT DIALYSIS DEC_ALL DEC_LIM DEC_WHLD DEC_COMF DEC_CAT DEXP EOLDEC CAPACITY DURATION ADAPP
+ADPROB DECMAKER LWILL LW_ALL LW_LIM LW_WHLD LW_COMF LW_CAT HCP DISCUSS ADVDIR EOLPLAN
+ADL_BEDBOUND DAYS_BED_ILL ADL_DR ADL_WK ADL_BH ADL_E ADL_TX ADL_T ADL_INDEX ADL_CAT ADL_INDEPENDENT
+ADL_PARTIAL ADL_SEVERE IADL_MP IADL_GR IADL_PH IADL_RX IADL_M IADL_IND IADL_CAT IADL_INDEPENDENT
+IADL_PARTIAL IADL_SEVERE ADL_SP_HELPER ADL_OTH_HELPER IADL_SP_HELPER IADL_OTH_HELPER adl_helper_count iadl_helper_count adl_helper_1-adl_helper_7 iadl_helper_1-iadl_helper_6 HH_WORKER CANCER_HRS LUNG_HRS HEART_HRS CHF_HRS STROKE_HRS MEMORY_HRS FALLS_HRS
+INCONT_HRS PAIN_HRS HTN_HRS DM_HRS PSYCH_HRS ARTH_HRS COMOR_IN_HRS COMOR_C_HRS 
+nhres_2yr_exit nh_stays_exit nh_nights_exit nh_ins_exit e_ivw_day e_ivw_month e_ivw_year 
+e_ivw_date e_ivw_day_imp) ;
+run;
+
+
+/*HRS - CMS 2010 crosswalk initial processing 
+xwalk file: cmsxref2010.sas7bdat*/
+
+data crosswalk_1;
+set medi.cmsxref2010;
+keep bid_hrs_19 hhid pn;
+run;
+
+/*get 2 variables bid_hrs = claims id, id=HRS id*/
+data crosswalk_2;
+set crosswalk_1;
+bid_hrs=bid_hrs_19;
+id=trim(hhid)||trim(pn);
+drop hhid pn;
+drop bid_hrs_19;
+run;
+
+proc sort data= crosswalk_2;
+by bid_hrs;
+run;
+
+proc sort data=exit_1;
+by id;
+run;
+
+/*bring in xwalk id to exit interview dataset*/
+proc sql;
+create table exit_xwalk as select
+a.*,b.bid_hrs from
+exit a
+left join
+crosswalk_2 b
+on a.id=b.id;
+quit;
+
+/*check for missing xwalk ids
+913 r's with exit interviews are missing xwalk ids*/
+data check1;
+set exit_xwalk ;
+if bid_hrs ='';
+run;
+
+/*create indicator for having xwalk id*/
+data exit_xwalk_1;
+set exit_xwalk;
+xwalk_yes=.;
+if bid_hrs ='' then xwalk_yes=0;
+if bid_hrs~='' then xwalk_yes=1;
+run;
+
+proc freq;
+table xwalk_yes*exit_year /missprint;
+run;
+
+/*keep a version before renaming so can use it later to get spouse exit*/
+data exit_xwalk_2;
+set exit_xwalk_1;
+run;
+
+
+/*******************************************************************/
+/*******************************************************************/
+/* Rename variables with  _x suffix for exit dataset  */
+/*******************************************************************/
+/*******************************************************************/
+*options macrogen mprint mlogic;
+%macro rename2(lib,dsn,pre,first);
+options pageno=1 nodate;
+proc contents data=&lib..&dsn;
+title "Before Renaming All Variables";
+run;
+proc sql noprint;
+select nvar into :num_vars
+from dictionary.tables
+where libname="&LIB" and
+memname="&DSN";
+select distinct(name) into :var1-
+:var%TRIM(%LEFT(&num_vars))
+from dictionary.columns
+where libname="&LIB" and
+memname="&DSN" ;
+quit;
+run;
+proc datasets library=&LIB;
+modify &DSN;
+rename
+%do i=1 %to &num_vars;
+
+&&var&i=&first.&&var&i.&&pre.
+%end;
+;
+quit;
+run;
+options pageno=1 nodate;
+proc contents data=&lib..&dsn;
+title "After Renaming All Variables";
+run;
+%mend ;
+%rename2(WORK,EXIT_XWALK_2,_x,);
+
+data exit_xwalk_3;
+set exit_xwalk_2;
+rename id_x=id;
+rename bid_hrs_x=BID_hrs;
+rename xwalk_yes_x=xwalk_yes;
+run;
+
+proc print data=exit_xwalk_3(keep=id BID_hrs obs=10);
+run;
+proc sort data=exit_xwalk_3;
+by id;
+run;
+
+/*******************************************************************/
+/*******************************************************************/
+/*  Merge the exit w/ mc xwalk with the restricted dataset         */
+/*******************************************************************/
+/*******************************************************************/
+
+proc contents data=hrs_cln.restricted_v2010(keep=id);
+run;
+
+data restricted;
+set hrs_cln.restricted_v2010;
+if id~='';
+run;
+
+proc sort data=exit_xwalk_3 nodupkey;
+by id;
+run;
+
+/*replace id with character id so restricted dataset can be merged in
+to the exit dataset*/
+data restricted_2;
+set restricted;
+length id_new $9 hhid $6 pn $3;
+id_new=hhid||pn;
+drop id;
+rename id_new=id;
+run;
+
+/*get restricted dataset that is just decedents*/
+proc sql;
+create table restricted_r as select * from
+restricted_2 where id in (select id from exit_xwalk_3);
+quit;
+
+
+/*rename variables in restricted dataset with  _e suffix*/
+%rename2(WORK,RESTRICTED_R,_e,);
+
+data restricted_r3;
+set restricted_r;
+rename id_e=id;
+age_at_death_e=(death_date_e-birth_date_e)/365.25;
+label age_at_death_e="Age at death";
+death_year_e=year(death_date_e);
+run;
+proc print data=restricted_r3(keep=id obs=10);
+run;
+proc sort data=restricted_r3 nodupkey;
+by id;
+run;
+
+/*this dataset = 6814 decedents from 2002 - 2010 exit interviews
+containst exit, mc xwalk id, and restricted info*/
+proc sql;
+create table exit_restricted_02_to_10 as 
+select *
+from  exit_xwalk_3 a
+left join
+restricted_r3 b
+on a.id=b.id;
+quit;
+
+/*this dataset = 6814 decedents from 2002 - 2010 exit interviews*/
+data oop_int.exit_restricted_02_to_10_v1;
+set exit_restricted_02_to_10;
+if id<0 or id=. then delete;
+run;
+
+/*141 decedents missing a cause of death*/
+proc freq;
+table CAUSE_DEATH_12_N_e;
+run;
+
+proc freq;
+table death_year_e*EXIT_YEAR_x /missprint;
+run;
+
+
+
+H="Pull core interviews"
+/*Get r's n1 and n2 core interviews*/
+
+libname hrs_cln 'E:\data\hrs_cleaned';
+libname oop_int 'E:\data\hrs_oop_2010\int_data';
+
+
+/*******************************************************************/
+/*******************************************************************/
+/*  get the negative one core variables for the respondent         */
+/*******************************************************************/
+/*******************************************************************/
+
+/*full core interview dataset 1998-2010 core ivws*/
+proc contents data=hrs_cln.core_00_to_10;
+run;
+
+/*list of all core interviews before death date*/
+proc sql;
+create table r_n1_core_before_death
+as select b.*
+ from oop_int.exit_restricted_02_to_10_v1 a 
+ inner join
+hrs_cln.core_00_to_10 b
+  on a.id=b.id and a.death_date_e>b.c_ivw_date;
+  quit;
+
+proc sort data=r_n1_core_before_death ;
+by id c_ivw_date;
+run;
+
+/*keep only the n1 core interview
+6509 interviews identified
+of these, 143 are in 1998 so will not have n2 core*/
+data resp_core_n1;
+set r_n1_core_before_death;
+by id c_ivw_date;
+if last.id;
+run;
+proc freq;
+table core_year;
+run;
+
+/*******************************************************************/
+/*******************************************************************/
+/*  get the negative 2 core variables for the respondent         */
+/*******************************************************************/
+/*******************************************************************/
+/*list of all core interviews before n1 interview*/
+proc sql;
+create table r_n2_core_before_death
+as select b.*
+ from resp_core_n1 a 
+ inner join
+hrs_cln.core_00_to_10 b
+  on a.id=b.id and a.c_ivw_date>b.c_ivw_date;
+  quit;
+
+proc sort data=r_n2_core_before_death ;
+by id c_ivw_date;
+run;
+
+/*keep only the n2 core interview
+6222 interviews identified*/
+data resp_core_n2;
+set r_n2_core_before_death;
+by id c_ivw_date;
+if last.id;
+run;
+proc freq;
+table core_year;
+run;
+
+/*******************************************************************/
+/*******************************************************************/
+/*  get the negative 3 core education variable for the respondent   */
+/*******************************************************************/
+/*******************************************************************/
+/*need to do this since education is only asked during r's
+first core interview and only backfilled for an overall education
+level through 2004*/
+proc sql;
+create table r_n3_core_before_death
+as select b.educ,b.c_ivw_date,b.core_year,b.id
+ from resp_core_n2 a 
+ inner join
+hrs_cln.core_00_to_10 b
+  on a.id=b.id and a.c_ivw_date>b.c_ivw_date;
+  quit;
+
+proc sort data=r_n3_core_before_death ;
+by id c_ivw_date;
+run;
+
+/*keep only the n3 core interview
+4692 interviews identified*/
+data resp_core_n3;
+set r_n3_core_before_death;
+by id c_ivw_date;
+if last.id;
+run;
+proc freq;
+table core_year;
+run;
+
+/*******************************************************************/
+/* Dementia probabilities */
+/*******************************************************************/
+/*merge in the HRS dementia probabilities at each core year
+Use dementia year - 1 to get the core year that the probability is based on*/
+proc contents data=hrs_dem.pdem_withvarnames;
+run;
+
+data dem_1;
+set hrs_dem.pdem_withvarnames;
+core_year_imp = prediction_year-1;
+/*create id variable as concat of hhid and pn*/
+length id $9 hhid $6 pn $3;
+id=hhid||pn;
+run;
+
+proc freq;
+table core_year_imp;
+run;
+
+proc sort data=dem_1 nodupkey;
+by id core_year_imp;
+run;
+
+proc sort data=resp_core_n1 nodupkey;
+by id core_year;
+run;
+
+/*n1 core interviews*/
+proc sql;
+create table resp_dem_core_n1
+as select a.*,b.prob_dementia from 
+resp_core_n1 a left join
+dem_1 b
+on a.id=b.id and a.core_year=b.core_year_imp;
+quit;
+
+proc sort data=resp_core_n2 nodupkey;
+by id core_year;
+run;
+
+/*n2 core interviews*/
+proc sql;
+create table resp_dem_core_n2
+as select a.*,b.prob_dementia from 
+resp_core_n2 a left join
+dem_1 b
+on a.id=b.id and a.core_year=b.core_year_imp;
+quit;
+
+
+
+H="Merge HRS interview datasets, get n1, n2, restr, exit, mc xw"
+/*merges the restricted/exit/xwalk dataset with the n1, n2 and n3 core datasets
+resulting dataset is saved as
+oop_int.r_x_r_n1_n2
+*/
+
+/*First rename variables*/
+
+%rename2(WORK,RESP_DEM_CORE_N1,_n1,);
+%rename2(WORK,RESP_DEM_CORE_N2,_n2,);
+%rename2(WORK,RESP_CORE_N3,_n3,);
+
+/*r's n1 core*/
+data resp_core_n1_a;
+set RESP_DEM_CORE_N1;
+rename id_n1 = id;
+run;
+
+proc sort data=resp_core_n1_a nodupkey;
+by id;
+run;
+
+/*r's n2 core*/
+data resp_core_n2_a;
+set RESP_DEM_CORE_N2;
+rename id_n2 = id; 
+run;
+
+proc sort data=resp_core_n2_a nodupkey;
+by id;
+run;
+
+/*r's n3 core*/
+data resp_core_n3_a;
+set RESP_CORE_N3;
+rename id_n3 = id; 
+run;
+
+proc sort data=resp_core_n3_a nodupkey;
+by id;
+run;
+
+/*merge datasets*/
+/*Merge r's interviews with exit/restricted dataset*/
+/*Sort r's exit and restricted dataset including r and s xwalk ids*/
+proc sort data=oop_int.exit_restricted_02_to_10_v1 out=r_ex_restr;
+by id;
+run;
+
+data oop_int.r_x_r_n1_n2;
+merge r_ex_restr resp_core_n1_a resp_core_n2_a resp_core_n3_a;
+by id;
+run;
+
+
+H="Get OOP data for exit, n1 and n2 cores"
+/*
+Collects OOP data for decedents from exit, n1 and n2 core interview imputations
+Dataset is oop_int.oop_x_n1_n2
+*/
+libname oop_src "E:\data\hrs_oop_2010\received_data";
+libname oop_int "E:\data\hrs_oop_2010\int_data";
+libname hrs_cln 'E:\data\hrs_cleaned';
+
+proc import datafile="E:\data\hrs_oop_2010\received_data\oopme_final_oldv.dta"  
+out=oop_1; 
+run;
+
+data oop_2 (keep=id year curr_iw_date prev_iw_date months total_OOP hospital_OOP NH_OOP 
+doctor_OOP dental_OOP patient_OOP 
+hospice_OOP RX_OOP home_OOP special_OOP non_med_OOP helper_OOP insurance_costs);
+set oop_1;
+length id $9 hhid $6 pn $3;
+id=hhid||pn;
+run;
+
+proc sort data=oop_2 nodupkey;
+by id year;
+run;
+
+data exit_2;
+set oop_int.exit_restricted_02_to_10_v1;
+keep id exit_year_x death_date_e;
+run;
+
+proc sort data=exit_2 nodupkey;
+by id exit_year_x;
+run;
+
+proc sql;
+create table exit_oop
+as select * from 
+exit_2 a left join
+oop_2 b
+on a.id=b.id and a.exit_year_x=b.year;
+quit;
+
+/*5 decedents do not have OOP imputed data from exit interviews*/
+proc freq data=exit_oop;
+table year;
+run;
+
+data exit_oop_1;
+set exit_oop;
+run;
+
+/*rename variable macro
+*options macrogen mprint mlogic;
+%macro rename2(lib,dsn,pre,first);
+options pageno=1 nodate;
+proc contents data=&lib..&dsn;
+title "Before Renaming All Variables";
+run;
+proc sql noprint;
+select nvar into :num_vars
+from dictionary.tables
+where libname="&LIB" and
+memname="&DSN";
+select distinct(name) into :var1-
+:var%TRIM(%LEFT(&num_vars))
+from dictionary.columns
+where libname="&LIB" and
+memname="&DSN" ;
+quit;
+run;
+proc datasets library=&LIB;
+modify &DSN;
+rename
+%do i=1 %to &num_vars;
+
+&&var&i=&first.&&var&i.&&pre.
+%end;
+;
+quit;
+run;
+options pageno=1 nodate;
+proc contents data=&lib..&dsn;
+title "After Renaming All Variables";
+run;
+%mend ;
+
+/*rename exit oop variables with _x suffix*/
+%rename2(WORK,EXIT_OOP_1,_x,);
+
+data EXIT_OOP_2;
+set EXIT_OOP_1;
+rename id_x=id;
+run;
+
+/***************************************************************************/
+/***************************************************************************/
+/*Get OOP data from n1 and n2 core interviews before death*/
+/***************************************************************************/
+/***************************************************************************/
+
+proc freq data=exit_oop_2;
+table year_x;
+run;
+
+/*first get all OOP data for decedents for their core interviews (before the exit ivw)*/
+proc sql;
+create table all_c_oop_deced
+as select b.* from
+exit_oop_2 a inner join
+oop_2 b
+on a.id=b.id and a.curr_iw_date_x>b.curr_iw_date;
+quit;
+
+proc sort data=all_c_oop_deced;
+by id curr_iw_date;
+run;
+
+/*keep the n1 core interview*/
+data oop_n1;
+set all_c_oop_deced;
+by id curr_iw_date;
+if last.id;
+run;
+
+proc freq;
+table year;
+run;
+
+/*now get the n2 core interview*/
+proc sql;
+create table oop_n2_1
+as select b.* from
+oop_n1 a inner join
+all_c_oop_deced b
+on a.id=b.id and a.curr_iw_date>b.curr_iw_date;
+quit;
+
+proc sort data=oop_n2_1;
+by id curr_iw_date;
+run;
+
+/*keep the n2 core interview*/
+data oop_n2;
+set oop_n2_1;
+by id curr_iw_date;
+if last.id;
+run;
+
+proc freq;
+table year;
+run;
+
+/*rename the n1 and n2 oop dataset variables*/
+%rename2(WORK,OOP_N1,_n1,);
+%rename2(WORK,OOP_N2,_n2,);
+
+data OOP_N1_2;
+set OOP_N1;
+rename id_n1=id;
+run;
+
+data OOP_N2_2;
+set OOP_N2;
+rename id_n2=id;
+run;
+
+/*merge the 3 OOP datasets so one observation per row, exit, n1 and n2 OOP year data*/
+proc sort data=EXIT_OOP_2 nodupkey;
+by id;
+run;
+
+proc sort data=OOP_N1_2 nodupkey;
+by id;
+run;
+
+proc sort data=OOP_N2_2 nodupkey;
+by id;
+run;
+
+proc sql;
+create table oop_x_n1 as select * from 
+exit_oop_2 a left join
+oop_n1_2 b
+on a.id=b.id ;
+quit;
+
+proc sql;
+create table oop_int.oop_x_n1_n2 as select * from
+oop_x_n1 a left join
+oop_n2_2 b
+on a.id=b.id ;
+quit;
+
+/*5 have no exit OOP data, 118 missing n1 and 250 missing n2*/
+proc freq;
+table year_x year_n1 year_n2;
+run;
+
+H="OOP spending totals 24 months before death"
+/*Start with dataset of OOP data exit, core n1 and n2
+Adjust all OOP spending for inflation to 2010 dollars
+Get totals by OOP spending type over the 24 months prior to death date
+
+Final dataset is oop_int.oop_24m
+*/
+
+/**********************************************************************/
+/**********************************************************************/
+/*First adjust all spending for inflation to 2010 dollars
+Uses CPI for Medical Services from BLS website, accessed 2/5/2014*/
+/**********************************************************************/
+/**********************************************************************/
+
+/*create macro to run through all OOP variables to adjust for inflation*/
+data adjust_oop_start;
+set oop_int.oop_x_n1_n2;
+run;
+
+%macro infl(wave,start);
+data adjust_oop&wave.;
+set adjust_oop&start.;
+Array list
+           NH_OOP&wave.
+           RX_OOP&wave.
+           dental_OOP&wave.
+           doctor_OOP&wave.
+           helper_OOP&wave.
+           home_OOP&wave.
+           hospice_OOP&wave.
+           hospital_OOP&wave.
+           non_med_OOP&wave.
+           patient_OOP&wave.
+           special_OOP&wave.
+           total_OOP&wave.
+;
+Do over list;
+if year&wave.=1998 then List=list*1.66616;
+if year&wave.=2000 then List=list*1.54589;
+if year&wave.=2002 then List=list*1.40392;
+if year&wave.=2004 then List=list*1.27983;
+if year&wave.=2006 then List=list*1.17287;
+if year&wave.=2008 then List=list*1.06823;
+end;
+run;
+%mend;
+
+%infl(wave=_x,start=_start);
+%infl(wave=_n1,start=_x);
+%infl(wave=_n2,start=_n1);
+
+/*final dataset is adjust_oop_n2 with all adjused for inflation*/
+proc means data=adjust_oop_start;
+var NH_OOP_x home_OOP_n1 total_OOP_n2;
+run;
+
+proc means data=adjust_oop_n2;
+var NH_OOP_x home_OOP_n1 total_OOP_n2;
+run;
+
+/**********************************************************************/
+/**********************************************************************/
+/*Adjust RX OOP and totals
+RX is capped at $300/month */
+/**********************************************************************/
+/**********************************************************************/
+data adjust_rx_start;
+set adjust_oop_n2;
+run;
+
+%macro rxadj(wave,start);
+data adjust_rx&wave.;
+set adjust_rx&start.;
+rx_old&wave.=rx_OOP&wave.
+total_old&wave.=total_OOP&wave.;
+if rx_OOP&wave./months&wave.>300 then rx_OOP&wave.=months&wave.*300;
+total_OOP&wave.=total_old&wave.-rx_old&wave.+rx_OOP&wave.;
+other_oop&wave.=total_oop&wave. -insurance_costs&wave.- hospital_oop&wave. -doctor_oop&wave. -rx_oop&wave.- nh_oop&wave. -helper_oop&wave.;
+run;
+%mend;
+
+%rxadj(wave=_x,start=_start);
+%rxadj(wave=_n1,start=_x);
+%rxadj(wave=_n2,start=_n1);
+
+proc means data=adjust_rx_n2;
+var RX_OOP_x/months_x RX_old_x/months_x other_oop_n1;
+run;
+
+/*set nursing home spending to 0 where missing in core interviews*/
+data nh_adj;
+set adjust_rx_n2;
+if nh_oop_n1=. then nh_oop_n1=0;
+if nh_oop_n2=. then nh_oop_n2=0;
+run;
+
+/**********************************************************************/
+/**********************************************************************/
+/*is the interview date from the Exit interview the death date
+It is the month of death???*/
+data zzzdates;
+set nh_adj;
+format death_date_e_x date9. ;
+run;
+/**********************************************************************/
+/**********************************************************************/
+
+
+/**********************************************************************/
+/**********************************************************************/
+/*Get totals over 24month period*/
+/**********************************************************************/
+/**********************************************************************/
+/*exit months range 1-202, n1 months=12-145, n2 months=12-152*/
+proc freq data=nh_adj;
+table months_x months_n1 months_n2;
+run;
+
+/*get totals of waves OOP for 24 months or more*/
+%let list=total_OOP helper_OOP hospital_OOP nh_OOP doctor_OOP rx_OOP
+ insurance_costs other_oop total_old rx_old;
+
+%macro all;
+
+%do i=1 %to 10;
+%let var=%scan(&list,&i);
+
+data temp_&i;
+set nh_adj;
+
+/*if all 24 months accounted for in exit interview*/
+if months_x>=24  then do;
+&var._24m=&var._x*24/months_x;
+end;
+
+/*if need n1+ exit*/
+if months_x+months_n1>=24 and &var._24m=. then do;
+&var._24m=&var._x+&var._n1*(24-months_x)/(months_n1);
+end;
+
+/*if need n1+n2+ exit*/
+if months_x+months_n1+months_n2>=24 and &var._24m=. then do;
+&var._24m=&var._x+&var._n1+&var._n2*(24-months_x-months_1)/months_n2);
+end;
+
+keep id &var._24m;
+run;
+
+proc sort data=temp_&i;
+by id;
+run;
+
+%end;
+
+%mend;
+
+%all;
+
+/*merge the temporary datasets back together*/
+/*so dataset all_2 has variables for OOP spending last 24 months of life*/
+data all_2;
+merge temp_1-temp_10;
+by id;
+run;
+
+proc means data=all_2(drop=id);
+var _all_;
+run;
+
+/*save this dataset*/
+data oop_int.oop_24m;
+set all_2;
+run;
+
+H="Merge interviews with OOP totals"
+
+proc sort data=oop_int.oop_24m out=oop nodupkey;
+by id;
+run;
+
+proc sort data=oop_int.r_x_r_n1_n2 out=ivws nodupkey;
+by id;
+run;
+
+/*merge oop with HRS interviews*/
+proc sql;
+create table oop_int.hrs_oop_ivws as select * from
+ivws a left join
+oop  b
+on a.id=b.id;
+quit;
+
+
+
+H="Set up denominator file data, check vs oop, keep age ge 70 at death"
+/************************************************************************
+Use merged Medicare denominator file 2000-2010,
+Merged and initial cleaning done in file HRS_2010_MC_claims.txt saved
+saved under general HRS processing directory
+************************************************************************/
+
+proc sort data=medi.dn_2000_2010 out=dn_2000_20102  nodupkey;
+by BID year;
+run;
+
+*Last (latest year) entry in denominator file;
+data dn_last_year;
+set dn_2000_20102(rename=bid=bid_hrs);
+by BID_hrs year;
+if last.BID_hrs then output;
+run;
+
+*Frequency table from denominator file of last entries;
+*11,000+ obs in 2010 for last year, because those are people who don't have a death date;
+proc freq data=dn_last_year;
+table death_year year;
+run;
+
+/*5764 meet the age >=67
+create table of observations 67 or older of age when died per the restricted dataset*/
+proc sql;
+create table oop_re_age_ge67 as
+select * from oop_int.exit_restricted_02_to_10_v1
+where age_at_death_e>=67;
+quit;
+
+proc freq;
+table xwalk_yes;
+run;
+
+/*5375 ids of 5764 have the cross walk ids.*/
+*create table of observations that have died that have xwalk id;
+data oop_age_ge67_in_mc ;
+set oop_re_age_ge67 ;
+if xwalk_yes=1;
+run;
+
+*frequency of merged_year variable from oop_re_age_ge67_in_mc above;
+proc freq;
+table exit_year_x;
+run;
+
+/*get a dataset with just decedents exit year, death_year, death date and ids*/
+data oop_sample;
+set oop_age_ge67_in_mc ;
+keep id bid_hrs exit_year_x death_year_e death_date_e;
+
+run;
+
+H="Check to see if medicare and no hmo for 2 yrs before death"
+/***********************************************************
+************************************************************
+Determine which observations get dropped from sample because they either (a) don't have medicare the whole 24 months before death or (b) have HMO sometime in the last 24 months before death
+************************************************************
+***********************************************************/
+
+/*new table adding mc monthly buyin and hmo status to hrs file w/ xwalk id added, 
+for year of death per hrs
+Count observations in denominator file with death year: 5192*/
+proc sql;
+create table dn_death_y as select
+a.*,b.buyin12,b.year,b.HMOIND12,b.bid_n
+from oop_sample a inner join
+dn_2000_20102 b
+on trim(left(a.BID_hrs))=trim(left(b.BID_HRS_19))
+and a.death_year_e=b.year;
+quit;
+
+proc freq data=dn_death_y;
+table death_year_e;
+run;
+proc sql;
+select count(distinct bid_n) from dn_death_y;
+quit;
+
+/*Since look back is 2 years, create table of observations with death year is 2002 and later: 4477 observations left*/
+proc sql;
+create table dn_death_y_02 as
+select * from dn_death_y 
+where death_year_e>2001 ;
+quit;
+
+/*note death month should from restricted file
+This trims the buyin12 and hmo12 variables to only have values
+entered prior to the patient's death using the death date from HRS*/
+data dn_death_y2;
+set dn_death_y_02;
+death_month_e=month(death_date_e);
+if length(trim(left(buyin12)))=12 and death_month_e>0 then do;
+buyin_dy=substr(trim(left(buyin12)),1,death_month_e);
+hmo_dy=substr(trim(left(HMOIND12)),1,death_month_e);
+end;
+else do;
+buyin_dy=trim(left(buyin12));
+hmo_dy=trim(left(HMOIND12));
+end;
+run;
+
+*all observations have death month;
+proc means n;
+var death_month_e;
+run;
+*freq table of death month;
+proc freq data=dn_death_y2;
+table death_month_e;
+run;
+
+/*Now match dn files from 1 year before death
+Matches hrs entry for year died with the previous year's mc denominator file, 
+pulling in buy in and hmo indicator
+to determine mc elgible throughout study time period*/
+proc sql;
+create table dn_death_y_1bef as select
+a.*,
+b.year as death_year_l1,
+b.buyin12 as buyin12_l1,
+b.HMOIND12 as HMOIND12_l1
+from dn_death_y2 a inner join
+dn_2000_20102 b
+on trim(left(a.BID_hrs))=trim(left(b.BID_hrs_19))
+and 0<a.year-b.year<=1 order by a.bid_n,year;
+quit;
+
+/*Now match dn files from 2 years before death
+Matches hrs entry for year died with the previous year's mc denominator file, pulling in buy in and hmo indicator
+to determine mc elgible throughout study time period
+Use _l2 to denote year prior to death (death year less 2)
+3 observations do not have 2 year before denominatory file*/
+proc sql;
+create table dn_death_y_2bef as select
+a.*,
+b.year as death_year_l2,
+b.buyin12 as buyin12_l2,
+b.HMOIND12 as HMOIND12_l2
+from dn_death_y_1bef a inner join
+dn_2000_20102 b
+on trim(left(a.BID_hrs))=trim(left(b.BID_hrs_19))
+and 1<a.year-b.year<=2 order by a.bid_n,year;
+quit;
+
+**************************************************
+**************************************************
+/*create variable that has entries for full 24 months pre-death for buyin and hmo variables by combining death year and years prior to death*/
+data all_insurance;
+set dn_death_y_2bef;
+*merge individual year variables into single variable;
+buyin_24_l=trim(left(buyin12_l2))||trim(left(buyin12_l1))||trim(left(buyin_dy));
+hmo_24_l=trim(left(hmoind12_l2))||trim(left(hmoind12_l1))||trim(left(hmo_dy));
+buylength=length(buyin_24_l);
+hlength=length(hmo_24_l);
+*trim so merged variable is 24 char long to reflect 24 months before death;
+buyin_24_lr=reverse(trim(buyin_24_l));
+hmo_24_lr=reverse(trim(hmo_24_l));
+buyin_24r=substr(trim(left(buyin_24_lr)),1,24);
+hmo_24r=substr(trim(left(hmo_24_lr)),1,24);
+buyin_24=reverse(trim(buyin_24r));
+hmo_24=reverse(trim(hmo_24r));
+buylength2=length(buyin_24);
+hlength2=length(hmo_24);
+*create indicator variable for mc coverage 0=no, 1=yes;
+if length(buyin_24)=24 then do;
+if indexc(buyin_24,"0","1","2","A","B") then part_ab_2y=0;
+if indexc(buyin_24,"0","1","2","A","B")=0 then part_ab_2y=1;
+end;
+*create indicator variable for hmo coverage 0=no, 1=yes;
+if length(hmo_24)=24 then do;
+if index(hmo_24,"000000000000000000000000") then hmo_2y=0;
+if index(hmo_24,"000000000000000000000000")=0 then hmo_2y=1;
+end;
+
+proc freq;
+table death_year_e*hmo_2y;
+run;
+
+proc freq;
+table death_year_e*part_ab_2y;
+run;
+
+proc sql outobs=100;
+select hmo_24,buyin_24,count(*) from all_insurance
+where  part_ab_2y=1 and hmo_2y=1;
+quit;
+
+proc means n;
+var hmo_2y part_ab_2y;
+run;
+
+/*3330 of the 4474 observations meet the mc parts a and b coverage and no hmo criteria
+Save this as a permanent dataset*/
+*create table of observations meeting mc and no hmo requirement;
+
+proc sql;
+create table oop_int.meet_criteria_2yr as
+select * from all_insurance
+where part_ab_2y=1 and hmo_2y=0;
+quit;
+
+
+
+H="Report on how to get final sample size"
+/*report on how to get to final sample size
+Requirements are:
+1. age at death => 67
+2. have xwalk id
+3. have medicare parts a and b for 34 months prior to death
+4. do not have hmo coverage for 34 months prior to death*/
+
+ods rtf body ="E:\data\hrs_oop_2010\logs\oop_N_ids_eligible.rtf";
+proc sql;
+title "Number of decedents 2002-2010 exit interview dataset";
+select count(*) from oop_int.exit_restricted_02_to_10_v1;
+
+*age requirement;
+title "meet age>=67";
+select count(*) from oop_int.exit_restricted_02_to_10_v1
+where age_at_death_e>=67;
+
+*mc xwalk id requirement;
+title "have the corresponding cross walk bid-hrsid";
+select count(*) from oop_int.exit_restricted_02_to_10_v1 
+where (xwalk_yes=1 and age_at_death_e>=67);
+
+*death date Jan 1 2002 and later to get full 24 month mc claims information;
+title "those who died on or after 01/01/2002 since the earliest available cms data is 2000";
+select count(*) from dn_death_y 
+where death_year_e>2001 ;
+
+*have insurance information for last 24 months of life;
+title "have dn information on last 24 months insurance ";
+select count(*) from all_insurance;
+title "those with hmo in the last 24 months";
+select count(*) from all_insurance where hmo_2y=1 ;
+title "those with no hmo without part a and part b in the whole last 24 months";
+select count(*) from all_insurance where hmo_2y<1 and part_ab_2y<=0 ;
+
+title "final N, 4474-986-158=3330";
+select count(*) from oop_int.meet_criteria_2yr; 
+quit;
+ods rtf close;
+
+
+H="Merge meet criteria with oop, ivw dataset and save"
+proc sort data=oop_int.hrs_oop_ivws out=oop_ivws nodupkey;
+by id;
+run;
+
+proc sort data=oop_int.meet_criteria_2yr out=meet nodupkey;
+by id;
+run;
+
+/*merge oop / HRS interview dataset with meet criteria variables*/
+proc sql;
+create table oop_fnl.hrs_oop_ivws_meet as select * from
+oop_ivws a left join
+meet b
+on a.id=b.id;
+quit;
+
+/*save version to Stata*/
+proc export data=oop_fnl.hrs_oop_ivws_meet 
+outfile="E:\data\hrs_oop_2010\final_data\hrs_oop_ivws_meet.dta" replace;
+run;
+
+H="Medpar mc spending total"
+/*Totals are from merged claims files from 2000-2010
+Initial claims merging, processing done in HRS_2010_MC_claims.txt code
+Filed in general HRS processing code directory
+*/
+
+/**********************************************************/
+/**********************************************************/
+/*totals from mp file*/
+/*Note: variable SSLSSNF from mp claims is N=Skilled nursing facility*/
+/*Two totals are calculated - one for skilled nursing facility claims
+and one for all other claims in the mp file (inpatient claims)*/
+/**********************************************************/
+/**********************************************************/
+
+%macro mp(month_n=,days_start=,days_bef_death=,source=,equ=);
+%let source0=mp;
+
+/*identify claims where entire claim is within the 24 months prior to death*/
+proc sql;
+create table &source._meet as select a.*,b.death_date_e
+from medi.&source0._2000_2010(where=(trim(left(SSLSSNF))&equ.="N")) a inner join
+oop_int.meet_criteria_2yr b
+on trim(left(a.BID_HRS_19))=trim(left(b.BID_hrs))
+and &days_start<=b.death_date_e-a.admit_date<=&days_bef_death;
+quit;
+
+/*identify claims that span 24 months prior to death (admission date is prior to start 
+of 24 months but discharge date is within the 24 month window*/
+proc sql;
+create table &source._meet2 as select a.*,b.death_date_e
+from medi.&source0._2000_2010(where=(trim(left(SSLSSNF))&equ.="N")) a inner join
+oop_int.meet_criteria_2yr b
+on trim(left(a.BID_HRS_19))=trim(left(b.BID_hrs))
+and b.death_date_e-a.admit_date>&days_bef_death and b.death_date_e-a.disch_date<=&days_bef_death;
+quit;
+
+/*identify fraction of claims that span 24 month period that should be 
+attributed to the 24 month period
+by just using the fraction of time that was included in the span*/
+data &source._meet3;
+set &source._meet2;
+pct_24m=(disch_date-(death_date_e-&days_bef_death))/(disch_date-admit_date);
+array list pmt_amt passthru;
+do over list;
+if list=. then list=0;
+/*scale the partial claims by the time within the 24 month period*/
+list=list*pct_24m;
+end;
+
+run;
+
+/*adjust for inflation, Uses CPI for Medical Services from 
+BLS website, accessed 3/14/2014*/
+
+/*create table merging both the claims fully in the 2 year period 
+and those partially in that time
+adjust for inflation here also*/
+data &source._cost;
+set &source._meet &source._meet3;
+array list pmt_amt passthru;
+do over list;
+if list=. then list=0;
+end;
+
+if year(admit_date)>=2010 then rate=1;
+if year(admit_date)=2009 then rate=1.0350;
+if year(admit_date)=2008 then rate=1.06823;
+if year(admit_date)=2007 then rate=1.11347;
+if year(admit_date)=2006 then rate=1.17287;
+if year(admit_date)=2005 then rate=1.22119;
+if year(admit_date)=2004 then rate=1.27983;
+if year(admit_date)=2003 then rate=1.34381;
+if year(admit_date)=2002 then rate=1.40392;
+if year(admit_date)=2001 then rate=1.47492;
+if year(admit_date)=2000 then rate=1.54589;
+if year(admit_date)<=1999 then rate=1.61195;
+
+
+&source._paid_by_mc=rate*(pmt_amt+passthru);
+run;
+
+*calculates total of mc charges for the claim type by hrs bid;
+proc sql;
+create table &source._pay as select distinct bid_hrs_19,sum(&source._paid_by_mc) as &source._paid_by_mc
+from &source._cost group by BID_HRS_19;
+quit;
+
+*merges the totals above with the hrs dataset that meets the 2 year criteria;
+proc sql;
+create table &source as select
+a.BID_hrs,a.id,coalesce(b.&source._paid_by_mc,0) as &source._paid_by_mc_2yr
+from oop_int.meet_criteria_2yr a
+left join
+ &source._pay b
+ on trim(left(a.BID_hrs))=trim(left(b.bid_hrs_19));
+ quit;
+
+ proc sort data=&source ;
+ by BID_hrs;
+ run;
+%mend;
+;
+
+/*Runs macro to get total for the SNF claims*/
+%mp(days_start=0,days_bef_death=(365.25*2),source=snf,equ= );
+/*Runs macro to get total for the inpatient (not SNF) claims*/
+%mp(days_start=0,days_bef_death=(365.25*2),source=ip,equ=~ );
+
+/*************************************************************************/
+/*Simple check to view one of the HRS id's claims that are totaled to get the snf number
+Just picked an ID number to use*/
+/*************************************************************************/
+
+proc sql;
+create table test25 as
+select * from medi.mp_2000_2010 
+where bid_hrs_19="H100000006";
+quit;
+
+proc sql;
+create table test26 as
+select * from test25 
+where SSLSSNF="N";
+quit;
+
+
+H="Other types of mc spending totals"
+/*macro to calculate totals for the claims that are not in medpar files*/
+%Macro all_other(source=,month_n=,days_start=,days_bef_death=);
+
+/*identify claims where entire claim is within the 60 months prior to death*/
+proc sql;
+create table &source._meet as select a.*
+from medi.&source._2000_2010 a inner join
+oop_int.meet_criteria_2yr b
+on trim(left(a.BID_hrs_19))=trim(left(b.BID_hrs))
+and &days_start<=b.death_date_e-a.admit_date<=&days_bef_death;
+quit;
+
+/*Adjust for inflation*/
+data &source._meet2;
+set &source._meet;
+/*adjust to 2010 dollars*/
+if year(admit_date)>=2010 then rate=1;
+if year(admit_date)=2009 then rate=1.0350;
+if year(admit_date)=2008 then rate=1.06823;
+if year(admit_date)=2007 then rate=1.11347;
+if year(admit_date)=2006 then rate=1.17287;
+if year(admit_date)=2005 then rate=1.22119;
+if year(admit_date)=2004 then rate=1.27983;
+if year(admit_date)=2003 then rate=1.34381;
+if year(admit_date)=2002 then rate=1.40392;
+if year(admit_date)=2001 then rate=1.47492;
+if year(admit_date)=2000 then rate=1.54589;
+if year(admit_date)<=1999 then rate=1.61195;
+
+&source._paid_by_mc=rate*(pmt_amt);
+run;
+
+/*Calculate total mc payments by ID*/
+proc sql;
+create table &source._pay as select distinct BID_hrs_19,sum(&source._paid_by_mc) as &source._paid_by_mc
+from &source._meet2 group by BID_hrs_19;
+quit;
+
+/*merge in mc totals with full oop dataset*/
+proc sql;
+create table &source&month_n as select
+a.BID_hrs,coalesce(b.&source._paid_by_mc,0) as &source._paid_by_mc&month_n 
+from oop_int.meet_criteria_2yr a
+left join
+ &source._pay b
+ on trim(left(a.BID_hrs))=trim(left(b.BID_hrs_19));
+ quit;
+
+ proc sort data=&source&month_n ;
+ by BID_hrs;
+ run;
+ %mend;
+
+/******************************************************************/
+/* Run the macro over the mc claims files for 2 years prior to death*/
+/******************************************************************/
+
+ %all_other(source=op,month_n=_2yr,days_start=0,days_bef_death=(365*2));
+  %all_other(source=pb,month_n=_2yr,days_start=0,days_bef_death=(365*2));
+   %all_other(source=hh,month_n=_2yr,days_start=0,days_bef_death=(365*2));
+    %all_other(source=hs,month_n=_2yr,days_start=0,days_bef_death=(365*2));
+     %all_other(source=dm,month_n=_2yr,days_start=0,days_bef_death=(365*2));
+
+
+H="Merge mc spending subtotals into single data file"
+/******************************************************************/
+/* Merge all subtotals into a single data file */
+/******************************************************************/
+	 data oop_int.costs_all;
+	 merge ip snf hh_2yr hs_2yr pb_2yr op_2yr dm_2yr;
+	 by BID_hrs;
+	 run;
+
+
+
+
+
+
+
+H="Adjust for wage index by patient zip code"
+/******************************************************************/
+/* Adjust subtotals for wage index */
+/******************************************************************/
+
+/******************************************************************/
+/* Pull in wage index file and clean up for states that are missing WI*/
+/******************************************************************/
+/*bring in 2010 wage index file*/
+proc import datafile="C:\data\oop\raw_data\wage_index_cbsa_2010.xls"  out=oop_int.wage_index 
+replace;
+run;
+
+/*get RI average*/
+data wi_ri;
+set oop_int.wage_index;
+if index(trim(left(Area_Title)),", RI")>0;
+run;
+
+proc means;
+var wage_index;
+run;
+
+/*deal with states that were missing wage index values in the 2010 file
+These values are the state averages using the individual cbsa values 
+data in the 2010 excel file came from
+Note in switching from 2008 to 2010, RI is the only missing state*/
+data wage_index2;
+set oop_int.wage_index;
+cbsa_n=cbsa_code+0;
+if trim(left(cbsa_code))~="";
+wage_index_2010=Wage_Index;
+if index(trim(left(Area_Title)),", RI")>0 then RI=1;
+*state 44=RI;
+if state_in_wage_index=44 then wage_index_2010=1.0783000; 
+run;
+
+*Look at observations from Rhode Island;
+proc freq data=wage_index2(where=(ri=1));
+table Area_Title;
+run;
+
+%let var=ri;
+proc means data=wage_index2;
+class &var;
+var wage_index_2010;
+run;
+
+/******************************************************************/
+/* Link CBSA codes and zip codes from the WI file*/
+/******************************************************************/
+/*Bring in xwalk file between CBSA codes and zip codes
+Note only keep variables needed from xwalk file because formats 
+are missing for some of the other text variables*/
+data zip_cb;
+set raw_data.xtract(keep=zip5 cbsa state);
+zip_n=zip5+0;
+cbsa_n=cbsa+0;
+/*If zip code is not missing, add state code*/
+if zip_n~=.;
+state_n=state+0;
+run;
+
+*Remove duplicate entries for zip5 and cbsa from xwalk file;
+*Goes from 399045 to 49289 rows;
+proc sort data=zip_cb out=zip_cb2 nodupkey;
+by zip_n cbsa_n;
+run;
+
+*Check to see zip codes in a cbsa code for Rochester, NY;
+proc sql;
+select zip5, cbsa from zip_cb2
+where cbsa_n in (40380);
+quit;
+
+/*note several zip codes have multiple cbsa*/
+/*create dataset with just one entry for each zip code
+8029 zip codes have more than one cbsa code
+Just use the first one when sort*/
+proc sort data=zip_cb2 out=cbsa_zip_final nodupkey;
+by zip_n;
+run;
+
+*Check to see zip codes in a cbsa code for Rochester, NY;
+proc sql;
+select zip_n, cbsa from cbsa_zip_final
+where cbsa_n in (40380);
+quit;
+
+/******************************************************************/
+/* Create dataset with cbsa, wage index and zip code */
+/******************************************************************/
+
+/*for zip codes with no cbsa, wage index is left missing*/
+proc sql;
+create table zip_cbsa_wage_index as
+select a.*,b.wage_index_2010 from
+cbsa_zip_final a
+left join
+wage_index2 b
+on a.cbsa_n=b.cbsa_n;
+quit;
+
+/*Check for and remove duplicates by zip - no duplicates*/
+proc sort data=zip_cbsa_wage_index out=zip_cbsa_wage_index2 nodupkey;
+by zip_n;
+run;
+
+
+/******************************************************************/
+/* Pull in zip code from restricted data */
+/******************************************************************/
+
+data id_zip;
+set oop_int.exit_restricted_02_to_10_v1(rename=(ZIP10_2000_e=ZIP10_e));
+/*use zip code variable from restricted dataset for year of exit interview*/
+zip_exit=vvaluex("zip"||substr(trim(left(exit_year_x)),3,2)||"_E" );
+run;
+
+/*2 obs have missing zip in exit year
+They have zip in previous wave so use that*/
+data zztestzip1;
+set id_zip;
+if zip_exit = "";
+run;
+
+/*if no zip in exit year, then use zip from wave prior to exit*/
+data id_zip_2;
+set id_zip;
+if zip_exit="" then zip_exit=vvaluex("zip"||substr(trim(left(exit_year_x-2)),3,2)||"_E"  );
+run;
+
+/*check to see if obs still have missing zip - none*/
+data zztestzip2;
+set id_zip_2;
+if zip_exit = "";
+run;
+
+
+/*Add zip code to the cost table by id*/
+proc sql;
+create table cost_zip as
+select a.*,b.zip_exit from 
+oop_int.costs_all a
+left join 
+id_zip_2 b
+on a.id=b.id;
+quit;
+
+
+
+/******************************************************************/
+/* Check zip codes in oop data for matching entries in the cbsa file*/
+/******************************************************************/
+
+/* 5 observation has a zip code without an associated cbsa */
+proc sql; 
+select count(distinct cbsa) from cbsa_zip_final;
+quit;
+
+proc sql;
+select count(distinct zip_exit) from cost_zip
+where zip_exit not in 
+(select ZIP5 from cbsa_zip_final);
+quit;
+
+proc sql; 
+select count(distinct zip_n) from zip_cbsa_wage_index2
+where wage_index_2010 is null ;
+quit;
+
+proc sql; 
+select count(distinct zip_exit) from cost_zip
+where zip_exit not in 
+(select ZIP5 from zip_cbsa_wage_index2);
+quit;
+
+
+/******************************************************************/
+/* Bring wage index and state code into cost file by zip-cbsa*/
+/******************************************************************/
+proc sql;
+create table cost_id_wage_index as
+select a.*,b.wage_index_2010,b.state_n from 
+cost_zip a
+left join 
+zip_cbsa_wage_index2 b
+on a.zip_exit=b.ZIP5;
+quit;
+
+/*1604 observations do not have wage id by cbsa-zip*/
+proc sql; 
+select count(distinct id) from cost_id_wage_index
+where wage_index_2010 is null ;
+quit;
+
+/******************************************************************/
+/* Bring wage index into cost file by state if missing above*/
+/******************************************************************/
+/*Get dataset with one wage index per state*/
+proc sort data=wage_index2 out=wage_index3 nodupkey;
+by state_in_wage_index;
+run;
+
+/*Merges in wage index if there's one for the state but was missing for the zip*/
+proc sql;
+create table cost_id_wage_index2 
+as select a.*,coalesce(a.wage_index_2010,b.wage_index_2010) as wage_index_20102
+from
+cost_id_wage_index a
+left join
+wage_index3 b
+on a.state_n=b.state_in_wage_index;
+quit;
+
+/*check for missing values*/
+proc means;
+var wage_index_2010 wage_index_20102;
+run;
+
+/*23 obs have missing state so can't backfill using state wage index*/
+proc sql;
+select distinct state_n ,count(*) from cost_id_wage_index2
+where wage_index_20102=. group by state_n;
+quit;
+
+/*********************************************************/
+/* Commented out, try to backfill in more manually later */
+/*********************************************************/
+/*most of these have invalid zip codes too*/
+proc sql;
+select distinct zip_exit ,count(*) from cost_id_wage_index2
+where wage_index_20102=. group by zip_exit;
+quit;
+
+/*manually fill in state where zip code is valid and rematch on state*/
+data cost_id_wage_index2a;
+set cost_id_wage_index2;
+if wage_index_20102=. and zip_exit=10065 then state_n=36; /*NY*/
+if wage_index_20102=. and zip_exit=33596 then state_n=12; /*FL*/
+if wage_index_20102=. and zip_exit=77498 then state_n=48; /*TX*/
+if wage_index_20102=. and zip_exit=78542 then state_n=48; /*TX*/
+run;
+
+proc sql;
+create table cost_id_wage_index2b 
+as select a.*,coalesce(a.wage_index_20102,b.wage_index_20102) as wage_index_20102
+from
+cost_id_wage_index2 a
+left join
+cost_id_wage_index2a b
+on a.state_n=b.state_in_wage_index;
+quit;
+
+/*most of these have invalid zip codes too*/
+proc sql;
+select distinct zip_exit ,count(*) from cost_id_wage_index2b
+where wage_index_20082=. group by zip_exit;
+quit;
+/*********************************************************/
+/* End of Commented out                                  */
+/*********************************************************/
+
+
+/******************************************************************/
+/* Scale individual costs by wage index*/
+/******************************************************************/
+
+/*drop observations with no state or zip code in exit_zip_n
+since those costs cannot be scaled and other regional data cannot
+be brought in for those obs
+2 observations dropped*/
+proc sql;
+create table cost_id_wage_index3 as
+select * from cost_id_wage_index2
+where wage_index_20102~=.;
+quit;
+
+proc sort data=cost_id_wage_index3 ;
+by BID_hrs;
+run;
+
+/*macro to adjust prices by wage index
+Have two subtotals now - one without wage index adjustment and one with _wi is adjusted*/
+%macro wageind(ctype=);
+data costs_&ctype._wi (keep=BID_HRS id &ctype._paid_by_mc_2yr &ctype._paid_by_mc_2yr_wi);
+set cost_id_wage_index3;
+&ctype._paid_by_mc_2yr_wi=&ctype._paid_by_mc_2yr/wage_index_20102;
+run;
+
+proc sort data=costs_&ctype._wi ;
+by BID_hrs id;
+run;
+
+%mend;
+
+%wageind(ctype=ip);
+%wageind(ctype=snf);
+%wageind(ctype=hh);
+%wageind(ctype=hs);
+%wageind(ctype=pb);
+%wageind(ctype=op);
+%wageind(ctype=dm);
+
+/*merge individual adjusted costs into single dataset*/
+data oop_int.costs_all_wi;
+merge costs_ip_wi costs_snf_wi costs_hh_wi costs_hs_wi costs_pb_wi
+ costs_op_wi costs_dm_wi;
+by BID_hrs id;
+run;
+
+
+
+
+
+
+
+
+H="Calculate total spending "
+/******************************************************************/
+/* Create new variable for total mc spending of all types */
+/******************************************************************/
+
+data oop_fnl.mc_costs_2yr;
+set oop_int.costs_all_wi;
+/*total not adjusted for wage index*/
+tot_paid_by_mc_2yr=sum(of ip_paid_by_mc_2yr snf_paid_by_mc_2yr hh_paid_by_mc_2yr hs_paid_by_mc_2yr
+pb_paid_by_mc_2yr op_paid_by_mc_2yr dm_paid_by_mc_2yr);
+/*total adjusted for wage index*/
+tot_paid_by_mc_2yr_wi=sum(of ip_paid_by_mc_2yr_wi snf_paid_by_mc_2yr_wi hh_paid_by_mc_2yr_wi hs_paid_by_mc_2yr_wi
+pb_paid_by_mc_2yr_wi op_paid_by_mc_2yr_wi dm_paid_by_mc_2yr_wi);
+run;
+
+/*save version to Stata*/
+proc export data=oop_fnl.mc_costs_2yr 
+outfile="E:\data\hrs_oop_2010\final_data\mc_costs_2yr.dta" replace;
+run;
+
+H="Merge mc spending into oop file"
+/* 
+Merges subtotals and total medicare spending in last 2 years
+of life into oop dataset
+
+Two sets of totals are brought in:
+1. Adjusted for inflation only (2010 dollars)
+2. Adjusetd for inflation and 2010 wage index
+
+Note: This step is done in Stata
+
+**oop+medicare totals saved as C:\data\oop\oop_resp_sp_restri_60m_mc.dta
+*/
+
+
+capture log close
+clear all
+set mem 500m
+set more off
+
+local logpath E:\data\hrs_oop_2010\logs
+local datapath E:\data\hrs_oop_2010\final_data
+
+log using `logpath'\mc_oop_2yr_merge-LOG.txt, text replace
+
+cd `datapath'
+use hrs_oop_ivws_meet.dta
+
+merge 1:1 id using mc_costs_2yr.dta
+//check merge to see that observations with costs were merged
+sum _merge if(tot_paid_by_mc_2yr==.)
+sum _merge if(tot_paid_by_mc_2yr~=.)
+
+//Create indicator variable to indciate medicare totals present
+gen mc_total_d=0
+replace mc_total_d=1 if(_merge==3)
+drop _merge
+tab mc_total_d
+
+//Label variables for mc spending totals
+la var tot_paid_by_mc_2yr "Total mc payments in last 2 years of life"
+la var ip_paid_by_mc_2yr "Inpatient mc payments in last 2 years of life"
+la var snf_paid_by_mc_2yr "SNF mc payments in last 2 years of life"
+la var hh_paid_by_mc_2yr "Home health mc payments in last 2 years of life"
+la var hs_paid_by_mc_2yr "Hospice mc payments in last 2 years of life"
+la var pb_paid_by_mc_2yr "Carrier mc payments in last 2 years of life"
+la var op_paid_by_mc_2yr "Outpatient mc payments in last 2 years of life"
+la var dm_paid_by_mc_2yr "DME mc payments in last 2 years of life"
+
+la var tot_paid_by_mc_2yr_wi "Total wage index adj. mc payments in last 2 years of life"
+la var ip_paid_by_mc_2yr_wi "Wage index adj. Inpatient mc payments in last 2 years of life"
+la var snf_paid_by_mc_2yr_wi "Wage index adj. SNF mc payments in last 2 years of life"
+la var hh_paid_by_mc_2yr_wi "Wage index adj. Home health mc payments in last 2 years of life"
+la var hs_paid_by_mc_2yr_wi "Wage index adj. Hospice mc payments in last 2 years of life"
+la var pb_paid_by_mc_2yr_wi "Wage index adj. Carrier mc payments in last 2 years of life"
+la var op_paid_by_mc_2yr_wi "Wage index adj. Outpatient mc payments in last 2 years of life"
+la var dm_paid_by_mc_2yr_wi "Wage index adj. DME mc payments in last 2 years of life"
+
+//save dataset with costs merged in
+save oop_resp_sp_restri_24m_mc.dta,replace
+
+//local for mc costs adjusted by wage index
+local mccost tot_paid_by_mc_2yr_wi ip_paid_by_mc_2yr_wi snf_paid_by_mc_2yr_wi ///
+hh_paid_by_mc_2yr_wi hs_paid_by_mc_2yr_wi pb_paid_by_mc_2yr_wi op_paid_by_mc_2yr_wi ///
+ dm_paid_by_mc_2yr_wi 
+tabstat `mccost' if(mc_total_d==1), stat(mean sd count) col(stat)
+
+tabout death_year_e female_x race_e /*age_at_death_e*/ if(mc_total_d==1) ///
+using "C:\data\oop\report\sumstats1.csv", ///
+replace sum c(mean tot_paid_by_mc_2yr_wi N tot_paid_by_mc_2yr_wi ) style(csv)
+
+/*
+//local for comorbidities present in last 24 months
+local comorb comorb_1_0d_n24m comorb_2_0d_n24m comorb_3_0d_n24m ///
+comorb_4_0d_n24m comorb_5_0d_n24m comorb_6_0d_n24m comorb_7_0d_n24m ///
+comorb_8_0d_n24m comorb_9_0d_n24m comorb_10_0d_n24m comorb_11_0d_n24m ///
+comorb_12_0d_n24m comorb_13_0d_n24m comorb_14_0d_n24m comorb_15_0d_n24m ///
+comorb_16_0d_n24m comorb_17_0d_n24m comorb_18_0d_n24m comorb_19_0d_n24m ///
+comorb_20_0d_n24m comorb_21_0d_n24m ///
+comorb_22_0d_n24m comorb_23_0d_n24m comorb_24_0d_n24m comorb_25_0d_n24m ///
+comorb_26_0d_n24m comorb_27_0d_n24m comorb_28_0d_n24m comorb_29_0d_n24m ///
+
+tabout `comorb'  if(mc_total_d==1) ///
+using `logpath'\sumstats2.csv, ///
+replace sum c(mean tot_paid_by_mc_2yr_wi N tot_paid_by_mc_2yr_wi ) style(csv)
+*/
+log close
+
+
+
+
+
+
+
+H="Look at dementia samples"
+capture log close
+clear all
+set mem 500m
+set more off
+
+local logpath E:\data\hrs_oop_2010\logs
+local datapath E:\data\hrs_oop_2010\final_data
+
+log using `logpath'\mc_oop_dementia_initial-LOG.txt, text replace
+
+cd `datapath'
+use oop_resp_sp_restri_24m_mc.dta
+
+//sample limited to 67 or older when died, ffs mc 2 years before death
+sum exit_year_x //number of decedents
+
+sum exit_year_x if age_at_death_e>=67 //decedents 67 and older
+
+sum exit_year_x if age_at_death_e>=67 & part_ab_2y==1 &  hmo_2y==0 // with ffs mc
+
+keep if age_at_death_e>=67 & part_ab_2y==1 & hmo_2y==0 //drop obs not in sample
+
+// look at dementia probability sample sizes
+
+gen byte dem_miss_n1 = .
+replace dem_miss_n1=1 if prob_dementia_n1==.
+replace dem_miss_n1=0 if prob_dementia_n1!=.
+
+gen byte dem_miss_n2 = .
+replace dem_miss_n2=1 if prob_dementia_n2==.
+replace dem_miss_n2=0 if prob_dementia_n2!=.
+
+tab dem_miss_n1 dem_miss_n2, missing
+
+//if missing, carry forward n2 probability
+gen prob_dem_n1n2 = prob_dementia_n1
+replace prob_dem_n1n2=prob_dementia_n2 if prob_dementia_n1==.
+
+//histogram prob_dem_n1n2
+
+gen byte pr_dem_gt50 = .
+replace pr_dem_gt50 = 0 if prob_dem_n1n2<=.5 & prob_dem_n1n2!=.
+replace pr_dem_gt50 = 1 if prob_dem_n1n2>.5 & prob_dem_n1n2!=.
+la var pr_dem_gt50 "Indicator dementia prob gt 0.5"
+tab pr_dem_gt50, missing
+
+gen byte pr_dem_gt30 = .
+replace pr_dem_gt30 = 0 if prob_dem_n1n2<=.3 & prob_dem_n1n2!=.
+replace pr_dem_gt30 = 1 if prob_dem_n1n2>.3 & prob_dem_n1n2!=.
+la var pr_dem_gt30 "Indicator dementia prob gt 0.3"
+tab pr_dem_gt30, missing
+
+gen byte pr_dem_gt70 = .
+replace pr_dem_gt70 = 0 if prob_dem_n1n2<=.7 & prob_dem_n1n2!=.
+replace pr_dem_gt70 = 1 if prob_dem_n1n2>.7 & prob_dem_n1n2!=.
+la var pr_dem_gt70 "Indicator dementia prob gt 0.7"
+tab pr_dem_gt70, missing
+
+//get tables comparing mean spending at different dementia probability cutoffs
+mat p50=J(16,2,.)
+//first row n each group
+tab pr_dem_gt50, missing matcell(r1_50)
+mat p50[1,1]=r1_50[2,1] //with dem prob > 50% col 1
+mat p50[1,2]=r1_50[1,1] //with dem prob < 50% col 2
+
+//mc vars
+local spvars tot_paid_by_mc_2yr_wi ip_paid_by_mc_2yr_wi snf_paid_by_mc_2yr_wi ///
+hh_paid_by_mc_2yr_wi hs_paid_by_mc_2yr_wi pb_paid_by_mc_2yr_wi op_paid_by_mc_2yr_wi ///
+dm_paid_by_mc_2yr_wi total_oop_24m helper_oop_24m hospital_oop_24m nh_oop_24m ///
+doctor_oop_24m rx_oop_24m other_oop_24m
+
+//total mc 2 years, wage index adjusted
+local r = 2
+foreach v in `spvars'{
+sum `v' if pr_dem_gt50==1
+mat p50[`r',1]=r(mean)
+sum `v' if pr_dem_gt50==0
+mat p50[`r',2]=r(mean)
+local r = `r'+1
+}
+
+mat rownames p50= "N" "Total medicare" "Medicare IP" "Medicare SNF" "Medicare HH" ///
+"Medicare hospice" "Medicare Carrier" "Medicare OP" "Medicare DME" ///
+"OOP Total" "OOP Helper" "OOP Hospital" "OOP NH" "OOP Doctor" "OOP Other"
+mat colnames p50="Prob dem > 50%" "Prob dem <=50%"
+
+mat list p50
+
+frmttable using `logpath'\oop_dem_initial_tables, statmat(p50) ///
+title("Dementia, P=.5 cutoff, Medicare and OOP Spending") ///
+note("Medicare spending totals are adjusted for the CMS wage index") ///
+sdec(0) replace
+
+//get tables comparing mean spending at different dementia probability cutoffs
+mat p30=J(16,2,.)
+//first row n each group
+tab pr_dem_gt30, missing matcell(r1_30)
+mat p30[1,1]=r1_30[2,1] //with dem prob > 50% col 1
+mat p30[1,2]=r1_30[1,1] //with dem prob < 50% col 2
+//total mc 2 years, wage index adjusted
+local r = 2
+foreach v in `spvars'{
+sum `v' if pr_dem_gt30==1
+mat p30[`r',1]=r(mean)
+sum `v' if pr_dem_gt30==0
+mat p30[`r',2]=r(mean)
+local r = `r'+1
+}
+
+mat rownames p30= "N" "Total medicare" "Medicare IP" "Medicare SNF" "Medicare HH" ///
+"Medicare hospice" "Medicare Carrier" "Medicare OP" "Medicare DME" ///
+"OOP Total" "OOP Helper" "OOP Hospital" "OOP NH" "OOP Doctor" "OOP Other"
+mat colnames p30="Prob dem > 30%" "Prob dem <=30%"
+
+mat list p30
+
+frmttable using `logpath'\oop_dem_initial_tables, statmat(p30) ///
+title("Dementia, P=.3 cutoff, Medicare and OOP Spending") ///
+note("Medicare spending totals are adjusted for the CMS wage index") ///
+sdec(0) addtable
+
+log close

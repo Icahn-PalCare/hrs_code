@@ -15,8 +15,9 @@ libname hrs_fnl 'E:\data\hrs_cleaned';
 /*medicare xwalk and claims path*/
 libname medi 'E:\data\cms_DUA_25000_2010';
 
-/*project data path*/
+/*project data paths*/
 libname sic_int E:\data\serious_ill\int_data
+libname sic_ref E:\data\serious_ill\ref_data
 
 H="Initial core criteria"
 /***********************************************************************/
@@ -191,11 +192,12 @@ log close
 H="Process Claims Relative to Core Interview Date"
 /*Get claims 1 year and 2 year before each core interview*/
 
-/*Step 1: Bring in mc xwalk id*/
+/*Step 1: Bring in mc xwalk id
+sic_int.core_xwalk_1 has core interviews, age and claims xwalk id */
 
 /*prepare core dataset to merge*/
 data core_id;
-set sic_int.core_age_1(keep=id age_at_core c_ivw_date core_year);
+set sic_int.core_age_1;
 run;
 
 proc sort data=core_id nodupkey;
@@ -256,8 +258,9 @@ H="Step 2 - Get claims"
 /*Step 2: Pull claims lists using mc xwalk id and interview date
 Save claims lists to project folder for use later */
 
-data core_xwalk_2;
-set sic_int.core_xwalk_1;
+/*just get information needed to grab claims, drop rest of interview data*/
+data sic_int.core_lmt_xwalk_2;
+set sic_int.core_xwalk_1(keep id core_year c_ivw_date bid_hrs xwalk_yes);
 if xwalk_yes=1;
 run;
 
@@ -271,7 +274,7 @@ run;
 proc sql;
 create table sic_int.&source._meet_&days_bef_core. as select a.*,b.c_ivw_date,b.core_year
 from medi.&source._2000_2010 a inner join
-core_xwalk_2 b
+sic_int.core_lmt_xwalk_2 b
 on trim(left(a.bid_hrs_19))=trim(left(b.bid_hrs))
 and &days_start<=b.c_ivw_date-a.admit_date<=&days_bef_core;
 quit;
@@ -285,7 +288,7 @@ quit;
 proc sql;
 create table &source._meet as select a.*,b.c_ivw_date,b.core_year
 from medi.&source0._2000_2010 a inner join
-core_xwalk_2 b
+sic_int.core_lmt_xwalk_2 b
 on trim(left(a.bid_hrs_19))=trim(left(b.bid_hrs))
 and &days_start<=b.c_ivw_date-a.admit_date<=&days_bef_core;
 quit;
@@ -293,7 +296,7 @@ quit;
 proc sql;
 create table &source._meet2 as select a.*,b.core_date,b.core_year
 from medi.&source0._2000_2010 a inner join
-core_xwalk_2 b
+sic_int.core_lmt_xwalk_2 b
 on trim(left(a.bid_hrs_19))=trim(left(b.bid_hrs))
 and b.c_ivw_date-a.admit_date>&days_bef_core and b.c_ivw_date-a.disch_date<=&days_bef_core;
 quit;
@@ -303,6 +306,10 @@ set &source._meet &source._meet2;
 run;
 
 %mend;
+
+/*run to get claims list 6 months pre-core for medpar
+Use to get indicator of hospitalizations 6 m prior to interview*/
+%mp(days_start=0,days_bef_core=183,source=mp );
 
 /*run to get claims lists 1 year pre-core
 Datasets are sic_int.mp_meet3_365, sic_int.hh_meet_365, etc.*/
@@ -547,6 +554,7 @@ comorbi_30=0;
 *add dementia and CAD;
 dementia=0;
 cad=0;
+als=1;
 
 *do over dx;
 	*Congestive Heart Failure;
@@ -936,6 +944,10 @@ cad=0;
 		and cad=0 
           then cad=1;
 
+	*ALS Amyotrophic lateral sclerosis;
+	if substr(dx,1,5) = '33520' and als=0
+	then als=1;
+
 end;
 
 run;
@@ -976,15 +988,16 @@ sum(comorbi_29) as com_29,
 sum(comorbi_30) as com_30,
 sum(dementia) as dementia
 sum(cad) as cad
+sum(als) as als
 from dx_31_comor
 group by BID_hrs_19,core_year;
 quit;
 
 /*convert counts of diagnoses for each comorbidity to indicator variables*/ 
-data comorbidity_1(keep=BID_hrs_19 core_year comorb_1-comorb_32 comorb_all);
+data comorbidity_1(keep=BID_hrs_19 core_year comorb_1-comorb_33 comorb_all);
 set com_test1;
-array list_com com_1-com_30 dementia cad;
-array list_com_bin comorb_1-comorb_30 comorb_31 comorb_32;
+array list_com com_1-com_30 dementia cad als;
+array list_com_bin comorb_1-comorb_30 comorb_31 comorb_32 comorb_33;
 
 do over list_com;
   list_com_bin=0;
@@ -994,7 +1007,7 @@ do over list_com;
    end;
 
 end;
-/*note this comorb_all count does not include CAD*/
+/*note this comorb_all count does not include CAD or ALS*/
 comorb_all=comorb_1+comorb_2+comorb_3+comorb_4+comorb_5+comorb_6+comorb_7+comorb_8+comorb_9+comorb_10
 +comorb_11+comorb_12+comorb_13+comorb_14+comorb_15+comorb_16+comorb_17+comorb_18+comorb_19+comorb_20
 +comorb_21+comorb_22+comorb_23+comorb_24+comorb_25+comorb_26+comorb_27+comorb_28+comorb_29+comorb_30
@@ -1002,7 +1015,7 @@ comorb_all=comorb_1+comorb_2+comorb_3+comorb_4+comorb_5+comorb_6+comorb_7+comorb
 
 run;
 
-/*merge in to list of core interviews for those with xwalk id*/
+/*merge in to list of core ivw dates for those with xwalk id*/
 proc sort data=comorbidity_1 nodupkey;
 by BID_hrs_19 core_year;
 run;
@@ -1010,7 +1023,7 @@ run;
 proc sql;
 create table core_xwalk_elix_1 as
 select a.*,b.*
-from sic_int.core_xwalk_1
+from sic_int.core_lmt_xwalk_2
 a left join
 comorbidity_1 b
 on trim(left(a.BID_hrs))=trim(left(b.BID_hrs_19)) and a.core_year=b.core_year;
@@ -1055,6 +1068,7 @@ label comorb_29 ="Psychoses";
 label comorb_30 ="Depression";
 label comorb_31 ="Dementia";
 label comorb_32 ="CAD";
+label comorb_33 ="ALS";
 label comorb_all ="Count of Elix comorbidities;
 run;
 
@@ -1078,6 +1092,626 @@ run;
 /*Run for 1 year, 2 year datasets, resulting datasets are sic_int.elix_0_1yr_2, sic_int.elix_0_2yr_2*/
 %elixhauser(range1=0, range2=1yr);
 %elixhauser(range1=0, range2=2yr);
+
+proc freq data=sic_int.elix_0_1yr_2;
+table comorb:;
+run;
+
+proc freq data=sic_int.elix_0_2yr_2;
+table comorb:;
+run;
+
+/****************************************************************************/
+/* Macro to merge Elixhauser comorbidities with core full interviews        */
+/****************************************************************************/
+/*note resulting datasets have interviews for just the group with the xwalk id
+If no xwalk id, then the r is omitted from the dataset*/
+%macro mergeel(range2=);
+proc sql;
+create table sic_int.core_ids_elix_&range2(drop=BID_hrs2 core_year2) as select a.*,
+b.*
+from 
+sic_int.core_xwalk_1 a left join
+sic_int.elix_0_&range2._2(rename=(BID_hrs_19=BID_hrs2 core_year=core_year2)) b
+on trim(left(a.BID_hrs))=trim(left(b.BID_hrs2)) and a.core_year=b.core_year2;
+quit;
+%mend;
+
+%mergeel(range2=1yr);
+%mergeel(range2=2yr);
+
+proc freq data=sic_int.core_ids_elix_1yr;
+table comorb:;
+run;
+
+proc freq data=sic_int.core_ids_elix_2yr;
+table comorb:;
+run;
+
+
+H="Step 4 - DW chronic conditions"
+/*CMS Data Warehouse Chronic Conditions*/
+
+/****************************************************************************/
+/*First get the dx list into dot format using Stata*/
+/****************************************************************************/
+
+/*export to Stata*/
+proc export data=sic_int.dx_0_1yr
+outfile="E:\data\serious_ill\int_data\dx_0_1yr.dta" replace;
+run;
+
+proc export data=sic_int.dx_0_2yr
+outfile="E:\data\serious_ill\int_data\dx_0_2yr.dta" replace;
+run;
+
+/****************************************************************************/
+/****************************************************************************/
+/*SWITCH TO STATA HERE*/
+/****************************************************************************/
+/****************************************************************************/
+
+clear
+set more off
+set memory 500m
+local datapath E:\data\serious_ill\int_data
+
+use `datapath'\dx_0_1yr.dta,clear
+
+// convert diagnosis codes to string variables, tostring diag,gen(icd9_c)
+gen new=ltrim(diag)
+icd9 check new,gen(icd9_c)
+replace new="" if icd9_c>0 
+// convert into dot format (ex 12.1 instead of 121)
+icd9 clean new,dots 
+
+replace diag=new
+drop icd9_c new
+
+save `datapath'\dx_0_1yr_2.dta,replace
+
+clear all
+
+use `datapath'\dx_0_2yr.dta,clear
+
+// convert diagnosis codes to string variables, tostring diag,gen(icd9_c)
+gen new=ltrim(diag)
+icd9 check new,gen(icd9_c)
+replace new="" if icd9_c>0 
+// convert into dot format (ex 12.1 instead of 121)
+icd9 clean new,dots 
+
+replace diag=new
+drop icd9_c new
+
+save `datapath'\dx_0_2yr_2.dta,replace
+
+/****************************************************************************/
+/****************************************************************************/
+/*SWITCH TO SAS HERE*/
+/****************************************************************************/
+/****************************************************************************/
+
+proc import 
+datafile="E:\data\serious_ill\int_data\dx_0_1yr_2.dta" 
+out=dx_0_1yr_2 replace;
+run;
+
+proc import 
+datafile="E:\data\serious_ill\int_data\dx_0_2yr_2.dta" 
+out=dx_0_2yr_2 replace;
+run;
+
+/*bring in excel list of dx codes associated with each chronic condition*/
+proc import 
+datafile='E:\data\serious_ill\ref_data\chronic_21_condition_icd9.xls'
+out=icd9_21_chronic dbms=xls replace;
+run;
+
+proc contents data=icd9_21_chronic;
+run;
+
+/*creates macro variables of each of the chronic conditions listing of dx codes*/
+proc sql;
+select icd_9 into :chronic_desc1-:chronic_desc21 from icd9_21_chronic;
+quit;
+%put &chronic_desc10;
+%put &chronic_desc5;
+
+/*******************************************************************/
+/*Macro to generate chronic conditions indicators using dx codes   */
+/*******************************************************************/
+
+%macro cc(precore=);
+
+data list_&precore._dx;
+set dx_0_&precore._2;
+array list CC_1_AMI
+CC_2_ALZH
+CC_3_ALZHDMTA
+CC_4_ATRIALFB
+CC_5_CATARACT
+CC_6_CHRNKIDN
+CC_7_COPD
+CC_8_CHF
+CC_9_DIABETES
+CC_10_GLAUCOMA
+CC_11_HIPFRAC
+CC_12_ISCHMCHT
+CC_13_DEPRESSN
+CC_14_OSTEOPRS
+CC_15_RA_OA
+CC_16_STRKETIA
+CC_17_CNCRBRST
+CC_18_CNCRCLRC
+CC_19_CNCRPRST
+CC_20_CNCRLUNG
+CC_21_CNCREndM;
+do over list ;
+list=0;
+end;
+
+diag_string=diag;
+
+/* for dx codes that begin with numbers, process chronic cond variables*/
+if anydigit(substr(trim(left(diag_string)),1,1))=1 then do;
+diag=diag_string+0;
+
+if diag in (&chronic_desc1) then CC_1_AMI=1;
+if diag in (&chronic_desc2)  then CC_2_ALZH=1;
+if diag in (&chronic_desc3)  then CC_3_ALZHDMTA=1;
+if diag in (&chronic_desc4) then CC_4_ATRIALFB=1;
+if diag in (&chronic_desc5) then CC_5_CATARACT=1;
+if diag in (&chronic_desc6) then CC_6_CHRNKIDN=1;
+if diag in (&chronic_desc7) then CC_7_COPD=1;
+if diag in (&chronic_desc8) then CC_8_CHF=1;
+if diag in (&chronic_desc9) then CC_9_DIABETES=1;
+if diag in (&chronic_desc10) then CC_10_GLAUCOMA=1;
+if diag in (&chronic_desc11) then CC_11_HIPFRAC=1;
+if diag in (&chronic_desc12) then CC_12_ISCHMCHT=1;
+if diag in (&chronic_desc13) then CC_13_DEPRESSN=1;
+if diag in (&chronic_desc14) then CC_14_OSTEOPRS=1;
+if diag in (&chronic_desc15) then CC_15_RA_OA=1;
+if diag in (&chronic_desc16) then CC_16_STRKETIA=1;
+if diag in (&chronic_desc17) then CC_17_CNCRBRST=1;
+if diag in (&chronic_desc18) then CC_18_CNCRCLRC=1;
+if diag in (&chronic_desc19) then CC_19_CNCRPRST=1;
+if diag in (&chronic_desc20) then CC_20_CNCRLUNG=1;
+if diag in (&chronic_desc21) then CC_21_CNCREndM=1;
+end;
+
+/*Process with dx codes that start with letters
+Only two of them in the list*/
+if anydigit(substr(trim(left(diag_string)),1,1))=0 then do;
+if trim(left(diag_string)) in ("V431") then CC_5_CATARACT=1;
+if trim(left(diag_string)) in ("V801") then CC_10_GLAUCOMA=1;
+end;
+
+run;
+
+
+proc sql;
+create table bid_dx_0_&precore.(rename=(bid_hrs_19=bid)) as
+select distinct bid_hrs_19,core_year,
+sum(CC_1_AMI) as CC_1_AMI,
+sum(CC_2_ALZH) as CC_2_ALZH,
+sum(CC_3_ALZHDMTA) as CC_3_ALZHDMTA,
+sum(CC_4_ATRIALFB) as CC_4_ATRIALFB,
+sum(CC_5_CATARACT) as CC_5_CATARACT,
+sum(CC_6_CHRNKIDN) as CC_6_CHRNKIDN,
+sum(CC_7_COPD) as CC_7_COPD,
+sum(CC_8_CHF) as CC_8_CHF,
+sum(CC_9_DIABETES) as CC_9_DIABETES,
+sum(CC_10_GLAUCOMA) as CC_10_GLAUCOMA,
+sum(CC_11_HIPFRAC) as CC_11_HIPFRAC,
+sum(CC_12_ISCHMCHT) as CC_12_ISCHMCHT,
+sum(CC_13_DEPRESSN) as CC_13_DEPRESSN,
+sum(CC_14_OSTEOPRS) as CC_14_OSTEOPRS,
+sum(CC_15_RA_OA) as CC_15_RA_OA,
+sum(CC_16_STRKETIA) as CC_16_STRKETIA,
+sum(CC_17_CNCRBRST) as CC_17_CNCRBRST,
+sum(CC_18_CNCRCLRC) as CC_18_CNCRCLRC,
+sum(CC_19_CNCRPRST) as CC_19_CNCRPRST,
+sum(CC_20_CNCRLUNG) as CC_20_CNCRLUNG,
+sum(CC_21_CNCREndM) as CC_21_CNCREndM
+
+from list_&precore._dx group by bid_hrs_19,core_year;
+quit;
+
+/*merge chronic conditions into interview list of bid's by bid*/
+ proc sql;
+ create table bid_dx_0_&precore.2(drop=bid) as select a.bid_hrs_19,b.*
+ from sic_int.core_lmt_xwalk_2 a
+ left join
+ bid_dx_0_&precore. b 
+ on trim(left(a.bid_hrs_19))=trim(left(b.bid))
+and a.core_year=b.core_year;
+ quit;
+
+/*convert to chronic condition vars. to binary variables*/
+ data bid_dx_0_&precore.3;
+ set bid_dx_0_&precore.2;
+ array list CC_1_AMI
+CC_2_ALZH
+CC_3_ALZHDMTA
+CC_4_ATRIALFB
+CC_5_CATARACT
+CC_6_CHRNKIDN
+CC_7_COPD
+CC_8_CHF
+CC_9_DIABETES
+CC_10_GLAUCOMA
+CC_11_HIPFRAC
+CC_12_ISCHMCHT
+CC_13_DEPRESSN
+CC_14_OSTEOPRS
+CC_15_RA_OA
+CC_16_STRKETIA
+CC_17_CNCRBRST
+CC_18_CNCRCLRC
+CC_19_CNCRPRST
+CC_20_CNCRLUNG
+CC_21_CNCREndM
+;
+do over list ;
+if list>0 then list=1;
+if list<=0 then list=0;
+end;
+
+/*create aggregated indicators*/
+CC_AMI_isch=CC_1_AMI|CC_12_ISCHMCHT;
+CC_alzheim=CC_2_ALZH|CC_3_ALZHDMTA;
+CC_cncr_chronic=CC_17_CNCRBRST | CC_18_CNCRCLRC | CC_19_CNCRPRST | CC_20_CNCRLUNG | 
+	CC_21_CNCREndM ;
+run;
+
+proc means;
+var CC_1_AMI
+CC_2_ALZH
+CC_3_ALZHDMTA
+CC_4_ATRIALFB
+CC_5_CATARACT
+CC_6_CHRNKIDN
+CC_7_COPD
+CC_8_CHF
+CC_9_DIABETES
+CC_10_GLAUCOMA
+CC_11_HIPFRAC
+CC_12_ISCHMCHT
+CC_13_DEPRESSN
+CC_14_OSTEOPRS
+CC_15_RA_OA
+CC_16_STRKETIA
+CC_17_CNCRBRST
+CC_18_CNCRCLRC
+CC_19_CNCRPRST
+CC_20_CNCRLUNG
+CC_21_CNCREndM;
+run;
+
+/*run rename macro*/
+data test;
+set bid_dx_0_&precore.3;
+run;
+
+%rename(WORK,TEST,&precore.);
+
+data sic_int.chronic_21_&precore.3_0;
+set test;
+bid_hrs_19=bid_hrs_19_&precore.;
+drop bid_hrs_19_&precore.;
+core_year=core_year_&precore.;
+drop core_year_&precore.;
+run;
+
+%mend;
+
+/*2 datasets are sic_int.chronic_21_1yr_0 and sic_int.chronic_21_2yr_0*/
+%cc(precore=1yr);
+%cc(precore=2yr);
+
+proc freq data=sic_int.chronic_21_1yr_0;
+table cc_:;
+run;
+
+proc freq data=sic_int.chronic_21_2yr_0;
+table cc_:;
+run;
+
+proc contents data=sic_int.chronic_21_1yr_0;
+run;
+
+/****************************************************************************/
+/* Merge cc's with interivew, elix dataset                                  */
+/****************************************************************************/
+%macro mergecc(precore=);
+
+proc sql;
+create table sic_int.core_ids_elix_cc_&precore.(drop=bid_hrs2 core_year2)
+as select * from
+sic_int.core_ids_elix_&precore. a
+left join
+sur_int.chronic_21_&precore._0(rename=(bid_hrs_19=bid_hrs2 core_year=core_year2)) b 
+on (a.bid_hrs_19)=(b.bid_hrs2) and a.core_year=b.core_year2;
+quit;
+
+%mend;
+
+%mergecc(precore=1yr);
+%mergecc(precore=2yr);
+
+/* the above file contains just people who have mc xwalk id
+with their core interviews, elixhauser comorbidities and cc's
+
+File names are:
+sic_int.core_ids_elix_cc_1yr
+sic_int.core_ids_elix_cc_2yr*/
+
+proc contents data=sic_int.core_ids_elix_cc_1yr;
+run;
+
+proc contents data=sic_int.core_ids_elix_cc_2yr;
+run;
+
+proc freq data=sic_int.core_ids_elix_cc_1yr;
+table cc_:;
+run;
+
+proc freq data=sic_int.core_ids_elix_cc_2yr;
+table cc_:;
+run;
+
+
+H="Step 5 - Get additional utilization information from claims"
+/****************************************************************************/
+/*Get indicator of any hospital admission 6 months pre-core interview*/
+/****************************************************************************/
+
+/*pull list if ip claims from all medpar claims 6 months pre-interview*/
+data ip_meet_183;
+set sic_int.mp_meet3_183(where=(trim(left(SSLSSNF))~="N"));
+run;
+
+data ip_2;
+set ip_meet_183;
+if icarecnt=. then icarecnt=0; /*medpar intensive care day count*/
+if CRNRYDAY=. then CRNRYDAY=0; /*medpar coronary day count*/
+icu_days=icarecnt+CRNRYDAY;
+run;
+
+proc sql;
+create table ip_3 as select distinct BID_hrs_19,core_year,
+sum(icu_days) as icu_days_6m label="total icu days 6 mo pre core ivw",
+count(*) as n_ip_admit_6m label="total n of hospital admit 6 mo pre core ivw",
+sum(LOSCNT) as n_hospd_6m label="total hospital days 6 mo pre core ivw"
+ from ip_2 group by BID_hrs_19,core_year;
+quit;
+
+/*merge the new variables with the overall dataset with ivws, elix and cc's*/
+proc sql;
+create table core_ids_criteria_1 as select a.*,b.icu_days_6m,
+b.n_ip_admit_6m,b.n_hospd_6m 
+from core_ids_elix_cc_1yr a
+left join
+ip_3 b 
+on trim(left(a.bid_hrs_19))=trim(left(b.bid_hrs_19)) and a.core_year=b.core_year;
+quit;
+
+ data sic_int.core_ids_1yr_criteria ;
+ set core_ids_criteria_1 ;
+ array list icu_days_6m n_ip_admit_6m n_hospd_6m;
+ do over list;
+ if list=. then list=0;
+ end;
+ run;
+
+/****************************************************************************/
+/*Get indicator of ESRD codes from the denominator file the year of the interview*/
+/****************************************************************************/
+proc sort data=medi.dn_2000_2010 out=dn_2000_20102  nodupkey;
+by BID_HRS_19 year;
+run;
+
+/*pull ESRD status variable from dn file
+for the core interview years*/
+proc sql;
+create table dn_core_y as select
+a.*,b.ESRD_IND
+from sic_int.core_ids_1yr_criteria a left join
+dn_2000_20102 b
+on trim(left(a.BID_hrs_19))=trim(left(b.BID_hrs_19))
+and a.core_year=b.year;
+quit;
+
+proc freq;
+table ESRD_IND /missprint;
+run;
+
+data sic_int.core_ids_1yr_criteria_2;
+set dn_core_y ;
+if ESRD_IND=Y then esrd_ind_n=1;
+if ESRD_IND=0 then esrd_ind_n=0;
+label esrd_ind_n="ESRD indicator from claims denominator file";
+drop ESRD_IND;
+run;
+
+/****************************************************************************/
+/*Get indicator of Home 02 use 12 months pre interview from DME claims*/
+/****************************************************************************/
+data oxygen_1(keep=(hrs_bid_19 core_year home_oxygen));
+set dme_meet_365;
+home_oxygen=0;
+label home_oxygen="Home O2 from DME claims";
+array list BETOS01:BETOS13;
+do over list;
+if list = D1C then home_oxygen=1;
+end;
+run; 
+
+proc sql;
+create table oxygen_2 as
+select distinct bid_hrs_19,core_year,
+sum(home_oxygen) as home_oxygen,
+from oxygen_1 group by bid_hrs_19,core_year;
+quit;
+
+/*convert to binary variables*/
+data oxygen_3;
+set oxygen_2 ;
+if home_oxygen>0 then home_oxygen=1;
+if home_oxygen<=0 then home_oxygen=0;
+end;
+
+/*merge Oxygen use variable into the overall dataset*/
+proc sql;
+create table sic_int.core_ids_1yr_criteria_3 as select
+a.*,b.home_oxygen
+from sic_int.core_ids_1yr_criteria_2 a left join
+oxygen_3 b
+on trim(left(a.BID_hrs_19))=trim(left(b.BID_hrs_19))
+and a.core_year=b.core_year;
+quit;
+
+proc freq;
+table home_oxygen /missprint;
+run;
+
+
+H="Step 6 - HRS variable cleaning and check criteria"
+data sic_int.core_ids_1yr_criteria_4;
+set sic_int.core_ids_1yr_criteria_3 ;
+
+/*create tics categorical variable*/
+if tics_tot>8 then tics_cat=1 ;
+if 5<=tics_tot<=8 then tics_cat=2 ;
+if 0<=tics_tot<=4 then tics_cat=3 ;
+label tics_cat="TICS 1=normal, 2=MCI, 3=Demented";
+
+/*any elixhauser cancer dx*/
+comorb_17_0_1yr=1 | comorb_18_0_1yr=1 | comorb_19_0_1yr==1 then el_cancer_1yr=1;
+comorb_17_0_1yr=1 & comorb_18_0_1yr=1 & comorb_19_0_1yr==1 then el_cancer_1yr=1;
+
+/*4 or more comorbidities*/
+if comorb_all_0_1yr>3 then el_ge4_comorb_1yr=1;
+if 0=<comorb_all_0_1yr<=3 then el_ge4_comorb_1yr=0;
+
+cc_all_count_1yr = cc_1_ami_1yr + cc_2_alzh_1yr + cc_3_alzhdmta_1yr + 
+cc_4_atrialfb_1yr + cc_5_cataract_1yr + cc_6_chrnkidn_1yr + 
+cc_7_copd_1yr + cc_8_chf_1yr + cc_9_diabetes_1yr + cc_10_glaucoma_1yr + 
+cc_11_hipfrac_1yr + cc_12_ischmcht_1yr + cc_13_depressn_1yr + 
+cc_14_osteoprs_1yr + cc_15_ra_oa_1yr + cc_16_strketia_1yr + 
+cc_17_cncrbrst_1yr + cc_18_cncrclrc_1yr + cc_19_cncrprst_1yr + 
+cc_20_cncrlung_1yr + cc_21_cncrendm_1yr;
+
+if cc_all_count_1yr >3 then cc_ge4_comorb_1yr=1;
+if 0=<cc_all_count_1yr <=3 then cc_ge4_comorb_1yr=0;
+
+/*cc's excluding cataract and glaucoma*/
+cc_all_count_1yr_2 = cc_1_ami_1yr + cc_2_alzh_1yr + cc_3_alzhdmta_1yr + 
+cc_4_atrialfb_1yr + /*cc_5_cataract_1yr +*/ cc_6_chrnkidn_1yr + 
+cc_7_copd_1yr + cc_8_chf_1yr + cc_9_diabetes_1yr + /*cc_10_glaucoma_1yr +*/ 
+cc_11_hipfrac_1yr + cc_12_ischmcht_1yr + cc_13_depressn_1yr + 
+cc_14_osteoprs_1yr + cc_15_ra_oa_1yr + cc_16_strketia_1yr + 
+cc_17_cncrbrst_1yr + cc_18_cncrclrc_1yr + cc_19_cncrprst_1yr + 
+cc_20_cncrlung_1yr + cc_21_cncrendm_1yr;
+label cc_all_count_12m_2="Count of cc's, excludes cataract and glaucoma";
+
+if cc_all_count_12m_2>3 then cc2_ge4_comorb_1yr=1;
+if 0=<cc_all_count_12m_2<=3 then cc2_ge4_comorb_1yr=0;
+
+label el_ge4_comorb_1yr="4+ Elixhauser comorbidities";
+label cc_ge4_comorb_1yr="4+ DW Chronic Conditions";
+label cc2_ge4_comorb_1yr="4+ DW Chronic Conditions, excl cataract and glaucoma";
+
+run;
+
+ ods rtf body="E:\data\serious_ill\logs\criteria_vars_before_coredate.rtf";
+
+title "Number of unique people in full cohort 2000-2010";
+select count(distinct hhidpn) from sic_int.core_ids_1yr_criteria_4
+where core_year in (2000,2002,2004,2006,2008,2010);
+
+title "Age 65+, With mc xwalk id";
+select count(distinct hhidpn) from sic_int.core_ids_1yr_criteria_4
+where age_ge_65=1 and xwalk_yes=1 and core_year in (2000,2002,2004,2006,2008,2010);
+
+create table age_ge_65_mc as 
+select * from sic_int.core_ids_1yr_criteria_4
+where age_ge_65=1 and xwalk_yes=1 and core_year in (2000,2002,2004,2006,2008,2010);
+
+title "Dementia variables - elix, cc, TICS";
+proc freq data=age_ge_65_mc ;
+table comorb_31_0_1yr CC_alzheim_1yr CC_2_ALZH_1yr CC_3_ALZHDMTA_1yr tics_cat \missprint;
+run;
+
+title "Cancer variables - elix, cc, interviews";
+proc freq data=age_ge_65_mc ;
+table comorb_17_0_1yr comorb_18_0_1yr comorb_19_0_1yr el_cancer_1yr
+CC_17_CNCRBRST_1yr CC_18_CNCRCLRC_1yr CC_19_CNCRPRST_1yr CC_20_CNCRLUNG_1yr 
+CC_21_CNCREndM_1yr CC_cncr_chronic_1yr
+cancer_hrs cancer_treat_hrs
+\missprint ;
+run;
+
+title "End Stage Renal Disease - elix, claims denominator file year of core ivw";
+proc freq data=age_ge_65_mc ;
+table comorb_13_0_1yr esrd_ind_n \missprint;
+run;
+
+title "CHF+Indicator of more advanced disease - elix, cc, HRS, needs work!";
+proc freq data=age_ge_65_mc ;
+table comorb_1_0_1yr CC_8_CHF_1yr heart_hrs chf_hrs chfadmit_hrs \missprint;
+run;
+
+title "COPD/Lung disease+home o2 - elix, cc, HRS, needs work!, Home O2 from DME claims";
+proc freq data=age_ge_65_mc ;
+table comorb_9_0_1yr CC_7_COPD_1yr lung_hrs lung_o2_hrs lung_lim_hrs home_oxygen \missprint;
+run;
+
+title "Diabetes + CKD or CAD - elix, cc, HRS";
+proc freq data=age_ge_65_mc ;
+table comorb_10_0_1yr comorb_11_0_1yr comorb_32_0_1yr 
+CC_9_DIABETES_1yr CC_6_CHRNKIDN_1yr 
+dm_hrs dm_ins_hrs dm_kidn_hrs  \missprint;
+run;
+
+title "Advanced liver disease/cirrhosis - elix (check dx codes included, maybe more?)";
+proc freq data=age_ge_65_mc ;
+table comorb_14_0_1yr  \missprint;
+run;
+
+title "HIV with and AIDS defining illness - elix (check dx codes included, maybe more?)";
+proc freq data=age_ge_65_mc ;
+table comorb_16_0_1yr  \missprint;
+run;
+
+title "ALS - just single dx code (check dx codes included, maybe more?)";
+proc freq data=age_ge_65_mc ;
+table comorb_33_0_1yr  \missprint;
+run;
+
+title "Multimorbidity 4+ chronic conditions, Elix, CC, HRS";
+proc freq data=age_ge_65_mc ;
+table el_ge4_comorb_1yr cc_ge4_comorb_1yr cc2_ge4_comorb_1yr comor_c_hrs \missprint;
+run;
+
+title "Hip fracture, CC, HRS";
+proc freq data=age_ge_65_mc ;
+table CC_11_HIPFRAC_1yr hip_frac_hrs \missprint;
+run;
+
+title "Any ADL help, HRS";
+proc freq data=age_ge_65_mc ;
+table adl_independent_core iadl_independent_core \missprint;
+run;
+
+title "Hospital admissions 6 months before core interview";
+proc freq data=age_ge_65_mc  ;
+table icu_days_6m n_ip_admit_6m n_hospd_6m \missprint;
+run;
+
+ods rtf close; 
+
 
 
 H="xxxxAdditional variables from claims"

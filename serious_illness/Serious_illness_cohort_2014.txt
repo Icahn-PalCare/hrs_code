@@ -256,17 +256,146 @@ proc freq;
 table xwalk_yes*core_year /missprint;
 run;
 
+/*just get information needed to grab claims, drop rest of interview data
+So pulls all interviews for r's with the mc linkage*/
+data sic_int.core_lmt_xwalk_2;
+set sic_int.core_xwalk_1(keep=id core_year c_ivw_date c_ivw_year c_ivw_month bid_hrs xwalk_yes);
+if xwalk_yes=1;
+run;
+
+
+H="Step 2a - Identify FFS MC 1yr and 2yrs preceeding core interview"
+/*Use denominator file to determine which interviews / r's have ffs mc
+during the time preceeding the core interview*/
+
+proc sort data=medi.dn_2000_2010 out=dn_2000_20102  nodupkey;
+by BID_HRS_19 year;
+run;
+
+proc sort data=sic_int.core_lmt_xwalk_2 out=core_mc_ids nodupkey;
+by bid_hrs c_ivw_year;
+run;
+
+/*pull medicare and hmo status variables from dn file
+for the core interview years
+interviews are dropped if they don't have a matching dn entry that year*/
+proc sql;
+create table dn_core_y as select
+a.*,,b.buyin12,b.year,b.HMOIND12
+from core_ids_1yr_criteria a inner join
+dn_2000_20102 b
+on trim(left(a.BID_hrs))=trim(left(b.BID_hrs_19))
+and a.c_ivw_year=b.year;
+quit;
+
+/*if find that month is missing, think about assigning it january...
+so we don't lose these observations in this step*/
+proc freq data=dn_core_y ;
+table c_ivw_year c_ivw_month;
+run;
+
+/*xxx r's have at least 1 interview with a denominator file linked*/
+proc sql;
+select count(distinct BID_hrs) from dn_core_y ;
+quit;
+
+data dn_core_y2;
+set dn_core_y;
+if length(trim(left(buyin12)))=12 and c_ivw_month>0 then do;
+buyin_dy=substr(trim(left(buyin12)),1,c_ivw_month);
+hmo_dy=substr(trim(left(HMOIND12)),1,c_ivw_month);
+end;
+else do;
+buyin_dy=trim(left(buyin12));
+hmo_dy=trim(left(HMOIND12));
+end;
+format c_ivw_date date9.;
+run;
+proc means n;
+var  c_ivw_month;
+run;
+
+/*Check year prior to core interview to backfill for interview dates
+in the first half of the year (since doing 12 mo look back)*/
+/* xxx have the -1 year dn file*/
+proc sql;
+create table dn_core_y_bef as select
+a.BID_hrs,a.c_ivw_year ,
+b.year as c_ivw_year_bef,
+b.year,b.buyin12,b.HMOIND12
+from dn_core_y a inner join
+dn_2000_20102 b
+on trim(left(a.BID_hrs))=trim(left(b.BID_hrs_19))
+and 0<a.c_ivw_year-b.year<=1 order by bid_hrs,c_ivw_year;
+quit;
+
+proc sql;
+create table all_insurance as select a.*,b.buyin12 as buyin_bef,b.HMOIND12 as hmo_bef from
+dn_core_y2 a
+left join
+dn_core_y_bef b
+on trim(left(a.BID_hrs))=trim(left(b.r_BID_hrs)) 
+and a.c_ivw_year=b.c_ivw_year;
+quit;
+
+/*merge surgery year and year before surgery buy-in and hmo variables
+Trim so the final variable _12m is 12 months pre-interview
+Note: indicator variables for parts a and b and hmo are null if don't
+have information for full 12 months pre-interview*/
+data all_insurance2;
+set all_insurance;
+buyin_2y=trim(left(buyin_bef))||trim(left(buyin_dy));
+hmo_2y=trim(left(hmo_bef))||trim(left(hmo_dy));
+
+buyin_2y_r=reverse(trim(buyin_2y));
+hmo_2y_r=reverse(trim(hmo_2y));
+
+/*create 12 month variable*/
+if length(buyin_2y_r)>11 then buyin_12m_r=substr(trim(left(buyin_2y)),1,12);
+if length(hmo_2y_r)>11 then hmo_12m_r=substr(trim(left(hmo_2y)),1,12);
+
+if length(buyin_2y_r)<12 then buyin_12m_r="";
+if length(hmo_2y_r)<12 then hmo_12m_r="";
+
+buyin_12m=reverse(trim(buyin_12m_r));
+hmo_12m=reverse(trim(hmo_12m_r));
+
+/*create indicator variable for mc coverage 12 mo. 0=no, 1=yes*/
+if length(buyin_12m)=12 then do;
+if indexc(buyin_12m,"0","1","2","A","B") then part_ab_12m=0;
+if indexc(buyin_12m,"0","1","2","A","B")=0 then part_ab_12m=1;
+end;
+if length(hmo_12m)=12 then do;
+if index(hmo_12m,"00000000000") then hmo_d_12m=0;
+if index(hmo_12m,"00000000000")=0 then hmo_d_12m=1;
+end;
+
+run;
+
+/*xx observations don't have full denominator data re insurance status
+either interview Before Jan 2001 or are missing year -1 dn file*/
+proc freq;
+table part_ab_12m hmo_d_12m;
+run;
+
+/*bring indicators into full interview dataset*/
+proc sql;
+create table sic_int.core_xwalk_ins as select a.*,b.buyin_12m,b.hmo_12m from
+sic_int.core_xwalk_1 a left join
+all_insurance_2
+on a.bid_hrs=a.bid_hrs and a.c_ivw_year=b.c_ivw_year;
+quit;
+
+proc freq;
+table age_ge_65*part_ab_12m /missprint;
+run;
+
 H="Step 2 - Get claims"
 /*Get claims 1 year and 2 year before each core interview*/
 
 /*Step 2: Pull claims lists using mc xwalk id and interview date
 Save claims lists to project folder for use later */
 
-/*just get information needed to grab claims, drop rest of interview data*/
-data sic_int.core_lmt_xwalk_2;
-set sic_int.core_xwalk_1(keep=id core_year c_ivw_date bid_hrs xwalk_yes);
-if xwalk_yes=1;
-run;
 
 /****************************************************************************/
 /* Macro to pull claims lists, saves lists to int_data folder               */
@@ -1113,7 +1242,7 @@ proc sql;
 create table sic_int.core_ids_elix_&range2(drop=BID_hrs2 core_year2) as select a.*,
 b.*
 from 
-sic_int.core_xwalk_1 a left join
+sic_int.core_xwalk_ins /*sic_int.core_xwalk_1*/ a left join
 sic_int.elix_0_&range2._2(rename=(BID_hrs=BID_hrs2 core_year=core_year2)) b
 on trim(left(a.BID_hrs))=trim(left(b.BID_hrs2)) and a.core_year=b.core_year2;
 quit;
@@ -1547,11 +1676,11 @@ run;
 for the core interview years*/
 proc sql;
 create table dn_core_y as select
-a.*,b.ESRD_IND
-from core_ids_1yr_criteria a left join
+a.*,b.ESRD_IND from 
+core_ids_1yr_criteria a left join
 dn_2000_20102 b
 on trim(left(a.BID_hrs))=trim(left(b.BID_hrs_19))
-and a.core_year=b.year;
+and a.c_ivw_year=b.year;
 quit;
 
 proc freq;
@@ -1668,7 +1797,6 @@ cc_11_hipfrac_1yr + cc_12_ischmcht_1yr + cc_13_depressn_1yr +
 cc_14_osteoprs_1yr + cc_15_ra_oa_1yr + cc_16_strketia_1yr + 
 cc_17_cncrbrst_1yr + cc_18_cncrclrc_1yr + cc_19_cncrprst_1yr + 
 cc_20_cncrlung_1yr + cc_21_cncrendm_1yr;
-
 label cc_all_count_1yr_2="Count of cc's, excludes cataract and glaucoma";
 
 if cc_all_count_1yr_2>3 then cc2_ge4_comorb_1yr=1;
@@ -1678,24 +1806,66 @@ label el_ge4_comorb_1yr="4+ Elixhauser comorbidities";
 label cc_ge4_comorb_1yr="4+ DW Chronic Conditions";
 label cc2_ge4_comorb_1yr="4+ DW Chronic Conditions, excl cataract and glaucoma";
 
-/*any dementia measure indicator*/
+/*create indicators for any indication of the serious medical illnesses across
+variables (cc's elix hrs survey) */
 if comorb_31_0_1yr=1 | CC_alzheim_1yr=1 | CC_2_ALZH_1yr=1 | CC_3_ALZHDMTA_1yr=1 | 
 tics_cat=3 then dem_any_ind=1;
 if if comorb_31_0_1yr=0 & CC_alzheim_1yr=0 & CC_2_ALZH_1yr=0 & CC_3_ALZHDMTA_1yr=0 & 
 (tics_cat=1 | tics_cat=2) then dem_any_ind=1;
 label dem_any_ind="Any indicator of Dementia 1yr";
 
-/*any cancer indicator*/
 if el_cancer_1yr=1 | CC_cncr_chronic_1yr=1 | cancer_hrs=1 then cancer_any_ind=1;
 if el_cancer_1yr=0 & CC_cncr_chronic_1yr=0 & cancer_hrs=0 then cancer_any_ind=0;
 label cancer_any_ind="Any indicator of Cancer 1yr";
 
-/*Any ESRD indicator*/
 if comorb_13_0_1yr=1 | esrd_ind_n=1 then esrd_any_ind=1;
 if comorb_13_0_1yr=0 & esrd_ind_n=0 then esrd_any_ind=0;
 label esrd_any_ind="Any indicator of ESRD 1yr";
 
-/*Any
+if comorb_1_0_1yr=1 | CC_8_CHF_1yr=1 | chf_hrs=1 | chfadmit_hrs=1 then chf_any_ind=1;
+if comorb_1_0_1yr=0 & CC_8_CHF_1yr=0 & chf_hrs=0 & chfadmit_hrs=0 then chf_any_ind=0;
+label chf_any_ind="Any indicator of CHF 1yr";
+
+if (comorb_9_0_1yr=1 | CC_7_COPD_1yr=1 | lung_hrs=1) & (lung_o2_hrs=1 | home_oxygen=1) then lung_02_ind=1;
+if (comorb_9_0_1yr=0 & CC_7_COPD_1yr=0 & lung_hrs=0) & (lung_o2_hrs=0 & home_oxygen=0) then lung_02_ind=0;
+label lung_02_ind="Any indicator of lung disease+home O2 use 1yr";
+
+if (comorb_10_0_1yr=1 | comorb_11_0_1yr=1 | CC_9_DIABETES_1yr=1 | dm_hrs=1 ) & 
+	(comorb_32_0_1yr=1 | CC_6_CHRNKIDN_1yr=1 | dm_kidn_hrs=1) then diab_compl_ind=1; 
+if (comorb_10_0_1yr=0 & comorb_11_0_1yr=0 & CC_9_DIABETES_1yr=0 & dm_hrs=0 ) & 
+	(comorb_32_0_1yr=0 & CC_6_CHRNKIDN_1yr=0 & dm_kidn_hrs=0) then diab_compl_ind=0; 
+label diab_compl_ind="Any indicator of diabetes+CKD or CAD 1yr";
+
+if comorb_14_0_1yr=1 then liver_any_ind=1;
+if comorb_14_0_1yr=0 then liver_any_ind=0;
+label liver_any_ind="Any indicator of Advanced liver disease/cirrhosis 1yr";
+
+if comorb_16_0_1yr=1 then hiv_any_ind=1;
+if comorb_16_0_1yr=0 then hiv_any_ind=0;
+label hiv_any_ind "Any indicator of HIV with and AIDS defining illness 1yr";
+
+if comorb_33_0_1yr=1 then als_any_ind=1;
+if comorb_33_0_1yr=0 then als_any_ind=0;
+label als_any_ind "Any indicator of ALS 1yr";
+
+/*doesn't use the cc definition excluding cataract,glaucoma cc2_ge4_comorb_1yr */
+if el_ge4_comorb_1yr=1 | cc_ge4_comorb_1yr=1 | comor_c_hrs=1 then multi_any_ind=1;
+if el_ge4_comorb_1yr=0 & cc_ge4_comorb_1yr=0 & comor_c_hrs=0 then multi_any_ind=0;
+label multi_any_ind="Any indicator of Multimorbidity 4+ chronic conditions 1yr";
+
+if CC_11_HIPFRAC_1yr=1 | hip_frac_hrs=1 then hip_any_ind=1;
+if CC_11_HIPFRAC_1yr=0 & hip_frac_hrs=0 then hip_any_ind=0;
+label hip_any_ind="Any indicator of Hip fracture 1yr";
+
+/*indicator for any serious medical illness*/
+if dem_any_ind=1 | cancer_any_ind=1 | esrd_any_ind=1 | chf_any_ind=1 | lung_02_ind=1 | 
+ diab_compl_ind=1 | liver_any_ind=1 | hiv_any_ind=1 | als_any_ind=1 | multi_any_ind=1 | hip_any_ind=1
+ then ser_med_illness=1;
+if dem_any_ind=0 & cancer_any_ind=0 & esrd_any_ind=0 & chf_any_ind=0 & lung_02_ind=0 & 
+ diab_compl_ind=0 & liver_any_ind=0 & hiv_any_ind=0 & als_any_ind=0 & multi_any_ind=0 & hip_any_ind=0
+ then ser_med_illness=0;
+label ser_med_illness="Any indicator of serious medical illness 1yr";
+
 run;
 
  ods rtf body="E:\data\serious_ill\logs\criteria_vars_before_coredate.rtf";
@@ -1788,8 +1958,27 @@ run;
 title "Number of R's that meet A)Any serious illness";
 proc sql;
 select count(distinct id) from age_ge_65_mc  
-where core_year in (2000,2002,2004,2006,2008,2010);
+where ser_med_illness=1;
 
+title "Number of R's that meet B)Any ADL help";
+proc sql;
+select count(distinct id) from age_ge_65_mc  
+where adl_independent_core=1;
+
+title "Number of R's that meet C)Any hospital admission 6m preceeding core interview";
+proc sql;
+select count(distinct id) from age_ge_65_mc  
+where ind_hosp_adm_6m=1;
+
+title "Number of R's that meet A)Any serious illness + B)ADL help";
+proc sql;
+select count(distinct id) from age_ge_65_mc  
+where (ser_med_illness=1 and adl_independent_core=1) ;
+
+title "Number of R's that meet A)Any serious illness + C)Hospital admission";
+proc sql;
+select count(distinct id) from age_ge_65_mc  
+where (ser_med_illness=1 and ind_hosp_adm_6m=1) ;
 
 ods rtf close; 
 

@@ -257,9 +257,10 @@ table xwalk_yes*core_year /missprint;
 run;
 
 /*just get information needed to grab claims, drop rest of interview data
-So pulls all interviews for r's with the mc linkage*/
+So pulls all interviews for r's with the mc linkage
+91386 interviews have linkage*/
 data sic_int.core_lmt_xwalk_2;
-set sic_int.core_xwalk_1(keep=id core_year c_ivw_date c_ivw_year c_ivw_month bid_hrs xwalk_yes);
+set sic_int.core_xwalk_1(keep=id core_year c_ivw_date c_ivw_year c_ivw_month age_at_core bid_hrs xwalk_yes);
 if xwalk_yes=1;
 run;
 
@@ -267,6 +268,7 @@ run;
 H="Step 2a - Identify FFS MC 1yr and 2yrs preceeding core interview"
 /*Use denominator file to determine which interviews / r's have ffs mc
 during the time preceeding the core interview*/
+
 
 proc sort data=medi.dn_2000_2010 out=dn_2000_20102  nodupkey;
 by BID_HRS_19 year;
@@ -276,25 +278,27 @@ proc sort data=sic_int.core_lmt_xwalk_2 out=core_mc_ids nodupkey;
 by bid_hrs c_ivw_year;
 run;
 
+proc freq;
+table c_ivw_year;
+run;
+
 /*pull medicare and hmo status variables from dn file
 for the core interview years
 interviews are dropped if they don't have a matching dn entry that year*/
 proc sql;
 create table dn_core_y as select
-a.*,,b.buyin12,b.year,b.HMOIND12
-from core_ids_1yr_criteria a inner join
+a.*,b.buyin12,b.year,b.HMOIND12
+from core_mc_ids a inner join
 dn_2000_20102 b
 on trim(left(a.BID_hrs))=trim(left(b.BID_hrs_19))
 and a.c_ivw_year=b.year;
 quit;
 
-/*if find that month is missing, think about assigning it january...
-so we don't lose these observations in this step*/
 proc freq data=dn_core_y ;
-table c_ivw_year c_ivw_month;
+table c_ivw_year c_ivw_month age_at_core;
 run;
 
-/*xxx r's have at least 1 interview with a denominator file linked*/
+/*16095 r's have at least 1 interview with a denominator file linked*/
 proc sql;
 select count(distinct BID_hrs) from dn_core_y ;
 quit;
@@ -310,14 +314,18 @@ buyin_dy=trim(left(buyin12));
 hmo_dy=trim(left(HMOIND12));
 end;
 format c_ivw_date date9.;
+age_at_core_n=floor(age_at_core);
 run;
 proc means n;
 var  c_ivw_month;
 run;
+proc freq;
+table age_at_core_n;
+run;
 
 /*Check year prior to core interview to backfill for interview dates
 in the first half of the year (since doing 12 mo look back)*/
-/* xxx have the -1 year dn file*/
+/* 49041 have the -1 year dn file*/
 proc sql;
 create table dn_core_y_bef as select
 a.BID_hrs,a.c_ivw_year ,
@@ -330,13 +338,18 @@ and 0<a.c_ivw_year-b.year<=1 order by bid_hrs,c_ivw_year;
 quit;
 
 proc sql;
-create table all_insurance as select a.*,b.buyin12 as buyin_bef,b.HMOIND12 as hmo_bef from
+create table all_insurance as select a.*,b.year as year_bef_civw, 
+b.buyin12 as buyin_bef,b.HMOIND12 as hmo_bef from
 dn_core_y2 a
 left join
 dn_core_y_bef b
-on trim(left(a.BID_hrs))=trim(left(b.r_BID_hrs)) 
+on trim(left(a.BID_hrs))=trim(left(b.BID_hrs)) 
 and a.c_ivw_year=b.c_ivw_year;
 quit;
+
+proc freq data=all_insurance;
+table c_ivw_year*year_bef_civw /missprint;
+run;
 
 /*merge surgery year and year before surgery buy-in and hmo variables
 Trim so the final variable _12m is 12 months pre-interview
@@ -372,23 +385,37 @@ end;
 
 run;
 
-/*xx observations don't have full denominator data re insurance status
+/*12954 observations don't have full denominator data re insurance status
 either interview Before Jan 2001 or are missing year -1 dn file*/
 proc freq;
-table part_ab_12m hmo_d_12m;
+table part_ab_12m hmo_d_12m part_ab_12m*age_at_core_n;
 run;
 
 /*bring indicators into full interview dataset*/
 proc sql;
-create table sic_int.core_xwalk_ins as select a.*,b.buyin_12m,b.hmo_12m from
+create table sic_int.core_xwalk_ins as select a.*,b.part_ab_12m,b.hmo_d_12m from
 sic_int.core_xwalk_1 a left join
-all_insurance_2
-on a.bid_hrs=a.bid_hrs and a.c_ivw_year=b.c_ivw_year;
+all_insurance2 b
+on a.bid_hrs=b.bid_hrs and a.c_ivw_year=b.c_ivw_year;
 quit;
 
 proc freq;
 table age_ge_65*part_ab_12m /missprint;
 run;
+
+proc freq;
+table age_ge_65 /missprint;
+run;
+
+data zzzztest1;
+set sic_int.core_xwalk_ins;
+if part_ab_12m=. & age_ge_65=1;
+age_at_core_n=floor(age_at_core);
+run;
+
+proc freq;
+table c_ivw_year*c_ivw_month age_at_core_n;
+
 
 H="Step 2 - Get claims"
 /*Get claims 1 year and 2 year before each core interview*/
@@ -602,6 +629,17 @@ run;
 /*1 and 2 years pre-interview: sic_int.dx_0_1yr, sic_int.dx_0_2yr */
 %dx_time_range(range1=0, range2=1yr, days_bef_core=365);
 %dx_time_range(range1=0, range2=2yr, days_bef_core=730);
+
+data zzzdx_test;
+set sic_int.dx_0_1yr;
+core_year_c=put(core_year,z4.);
+run;
+
+/*47538 interviews have at least 1 dx code 1 year preceeding the interview*/
+proc sql;
+select count (distinct bid_hrs_19||core_year_c) from zzzdx_test;
+quit;
+
 
 H="Step 3 - Elixhauser comorbidities"
 /****************************************************************************/
@@ -1236,26 +1274,41 @@ run;
 /* Macro to merge Elixhauser comorbidities with core full interviews        */
 /****************************************************************************/
 /*note resulting datasets have all interviews
-If no xwalk id, then the the elix comorb are left as missing*/
+If ffs mc 1 year prior to interview, then the the elix comorb are left as missing*/
 %macro mergeel(range2=);
 proc sql;
-create table sic_int.core_ids_elix_&range2(drop=BID_hrs2 core_year2) as select a.*,
+create table core_ids_elix_&range2(drop=BID_hrs2 core_year2) as select a.*,
 b.*
 from 
 sic_int.core_xwalk_ins /*sic_int.core_xwalk_1*/ a left join
 sic_int.elix_0_&range2._2(rename=(BID_hrs=BID_hrs2 core_year=core_year2)) b
 on trim(left(a.BID_hrs))=trim(left(b.BID_hrs2)) and a.core_year=b.core_year2;
 quit;
+
+/*1328 obs have ffs mc 1 year preceeding interview but no dx during that time
+data zzztest;
+set sic_int.core_ids_elix_1yr;
+if comorb_all_0_1yr=. and part_ab_12m=1 and hmo_d_12m=0 ;
+run;*/
+
+data sic_int.core_ids_elix_&range2._2;
+set core_ids_elix_&range2;
+array list comorb_:;
+do over list;
+if part_ab_12m=1 and hmo_d_12m=0 and list=. then list=0;
+end;
+run;
+
 %mend;
 
 %mergeel(range2=1yr);
 %mergeel(range2=2yr);
 
-proc freq data=sic_int.core_ids_elix_1yr;
+proc freq data=sic_int.core_ids_elix_1yr_2;
 table comorb:;
 run;
 
-proc freq data=sic_int.core_ids_elix_2yr;
+proc freq data=sic_int.core_ids_elix_2yr_2;
 table comorb:;
 run;
 
@@ -1569,44 +1622,61 @@ proc sort data=sic_int.chronic_21_&precore.3_0;
 by bid_hrs core_year;
 run;
 
-
 proc sql;
-create table sic_int.core_ids_elix_cc_&precore.(drop=bid_hrs2 core_year2)
+create table core_ids_elix_cc_&precore.(drop=bid_hrs2 core_year2)
 as select * from
-sic_int.core_ids_elix_&precore. a
+sic_int.core_ids_elix_&precore._2 a
 left join
 sic_int.chronic_21_&precore.3_0(rename=(bid_hrs=bid_hrs2 core_year=core_year2)) b 
 on (a.bid_hrs)=(b.bid_hrs2) and a.core_year=b.core_year2;
 quit;
+
+/*For observations that have ffs mc 1 year prior to interview
+set cc's variables to 0 if missing bc didn't have a dx during that time*/
+data sic_int.core_ids_elix_cc_&precore._2;
+set core_ids_elix_cc_&precore.;
+array list cc_:;
+do over list;
+if part_ab_12m=1 and hmo_d_12m=0 and list=. then list=0;
+end;
+run;
 
 %mend;
 
 %mergecc(precore=1yr);
 %mergecc(precore=2yr);
 
-/* the above file contains all interviews, if mc xwalk id
-is missing then elixhauser comorbidities and cc's are missing
+/* the above file contains all interviews, if do not have mc ffs
+1 year preceeding interview then elixhauser comorbidities and cc's are missing
 
 File names are:
 sic_int.core_ids_elix_cc_1yr
 sic_int.core_ids_elix_cc_2yr*/
 
-proc contents data=sic_int.core_ids_elix_cc_1yr;
+proc contents data=sic_int.core_ids_elix_cc_1yr_2;
 run;
 
-proc contents data=sic_int.core_ids_elix_cc_2yr;
+proc contents data=sic_int.core_ids_elix_cc_2yr_2;
 run;
 
-proc freq data=sic_int.core_ids_elix_cc_1yr;
+proc freq data=sic_int.core_ids_elix_cc_1yr_2;
+table cc_: comorb_all_0_1yr;
+run;
+
+proc freq data=sic_int.core_ids_elix_cc_2yr_2;
 table cc_:;
 run;
 
-proc freq data=sic_int.core_ids_elix_cc_2yr;
-table cc_:;
-run;
+
+
+
 
 
 H="Step 5 - Get additional utilization information from claims"
+/*These additional variables are just added to the dataset with the
+elixhauser and cc's 1 year preceeding the interview, can add them
+later when required to get the 2 year look-back dataset*/
+
 /****************************************************************************/
 /*Get indicator of any hospital admission 6 months pre-core interview*/
 /****************************************************************************/
@@ -1640,15 +1710,14 @@ variables left blank if no ip claims*/
 proc sql;
 create table core_ids_criteria_1 as select a.*,b.icu_days_6m,
 b.n_ip_admit_6m,b.n_hospd_6m 
-from sic_int.core_ids_elix_cc_1yr a
+from sic_int.core_ids_elix_cc_1yr_2 a
 left join
 ip_3 b 
 on trim(left(a.bid_hrs))=trim(left(b.bid_hrs_19)) and a.core_year=b.core_year;
 quit;
 
-/*******************************************************************************/
-/*need to check this!! for now, if missing comorbidities, then set to 0
-Probably want to change this once have ffs mc status*/
+/*Since set comorbidities = 0 if no dx but have ffs mc 1 year preceeding the
+core interview, can use comorb = ., same as ffs mc 1 year=no*/
  data core_ids_1yr_criteria ;
  set core_ids_criteria_1 ;
  array list icu_days_6m n_ip_admit_6m n_hospd_6m;
@@ -1663,7 +1732,6 @@ Probably want to change this once have ffs mc status*/
  proc freq;
  table icu_days_6m n_ip_admit_6m n_hospd_6m ind_hosp_adm_6m /missprint;
  run;
-/*******************************************************************************/
 
 /****************************************************************************/
 /*Get indicator of ESRD codes from the denominator file the year of the interview*/
@@ -1761,6 +1829,11 @@ run;
 
 
 H="Step 6 - HRS variable cleaning and check criteria"
+proc freq
+data=sic_int.core_ids_1yr_criteria_4;
+table comorb_31_0_1yr;
+run;
+
 data sic_int.core_ids_1yr_criteria_5;
 set sic_int.core_ids_1yr_criteria_4 ;
 
@@ -1772,7 +1845,7 @@ label tics_cat="TICS 1=normal, 2=MCI, 3=Demented";
 
 /*any elixhauser cancer dx*/
 if comorb_17_0_1yr=1 | comorb_18_0_1yr=1 | comorb_19_0_1yr=1 then el_cancer_1yr=1;
-if comorb_17_0_1yr=1 & comorb_18_0_1yr=1 & comorb_19_0_1yr=1 then el_cancer_1yr=1;
+if comorb_17_0_1yr=0 & comorb_18_0_1yr=0 & comorb_19_0_1yr=0 then el_cancer_1yr=0;
 
 /*4 or more comorbidities*/
 if comorb_all_0_1yr>3 then el_ge4_comorb_1yr=1;
@@ -1810,7 +1883,7 @@ label cc2_ge4_comorb_1yr="4+ DW Chronic Conditions, excl cataract and glaucoma";
 variables (cc's elix hrs survey) */
 if comorb_31_0_1yr=1 | CC_alzheim_1yr=1 | CC_2_ALZH_1yr=1 | CC_3_ALZHDMTA_1yr=1 | 
 tics_cat=3 then dem_any_ind=1;
-if if comorb_31_0_1yr=0 & CC_alzheim_1yr=0 & CC_2_ALZH_1yr=0 & CC_3_ALZHDMTA_1yr=0 & 
+if comorb_31_0_1yr=0 & CC_alzheim_1yr=0 & CC_2_ALZH_1yr=0 & CC_3_ALZHDMTA_1yr=0 & 
 (tics_cat=1 | tics_cat=2) then dem_any_ind=1;
 label dem_any_ind="Any indicator of Dementia 1yr";
 
@@ -1842,11 +1915,11 @@ label liver_any_ind="Any indicator of Advanced liver disease/cirrhosis 1yr";
 
 if comorb_16_0_1yr=1 then hiv_any_ind=1;
 if comorb_16_0_1yr=0 then hiv_any_ind=0;
-label hiv_any_ind "Any indicator of HIV with and AIDS defining illness 1yr";
+label hiv_any_ind="Any indicator of HIV with and AIDS defining illness 1yr";
 
 if comorb_33_0_1yr=1 then als_any_ind=1;
 if comorb_33_0_1yr=0 then als_any_ind=0;
-label als_any_ind "Any indicator of ALS 1yr";
+label als_any_ind="Any indicator of ALS 1yr";
 
 /*doesn't use the cc definition excluding cataract,glaucoma cc2_ge4_comorb_1yr */
 if el_ge4_comorb_1yr=1 | cc_ge4_comorb_1yr=1 | comor_c_hrs=1 then multi_any_ind=1;
@@ -1875,13 +1948,23 @@ proc sql;
 select count(distinct id) from sic_int.core_ids_1yr_criteria_5
 where core_year in (2000,2002,2004,2006,2008,2010);
 
-title "Age 65+, With mc xwalk id";
+title "Unique R's w/ Age 65+";
+select count(distinct id) from sic_int.core_ids_1yr_criteria_5
+where age_ge_65=1 and core_year in (2000,2002,2004,2006,2008,2010);
+
+title "Unique R's w/ Age 65+, With mc xwalk id";
 select count(distinct id) from sic_int.core_ids_1yr_criteria_5
 where age_ge_65=1 and xwalk_yes=1 and core_year in (2000,2002,2004,2006,2008,2010);
 
+title "Unique R's w/ Age 65+, With mc xwalk id, and FFS 1yr pre-ivw";
+select count(distinct id) from sic_int.core_ids_1yr_criteria_5
+where age_ge_65=1 and xwalk_yes=1 and part_ab_12m=1 and hmo_d_12m=0 
+and core_year in (2000,2002,2004,2006,2008,2010);
+
 create table age_ge_65_mc as 
 select * from sic_int.core_ids_1yr_criteria_5
-where age_ge_65=1 and xwalk_yes=1 and core_year in (2000,2002,2004,2006,2008,2010);
+where age_ge_65=1 and xwalk_yes=1 and part_ab_12m=1 and hmo_d_12m=0 
+and core_year in (2000,2002,2004,2006,2008,2010);
 quit;
 
 title "Dementia variables - elix, cc, TICS";
@@ -1963,7 +2046,7 @@ where ser_med_illness=1;
 title "Number of R's that meet B)Any ADL help";
 proc sql;
 select count(distinct id) from age_ge_65_mc  
-where adl_independent_core=1;
+where adl_independent_core=0;
 
 title "Number of R's that meet C)Any hospital admission 6m preceeding core interview";
 proc sql;
@@ -1973,7 +2056,7 @@ where ind_hosp_adm_6m=1;
 title "Number of R's that meet A)Any serious illness + B)ADL help";
 proc sql;
 select count(distinct id) from age_ge_65_mc  
-where (ser_med_illness=1 and adl_independent_core=1) ;
+where (ser_med_illness=1 and adl_independent_core=0) ;
 
 title "Number of R's that meet A)Any serious illness + C)Hospital admission";
 proc sql;

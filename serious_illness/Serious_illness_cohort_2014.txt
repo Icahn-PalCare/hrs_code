@@ -1683,7 +1683,7 @@ later when required to get the 2 year look-back dataset*/
 
 %macro admissions(days=,suffix=);
 
-/*pull list of ip claims from all medpar claims 6 months pre-interview*/
+/*pull list of ip claims from all medpar claims x days pre-interview*/
 data ip_meet_&days.;
 set sic_int.mp_meet3_&days.(where=(trim(left(SSLSSNF))~="N"));
 run;
@@ -1693,8 +1693,15 @@ set ip_meet_&days.;
 if icarecnt=. then icarecnt=0; /*medpar intensive care day count*/
 if CRNRYDAY=. then CRNRYDAY=0; /*medpar coronary day count*/
 icu_days=icarecnt+CRNRYDAY;
-em_urgent_admit=0;
+em_urgent_admit=0; /*Urgent , emergent admissions from admission type*/
 if type_adm in (1,2) then em_urgent_admit=1;
+em_admit=0;
+if type_adm=1 then em_admit=1;
+urgent_admit=0;
+if type_adm=2 then urgent_admit=1;
+ind_ed_charge=0; /*ED charges as another indicator of ED use*/
+if ER_AMT>0 & ER_AMT~=. then ind_ed_charge=1;
+if ER_AMT==0 | ER_AMT==. then ind_ed_charge=0;
 run;
 
 proc sort data=ip_&days._2;
@@ -1703,11 +1710,25 @@ run;
 
 proc sql;
 create table ip_&days._3 as select distinct BID_hrs_19,core_year,
+/*total ICU days*/
 sum(icu_days) as icu_days_&suffix. label="total icu days &suffix. pre core ivw",
+/*count of IP admissions, all types*/
 count(*) as n_ip_admit_&suffix. label="total n of hospital admit &suffix. pre core ivw",
+/*total Hospital LOS*/
 sum(LOSCNT) as n_hospd_&suffix. label="total hospital days &suffix. pre core ivw",
+/*count urgent or emergency admissions*/
 count(*) where em_urgent_admit=1 as n_em_urgent_admit_&suffix. 
-	label="total n of urgent/emergent hospital admit &suffix. pre core ivw"
+	label="total n of urgent/emergent hospital admit &suffix. pre core ivw",
+/*count of emergency admissions, from admission type code*/
+count(*) where em_admit=1 as n_em_admit_&suffix. 
+	label="total n of emergent hospital admit &suffix. pre core ivw",
+/*count of urgent admissions, from admission type code*/
+count(*) where urgent_admit=1 as n_urgent_admit_&suffix. 
+	label="total n of urgent hospital admit &suffix. pre core ivw",
+/*count of admissions with any ED charges*/
+count(*) where ind_ed_charge=1 as n_ED_ip_&suffix. 
+	label="total n of ED visits with subsequent admit &suffix. pre core ivw"
+
  from ip_&days._2 group by BID_hrs_19,core_year;
 quit;
 
@@ -1720,7 +1741,8 @@ quit;
 variables left blank if no ip claims*/
 proc sql;
 create table core_ids_criteria_1a as select a.*,b.icu_days_6m,
-b.n_ip_admit_6m,b.n_hospd_6m,b.n_em_urgent_admit_6m
+b.n_ip_admit_6m,b.n_hospd_6m,b.n_em_urgent_admit_6m,b.n_em_admit_6m,
+b.n_urgent_admit_6m,b.n_ED_ip_6m
 from sic_int.core_ids_elix_cc_1yr_2 a
 left join
 ip_183_3 b 
@@ -1729,23 +1751,26 @@ quit;
 
 proc sql;
 create table core_ids_criteria_1 as select a.*,b.icu_days_12m,
-b.n_ip_admit_12m,b.n_hospd_12m,b.n_em_urgent_admit_12m
+b.n_ip_admit_12m,b.n_hospd_12m,b.n_em_urgent_admit_12m,b.n_em_admit_12m,
+b.n_urgent_admit_12m,b.n_ED_ip_12m
 from core_ids_criteria_1a a
 left join
 ip_365_3 b 
 on trim(left(a.bid_hrs))=trim(left(b.bid_hrs_19)) and a.core_year=b.core_year;
 quit;
 
-
 /*Since set comorbidities = 0 if no dx but have ffs mc 1 year preceeding the
 core interview, can use comorb = ., same as ffs mc 1 year=no*/
  data core_ids_1yr_criteria ;
  set core_ids_criteria_1 ;
  array list icu_days_6m n_ip_admit_6m n_hospd_6m n_em_urgent_admit_6m 
-	icu_days_12m n_ip_admit_12m n_hospd_12m n_em_urgent_admit_12m;
+	n_em_admit_6m n_urgent_admit_6m n_ED_ip_6m
+	icu_days_12m n_ip_admit_12m n_hospd_12m n_em_urgent_admit_12m
+	n_em_admit_12m n_urgent_admit_12m n_ED_ip_12m;
  do over list;
  if list=. & comorb_1_0_1yr~=. then list=0;
  end;
+
  if n_ip_admit_6m=0 then ind_hosp_adm_6m=0;
  if n_ip_admit_6m>0 & n_ip_admit_6m~=. then ind_hosp_adm_6m=1;
  label ind_hosp_adm_6m="Indicator for any hospital admission 6m pre core";
@@ -1753,6 +1778,18 @@ core interview, can use comorb = ., same as ffs mc 1 year=no*/
  if n_em_urgent_admit_6m=0 then ind_em_ur_adm_6m=0;
  if n_em_urgent_admit_6m>0 & n_em_urgent_admit_6m~=. then ind_em_ur_adm_6m=1;
  label ind_em_ur_adm_6m="Ind any urgent or emergent hospital admission 6m pre core";
+
+ if n_em_admit_6m=0 then ind_em_adm_6m=0;
+ if n_em_admit_6m>0 & n_em_admit_6m~=. then ind_em_adm_6m=1;
+ label ind_em_adm_6m="Ind any emergency hospital admission 6m pre core";
+
+ if n_urgent_admit_6m=0 then ind_ur_adm_6m=0;
+ if n_urgent_admit_6m>0 & n_urgent_admit_6m~=. then ind_ur_adm_6m=1;
+ label ind_ur_adm_6m="Ind any urgent hospital admission 6m pre core";
+
+ if n_ED_ip_6m=0 then ind_ED_adm_6m=0;
+ if n_ED_ip_6m>0 & n_ED_ip_6m~=. then ind_ED_adm_6m=1;
+ label ind_ED_adm_6m="Ind ED use with hospital admission 6m pre core, from charges";
 
  if n_ip_admit_12m=0 then ind_hosp_adm_12m=0;
  if n_ip_admit_12m>0 & n_ip_admit_12m~=. then ind_hosp_adm_12m=1;
@@ -1762,19 +1799,162 @@ core interview, can use comorb = ., same as ffs mc 1 year=no*/
  if n_em_urgent_admit_12m>0 & n_em_urgent_admit_12m~=. then ind_em_ur_adm_12m=1;
  label ind_em_ur_adm_12m="Ind any urgent or emergent hospital admission 12m pre core";
 
- run;
+ if n_em_admit_12m=0 then ind_em_adm_12m=0;
+ if n_em_admit_12m>0 & n_em_admit_12m~=. then ind_em_adm_12m=1;
+ label ind_em_adm_12m="Ind any emergency hospital admission 12m pre core";
+
+ if n_urgent_admit_12m=0 then ind_ur_adm_12m=0;
+ if n_urgent_admit_12m>0 & n_urgent_admit_12m~=. then ind_ur_adm_12m=1;
+ label ind_ur_adm_12m="Ind any urgent hospital admission 12m pre core";
+
+ if n_ED_ip_12m=0 then ind_ED_adm_12m=0;
+ if n_ED_ip_12m>0 & n_ED_ip_12m~=. then ind_ED_adm_12m=1;
+ label ind_ED_adm_12m="Ind ED use with hospital admission 12m pre core, from charges";
+
+run;
 
  proc freq;
- table icu_days_6m n_ip_admit_6m n_hospd_6m ind_hosp_adm_6m n_em_urgent_admit_6m ind_em_ur_adm_6m /missprint;
+ table icu_days_6m n_ip_admit_6m n_hospd_6m ind_hosp_adm_6m n_em_urgent_admit_6m ind_em_ur_adm_6m 
+	ind_em_adm_6m ind_ur_adm_6m n_ED_ip_6m ind_ED_ip_6m ind_em_adm_6m*ind_ED_ip_6m /missprint;
  run;
 
- proc freq;
- table icu_days_12m n_ip_admit_12m n_hospd_12m ind_hosp_adm_12m n_em_urgent_admit_12m ind_em_ur_adm_12m /missprint;
- run;
+proc freq;
+table icu_days_12m n_ip_admit_12m n_hospd_12m ind_hosp_adm_12m n_em_urgent_admit_12m ind_em_ur_adm_12m ind_em_adm_12m ind_ur_adm_12m n_ED_ip_12m ind_ED_ip_12m ind_em_adm_12m*ind_ED_ip_12m /missprint;
+run;
+/****************************************************************************/
+/****************************************************************************/
+/*Get SNF days, indicator for 12 months preceding the interview*/
+/****************************************************************************/
+/****************************************************************************/
+
+/*pull list of snf claims from all medpar claims 12 months pre-interview*/
+data snf_meet_365;
+set sic_int.mp_meet3_365(where=(trim(left(SSLSSNF))="N"));
+run;
+
+/*Identify claims entirely within 1 year before interview
+Step 4: Claims that aren't entirely within 1 year from interview date
+xx claims left, so x claims end within 1 year but SNF stay doesn't start
+until before 1 year, need to count these observations seperately
+to calculate the number of days spent in the SNF in the year pre-interview*/
+proc sql;
+create table snf_meet1_pre_365 as select *
+from snf_meet_365
+where (c_ivw_date - admit_date)<365; 
+quit;
+
+
+/*Identify claims that are partially within the time from interview date*/
+proc sql;
+create table snf_meet2_pre_365 as select *
+from snf_meet_365
+where (c_ivw_date - admit_date)>=365; 
+quit;
+
+/*For claims partially in 1 year pre-interview, truncate start date to just get 
+days w/i 1 year
+create indicator variable that claim start date is truncated*/
+data snf_meet2_pre_365_1;
+set snf_meet2_pre_365;
+admit_date = c_ivw_date+365;
+snf_admit_date_mod = 1;
+label snf_admit_date_mod = "Admit date mod; at 12 mo from ivw date";
+format admit_date date10.;
+run;
+
+proc freq;
+table snf_admit_date_mod ;
+run;
+
+data snf_meet_pre_365;
+set snf_meet1_pre_365 snf_meet2_pre_365_1;
+run;
+
+proc freq;
+table snf_admit_date_mod ;
+run;
+
+/*save final files to project int_data directory*/
+data sic_int.snf_meet_pre_365 ;
+set  snf_meet_pre_365;
+run;
+
+/*************************************************************/
+/*calculate total number of days spent in SNF by BID*/
+/*************************************************************/
+
+data pre_snf_days_1;
+set sic_int.snf_meet_pre_365;
+calc_snf_LOS=disch_date-admit_date;
+run;
+
+proc sort data=pre_snf_days_1;
+by bid_hrs_19 c_ivw_date admit_date;
+run;
+
+proc sql;
+create table snf_days_pre as select distinct bid_hrs_19,core_year,
+sum(calc_snf_LOS)
+	as snf_days_pre_12m
+	from pre_snf_days_1 group by bid_hrs_19,core_year;
+quit;
+
+proc freq;
+table snf_days_pre_12m;
+run;
+
+/*create indicator for any SNF claims*/
+data snf_days_pre_1;
+set snf_days_pre;
+run;
 
 
 /****************************************************************************/
+
+/****************************************************************************/
+
+/****************************************************************************/
+
+/****************************************************************************/
+
+/****************************************************************************/
+
+/*merge into full dataset*/
+
+
+ data core_ids_1yr_criteria ;
+ set core_ids_criteria_1 ;
+ array list icu_days_6m n_ip_admit_6m n_hospd_6m n_em_urgent_admit_6m 
+	n_em_admit_6m n_urgent_admit_6m n_ED_ip_6m
+	icu_days_12m n_ip_admit_12m n_hospd_12m n_em_urgent_admit_12m
+	n_em_admit_12m n_urgent_admit_12m n_ED_ip_12m;
+ do over list;
+ if list=. & comorb_1_0_1yr~=. then list=0;
+ end; 
+
+if n_snf_days_12m=0 then ind_snf_use_12m=0;
+ if n_snf_days_12m>0 & n_snf_days_12m=. then ind_snf_use_12m=1;
+ label ind_snf_use_12m="Indicator for any SNF stay 12m pre core";
+
+run;
+
+proc freq;
+table n_snf_days_12m ind_snf_use_12m /missprint;
+run;
+
+/****************************************************************************/
+
+/****************************************************************************/
+
+/****************************************************************************/
+
+/****************************************************************************/
+
+
+/****************************************************************************/
+/****************************************************************************/
 /*Get indicator of ESRD codes from the denominator file the year of the interview*/
+/****************************************************************************/
 /****************************************************************************/
 proc sort data=medi.dn_2000_2010 out=dn_2000_20102  nodupkey;
 by BID_HRS_19 year;
@@ -2102,7 +2282,8 @@ run;
 
 title "Hospital admissions 6m, 12m before core interview";
 proc freq data=age_ge_65_mc  ;
-table ind_hosp_adm_6m*ind_em_ur_adm_6m ind_hosp_adm_12m*ind_em_ur_adm_12m /missprint;
+table ind_hosp_adm_6m*ind_em_ur_adm_6m ind_hosp_adm_12m*ind_em_ur_adm_12m 
+ind_em_adm_12m*ind_ED_ip_12m /missprint;
 run;
 
 title "Number of R's that meet A)Any serious illness";
@@ -2183,3 +2364,16 @@ data medpar3;
 	if ICU = 0 and ED = 0 then ICUED = 0;
 	drop icu ed;
 run;
+
+
+/*Notes re OP ED Use, from Melissa's project
+Uses Revenue center codes*/
+
+data ed;
+	set revenue0;
+	if REV_CNTR >= 450 and REV_CNTR < 460;
+	ed = 1;
+run;
+
+Each OP claim has up to 45 REV_CNTR variables:
+ 	RVCNTR01-RVCNTR45

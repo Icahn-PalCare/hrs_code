@@ -1895,39 +1895,26 @@ run;
 proc sql;
 create table snf_days_pre as select distinct bid_hrs_19,core_year,
 sum(calc_snf_LOS)
-	as snf_days_pre_12m
+	as n_snf_days_12m
 	from pre_snf_days_1 group by bid_hrs_19,core_year;
 quit;
 
 proc freq;
-table snf_days_pre_12m;
+table n_snf_days_12m;
 run;
-
-/*create indicator for any SNF claims*/
-data snf_days_pre_1;
-set snf_days_pre;
-run;
-
-
-/****************************************************************************/
-
-/****************************************************************************/
-
-/****************************************************************************/
-
-/****************************************************************************/
-
-/****************************************************************************/
 
 /*merge into full dataset*/
+proc sql;
+create table core_ids_criteria_2a as select a.*,b.n_snf_days_12m
+from core_ids_criteria_1 a
+left join
+snf_days_pre b 
+on trim(left(a.bid_hrs))=trim(left(b.bid_hrs_19)) and a.core_year=b.core_year;
+quit;
 
-
- data core_ids_1yr_criteria ;
- set core_ids_criteria_1 ;
- array list icu_days_6m n_ip_admit_6m n_hospd_6m n_em_urgent_admit_6m 
-	n_em_admit_6m n_urgent_admit_6m n_ED_ip_6m
-	icu_days_12m n_ip_admit_12m n_hospd_12m n_em_urgent_admit_12m
-	n_em_admit_12m n_urgent_admit_12m n_ED_ip_12m;
+ data core_ids_1yr_criteria_2 ;
+ set core_ids_criteria_2a ;
+ array list n_snf_days_12m;
  do over list;
  if list=. & comorb_1_0_1yr~=. then list=0;
  end; 
@@ -1935,6 +1922,7 @@ run;
 if n_snf_days_12m=0 then ind_snf_use_12m=0;
  if n_snf_days_12m>0 & n_snf_days_12m=. then ind_snf_use_12m=1;
  label ind_snf_use_12m="Indicator for any SNF stay 12m pre core";
+ label n_snf_days_12m="SNF Days 12m pre core"
 
 run;
 
@@ -1942,13 +1930,6 @@ proc freq;
 table n_snf_days_12m ind_snf_use_12m /missprint;
 run;
 
-/****************************************************************************/
-
-/****************************************************************************/
-
-/****************************************************************************/
-
-/****************************************************************************/
 
 
 /****************************************************************************/
@@ -1965,7 +1946,7 @@ for the core interview years*/
 proc sql;
 create table dn_core_y as select
 a.*,b.ESRD_IND from 
-core_ids_1yr_criteria a left join
+core_ids_1yr_criteria_2 a left join
 dn_2000_20102 b
 on trim(left(a.BID_hrs))=trim(left(b.BID_hrs_19))
 and a.c_ivw_year=b.year;
@@ -1975,7 +1956,7 @@ proc freq;
 table ESRD_IND /missprint;
 run;
 
-data core_ids_1yr_criteria_2;
+data core_ids_1yr_criteria_2b;
 set dn_core_y ;
 if ESRD_IND='Y' then esrd_ind_n=1;
 if ESRD_IND='0' then esrd_ind_n=0;
@@ -2031,7 +2012,7 @@ run;
 proc sql;
 create table core_ids_1yr_criteria_3 as select
 a.*,b.home_oxygen
-from core_ids_1yr_criteria_2 a left join
+from core_ids_1yr_criteria_2b a left join
 oxygen_3 b
 on trim(left(a.BID_hrs))=trim(left(b.BID_hrs_19))
 and a.core_year=b.core_year;
@@ -2184,6 +2165,15 @@ if smi_dem_ind =0 & smi_cancer_ind =0 & comorb_13_0_1yr =0 & smi_chf_ind =0 &
  then ser_med_illness=0;
 label ser_med_illness="Any indicator of serious medical illness 1yr";
 
+/*Indicator for any SNF stays 12m prior to interview or current nh res*/
+if ind_snf_use_12m=1 | nhres=1 then smi_nh_ind=1;
+if ind_snf_use_12m=0 & nhres=0 then smi_nh_ind=0;
+label smi_nh_ind="Nursing home resident or an SNF claims 1yr";
+
+/*indicator for adl helper*/
+if adl_helper_count>0 & adl_helper_count~=. then smi_helper_ind=1;
+if adl_helper_count=0 then smi_helper_ind=0;
+label smi_helper_ind="Indicator of having any helpers with ADL, core";
 run;
 
  ods rtf body="E:\data\serious_ill\logs\criteria_vars_before_coredate.rtf";
@@ -2286,6 +2276,16 @@ table ind_hosp_adm_6m*ind_em_ur_adm_6m ind_hosp_adm_12m*ind_em_ur_adm_12m
 ind_em_adm_12m*ind_ED_ip_12m /missprint;
 run;
 
+title "Nursing home use 12m before core interview or self report NH resident at interview";
+proc freq data=age_ge_65_mc  ;
+table ind_snf_use_12m nhres smi_nh_ind /missprint;
+run;
+
+title "Any helper with ADLs, core interview";
+proc freq data=age_ge_65_mc  ;
+table smi_helper_ind /missprint;
+run;
+
 title "Number of R's that meet A)Any serious illness";
 proc sql;
 select count(distinct id) from age_ge_65_mc  
@@ -2300,6 +2300,16 @@ title "Number of R's that meet C)Any hospital admission 12m preceding core inter
 proc sql;
 select count(distinct id) from age_ge_65_mc  
 where ind_hosp_adm_12m=1;
+
+title "Number of R's that meet D)NH resident at interview or any SNF claim 12m pre interview";
+proc sql;
+select count(distinct id) from age_ge_65_mc  
+where smi_nh_ind=1;
+
+title "Number of R's that meet E)Any helper with ADLs core interview";
+proc sql;
+select count(distinct id) from age_ge_65_mc  
+where smi_helper_ind=1;
 
 title "Number of R's that meet A)Any serious illness + B)ADL help";
 proc sql;

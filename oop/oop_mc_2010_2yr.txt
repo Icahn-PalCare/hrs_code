@@ -1027,16 +1027,19 @@ table exit_year_x;
 run;
 
 /*get a dataset with just decedents exit year, death_year, death date and ids*/
-data oop_sample;
+data oop_int.oop_sample;
 set oop_age_ge67_in_mc ;
 keep id bid_hrs exit_year_x death_year_e death_date_e;
 
 run;
 
-H="Check to see if medicare and no hmo for 2 yrs before death"
+H="Check to see if medicare and no hmo for 2 and 5 yrs before death"
 /***********************************************************
 ************************************************************
 Determine which observations get dropped from sample because they either (a) don't have medicare the whole 24 months before death or (b) have HMO sometime in the last 24 months before death
+
+Save one datasets:
+oop_int.meet_criteria_2yr, this also has the 5 year variables
 ************************************************************
 ***********************************************************/
 
@@ -1046,7 +1049,7 @@ Count observations in denominator file with death year: 5192*/
 proc sql;
 create table dn_death_y as select
 a.*,b.buyin12,b.year,b.HMOIND12,b.bid_n
-from oop_sample a inner join
+from oop_int.oop_sample a inner join
 dn_2000_20102 b
 on trim(left(a.BID_hrs))=trim(left(b.BID_HRS_19))
 and a.death_year_e=b.year;
@@ -1124,42 +1127,115 @@ on trim(left(a.BID_hrs))=trim(left(b.BID_hrs_19))
 and 1<a.year-b.year<=2 order by a.bid_n,year;
 quit;
 
+/*Now match dn files from 3 years before death
+Matches hrs entry for year died with the previous year's mc denominator file, pulling in buy in and hmo indicator
+to determine mc elgible throughout study time period
+Use _l2 to denote 2 years prior to death (death year less 2)
+Don't lose any observations*/
+proc sql;
+create table dn_death_y_3bef as select
+a.*,
+b.year as death_year_l3,
+b.buyin12 as buyin12_l3,
+b.HMOIND12 as HMOIND12_l3
+from dn_death_y_2bef a inner join
+dn_2000_20082 b
+on trim(left(a.BID_hrs))=trim(left(b.BID_hrs_19))
+and 2<a.year-b.year<=3 order by a.bid_n,year;
+quit;
+
+/*Now match dn files from 4 years before death
+Matches hrs entry for year died with the previous year's mc denominator file, pulling in buy in and hmo indicator
+to determine mc elgible throughout study time period
+Use _l3 to denote 3 years prior to death (death year less 2)
+Lose one observations: 1574*/
+proc sql;
+create table dn_death_y_4bef as select
+a.*,
+b.year as death_year_l4,
+b.buyin12 as buyin12_l4,
+b.HMOIND12 as HMOIND12_l4
+from dn_death_y_3bef a inner join
+dn_2000_20082 b
+on trim(left(a.BID_hrs))=trim(left(b.BID_hrs_19))
+and 3<a.year-b.year<=4 order by a.bid_n,year;
+quit;
+
+/*Finally, match dn files from 5 years before death
+Matches hrs entry for year died with the previous year's mc denominator file, pulling in buy in and hmo indicator
+to determine mc elgible throughout study time period
+Use _l5 to denote 5 years prior to death (death year less 5)
+Don't lose any observations*/
+proc sql;
+create table dn_death_y_5bef as select
+a.*,
+b.year as death_year_l5,
+b.buyin12 as buyin12_l5,
+b.HMOIND12 as HMOIND12_l5
+from dn_death_y_4bef a inner join
+dn_2000_20082 b
+on trim(left(a.BID_hrs))=trim(left(b.BID_hrs_19))
+and 4<a.year-b.year<=5 order by a.bid_n,year;
+quit;
+
 **************************************************
 **************************************************
-/*create variable that has entries for full 24 months pre-death for buyin and hmo variables by combining death year and years prior to death*/
+/*create variables that have entries for full 24m and 60m pre-death for buyin and hmo variables by combining death year and years prior to death*/
 data all_insurance;
-set dn_death_y_2bef;
+set dn_death_y_5bef;
+
 *merge individual year variables into single variable;
-buyin_24_l=trim(left(buyin12_l2))||trim(left(buyin12_l1))||trim(left(buyin_dy));
-hmo_24_l=trim(left(hmoind12_l2))||trim(left(hmoind12_l1))||trim(left(hmo_dy));
-buylength=length(buyin_24_l);
-hlength=length(hmo_24_l);
-*trim so merged variable is 24 char long to reflect 24 months before death;
-buyin_24_lr=reverse(trim(buyin_24_l));
-hmo_24_lr=reverse(trim(hmo_24_l));
-buyin_24r=substr(trim(left(buyin_24_lr)),1,24);
-hmo_24r=substr(trim(left(hmo_24_lr)),1,24);
+buyin_60_l=trim(left(buyin12_l5))||trim(left(buyin12_l4))||trim(left(buyin12_l3))||trim(left(buyin12_l2))||trim(left(buyin12_l1))||trim(left(buyin_dy));
+hmo_60_l=trim(left(hmoind12_l5))||trim(left(hmoind12_l4))||trim(left(hmoind12_l3))||trim(left(hmoind12_l2))||trim(left(hmoind12_l1))||trim(left(hmo_dy));
+buylength=length(buyin_60_l);
+hlength=length(hmo_60_l);
+
+*trim so merged variable is 24 or 60 char long to reflect months before death;
+buyin_60_lr=reverse(trim(buyin_60_l));
+hmo_60_lr=reverse(trim(hmo_60_l));
+
+buyin_24r=substr(trim(left(buyin_60_lr)),1,24);
+hmo_24r=substr(trim(left(hmo_60_lr)),1,24);
+buyin_60r=substr(trim(left(buyin_60_lr)),1,60);
+hmo_60r=substr(trim(left(hmo_60_lr)),1,60);
+
 buyin_24=reverse(trim(buyin_24r));
 hmo_24=reverse(trim(hmo_24r));
-buylength2=length(buyin_24);
-hlength2=length(hmo_24);
+buyin_60=reverse(trim(buyin_60r));
+hmo_60=reverse(trim(hmo_60r));
+
+buylength2_24=length(buyin_24);
+hlength2_24=length(hmo_24);
+buylength2_60=length(buyin_60);
+hlength2_60=length(hmo_60);
+
+
 *create indicator variable for mc coverage 0=no, 1=yes;
 if length(buyin_24)=24 then do;
 if indexc(buyin_24,"0","1","2","A","B") then part_ab_2y=0;
 if indexc(buyin_24,"0","1","2","A","B")=0 then part_ab_2y=1;
 end;
+if length(buyin_60)=60 then do;
+if indexc(buyin_60,"0","1","2","A","B") then part_ab_5y=0;
+if indexc(buyin_60,"0","1","2","A","B")=0 then part_ab_5y=1;
+end;
+
 *create indicator variable for hmo coverage 0=no, 1=yes;
 if length(hmo_24)=24 then do;
 if index(hmo_24,"000000000000000000000000") then hmo_2y=0;
 if index(hmo_24,"000000000000000000000000")=0 then hmo_2y=1;
 end;
+if length(hmo_60)=60 then do;
+if index(hmo_60,"000000000000000000000000000000000000000000000000000000000000") then hmo_5y=0;
+if index(hmo_60,"000000000000000000000000000000000000000000000000000000000000")=0 then hmo_5y=1;
+end;
 
 proc freq;
-table death_year_e*hmo_2y;
+table death_year_e*hmo_2y death_year_e*hmo_5y;
 run;
 
 proc freq;
-table death_year_e*part_ab_2y;
+table death_year_e*part_ab_2y death_year_e*part_ab_5y;
 run;
 
 proc sql outobs=100;
@@ -1168,7 +1244,7 @@ where  part_ab_2y=1 and hmo_2y=1;
 quit;
 
 proc means n;
-var hmo_2y part_ab_2y;
+var hmo_2y part_ab_2y hmo_5y part_ab_5y;
 run;
 
 /*3330 of the 4474 observations meet the mc parts a and b coverage and no hmo criteria
@@ -1180,6 +1256,12 @@ create table oop_int.meet_criteria_2yr as
 select * from all_insurance
 where part_ab_2y=1 and hmo_2y=0;
 quit;
+
+/*get count of subsample that also meets 5 year criteria*/
+proc sql;
+count(*) from oop_int.meet_criteria_2yr
+where part_ab_5y=1 and hmo_5y=0;
+run;
 
 
 
@@ -1233,7 +1315,6 @@ run;
 proc sort data=oop_int.meet_criteria_2yr out=meet nodupkey;
 by id;
 run;
-
 
 /**********************************************************************/
 /**********************************************************************/

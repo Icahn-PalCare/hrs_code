@@ -2574,10 +2574,10 @@ and one for all other claims in the mp file (inpatient claims)*/
 /**********************************************************/
 /**********************************************************/
 
-%macro mp(month_n=,days_start=,days_bef_death=,source=,equ=);
+%macro mp(month_n=,days_start=,days_bef_death=,source=,equ=,name=);
 %let source0=mp;
 
-/*identify claims where entire claim is within the 24 months prior to death*/
+/*identify claims where entire claim is within the x months prior to death*/
 proc sql;
 create table &source._meet as select a.*,b.death_date_e
 from medi.&source0._2000_2010(where=(trim(left(SSLSSNF))&equ.="N")) a inner join
@@ -2586,8 +2586,8 @@ on trim(left(a.BID_HRS_19))=trim(left(b.BID_hrs))
 and &days_start<=b.death_date_e-a.admit_date<=&days_bef_death;
 quit;
 
-/*identify claims that span 24 months prior to death (admission date is prior to start 
-of 24 months but discharge date is within the 24 month window*/
+/*identify claims that span x months prior to death (admission date is prior to start 
+of x months but discharge date is within the x month window*/
 proc sql;
 create table &source._meet2 as select a.*,b.death_date_e
 from medi.&source0._2000_2010(where=(trim(left(SSLSSNF))&equ.="N")) a inner join
@@ -2596,17 +2596,17 @@ on trim(left(a.BID_HRS_19))=trim(left(b.BID_hrs))
 and b.death_date_e-a.admit_date>&days_bef_death and b.death_date_e-a.disch_date<=&days_bef_death;
 quit;
 
-/*identify fraction of claims that span 24 month period that should be 
-attributed to the 24 month period
+/*identify fraction of claims that span x month period that should be 
+attributed to the x month period
 by just using the fraction of time that was included in the span*/
 data &source._meet3;
 set &source._meet2;
-pct_24m=(disch_date-(death_date_e-&days_bef_death))/(disch_date-admit_date);
+pct_xm=(disch_date-(death_date_e-&days_bef_death))/(disch_date-admit_date);
 array list pmt_amt passthru;
 do over list;
 if list=. then list=0;
-/*scale the partial claims by the time within the 24 month period*/
-list=list*pct_24m;
+/*scale the partial claims by the time within the x month period*/
+list=list*pct_xm;
 end;
 
 run;
@@ -2649,8 +2649,8 @@ quit;
 
 *merges the totals above with the hrs dataset that meets the 2 year criteria;
 proc sql;
-create table &source as select
-a.BID_hrs,a.id,coalesce(b.&source._paid_by_mc,0) as &source._paid_by_mc_2yr
+create table &source_&name. as select
+a.BID_hrs,a.id,coalesce(b.&source._paid_by_mc,0) as &source._paid_by_mc_&name.
 from oop_int.meet_criteria_2yr a
 left join
  &source._pay b
@@ -2661,12 +2661,14 @@ left join
  by BID_hrs;
  run;
 %mend;
-;
+; /*check is ; this needed???*/
 
 /*Runs macro to get total for the SNF claims*/
-%mp(days_start=0,days_bef_death=(365.25*2),source=snf,equ= );
+%mp(days_start=0,days_bef_death=(365.25*2),source=snf,equ=,name=2yr );
+%mp(days_start=0,days_bef_death=(365.25*2),source=snf,equ=,name=2yr );
 /*Runs macro to get total for the inpatient (not SNF) claims*/
-%mp(days_start=0,days_bef_death=(365.25*2),source=ip,equ=~ );
+%mp(days_start=0,days_bef_death=(365.25*5),source=ip,equ=~,name=5yr );
+%mp(days_start=0,days_bef_death=(365.25*5),source=ip,equ=~,name=5yr );
 
 /*************************************************************************/
 /*Simple check to view one of the HRS id's claims that are totaled to get the snf number
@@ -2690,7 +2692,7 @@ H="Other types of mc spending totals"
 /*macro to calculate totals for the claims that are not in medpar files*/
 %Macro all_other(source=,month_n=,days_start=,days_bef_death=);
 
-/*identify claims where entire claim is within the 60 months prior to death*/
+/*identify claims where entire claim is within the x months prior to death*/
 proc sql;
 create table &source._meet as select a.*
 from medi.&source._2000_2010 a inner join
@@ -2750,13 +2752,24 @@ left join
     %all_other(source=hs,month_n=_2yr,days_start=0,days_bef_death=(365*2));
      %all_other(source=dm,month_n=_2yr,days_start=0,days_bef_death=(365*2));
 
+/******************************************************************/
+/* Run the macro over the mc claims files for 5 years prior to death*/
+/******************************************************************/
+
+ %all_other(source=op,month_n=_5yr,days_start=0,days_bef_death=(365*5));
+  %all_other(source=pb,month_n=_5yr,days_start=0,days_bef_death=(365*5));
+   %all_other(source=hh,month_n=_5yr,days_start=0,days_bef_death=(365*5));
+    %all_other(source=hs,month_n=_5yr,days_start=0,days_bef_death=(365*5));
+     %all_other(source=dm,month_n=_5yr,days_start=0,days_bef_death=(365*5));
+
 
 H="Merge mc spending subtotals into single data file"
 /******************************************************************/
 /* Merge all subtotals into a single data file */
 /******************************************************************/
 	 data oop_int.costs_all;
-	 merge ip snf hh_2yr hs_2yr pb_2yr op_2yr dm_2yr;
+	 merge ip_2yr snf_2yr hh_2yr hs_2yr pb_2yr op_2yr dm_2yr
+		ip_5yr snf_5yr hh_5yr hs_5yr pb_5yr op_5yr dm_5yr;
 	 by BID_hrs;
 	 run;
 
@@ -3051,9 +3064,11 @@ run;
 /*macro to adjust prices by wage index
 Have two subtotals now - one without wage index adjustment and one with _wi is adjusted*/
 %macro wageind(ctype=);
-data costs_&ctype._wi (keep=BID_HRS id &ctype._paid_by_mc_2yr &ctype._paid_by_mc_2yr_wi);
+data costs_&ctype._wi (keep=BID_HRS id &ctype._paid_by_mc_2yr &ctype._paid_by_mc_2yr_wi
+	&ctype._paid_by_mc_5yr &ctype._paid_by_mc_5yr_wi);
 set cost_id_wage_index3;
 &ctype._paid_by_mc_2yr_wi=&ctype._paid_by_mc_2yr/wage_index_20102;
+&ctype._paid_by_mc_5yr_wi=&ctype._paid_by_mc_5yr/wage_index_20102;
 run;
 
 proc sort data=costs_&ctype._wi ;

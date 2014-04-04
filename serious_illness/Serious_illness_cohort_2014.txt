@@ -493,6 +493,21 @@ Datasets are sic_int.mp_meet3_730, sic_int.hh_meet_730, etc.*/
 %other(days_start=0,days_bef_core=730,source=pb );
 
 
+******************************************************************
+
+******************************************************************
+******************************************************************
+/*try running medpar code on the ip claims list to get ip claims 1
+year pre-core
+Use these ip claims for the hip fracture determination*/
+%mp(days_start=0,days_bef_core=365,source=ip );
+
+
+******************************************************************
+******************************************************************
+
+******************************************************************
+
 /****************************************************************************/
 /* Macro to pull dx from claims lists, saves dx lists to int_data folder    */
 /****************************************************************************/
@@ -2220,6 +2235,7 @@ if &name._dx~="" then do;
 
 chf_&name._dx=0;
 copd_&name._dx=0;
+hip_&name._dx=0;
 
 /*CHF*/
 if (substr(&name._dx,1,5)='39891' or
@@ -2257,6 +2273,10 @@ if (substr(&name._dx,1,5)='39891' or
 		substr(&name._dx,1,4)='5064') 
 			and copd_&name._dx=0 
 		then copd_&name._dx=1;	
+*hip fracture;
+if (substr(&name._dx,1,3)='820' ) 
+		and hip_&name._dx=0 
+		then hip_&name._dx=1;*add one binary variables here.;
 end;
 run;
 
@@ -2264,7 +2284,8 @@ proc sql;
 create table &name._dx_2 as
 select distinct BID_hrs_19,core_year,
 sum(chf_&name._dx) as chf_&name.,
-sum(copd_&name._dx) as copd_&name.
+sum(copd_&name._dx) as copd_&name.,
+sum(hip_&name._dx) as hip_&name.
 from dx_1_&name.
 group by BID_hrs_19,core_year;
 quit;
@@ -2272,8 +2293,8 @@ quit;
 /*convert counts of diagnoses for each comorbidity to indicator variables*/ 
 data &name._dx_3(keep=BID_hrs_19 core_year chf_&name._dx copd_&name._dx);
 set &name._dx_2 ;
-array list_com chf_&name. copd_&name.;
-array list_com_bin chf_&name._dx copd_&name._dx;
+array list_com chf_&name. copd_&name. hip_&name.;
+array list_com_bin chf_&name._dx copd_&name._dx hip_&name._dx;
 
 do over list_com;
   list_com_bin=0;
@@ -2287,7 +2308,7 @@ end;
 run;
 
 proc freq;
-table chf_&name._dx copd_&name._dx;
+table chf_&name._dx copd_&name._dx hip_&name._dx;
 run;
 %mend;
 
@@ -2299,7 +2320,7 @@ run;
 /*merge into dataset*/
 proc sql;
 create table core_ids_1yr_criteria_4c as select a.*,b.chf_pri_dx,
-b.copd_pri_dx
+b.copd_pri_dx,b.hip_pri_dx
 from sic_int.core_ids_1yr_criteria_4b a
 left join
 pri_dx_3 b 
@@ -2308,7 +2329,7 @@ quit;
 
 proc sql;
 create table core_ids_1yr_criteria_4d as select a.*,b.chf_adm_dx,
-b.copd_adm_dx
+b.copd_adm_dx,b.hip_adm_dx
 from core_ids_1yr_criteria_4c a
 left join
 adm_dx_3 b 
@@ -2318,29 +2339,84 @@ quit;
 data sic_int.core_ids_1yr_criteria_4e;
 set core_ids_1yr_criteria_4d;
 
-if chf_pri_dx=. and comorb_1_0_1yr~=. then chf_pri_dx=0;
-if copd_pri_dx=. and comorb_1_0_1yr~=. then copd_pri_dx=0;
-if chf_adm_dx=. and comorb_1_0_1yr~=. then chf_adm_dx=0;
-if copd_adm_dx=. and comorb_1_0_1yr~=. then copd_adm_dx=0;
-
+array list chf_pri_dx copd_pri_dx hip_pri_dx chf_adm_dx copd_adm_dx hip_adm_dx;
+do over list;
+	if list = . and comorb_1_0_1yr~=. then list=0;
+end;
 label chf_pri_dx="CHF as primary dx from IP claim, 1yr pre ivw";
 label copd_pri_dx="COPD as primary dx from IP claim, 1yr pre ivw";
+label hip_pri_dx="Hip fracture as primary dx from IP claim, 1yr pre ivw";
+
 label chf_adm_dx="CHF as admitting dx from IP claim, 1yr pre ivw";
 label copd_adm_dx="COPD as admitting dx from IP claim, 1yr pre ivw";
+label hip_adm_dx="Hip fracture as admitting dx from IP claim, 1yr pre ivw";
 
 run;
 
 proc freq;
-table chf_pri_dx*chf_adm_dx copd_pri_dx*copd_adm_dx;
+table chf_pri_dx*chf_adm_dx copd_pri_dx*copd_adm_dx hip_pri_dx*hip_adm_dx ;
 run;
 
-/*Hip fractore criteria, method  by Covinsky
-"(1) Subject was admitted to a hospital with admitting diagnosis of “820.xx”. 1
+/*Hip fractor criteria, method  by Covinsky
+One of the (2) criteria met:
+(1) Subject was admitted to a hospital with admitting diagnosis of “820.xx”.
 (2) There is a physician record of “HF procedure” (defined by CPT code of 27230-27248) that is supported by either: 
 a. Another physician record within 2 days OR 2
 b. Relevant surgery during hospitalization. (Relevant surgery is defined by ICD9 codes 785.5, 790.5, 791.5, 792.5). 
-"
+(1) variable hip_adm_dx defined in macro above
+(2) HF procedure: carrier claims 	(HCPCS_YR specifies the year of CPT coding used)
+					HCPSCD01-HCPSCD13 The level 1 HCPCS code is the CPT code
+Then a)from carrier claims or 
+     b) from IP claims
+	
 */
+
+/*for b) identify relevant surgeries from IP claims CPT codes and surgery dates*/
+
+/*This section of code for just checking For Surgeries*/
+data ip_meet_365;
+set sic_int.mp_meet3_365(where=(trim(left(SSLSSNF))~="N"));
+run;
+
+data proc_long(keep=BID_hrs_19 TYPE_ADM procedure procedure_date AD_DGNS DGNSCD01-DGNSCD25
+	STUS_CD clm_id admit_date disch_date);
+set ip_meet_365;
+array list PRCDRCD1-PRCDRCD25;
+array date PRCDRDT1-PRCDRDT25;
+do over list;
+if list~="" then do;
+	procedure=list;
+	procedure_date=mdy(substr(trim(left(date)),5,2),substr(trim(left(date)),7,2),
+	 substr(trim(left(date)),1,4));
+	output;
+end;
+end;
+
+format procedure_date date10.;
+format admit_date date10.;
+format disch_date date10.;
+
+run;
+
+/* Identify surgeries that meet the criteria
+Indicator variable surgery_meet = 1 if yes, include in sample 
+1700 surgeries meet the criteria*/
+data surgery_meet;
+set proc_long;
+if length(compress(procedure))>3 then do;
+
+if compress(procedure)+0 in (7855, 7905, 7915, 7925) then surgery_meet=1;
+
+end;
+/*only keep observations in work.surgery_meet that meet criteria*/
+if surgery_meet then output;
+
+run;
+/*End surgery section 1*/
+
+/*Another idea is to check IP claims
+if CPT code (in fields HCPCSCD01-HCPCSCD45 in list then if PRCDRCD1-PRCDRCD25 in list = hip frature = yes*/
+
 
 H="Step 6 - HRS variable cleaning and check criteria"
 proc freq
@@ -2671,6 +2747,17 @@ where (ser_med_illness=1 and ind_hosp_adm_12m=1) ;
 
 ods rtf close; 
 
+
+
+H="xxxxNotes"
+Helper files - A respondant gets an entry (or many entries) in the helper file
+if they report getting help in the ADLs, IADLs and Money (MG062_1 or _2) questions:
+
+data helper_check;
+set core_pre.H10g_hp;
+if MADLNDX=. & MIADLNDX=. & MMNYNDX=.;
+run;
+No observations without one of the three links.
 
 
 H="xxxx Additional checks"

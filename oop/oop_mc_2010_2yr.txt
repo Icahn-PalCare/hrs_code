@@ -514,10 +514,10 @@ by id;
 run;
 
 
-H="Get OOP data for exit, n1 and n2 cores"
+H="Get OOP data for exit, n1, n2 and n3 cores"
 /*
-Collects OOP data for decedents from exit, n1 and n2 core interview imputations
-Dataset is oop_int.oop_x_n1_n2
+Collects OOP data for decedents from exit, n1, n2, and n3 core interview imputations
+Dataset is oop_int.oop_x_n1_n2_n3
 */
 libname oop_src "E:\data\hrs_oop_2010\received_data";
 libname oop_int "E:\data\hrs_oop_2010\int_data";
@@ -666,9 +666,35 @@ proc freq;
 table year;
 run;
 
-/*rename the n1 and n2 oop dataset variables*/
+/*now get the n3 core interview*/
+proc sql;
+create table oop_n3_1
+as select b.* from
+oop_n2 a inner join
+all_c_oop_deced b
+on a.id=b.id and a.curr_iw_date>b.curr_iw_date;
+quit;
+
+proc sort data=oop_n3_1;
+by id curr_iw_date;
+run;
+
+/*keep the n3 core interview*/
+data oop_n3;
+set oop_n3_1;
+by id curr_iw_date;
+if last.id;
+run;
+
+proc freq;
+table year;
+run;
+
+
+/*rename the n1-n3 oop dataset variables*/
 %rename2(WORK,OOP_N1,_n1,);
 %rename2(WORK,OOP_N2,_n2,);
+%rename2(WORK,OOP_N3,_n3,);
 
 data OOP_N1_2;
 set OOP_N1;
@@ -677,6 +703,11 @@ run;
 
 data OOP_N2_2;
 set OOP_N2;
+rename id_n2=id;
+run;
+
+data OOP_N3_2;
+set OOP_N3;
 rename id_n2=id;
 run;
 
@@ -693,6 +724,10 @@ proc sort data=OOP_N2_2 nodupkey;
 by id;
 run;
 
+proc sort data=OOP_N3_2 nodupkey;
+by id;
+run;
+
 proc sql;
 create table oop_x_n1 as select * from 
 exit_oop_2 a left join
@@ -700,20 +735,37 @@ oop_n1_2 b
 on a.id=b.id ;
 quit;
 
+/**********************************************************************/
+
+/**********************************************************************/
+
+/*delete the oop_int.oop_x_n1_n2 dataset from the directory!*/
+
+/**********************************************************************/
+
+/**********************************************************************/
 proc sql;
-create table oop_int.oop_x_n1_n2 as select * from
+create table oop_x_n1_n2 as select * from
 oop_x_n1 a left join
 oop_n2_2 b
 on a.id=b.id ;
 quit;
 
+proc sql;
+create table oop_int.oop_x_n1_n2_n3 as select * from
+oop_x_n1_n2 a left join
+oop_n3_2 b
+on a.id=b.id ;
+quit;
+
+
 /*5 have no exit OOP data, 118 missing n1 and 250 missing n2*/
 proc freq;
-table year_x year_n1 year_n2;
+table year_x year_n1 year_n2 year_n3;
 run;
 
 H="OOP spending totals 24 months before death"
-/*Start with dataset of OOP data exit, core n1 and n2
+/*Start with dataset of OOP data exit, core n1 and n2 and n3
 Adjust all OOP spending for inflation to 2010 dollars
 Get totals by OOP spending type over the 24 months prior to death date
 
@@ -729,7 +781,7 @@ Uses CPI for Medical Services from BLS website, accessed 2/5/2014*/
 
 /*create macro to run through all OOP variables to adjust for inflation*/
 data adjust_oop_start;
-set oop_int.oop_x_n1_n2;
+set oop_int.oop_x_n1_n2_n3;
 run;
 
 %macro infl(wave,start);
@@ -763,14 +815,15 @@ run;
 %infl(wave=_x,start=_start);
 %infl(wave=_n1,start=_x);
 %infl(wave=_n2,start=_n1);
+%infl(wave=_n3,start=_n2);
 
-/*final dataset is adjust_oop_n2 with all adjused for inflation*/
+/*final dataset is adjust_oop_n3 with all adjused for inflation*/
 proc means data=adjust_oop_start;
-var NH_OOP_x home_OOP_n1 total_OOP_n2;
+var NH_OOP_x home_OOP_n1 total_OOP_n2 total_OOP_n3;
 run;
 
-proc means data=adjust_oop_n2;
-var NH_OOP_x home_OOP_n1 total_OOP_n2;
+proc means data=adjust_oop_n3;
+var NH_OOP_x home_OOP_n1 total_OOP_n2 total_OOP_n3;
 run;
 
 /**********************************************************************/
@@ -780,7 +833,7 @@ RX is capped at $300/month */
 /**********************************************************************/
 /**********************************************************************/
 data adjust_rx_start;
-set adjust_oop_n2;
+set adjust_oop_n3;
 run;
 
 %macro rxadj(wave,start);
@@ -797,16 +850,18 @@ run;
 %rxadj(wave=_x,start=_start);
 %rxadj(wave=_n1,start=_x);
 %rxadj(wave=_n2,start=_n1);
+%rxadj(wave=_n3,start=_n2);
 
-proc means data=adjust_rx_n2;
+proc means data=adjust_rx_n3;
 var RX_OOP_x/months_x RX_old_x/months_x other_oop_n1;
 run;
 
 /*set nursing home spending to 0 where missing in core interviews*/
 data nh_adj;
-set adjust_rx_n2;
+set adjust_rx_n3;
 if nh_oop_n1=. then nh_oop_n1=0;
 if nh_oop_n2=. then nh_oop_n2=0;
+if nh_oop_n3=. then nh_oop_n3=0;
 run;
 
 /**********************************************************************/
@@ -826,42 +881,56 @@ run;
 /*Get totals over 24month period*/
 /**********************************************************************/
 /**********************************************************************/
-/*exit months range 1-202, n1 months=12-145, n2 months=12-152*/
+/*exit months range 1-202, n1 months=12-145, n2 months=12-152, add n3 range!*/
 proc freq data=nh_adj;
-table months_x months_n1 months_n2;
+table months_x months_n1 months_n2 months_n3;
 run;
 
-/*get totals of waves OOP for 24 months or more*/
+data check_months;
+set nh_adj;
+total_mos= months_x+months_n1+months_n2+months_n3;
+run;
+
+proc freq;
+table total_mos;
+run;
+
+/*get totals of waves OOP for 24 months and 60 months*/
 %let list=total_OOP helper_OOP hospital_OOP nh_OOP doctor_OOP rx_OOP
  insurance_costs other_oop total_old rx_old;
 
-%macro all;
+%macro all(su=,months=);
 
 %do i=1 %to 10;
 %let var=%scan(&list,&i);
 
-data temp_&i;
+data temp_&su._&i;
 set nh_adj;
 
 /*if all 24 months accounted for in exit interview*/
-if months_x>=24  then do;
-&var._24m=&var._x*24/months_x;
+if months_x>=&months.  then do;
+&var._&su.=&var._x*&months./months_x;
 end;
 
 /*if need n1+ exit*/
-if months_x+months_n1>=24 and &var._24m=. then do;
-&var._24m=&var._x+&var._n1*(24-months_x)/(months_n1);
+if months_x+months_n1>=&months. and &var._&su.=. then do;
+&var._&su.=&var._x+&var._n1*(&months.-months_x)/(months_n1);
 end;
 
 /*if need n1+n2+ exit*/
-if months_x+months_n1+months_n2>=24 and &var._24m=. then do;
-&var._24m=&var._x+&var._n1+&var._n2*(24-months_x-months_1)/months_n2);
+if months_x+months_n1+months_n2>=&months. and &var._&su.=. then do;
+&var._&su.=&var._x+&var._n1+&var._n2*(&months.-months_x-months_n1)/months_n2);
 end;
 
-keep id &var._24m;
+/*if need n1+n2+n3+ exit*/
+if months_x+months_n1+months_n2+months_n3>=&months. and &var._&su.=. then do;
+&var._&su.=&var._x+&var._n1+&var._n2+&var._n3*(&months.-months_x-months_n1-months_n2)/months_n3);
+end;
+
+keep id &var._&su.;
 run;
 
-proc sort data=temp_&i;
+proc sort data=temp_&su._&i;
 by id;
 run;
 
@@ -869,12 +938,13 @@ run;
 
 %mend;
 
-%all;
+%all(su=24m,months=24);
+%all(su=60m,months=60);
 
 /*merge the temporary datasets back together*/
 /*so dataset all_2 has variables for OOP spending last 24 months of life*/
 data all_2;
-merge temp_1-temp_10;
+merge temp_24m_1-temp_24m_10 temp_60m_1-temp_60m_10;
 by id;
 run;
 
@@ -882,14 +952,15 @@ proc means data=all_2(drop=id);
 var _all_;
 run;
 
+/*Delete the old dataset oop_int.oop_24m!! */
 /*save this dataset*/
-data oop_int.oop_24m;
+data oop_int.oop_24m_60m;
 set all_2;
 run;
 
 H="Merge interviews with OOP totals"
 
-proc sort data=oop_int.oop_24m out=oop nodupkey;
+proc sort data=oop_int.oop_24m_60m out=oop nodupkey;
 by id;
 run;
 

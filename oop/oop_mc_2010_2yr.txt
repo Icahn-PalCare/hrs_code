@@ -708,7 +708,7 @@ run;
 
 data OOP_N3_2;
 set OOP_N3;
-rename id_n2=id;
+rename id_n3=id;
 run;
 
 /*merge the 3 OOP datasets so one observation per row, exit, n1 and n2 OOP year data*/
@@ -735,15 +735,6 @@ oop_n1_2 b
 on a.id=b.id ;
 quit;
 
-/**********************************************************************/
-
-/**********************************************************************/
-
-/*delete the oop_int.oop_x_n1_n2 dataset from the directory!*/
-
-/**********************************************************************/
-
-/**********************************************************************/
 proc sql;
 create table oop_x_n1_n2 as select * from
 oop_x_n1 a left join
@@ -759,15 +750,15 @@ on a.id=b.id ;
 quit;
 
 
-/*5 have no exit OOP data, 118 missing n1 and 250 missing n2*/
+/*5 have no exit OOP data, 118 missing n1, 250 missing n2, 608 missing n3*/
 proc freq;
 table year_x year_n1 year_n2 year_n3;
 run;
 
-H="OOP spending totals 24 months before death"
+H="OOP spending totals 24,60 months before death"
 /*Start with dataset of OOP data exit, core n1 and n2 and n3
 Adjust all OOP spending for inflation to 2010 dollars
-Get totals by OOP spending type over the 24 months prior to death date
+Get totals by OOP spending type over the 24 and 60 months prior to death date
 
 Final dataset is oop_int.oop_24m
 */
@@ -839,7 +830,7 @@ run;
 %macro rxadj(wave,start);
 data adjust_rx&wave.;
 set adjust_rx&start.;
-rx_old&wave.=rx_OOP&wave.
+rx_old&wave.=rx_OOP&wave.;
 total_old&wave.=total_OOP&wave.;
 if rx_OOP&wave./months&wave.>300 then rx_OOP&wave.=months&wave.*300;
 total_OOP&wave.=total_old&wave.-rx_old&wave.+rx_OOP&wave.;
@@ -853,7 +844,7 @@ run;
 %rxadj(wave=_n3,start=_n2);
 
 proc means data=adjust_rx_n3;
-var RX_OOP_x/months_x RX_old_x/months_x other_oop_n1;
+var RX_OOP_x RX_old_x other_oop_n1;
 run;
 
 /*set nursing home spending to 0 where missing in core interviews*/
@@ -866,8 +857,8 @@ run;
 
 /**********************************************************************/
 /**********************************************************************/
-/*is the interview date from the Exit interview the death date
-It is the month of death???*/
+/*is the OOP dataset interview date from the Exit interview the death date
+It is the month of death??? Yes*/
 data zzzdates;
 set nh_adj;
 format death_date_e_x date9. ;
@@ -881,14 +872,14 @@ run;
 /*Get totals over 24month period*/
 /**********************************************************************/
 /**********************************************************************/
-/*exit months range 1-202, n1 months=12-145, n2 months=12-152, add n3 range!*/
+/*exit months range 1-202, n1 months=12-145, n2 months=12-152, n3 months=12-118*/
 proc freq data=nh_adj;
 table months_x months_n1 months_n2 months_n3;
 run;
 
 data check_months;
 set nh_adj;
-total_mos= months_x+months_n1+months_n2+months_n3;
+total_mos= sum(months_x,months_n1,months_n2,months_n3);
 run;
 
 proc freq;
@@ -919,12 +910,12 @@ end;
 
 /*if need n1+n2+ exit*/
 if months_x+months_n1+months_n2>=&months. and &var._&su.=. then do;
-&var._&su.=&var._x+&var._n1+&var._n2*(&months.-months_x-months_n1)/months_n2);
+&var._&su.=&var._x+&var._n1+&var._n2*((&months.-months_x-months_n1)/months_n2);
 end;
 
 /*if need n1+n2+n3+ exit*/
 if months_x+months_n1+months_n2+months_n3>=&months. and &var._&su.=. then do;
-&var._&su.=&var._x+&var._n1+&var._n2+&var._n3*(&months.-months_x-months_n1-months_n2)/months_n3);
+&var._&su.=&var._x+&var._n1+&var._n2+&var._n3*((&months.-months_x-months_n1-months_n2)/months_n3);
 end;
 
 keep id &var._&su.;
@@ -952,10 +943,37 @@ proc means data=all_2(drop=id);
 var _all_;
 run;
 
-/*Delete the old dataset oop_int.oop_24m!! */
+/*bring in the total months oop data available variables, create indicator for complete
+data 24m and 60m*/
+proc sql;
+create table complete_oop as select a.*,b.total_mos,b.months_x,b.months_n1,b.months_n2,b.months_n3 from
+all_2 a left join
+check_months b
+on a.id=b.id;
+quit;
+
+proc freq;
+table total_mos months_x months_n1 months_n2 months_n3;
+run;
+
+data complete_oop_1;
+set complete_oop;
+ind_24m_oop_yes=0;
+ind_60m_oop_yes=0;
+if total_mos>=24 & total_mos~=. then ind_24m_oop_yes=1 ;
+if total_mos>=60 & total_mos~=. then ind_60m_oop_yes=1 ;
+label ind_24m_oop_yes="Indicator for 24m OOP data available";
+label ind_60m_oop_yes="Indicator for 60m OOP data available";
+run;
+
+proc freq;
+table ind_24m_oop_yes ind_60m_oop_yes;
+run;
+
 /*save this dataset*/
 data oop_int.oop_24m_60m;
-set all_2;
+set complete_oop_1;
+drop total_mos months_x months_n1 months_n2 months_n3;
 run;
 
 H="Merge interviews with OOP totals"
@@ -978,7 +996,7 @@ quit;
 
 
 
-H="Set up denominator file data, check vs oop, keep age ge 70 at death"
+H="Set up denominator file data, check vs oop, keep age ge 67 at death"
 /************************************************************************
 Use merged Medicare denominator file 2000-2010,
 Merged and initial cleaning done in file HRS_2010_MC_claims.txt saved
@@ -1019,18 +1037,19 @@ run;
 data oop_age_ge67_in_mc ;
 set oop_re_age_ge67 ;
 if xwalk_yes=1;
+if age_at_death_e>=70 then age_ge_70=1;
+if age_at_death_e<70 and age_at_death_e~=. then age_ge_70=0;
 run;
 
 *frequency of merged_year variable from oop_re_age_ge67_in_mc above;
 proc freq;
-table exit_year_x;
+table exit_year_x age_ge_70;
 run;
 
 /*get a dataset with just decedents exit year, death_year, death date and ids*/
 data oop_int.oop_sample;
 set oop_age_ge67_in_mc ;
 keep id bid_hrs exit_year_x death_year_e death_date_e;
-
 run;
 
 H="Check to see if medicare and no hmo for 2 and 5 yrs before death"
@@ -1114,7 +1133,7 @@ quit;
 Matches hrs entry for year died with the previous year's mc denominator file, pulling in buy in and hmo indicator
 to determine mc elgible throughout study time period
 Use _l2 to denote year prior to death (death year less 2)
-3 observations do not have 2 year before denominatory file*/
+3 observations do not have 2 year before denominator file*/
 proc sql;
 create table dn_death_y_2bef as select
 a.*,
@@ -1130,8 +1149,8 @@ quit;
 /*Now match dn files from 3 years before death
 Matches hrs entry for year died with the previous year's mc denominator file, pulling in buy in and hmo indicator
 to determine mc elgible throughout study time period
-Use _l2 to denote 2 years prior to death (death year less 2)
-Don't lose any observations*/
+Use _l3 to denote 3 years prior to death (death year less 3)
+694 observations don't have _l3 denominator file*/
 proc sql;
 create table dn_death_y_3bef as select
 a.*,
@@ -1139,7 +1158,7 @@ b.year as death_year_l3,
 b.buyin12 as buyin12_l3,
 b.HMOIND12 as HMOIND12_l3
 from dn_death_y_2bef a inner join
-dn_2000_20082 b
+dn_2000_20102 b
 on trim(left(a.BID_hrs))=trim(left(b.BID_hrs_19))
 and 2<a.year-b.year<=3 order by a.bid_n,year;
 quit;
@@ -1148,7 +1167,7 @@ quit;
 Matches hrs entry for year died with the previous year's mc denominator file, pulling in buy in and hmo indicator
 to determine mc elgible throughout study time period
 Use _l3 to denote 3 years prior to death (death year less 2)
-Lose one observations: 1574*/
+Lose 551 observations: 3429*/
 proc sql;
 create table dn_death_y_4bef as select
 a.*,
@@ -1156,7 +1175,7 @@ b.year as death_year_l4,
 b.buyin12 as buyin12_l4,
 b.HMOIND12 as HMOIND12_l4
 from dn_death_y_3bef a inner join
-dn_2000_20082 b
+dn_2000_20102 b
 on trim(left(a.BID_hrs))=trim(left(b.BID_hrs_19))
 and 3<a.year-b.year<=4 order by a.bid_n,year;
 quit;
@@ -1165,7 +1184,7 @@ quit;
 Matches hrs entry for year died with the previous year's mc denominator file, pulling in buy in and hmo indicator
 to determine mc elgible throughout study time period
 Use _l5 to denote 5 years prior to death (death year less 5)
-Don't lose any observations*/
+557 obs don't have l5 denominator entry n=2872*/
 proc sql;
 create table dn_death_y_5bef as select
 a.*,
@@ -1173,15 +1192,50 @@ b.year as death_year_l5,
 b.buyin12 as buyin12_l5,
 b.HMOIND12 as HMOIND12_l5
 from dn_death_y_4bef a inner join
-dn_2000_20082 b
+dn_2000_20102 b
 on trim(left(a.BID_hrs))=trim(left(b.BID_hrs_19))
 and 4<a.year-b.year<=5 order by a.bid_n,year;
 quit;
 
-**************************************************
-**************************************************
+/**************************************************/
+/**************************************************/
 /*create variables that have entries for full 24m and 60m pre-death for buyin and hmo variables by combining death year and years prior to death*/
-data all_insurance;
+data all_insurance_24m;
+set dn_death_y_2bef;
+
+*merge individual year variables into single variable;
+buyin_24_l=trim(left(buyin12_l2))||trim(left(buyin12_l1))||trim(left(buyin_dy));
+hmo_24_l=trim(left(hmoind12_l2))||trim(left(hmoind12_l1))||trim(left(hmo_dy));
+buylength=length(buyin_24_l);
+hlength=length(hmo_24_l);
+
+*trim so merged variable is 24 char long to reflect months before death;
+buyin_24_lr=reverse(trim(buyin_24_l));
+hmo_24_lr=reverse(trim(hmo_24_l));
+
+buyin_24r=substr(trim(left(buyin_24_lr)),1,24);
+hmo_24r=substr(trim(left(hmo_24_lr)),1,24);
+
+buyin_24=reverse(trim(buyin_24r));
+hmo_24=reverse(trim(hmo_24r));
+
+buylength2_24=length(buyin_24);
+hlength2_24=length(hmo_24);
+
+*create indicator variable for mc coverage 0=no, 1=yes;
+if length(buyin_24)=24 then do;
+if indexc(buyin_24,"0","1","2","A","B") then part_ab_2y=0;
+if indexc(buyin_24,"0","1","2","A","B")=0 then part_ab_2y=1;
+end;
+
+*create indicator variable for hmo coverage 0=no, 1=yes;
+if length(hmo_24)=24 then do;
+if index(hmo_24,"000000000000000000000000") then hmo_2y=0;
+if index(hmo_24,"000000000000000000000000")=0 then hmo_2y=1;
+end;
+run;
+
+data all_insurance_60m;
 set dn_death_y_5bef;
 
 *merge individual year variables into single variable;
@@ -1194,41 +1248,39 @@ hlength=length(hmo_60_l);
 buyin_60_lr=reverse(trim(buyin_60_l));
 hmo_60_lr=reverse(trim(hmo_60_l));
 
-buyin_24r=substr(trim(left(buyin_60_lr)),1,24);
-hmo_24r=substr(trim(left(hmo_60_lr)),1,24);
 buyin_60r=substr(trim(left(buyin_60_lr)),1,60);
 hmo_60r=substr(trim(left(hmo_60_lr)),1,60);
 
-buyin_24=reverse(trim(buyin_24r));
-hmo_24=reverse(trim(hmo_24r));
 buyin_60=reverse(trim(buyin_60r));
 hmo_60=reverse(trim(hmo_60r));
 
-buylength2_24=length(buyin_24);
-hlength2_24=length(hmo_24);
 buylength2_60=length(buyin_60);
 hlength2_60=length(hmo_60);
 
 
 *create indicator variable for mc coverage 0=no, 1=yes;
-if length(buyin_24)=24 then do;
-if indexc(buyin_24,"0","1","2","A","B") then part_ab_2y=0;
-if indexc(buyin_24,"0","1","2","A","B")=0 then part_ab_2y=1;
-end;
 if length(buyin_60)=60 then do;
 if indexc(buyin_60,"0","1","2","A","B") then part_ab_5y=0;
 if indexc(buyin_60,"0","1","2","A","B")=0 then part_ab_5y=1;
 end;
 
 *create indicator variable for hmo coverage 0=no, 1=yes;
-if length(hmo_24)=24 then do;
-if index(hmo_24,"000000000000000000000000") then hmo_2y=0;
-if index(hmo_24,"000000000000000000000000")=0 then hmo_2y=1;
-end;
 if length(hmo_60)=60 then do;
 if index(hmo_60,"000000000000000000000000000000000000000000000000000000000000") then hmo_5y=0;
 if index(hmo_60,"000000000000000000000000000000000000000000000000000000000000")=0 then hmo_5y=1;
 end;
+run;
+
+
+/*merge the 2 year and 5 year indicators into a single dataset*/
+proc sql;
+create table all_insurance as select
+a.id,a.bid_hrs,a.death_year_e,a.death_date_e,a.part_ab_2y,a.hmo_2y,a.hmo_24,a.buyin_24,b.part_ab_5y,b.hmo_5y from
+all_insurance_24m a left join
+all_insurance_60m b
+on a.id=b.id;
+quit;
+
 
 proc freq;
 table death_year_e*hmo_2y death_year_e*hmo_5y;
@@ -1240,7 +1292,7 @@ run;
 
 proc sql outobs=100;
 select hmo_24,buyin_24,count(*) from all_insurance
-where  part_ab_2y=1 and hmo_2y=1;
+where  part_ab_2y=1 and hmo_2y=0;
 quit;
 
 proc means n;
@@ -1257,9 +1309,9 @@ select * from all_insurance
 where part_ab_2y=1 and hmo_2y=0;
 quit;
 
-/*get count of subsample that also meets 5 year criteria*/
+/*get count of subsample that also meets 5 year criteria *1923, 57.7%*/
 proc sql;
-count(*) from oop_int.meet_criteria_2yr
+select count(distinct id) from oop_int.meet_criteria_2yr
 where part_ab_5y=1 and hmo_5y=0;
 run;
 
@@ -1303,11 +1355,17 @@ select count(*) from all_insurance where hmo_2y<1 and part_ab_2y<=0 ;
 
 title "final N, 4474-986-158=3330";
 select count(*) from oop_int.meet_criteria_2yr; 
+
+title "number of N that also meet 5 year insurance criteria";
+select count(*) from oop_int.meet_criteria_2yr
+where hmo_5y=0 and part_ab_5y=1;
 quit;
+
 ods rtf close;
 
 
 H="Merge meet criteria with oop, ivw dataset and save"
+
 proc sort data=oop_int.hrs_oop_ivws out=oop_ivws nodupkey;
 by id;
 run;
@@ -1326,7 +1384,7 @@ run;
 proc sql;
 create table oop_fnl.hrs_oop_ivws_meet as select * from
 oop_ivws a left join
-meet b
+meet(drop=death_year_e death_date_e) b
 on a.id=b.id;
 quit;
 
@@ -1356,7 +1414,7 @@ xx = claim type
 proc sql;
 create table &source._meet_&days_bef_death. as select a.*,b.death_date_e
 from medi.&source._2000_2010 a inner join
-oop_fnl.hrs_oop_ivws_meet b
+oop_int.meet_criteria_2yr b
 on trim(left(a.bid_hrs_19))=trim(left(b.bid_hrs))
 and &days_start<=b.death_date_e-a.admit_date<=&days_bef_death;
 quit;
@@ -1374,7 +1432,7 @@ where ### = days before death */
 proc sql;
 create table &source._meet_&days_bef_death. as select a.*,b.death_date_e
 from medi.&source0._2000_2010 a inner join
-oop_fnl.hrs_oop_ivws_meet b
+oop_int.meet_criteria_2yr b
 on trim(left(a.bid_hrs_19))=trim(left(b.bid_hrs)) 
 and &days_start<=b.death_date_e-a.admit_date<=&days_bef_death ;
 quit;
@@ -1383,7 +1441,7 @@ quit;
 proc sql;
 create table &source._meet2_&days_bef_death. as select a.*,b.death_date_e
 from medi.&source0._2000_2010 a inner join
-oop_fnl.hrs_oop_ivws_meet b
+oop_int.meet_criteria_2yr b
 on trim(left(a.bid_hrs_19))=trim(left(b.bid_hrs))
 and b.death_date_e-a.admit_date>&days_bef_death and b.death_date_e-a.disch_date<=&days_bef_death;
 quit;
@@ -1397,12 +1455,12 @@ run;
 %mend;
 
 /*Run macros to identify claims that are within 2 years of the death date*/
-%mp(days_start=0,days_bef_death=365*2,source=mp );
-%other(days_start=0,days_bef_death=365*2,source=hh );
-%other(days_start=0,days_bef_death=365*2,source=hs );
-%other(days_start=0,days_bef_death=365*2,source=dm );
-%other(days_start=0,days_bef_death=365*2,source=op );
-%other(days_start=0,days_bef_death=365*2,source=pb );
+%mp(days_start=0,days_bef_death=730,source=mp );
+%other(days_start=0,days_bef_death=730,source=hh );
+%other(days_start=0,days_bef_death=730,source=hs );
+%other(days_start=0,days_bef_death=730,source=dm );
+%other(days_start=0,days_bef_death=730,source=op );
+%other(days_start=0,days_bef_death=730,source=pb );
 
 /*******************************************************************/
 /*Step 2, pull out dx codes*/
@@ -1550,8 +1608,13 @@ run;
 %mend;
 
 
-/*run the macro - 24 months pre-surgery - get sas dataset oop_int.dx_0_n24m*/
-%dx_time_range(range1=0, range2=n24m, days_bef_death=365*2);
+/*run the macro - 24 months pre-death - get sas dataset oop_int.dx_0d_n24m*/
+%dx_time_range(range1=0d, range2=n24m, days_bef_death=730);
+
+proc sql;
+select count(*) from oop_int.dx_0d_n24m where bid_hrs_19='.';
+quit;
+
 
 H="Elix, etc. - part 2, create elix indicators"
 /*Elixhauser index created, added to interview, OOP dataset
@@ -1567,6 +1630,7 @@ lib=library
 dsn=dataset name
 pre=suffix to be added to all of the variable names
 */
+
 
 %macro rename(lib,dsn,pre);
 options pageno=1 nodate;
@@ -1603,16 +1667,13 @@ run;
 %mend rename;
 
 
-
-
-
 /*Elixhauser index macro
 Note includes additional 2 comorbidities: Dementia and Coronary Artery Disease*/
 
 %macro elixhauser(range1=, range2=);
 
 data dx_31_comor_&range2;
-set sur_int.dx_&range1._&range2(rename=(diag=dx_0));
+set oop_int.dx_&range1._&range2.(rename=(diag=dx_0));
 dx=trim(left(dx_0));
 
 if dx~="" then do;
@@ -2114,6 +2175,7 @@ do over list_com;
 
 end;
 
+
 /*define aggregate comorbidity as sum of 31 individual indicator vars.
 note: CAD not included in this aggregate score*/
 comorb_all=comorb_1+comorb_2+comorb_3+comorb_4+comorb_5+comorb_6+comorb_7+
@@ -2128,20 +2190,26 @@ proc sort data=comorbidity_&range2. nodupkey;
 by BID_hrs_19;
 run;
 
-/*merges with decedent dataset that has mc ffs 2 years pre-death by id*/
+proc sort data=oop_int.meet_criteria_2yr out=meettomerge nodupkey;
+by bid_hrs;
+run;
+
+/*merges with decedent dataset that has mc ffs 2 years pre-death by id
+Note if this has to be run on a different dataset (another time period for example
+need to rewrite this system since the file name suffixes aren't consistent!*/
 proc sql;
-create table ids_meet_criteria_&range2.13 as
-select a.*,b.*
-from oop_int.meet_criteria_&range2
+create table ids_meet_criteria_&range2.13(drop bid_hrs_19) as
+select *
+from meettomerge
 a left join
 comorbidity_&range2. b
-on trim(left(a.BID_hrs_19))=trim(left(b.BID_hrs_19));
+on a.BID_hrs=b.BID_hrs_19;
 quit;
 
 /*if comorbidity=null, set to zero*/
 data oop_int.elix_&range1._&range2;
 set ids_meet_criteria_&range2.13;
-array list comorb_1-comorb_31 comorb_all;
+array list comorb_1-comorb_32 comorb_all;
 do over list;
 if list=. then list=0;
 end;
@@ -2189,12 +2257,12 @@ run;
 %rename(WORK,TEST,&range1._&range2);
 
 /*rename bid_hrs_&range1._&range2=bid_hrs*/
-data oop_int.elix_&range1._&range2._2(rename =(bid_hrs_19_&range1._&range2=bid_hrs_19));
+data oop_int.elix_&range1._&range2._2(rename =(bid_hrs_&range1._&range2=bid_hrs));
 set test;
-keep bid_hrs_19_&range1._&range2 comorb:;
+keep bid_hrs_&range1._&range2 comorb:;
 run;
 proc sort data=oop_int.elix_&range1._&range2._2;
-by bid_hrs_19;
+by bid_hrs;
 run;
 
 %mend;
@@ -2203,10 +2271,17 @@ run;
 /*run macro to get elixhauser comorbidities 24 months pre-death*/
 %elixhauser(range1=0d, range2=n24m);
 
-
 proc freq;
 table comorb:;
 run;
+
+/*make sure no obs have missing bid field*/
+data bid_miss_test;
+ set oop_int.elix_0d_n24m_2;
+ if bid_hrs = '';
+run;
+
+
 proc contents data=oop_int.elix_0d_n24m_2;
 run;
 
@@ -2217,19 +2292,26 @@ oop_fin.surgery_ids_last_n24m
 Comorbidites are missing if don't have ffs mc 2 years prior to death*/ 
 
 %macro mergeel(range2=);
+
+proc sort data=oop_fnl.hrs_oop_ivws_meet out=full_merge nodupkey;
+by BID_hrs;
+run;
+
+proc sort data=oop_int.elix_0d_&range2._2 out=el_merge_&range2. nodupkey;
+by BID_hrs;
+run;
+
 proc sql;
-create table oop_fin.hrs_oop_ivws_meet_el_&range2(drop=BID_hrs2) as select a.*,
-b.*
-from 
-oop_fnl.hrs_oop_ivws_meet a left join
-oop_int.elix_0d_&range2._2(rename=(BID_hrs_19=BID_hrs2)) b
-on trim(left(a.BID_hrs_19))=trim(left(b.BID_hrs2));
+create table oop_fnl.hrs_oop_ivws_meet_el_&range2 as select * from 
+full_merge a left join
+el_merge_&range2. b
+on trim(left(a.BID_hrs))=trim(left(b.BID_hrs));
 quit;
 %mend;
 
 %mergeel(range2=n24m);
 
-proc freq data=oop_fin.hrs_oop_ivws_meet_el_n24m;
+proc freq data=oop_fnl.hrs_oop_ivws_meet_el_n24m;
 table comorb:;
 run;
 

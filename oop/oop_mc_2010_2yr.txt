@@ -2293,7 +2293,7 @@ Comorbidites are missing if don't have ffs mc 2 years prior to death*/
 
 %macro mergeel(range2=);
 
-proc sort data=oop_fnl.hrs_oop_ivws_meet out=full_merge nodupkey;
+proc sort data=oop_fnl.hrs_oop_ivws_meet out=full_merge;
 by BID_hrs;
 run;
 
@@ -2317,6 +2317,7 @@ run;
 
 
 
+
 H="Elix, etc. - part 3, create cc indicators"
 /*begin of chronic 21 conditions.
 
@@ -2327,8 +2328,8 @@ code is run from
 
 /*export list of diagnosis codes to stata*/
 
-proc export data=oop_int.dx_0_n12m
-outfile="E:\data\oop_2010\int_data\dx_0_n12m.dta" replace;
+proc export data=oop_int.dx_0d_n24m
+outfile="E:\data\hrs_oop_2010\int_data\dx_0d_n24m.dta" replace;
 run;
 
 /*******************************************************************/
@@ -2341,7 +2342,7 @@ clear
 set memory 500m
 
 //process diagnosis codes 24 months pre-surgery
-use "E:\data\oop_2010\int_data\dx_0_n24m.dta",clear
+use "E:\data\hrs_oop_2010\int_data\dx_0d_n24m.dta",clear
 
 // convert diagnosis codes to string variables, tostring diag,gen(icd9_c)
 gen new=ltrim(diag)
@@ -2353,31 +2354,28 @@ icd9 clean new,dots
 replace diag=new
 drop icd9_c new
 
-save "E:\data\oop_2010\int_data\dx_0_n24m_2.dta",replace
+save "E:\data\hrs_oop_2010\int_data\dx_0d_n24m_2.dta",replace
+
 
 /*******************************************************************/
 //Convert back to SAS
 //This is SAS Code
-/* to the cms 21 chronic comorbidity*/ /*******************************************************************/
+/* to the cms 21 chronic comorbidity*/ 
+/*******************************************************************/
 
 /*bring in formatted Stata dataset of dx codes*/
 proc import 
-datafile="E:\data\oop_2010\int_data\dx_0_n24m_2.dta" 
-out=dx_0_n24m_2 replace;
+datafile="E:\data\hrs_oop_2010\int_data\dx_0d_n24m_2.dta" 
+out=dx_0d_n24m_2 replace;
 run;
 
 
 /*bring in excel list of dx codes associated with each chronic condition*/
 proc import /*datafile="C:\projects\Hospice_impact_on_utilization\raw_data\chronic_21_condition_icd9.xls" */
-datafile='E:\data\oop_2010\ref_data\chronic_21_condition_icd9.xls'
+datafile='E:\data\hrs_oop_2010\ref_data\chronic_21_condition_icd9.xls'
 out=icd9_21_chronic dbms=xls replace;
 run;
-data icd9_21_chronic2;
-set icd9_21_chronic;
-/*create new variable of icd 9 code list NOT in dot format
-Don't actually use this variable in the following code*/
-icd9_wo_dot=compress(icd_9,".");
-run;
+
 proc contents data=icd9_21_chronic;
 run;
 
@@ -2390,17 +2388,17 @@ quit;
 
 /*******************************************************************/
 /*Generate chronic conditions indicator variables using dx
-codes 6 months and 12 months pre-surgery */
+codes 24 months pre-death */
 /*******************************************************************/
 
 /*macro to create indicator variables for 21 chronic conditions
-predeath = n24m or n12m */
+predeath = n24m  */
 
 %macro cc(predeath=);
 
 /*initialize the chronic conditions variables*/
 data list_&predeath._dx;
-set dx_0_&predeath._2;
+set dx_0d_&predeath._2;
 array list CC_1_AMI
 CC_2_ALZH
 CC_3_ALZHDMTA
@@ -2494,13 +2492,22 @@ sum(CC_21_CNCREndM) as CC_21_CNCREndM
 from list_&predeath._dx group by bid_hrs_19;
 quit;
 
-/*merge chronic conditions decedent list bid's by bid*/
+/*merge chronic conditions decedent list bid's by bid
+This is now a list of those bids with ffs mc last 2 years of life only*/
+proc sort data=bid_dx_0_&predeath. nodupkey;
+by BID;
+run;
+
+proc sort data=oop_int.meet_criteria_2yr out=meettomerge nodupkey;
+by bid_hrs;
+run;
+
  proc sql;
- create table bid_dx_0_&predeath.2(drop=bid) as select a.bid_hrs_19,b.*
- from oop_int.meet_criteria_&predeath. a
+ create table bid_dx_0_&predeath.2(drop=bid) as select a.bid_hrs,b.*
+ from meettomerge a
  left join
   bid_dx_0_&predeath. b 
- on trim(left(a.bid_hrs_19))=trim(left(b.bid));
+ on trim(left(a.bid_hrs))=trim(left(b.bid));
  quit;
 
 /*convert to chronic condition vars. to binary variables*/
@@ -2585,14 +2592,14 @@ Data file is still work.test but variables renamed after running this macro*/
 %rename(WORK,TEST,n24mn0);
 
 /*Changes name of bid_hrs variable so no _n24mn0*/
-data sur_int.chronic_21_n24m_n0_0;
+data oop_int.chronic_21_n24m_n0_0;
 set test;
-bid_hrs_19=bid_hrs_19_n24mn0;
-drop bid_hrs_19_n24mn0;
+bid_hrs=bid_hrs_n24mn0;
+drop bid_hrs_n24mn0;
 run;
 
-proc freq data=sur_int.chronic_21_n24m_n0_0;
-table cc_alzheim_n24mn0 cc_cncr_chronic_n24mn0;
+proc freq data=oop_int.chronic_21_n24m_n0_0;
+table cc: ;
 run;
 proc contents;
 run;
@@ -2605,21 +2612,17 @@ that also contains the Elixhauser comorbidities */
 %macro mergecc(predeath=);
 
 proc sql;
-create table oop_fin.hrs_oop_ivws_meet_el_cc_&predeath.3(drop=bid_hrs2)
+create table oop_fnl.hrs_oop_ivws_meet_el_cc_&predeath(drop=bid_hrs2)
 as select * from
-oop_fin.hrs_oop_ivws_meet_el_&predeath. a
+oop_fnl.hrs_oop_ivws_meet_el_&predeath. a
 left join
-sur_int.chronic_21_&predeath._n0_0(rename=(bid_hrs_19=bid_hrs2)) b 
-on (a.bid_hrs_19)=(b.bid_hrs2);
+oop_int.chronic_21_&predeath._n0_0(rename=(bid_hrs=bid_hrs2)) b 
+on (a.bid_hrs)=(b.bid_hrs2);
 quit;
-
-data oop_fin.hrs_oop_ivws_meet_el_cc_&predeath;
-set oop_fin.hrs_oop_ivws_meet_el_cc_&predeath.3;
-run;
 
 %mend;
 
-%mergecc(predeath=n12m);
+%mergecc(predeath=n24m);
 
 /* the above file contains decedents oop and HRS interview data
 elixhauser and chronic conditions and insurance data 
@@ -2628,11 +2631,11 @@ File names are:
 oop_fin.hrs_oop_ivws_meet_el_cc_n24m
 */
 
-proc contents data=oop_fin.hrs_oop_ivws_meet_el_cc_n24m;
+proc contents data=oop_fnl.hrs_oop_ivws_meet_el_cc_n24m;
 run;
 
 
-proc freq data=oop_fin.hrs_oop_ivws_meet_el_cc_n24m;
+proc freq data=oop_fnl.hrs_oop_ivws_meet_el_cc_n24m;
 table cc_:;
 run;
 
@@ -2725,13 +2728,14 @@ run;
 
 *calculates total of mc charges for the claim type by hrs bid;
 proc sql;
-create table &source._pay as select distinct bid_hrs_19,sum(&source._paid_by_mc) as &source._paid_by_mc
+create table &source._pay as select distinct bid_hrs_19,
+sum(&source._paid_by_mc) as &source._paid_by_mc 
 from &source._cost group by BID_HRS_19;
 quit;
 
 *merges the totals above with the hrs dataset that meets the 2 year criteria;
 proc sql;
-create table &source_&name. as select
+create table &source._&name. as select
 a.BID_hrs,a.id,coalesce(b.&source._paid_by_mc,0) as &source._paid_by_mc_&name.
 from oop_int.meet_criteria_2yr a
 left join
@@ -2739,17 +2743,16 @@ left join
  on trim(left(a.BID_hrs))=trim(left(b.bid_hrs_19));
  quit;
 
- proc sort data=&source ;
+ proc sort data=&source._&name. ;
  by BID_hrs;
  run;
 %mend;
-; /*check is ; this needed???*/
 
 /*Runs macro to get total for the SNF claims*/
 %mp(days_start=0,days_bef_death=(365.25*2),source=snf,equ=,name=2yr );
-%mp(days_start=0,days_bef_death=(365.25*2),source=snf,equ=,name=2yr );
+%mp(days_start=0,days_bef_death=(365.25*5),source=snf,equ=,name=5yr );
 /*Runs macro to get total for the inpatient (not SNF) claims*/
-%mp(days_start=0,days_bef_death=(365.25*5),source=ip,equ=~,name=5yr );
+%mp(days_start=0,days_bef_death=(365.25*2),source=ip,equ=~,name=2yr );
 %mp(days_start=0,days_bef_death=(365.25*5),source=ip,equ=~,name=5yr );
 
 /*************************************************************************/
@@ -2772,12 +2775,12 @@ quit;
 
 H="Other types of mc spending totals"
 /*macro to calculate totals for the claims that are not in medpar files*/
-%Macro all_other(source=,month_n=,days_start=,days_bef_death=);
+%macro all_other(source=,month_n=,days_start=,days_bef_death=);
 
 /*identify claims where entire claim is within the x months prior to death*/
 proc sql;
 create table &source._meet as select a.*
-from medi.&source._2000_2010 a inner join
+from medi.&source._2000_2010(keep=admit_date BID_hrs_19 pmt_amt) a inner join
 oop_int.meet_criteria_2yr b
 on trim(left(a.BID_hrs_19))=trim(left(b.BID_hrs))
 and &days_start<=b.death_date_e-a.admit_date<=&days_bef_death;
@@ -2811,7 +2814,7 @@ quit;
 
 /*merge in mc totals with full oop dataset*/
 proc sql;
-create table &source&month_n as select
+create table &source.&month_n as select
 a.BID_hrs,coalesce(b.&source._paid_by_mc,0) as &source._paid_by_mc&month_n 
 from oop_int.meet_criteria_2yr a
 left join
@@ -3291,6 +3294,120 @@ log close
 
 
 
+
+
+
+H="Get nights SNF paid for by MC"
+/*first pull all snf claims x years before death*/
+
+%macro snfnights(days_start=,days_bef_death=,name=);
+
+/*identify claims where entire claim is within the x months prior to death*/
+proc sql;
+create table snf_meet as select a.*,b.death_date_e
+from medi.mp_2000_2010(where=(trim(left(SSLSSNF))="N")) a inner join
+oop_int.meet_criteria_2yr b
+on trim(left(a.BID_HRS_19))=trim(left(b.BID_hrs))
+and &days_start<=b.death_date_e-a.admit_date<=&days_bef_death;
+quit;
+
+/*identify claims that span x months prior to death (admission date is prior to start 
+of x months but discharge date is within the x month window*/
+proc sql;
+create table snf_meet2 as select a.*,b.death_date_e
+from medi.mp_2000_2010(where=(trim(left(SSLSSNF))="N")) a inner join
+oop_int.meet_criteria_2yr b
+on trim(left(a.BID_HRS_19))=trim(left(b.BID_hrs))
+and b.death_date_e-a.admit_date>&days_bef_death and b.death_date_e-a.disch_date<=&days_bef_death;
+quit;
+
+/*Reset the start date = x months before death to just capture part of stay that was 
+during the final x months*/
+data snf_meet3;
+set snf_meet2;
+admit_date_mod=1;
+admit_date_old=admit_date;
+admit_date=death_date_e-&days_bef_death;
+label admit_date="modified admit date";
+run;
+
+
+data snf_meet_4;
+set snf_meet snf_meet3;
+
+exhst_dt_new=exhst_dt;
+if exhst_dt=0000000 then exhst_dt_new=.;
+if exhst_dt=0 then  exhst_dt_new=.;
+
+bene_exh_date = datejul(exhst_dt_new);
+format admit_date date10.;
+format disch_date date10.;
+*format bene_exh_date date10.;
+snf_stay_all=disch_date-admit_date;
+if snf_stay_all=0 then snf_stay_all=1;
+los_snf_paid_by_mc_&name. = bene_exh_date-admit_date;
+if bene_exh_date-admit_date=0 then los_snf_paid_by_mc_&name.=1;
+if bene_exh_date=. then los_snf_paid_by_mc_&name.=snf_stay_all;
+
+run; 
+
+proc freq; table admit_date_mod;
+run;
+
+proc means; var snf_stay_all los_snf_paid_by_mc_2y; run;
+
+/*
+proc sql;
+create table util_days as select distinct
+bid_hrs_19,sum(util_day) as snf_util_&name.
+from post_snf_days_1 group by bid_hrs_19;
+quit;
+
+proc freq;
+table snf_util_post_12m;
+run;*/
+
+%mend;
+
+%snfnights(days_start=0,days_bef_death=730,name=2y);
+
+
+H="Account for missing nh nights"
+/*there are likely observations that had nursing home costs that
+don't appear in the Medicare paid costs or OOP reported spending
+Try to account for that here*/
+
+
+capture log close
+clear all
+set mem 500m
+set more off
+
+local logpath E:\data\hrs_oop_2010\logs
+local datapath E:\data\hrs_oop_2010\final_data
+
+log using `logpath'\add_nh_costs-LOG.txt, text replace
+
+cd `datapath'
+
+use oop_resp_sp_restri_24m_mc.dta
+
+//get self reported nursing home nights last 2, 5 years of life/
+
+foreach i in 24 60 {
+gen nh_nights_`i'm = .
+replace nh_nights_`i'm=nh_nights_x*(`i'/nh_months_x) if months_x>=`i'
+replace nh_nights_`i'm=nh_nights_x + nh_nights_n1*((`i'-months_x)/months_n1) if ///
+	nh_nights_`i'm ==. & (months_x+months_n1)>=`i'
+replace nh_nights_`i'm=nh_nights_x+nh_nights_n1 + nh_nights_n2*((`i'-months_x-months_n1)/months_n2) if ///
+	nh_nights_`i'm ==. & (months_x+months_n1+months_n2)>=`i'
+replace nh_nights_`i'm=nh_nights_x+nh_nights_n1+nh_nights_n2 + ///
+	nh_nights_n3*((`i'-months_x-months_n1-months_n2)/months_n3) if ///
+	nh_nights_`i'm ==. & (months_x+months_n1+months_n2+months_n3)>=`i'
+}
+
+label nh_nights_24m "Self Report NH nights 2yrs prior to death"
+label nh_nights_60m "Self Report NH nights 5yrs prior to death"
 
 
 

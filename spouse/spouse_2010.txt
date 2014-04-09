@@ -5640,9 +5640,9 @@ sca cal_ps1=r(sd)*0.02
 sca list cal_ps1
 
 //rule of thumb 0.2*sd
-//psmatch2  r_hs_12m,outcome(s_cesdbetter) pscore(hs_pscore) caliper(.1797076) logit
+//psmatch2  r_hs_12m,outcome(s_cesdbetter) pscore(hs_pscore) caliper(.179911) logit
 //try 0.02* sd
-psmatch2  r_hs_12m,outcome(s_cesdbetter) pscore(hs_pscore) radius caliper(.01797076) logit
+psmatch2  r_hs_12m,outcome(s_cesdbetter) pscore(hs_pscore) radius caliper(.0179911) logit
 //note this creates varaible _weight
 
 //graph including off common support information
@@ -5762,6 +5762,39 @@ outreg using `logpath'\spouse_analysis, ///
 	note("Base categories are year=2000 and spouse has" \ ///
 	"no comorbidities per HRS survey questions.") ///
 	varlabels starlevels(10 5 1)  summstat( N) addtable
+
+*************************************************************************************
+//Run logit on subsamples based on p1 interview date
+
+//interview within 1 year (3-12 months)
+logit s_cesdbetter i.r_hs_12m `yearvars' $matchvars [iw=weight_1] if s_1yr_p1_core_dead==1 , or 
+
+outreg using `logpath'\spouse_analysis, ///
+	stats(e_b e_ci p) nosubstat ///
+	title("Reduced spousal depressive symptoms and hospice enrollment" \ ///
+	"Propensity Score Matched, Frequency Weighted Sample" \ ///	
+	"Outcome = CESD Score Decreased (by any amount) n1 to p1" \ ///
+	"Subsample p1 interview within 1 year of R's death") ///	
+	ctitles("" "OR" "95% CI" "P-value") ///
+	note("Base categories are year=2000 and spouse has" \ ///
+	"no comorbidities per HRS survey questions.") ///
+	varlabels starlevels(10 5 1)  summstat( N) addtable
+
+//interview after 1 year (13+ months)
+logit s_cesdbetter i.r_hs_12m `yearvars' $matchvars [iw=weight_1] if s_1yr_p1_core_dead==0 , or 
+
+outreg using `logpath'\spouse_analysis, ///
+	stats(e_b e_ci p) nosubstat ///
+	title("Reduced spousal depressive symptoms and hospice enrollment" \ ///
+	"Propensity Score Matched, Frequency Weighted Sample" \ ///	
+	"Outcome = CESD Score Decreased (by any amount) n1 to p1" \ ///
+	"Subsample p1 interview after 1 year from R's death") ///	
+	ctitles("" "OR" "95% CI" "P-value") ///
+	note("Base categories are year=2000 and spouse has" \ ///
+	"no comorbidities per HRS survey questions.") ///
+	varlabels starlevels(10 5 1)  summstat( N) addtable
+
+
 
 
 
@@ -6277,9 +6310,9 @@ sum logitpscore
 sca cal_ps1=r(sd)*0.02
 sca list cal_ps1
 
-//psmatch2  r_hs_12m,outcome(s_cesdbetter) pscore(hs_pscore) caliper(.1837159) logit
+//psmatch2  r_hs_12m,outcome(s_cesdbetter) pscore(hs_pscore) caliper(.1855744) logit
 //try 0.2* sd
-psmatch2  r_hs_12m,outcome(s_cesdbetter) pscore(hs_pscore) radius caliper(.01837159) logit
+psmatch2  r_hs_12m,outcome(s_cesdbetter) pscore(hs_pscore) radius caliper(.01855744) logit
 //note this creates varaible _weight
 
 //graph including off common support information
@@ -6386,6 +6419,295 @@ outreg using `logpath'\helpers_spouse_analysis, ///
 log close
 
 
+H="Subsamples based on p1 interview time"
+/*This Stata code runs following analyses:
+1. Unmatched logit regression on spouse depressive symptoms
+2. Determines propensity scores
+3. Runs summary tables for r and s characteristics using px weighting
+4. Px matched logit regression on reduced spouse depressive symptoms 
+5. Creates means tables of matched, frequency weighted sample
+*/
+
+capture log close
+
+clear all
+set mem 500m
+set more off
+
+//Amy's PC
+local logpath E:\data\spouse\logs
+local datapath E:\data\spouse\final_data
+
+//RG PC
+//local logpath C:\data\Spouse\logs
+//local datapath C:\data\Spouse
+
+log using "`logpath'\6b-HRS_Spouse_analysis_group_by_p1_ivw.txt", text replace
+
+cd `datapath'
+
+use spouse_data_sample_v2.dta
+
+tab r_hs_12m s_1yr_p1_core_dead, missing
+
+
+*****************************************************************************
+*****************************************************************************
+//Px score matching
+*****************************************************************************
+*****************************************************************************
+//rg modified list
+//uses net worth quartiles, high is omitted category
+
+tab r_hs_12m, missing
+
+//first sort data randomly
+set seed 2000
+gen x=uniform()
+sort x
+
+*****************************************************************************
+*****************************************************************************
+//Using Stata's pscore to generate px scores, sample with interview before 1 year
+*****************************************************************************
+*****************************************************************************
+//keep subsample of interviews where interview 3-12 months after death
+drop if s_1yr_p1_core_dead==0
+
+//generate pscore variable hs_pscore
+pscore r_hs_12m $matchvars , pscore(hs_pscore) blockid(hs_block) logit detail
+
+//graph without dropping any observations in the matching process
+psgraph, treated(r_hs_12m) pscore(hs_pscore)
+//graph save `logpath'/helper_psgraph_1 ,replace
+
+//implement radius matching
+gen logitpscore=ln(hs_pscore/(1-hs_pscore))
+sum logitpscore
+
+sca cal_ps1=r(sd)*0.02
+sca list cal_ps1
+
+//psmatch2  r_hs_12m,outcome(s_cesdbetter) pscore(hs_pscore) caliper(.1948227) logit
+//try 0.2* sd
+psmatch2  r_hs_12m,outcome(s_cesdbetter) pscore(hs_pscore) radius caliper(.01948227) logit
+//note this creates varaible _weight
+
+//graph including off common support information
+psgraph, treated(r_hs_12m) pscore(hs_pscore)
+//graph save `logpath'/helper_psgraph_2 ,replace
+
+histogram hs_pscore if _support==1, by(r_hs_12m) 
+
+//look at balance of matched vs unmatched samples
+pstest $matchvars,treated(r_hs_12m) both hist
+//graph save `logpath'/helper_psmatch_1 ,replace
+
+pstest $matchvars,treated(r_hs_12m) both graph
+//graph save `logpath'/helper_psmatch_2 ,replace
+
+//look at quantile-quantile plots for continuous variables
+foreach v in cc_all_count_12m_2 s_age {
+gen `v'_treated = `v' if r_hs_12m==1 & _support==1
+gen `v'_comparison = `v' if r_hs_12m==0 & _support==1
+qqplot `v'_treated `v'_comparison
+//graph save `logpath'/helper_qqplot_`v', replace
+}
+
+
+mat vr=J(43,6,.)
+//compare variance of covariates before and after matching
+local i=1
+foreach v in $matchvars  {
+sum `v' if r_hs_12m==1 //get variance treated before matching
+mat vr[`i',1]=r(Var)
+sum `v' if r_hs_12m==0 //get variance comparison before matching
+mat vr[`i',2]=r(Var)
+mat vr[`i',3]= vr[`i',1]/vr[`i',2] //ratio
+sum `v' if r_hs_12m==1 & _support==1 //get variance treated after matching
+mat vr[`i',4]=r(Var)
+sum `v' if r_hs_12m==0 [iweight=_weight] //get variance comparison after matching
+mat vr[`i',5]=r(Var)
+mat vr[`i',6]= (vr[`i',4]) / (vr[`i',5]) //ratio
+local i=`i'+1
+}
+
+
+mat rownames vr="Count of comorbidities" "Alzheimers/Dementia" "AMI / ISCH" ///
+"CHF" "Diabetes" "Chronic kidney disease" "COPD" "Stroke/TIA" "Cancer" "Atrial fibrilation" ///
+"Hip fracture" "Depression" "Osteoporosis" "Arthritis"  ///
+"R Net worth - lowest quart" "NW - med-low quart" "NW - med-high quart" "Nursing home res" ///
+ "ADL stable partial" "ADL stable severe" "ADL Ind to mod" ///
+"ADL mod to severe" "ADL ind to severe" "ADL n2 to n1 missing" "Medicaid" "Champus" "Medigap" ///
+"Advance directive Y" "Advance directive missing" "R Discuss EOL plans" "R SRH Fair/Poor"  ///
+"S age" "S Female" "S White" "S HS Degree" "S Religion very important" "S SRH Fair/Poor" ///
+"S HRS Comorb Mild 1-3" "S HRS Comorb Mod 4-6" "S Psych Problem HRS n1" "HCI Index" ///
+"Hospital beds" "Specialists"
+
+mat list vr
+
+
+//_support ==1 if matched
+tab _support, missing
+tab _support if r_hs_12m==1, missing
+tab _support if r_hs_12m==0, missing
+tab _weight if r_hs_12m==1, missing
+sum _weight if r_hs_12m==0
+
+//drop observations that aren't matched using caliper match
+drop if _support!=1
+drop if _weight==.
+
+***********************************************************************
+//now run logit model using weighting 
+***********************************************************************
+//need to include the variables used in the propensity score
+//we probably can't keep both spouse and r gender variables in
+
+
+local yearvars ib2000.r_death_year 
+
+logit s_cesdbetter i.r_hs_12m `yearvars' $matchvars [iw=_weight] , or 
+
+outreg using `logpath'\ivw_time_groups_spouse_analysis, ///
+	stats(e_b e_ci p) nosubstat ///
+	title("Reduced spousal depressive symptoms and hospice enrollment" \ ///
+	"Propensity Score Matched, Frequency Weighted Sample" \ ///
+	"Limited to S p1 interview within 1 year of R's death" \ ///	
+	"Outcome = CESD Score Decreased (by any amount) n1 to p1") ///	
+	ctitles("" "OR" "95% CI" "P-value") ///
+	note("Base categories are year=2000 and spouse no comorbidities.") ///
+	varlabels starlevels(10 5 1)  summstat( N) replace
+
+*****************************************************************************
+
+*****************************************************************************
+*****************************************************************************
+//Using Stata's pscore to generate px scores, sample with interview after 1 year
+*****************************************************************************
+*****************************************************************************
+
+*****************************************************************************
+
+clear all
+
+use spouse_data_sample_v2.dta
+
+set seed 2000
+gen x=uniform()
+sort x
+
+//keep subsample of interviews where interview 12+ months after death
+drop if s_1yr_p1_core_dead==1
+
+
+//generate pscore variable hs_pscore
+pscore r_hs_12m $matchvars , pscore(hs_pscore) blockid(hs_block) logit detail
+
+//graph without dropping any observations in the matching process
+psgraph, treated(r_hs_12m) pscore(hs_pscore)
+//graph save `logpath'/helper_psgraph_1 ,replace
+
+//implement radius matching
+gen logitpscore=ln(hs_pscore/(1-hs_pscore))
+sum logitpscore
+
+sca cal_ps1=r(sd)*0.02
+sca list cal_ps1
+
+//psmatch2  r_hs_12m,outcome(s_cesdbetter) pscore(hs_pscore) caliper(.2209762) logit
+//try 0.2* sd
+psmatch2  r_hs_12m,outcome(s_cesdbetter) pscore(hs_pscore) radius caliper(.02209762) logit
+//note this creates varaible _weight
+
+//graph including off common support information
+psgraph, treated(r_hs_12m) pscore(hs_pscore)
+//graph save `logpath'/helper_psgraph_2 ,replace
+
+histogram hs_pscore if _support==1, by(r_hs_12m) 
+
+//look at balance of matched vs unmatched samples
+pstest $matchvars,treated(r_hs_12m) both hist
+//graph save `logpath'/helper_psmatch_1 ,replace
+
+pstest $matchvars,treated(r_hs_12m) both graph
+//graph save `logpath'/helper_psmatch_2 ,replace
+
+//look at quantile-quantile plots for continuous variables
+foreach v in cc_all_count_12m_2 s_age {
+gen `v'_treated = `v' if r_hs_12m==1 & _support==1
+gen `v'_comparison = `v' if r_hs_12m==0 & _support==1
+qqplot `v'_treated `v'_comparison
+//graph save `logpath'/helper_qqplot_`v', replace
+}
+
+
+mat vr=J(43,6,.)
+//compare variance of covariates before and after matching
+local i=1
+foreach v in $matchvars  {
+sum `v' if r_hs_12m==1 //get variance treated before matching
+mat vr[`i',1]=r(Var)
+sum `v' if r_hs_12m==0 //get variance comparison before matching
+mat vr[`i',2]=r(Var)
+mat vr[`i',3]= vr[`i',1]/vr[`i',2] //ratio
+sum `v' if r_hs_12m==1 & _support==1 //get variance treated after matching
+mat vr[`i',4]=r(Var)
+sum `v' if r_hs_12m==0 [iweight=_weight] //get variance comparison after matching
+mat vr[`i',5]=r(Var)
+mat vr[`i',6]= (vr[`i',4]) / (vr[`i',5]) //ratio
+local i=`i'+1
+}
+
+
+mat rownames vr="Count of comorbidities" "Alzheimers/Dementia" "AMI / ISCH" ///
+"CHF" "Diabetes" "Chronic kidney disease" "COPD" "Stroke/TIA" "Cancer" "Atrial fibrilation" ///
+"Hip fracture" "Depression" "Osteoporosis" "Arthritis"  ///
+"R Net worth - lowest quart" "NW - med-low quart" "NW - med-high quart" "Nursing home res" ///
+ "ADL stable partial" "ADL stable severe" "ADL Ind to mod" ///
+"ADL mod to severe" "ADL ind to severe" "ADL n2 to n1 missing" "Medicaid" "Champus" "Medigap" ///
+"Advance directive Y" "Advance directive missing" "R Discuss EOL plans" "R SRH Fair/Poor"  ///
+"S age" "S Female" "S White" "S HS Degree" "S Religion very important" "S SRH Fair/Poor" ///
+"S HRS Comorb Mild 1-3" "S HRS Comorb Mod 4-6" "S Psych Problem HRS n1" "HCI Index" ///
+"Hospital beds" "Specialists"
+
+mat list vr
+
+
+//_support ==1 if matched
+tab _support, missing
+tab _support if r_hs_12m==1, missing
+tab _support if r_hs_12m==0, missing
+tab _weight if r_hs_12m==1, missing
+sum _weight if r_hs_12m==0
+
+//drop observations that aren't matched using caliper match
+drop if _support!=1
+drop if _weight==.
+
+***********************************************************************
+//now run logit model using weighting 
+***********************************************************************
+//need to include the variables used in the propensity score
+//we probably can't keep both spouse and r gender variables in
+
+
+local yearvars ib2000.r_death_year 
+
+logit s_cesdbetter i.r_hs_12m `yearvars' $matchvars [iw=_weight] , or 
+
+outreg using `logpath'\ivw_time_groups_spouse_analysis, ///
+	stats(e_b e_ci p) nosubstat ///
+	title("Reduced spousal depressive symptoms and hospice enrollment" \ ///
+	"Propensity Score Matched, Frequency Weighted Sample" \ ///
+	"Limited to S p1 interview after 1 year of R's death" \ ///	
+	"Outcome = CESD Score Decreased (by any amount) n1 to p1") ///	
+	ctitles("" "OR" "95% CI" "P-value") ///
+	note("Base categories are year=2000 and spouse no comorbidities.") ///
+	varlabels starlevels(10 5 1)  summstat( N) addtable
+log close
+
+
 H="Analysis - Hospice use >=3d alternate definitions"
 /*Outcome variable is: CESD improvement indicator, ie any improvement 
 in CESD score from n1 to p1
@@ -6487,9 +6809,617 @@ sca cal_ps3=r(sd)*0.02
 sca list cal_ps3
 
 //rule of thumb 0.2*sd
-//psmatch2  r_hs_12m,outcome(s_cesdbetter) pscore(hs_pscore) caliper(.1851879) logit
+//psmatch2  r_hs_12m,outcome(s_cesdbetter) pscore(hs_pscore) caliper(.1883521) logit
 //try 0.02* sd
-psmatch2  r_hs_12m_gt3d,outcome(s_cesdbetter) pscore(hs_pscore3) radius caliper(.01851879) logit
+psmatch2  r_hs_12m_gt3d,outcome(s_cesdbetter) pscore(hs_pscore3) radius caliper(.01883521) logit
+//note this creates varaible _weight
+
+//graph including off common support information
+psgraph, treated(r_hs_12m_gt3d) pscore(hs_pscore3)
+graph save `logpath'/psgraph_2_gt3d ,replace
+
+histogram hs_pscore3 if _support==1, by(r_hs_12m_gt3d) 
+
+//look at balance of matched vs unmatched samples
+pstest $matchvars `xvars2',treated(r_hs_12m_gt3d) both hist
+graph save `logpath'/psmatch_1_gt3d ,replace
+
+//pstest $matchvars `xvars',treated(r_hs_12m) both graph
+//graph save `logpath'/psmatch_2 ,replace
+
+//look at quantile-quantile plots for continuous variables
+foreach v in cc_all_count_12m_2 s_age{
+gen `v'_treated_3 = `v' if r_hs_12m_gt3d==1 & _weight!=.
+gen `v'_comparison_3 = `v' if r_hs_12m_gt3d==0 & _weight!=.
+qqplot `v'_treated_3 `v'_comparison_3
+graph save `logpath'/qqplot_`v'_gt3d, replace
+}
+
+
+mat vr=J(43,6,.)
+//compare variance of covariates before and after matching
+local i=1
+foreach v in $matchvars  {
+sum `v' if r_hs_12m==1 //get variance treated before matching
+mat vr[`i',1]=r(Var)
+sum `v' if r_hs_12m==0 //get variance comparison before matching
+mat vr[`i',2]=r(Var)
+mat vr[`i',3]= vr[`i',1]/vr[`i',2] //ratio
+sum `v' if r_hs_12m==1 & _support==1 //get variance treated after matching
+mat vr[`i',4]=r(Var)
+sum `v' if r_hs_12m==0 [iweight=_weight] //get variance comparison after matching
+mat vr[`i',5]=r(Var)
+mat vr[`i',6]= (vr[`i',4]) / (vr[`i',5]) //ratio
+local i=`i'+1
+}
+
+
+
+mat rownames vr="Count of comorbidities" "Alzheimers/Dementia" "AMI / ISCH" ///
+"CHF" "Diabetes" "Chronic kidney disease" "COPD" "Stroke/TIA" "Cancer" "Atrial fibrilation" ///
+"Hip fracture" "Depression" "Osteoporosis" "Arthritis"  ///
+"R Net worth - lowest quart" "NW - med-low quart" "NW - med-high quart" "Nursing home res" ///
+ "ADL stable partial" "ADL stable severe" "ADL Ind to mod" ///
+"ADL mod to severe" "ADL ind to severe" "ADL n2 to n1 missing" "Medicaid" "Champus" "Medigap" ///
+"Advance directive Y" "Advance directive missing" "R Discuss EOL plans" "R SRH Fair/Poor"  ///
+"S age" "S Female" "S White" "S HS Degree" "S Religion very important" "S SRH Fair/Poor" ///
+"S HRS Comorb Mild 1-3" "S HRS Comorb Mod 4-6" "S Psych Problem HRS n1" ///
+"HCI Index" "Hospital beds" "Specialists"
+
+mat list vr
+
+//using this matching, 5 obs from the treatment group are dropped b/c they don't match
+//_support ==1 if matched
+//x not matched, weight=.
+tab _support, missing
+tab _support if r_hs_12m_gt3d==1, missing
+tab _support if r_hs_12m_gt3d==0, missing
+tab _weight if r_hs_12m_gt3d==1, missing
+sum _weight if r_hs_12m_gt3d==0
+
+//rename ps variables and save dataset so can call them up later
+rename _support support_3
+rename _weight weight_3
+save spouse_data_sample_v1_ps3.dta, replace
+
+//drop observations that aren't matched using caliper match
+drop if weight_3==.
+
+//now run using weighting , outcome = improved CESD score p1
+//need to include the variables used in the propensity score
+//we probably can't keep both spouse and r gender variables in
+logit s_cesdbetter i.r_hs_12m_gt3d  `yearvars' $matchvars [iw=weight_3] , or 
+
+est save logit_matched_3, replace
+
+outreg using `logpath'\spouse_analysis_alt_hs_use_def, ///
+	stats(e_b e_ci p) nosubstat ///
+	title("Reduced spousal depressive symptoms and hospice enrollment" \ ///
+	"Propensity Score Matched, Frequency Weighted Sample" \ ///	
+	"Outcome = CESD Score Decreased (by any amount) n1 to p1" \ ///
+	"R Hospice enrollment 3 or more days") ///	
+	ctitles("" "OR" "95% CI" "P-value") ///
+	note("Base categories are year=2000 and spouse has" \ ///
+	"no comorbidities per HRS survey questions.") ///
+	varlabels starlevels(10 5 1)  summstat( N) addtable
+
+tab s_cesdbetter s_cesd_ge3better, missing
+
+//Run logit with outcome=depressed n1, not depressed p1
+logit s_cesd_ge3better i.r_hs_12m_gt3d  `yearvars' $matchvars [iw=weight_3] , or 
+
+outreg using `logpath'\spouse_analysis_alt_hs_use_def, ///
+	stats(e_b e_ci p) nosubstat ///
+	title("Reduced spousal depressive symptoms and hospice enrollment" \ ///
+	"Propensity Score Matched, Frequency Weighted Sample" \ ///	
+	"Outcome = CESD Score 3+ n1 to less than 3 p1" \ ///	
+	"R Hospice enrollment 3 or more days") ///	
+	ctitles("" "OR" "95% CI" "P-value") ///
+	note("Base categories are year=2000 and spouse has" \ ///
+	"no comorbidities per HRS survey questions.") ///
+	varlabels starlevels(10 5 1)  summstat( N) addtable
+
+/*
+*************************************************************************************
+*************************************************************************************
+//Create tables of matched / frequency weighted means
+*************************************************************************************
+*************************************************************************************
+
+*************************************************************************************
+//Table 1 - Respondent characteristics, matched and weighted
+*************************************************************************************
+local t1vars r_medicaid_n1 r_nhres_n1 r_nhres_x r_advdir_y r_advdir_n r_advdir_miss ///
+r_adl_stable_ind_n1n2 ///
+r_adl_stable_partial_n1n2 r_adl_stable_severe_n1n2 r_adl_change_i_m_n1n2 ///
+r_adl_change_m_s_n1n2 r_adl_change_i_s_n1n2 r_adl_change_n1n2_miss cc_3_alzhdmta_n12mn0 ///
+cc_6_chrnkidn_n12mn0 cc_12_ischmcht_n12mn0 cc_8_chf_n12mn0 ///
+cc_9_diabetes_n12mn0 cc_7_copd_n12mn0 cc_16_strketia_n12mn0 ///
+cc_cncr_chronic_n12mn0 cc_4_atrialfb_n12mn0 cc_11_hipfrac_n12mn0 ///
+cc_13_depressn_n12mn0 cc_14_osteoprs_n12mn0 cc_15_ra_oa_n12mn0 
+
+gen byte non_hosp_3d=.
+replace non_hosp_3d=1 if r_hs_12m_gt3d==0
+replace non_hosp_3d=0 if r_hs_12m_gt3d==1
+tab non_hosp_3d r_hs_12m_gt3d, missing
+
+mat demo=J(42,3,.)
+
+//first row, n of hospice users and non-users
+tab r_hs_12m_gt3d if weight_1!=. , missing matcell(d1)
+mat demo[1,1]=d1[2,1] //non-hospice n
+mat demo[1,2]=d1[1,1] //hospice users n
+
+local j=1
+foreach h in r_hs_12m_gt3d non_hosp_3d{
+sum r_age if `h'==1 [iweight=weight_3] //age
+mat demo[2,`j']=r(mean)
+mat demo[3,`j']=r(sd)
+sum r_female if `h'==1 [iweight=weight_3] //female
+mat demo[4,`j']=r(mean)*100
+sum r_white_e if `h'==1 [iweight=weight_3] //non-hispanic, white
+mat demo[5,`j']=r(mean)*100
+sum r_hseduc_n1_n3 if `h'==1 [iweight=weight_3] //hs education+
+mat demo[6,`j']=r(mean)*100
+sum r_networth_adj2010_n1 if `h'==1 [iweight=weight_3] //net worth
+mat demo[7,`j']=r(mean)
+mat demo[8,`j']=r(sd)
+local i=9
+foreach v in `t1vars' {
+	sum `v' if `h'==1 [iweight=weight_3] 
+	mat demo[`i',`j']=r(mean)*100
+	local i=`i'+1 //populates rows 9-34
+	}
+sum cc_all_count_12m_2 if `h'==1 [iweight=weight_3] //count of chronic conditions
+mat demo[35,`j']=r(mean)
+mat demo[36,`j']=r(sd)
+sum hospital_beds if `h'==1 [iweight=weight_3] //hospital beds
+mat demo[37,`j']=r(mean)
+mat demo[38,`j']=r(sd)
+sum medical_specialists if `h'==1 [iweight=weight_3] //medical specialists
+mat demo[39,`j']=r(mean)
+mat demo[40,`j']=r(sd)
+sum hci_index if `h'==1 [iweight=weight_3] //hci index
+mat demo[41,`j']=r(mean)
+mat demo[42,`j']=r(sd)
+local j=`j'+1
+}
+
+//pvalues
+logit r_hs_12m_gt3d r_age [iweight=weight_3]
+test r_age
+mat demo[2,3]=r(p) //p value from t-test
+local j=4
+foreach v in r_female r_white_e r_hseduc_n1_n3{
+logit r_hs_12m_gt3d `v' [iweight=weight_3]
+test `v'
+mat demo[`j',3]=r(p) //p value from chisq test
+local j = `j'+1 //rows 4-6 
+}
+logit r_hs_12m_gt3d r_networth_adj2010_n1 [iweight=weight_3]
+test r_networth_adj2010_n1 
+mat demo[7,3]=r(p) //p value from t-test
+local j=9
+foreach v in `t1vars' {
+	logit r_hs_12m_gt3d `v' [iweight=weight_3]
+	test `v'
+	mat demo[`j',3]=r(p)
+	local j=`j'+1 //populates rows 9-34
+	}
+local j=35
+foreach v in cc_all_count_12m_2 hospital_beds medical_specialists hci_index{
+logit r_hs_12m_gt3d `v' [iweight=weight_3]
+	test `v'
+	mat demo[`j',3]=r(p)
+	local j=`j'+2 //populates rows 32-36 (even only)
+}
+
+mat rownames demo ="Sample n" "Age at death, years, mean" "SD" "Female, %" "Race, Non-Hispanic White, %" ///
+"Education, High School Grad" "Net worth, 2010US$, mean" "SD" "Medicaid, %" ///
+"Nursing home resident n1, %" "Nursing home resident exit" "Had advance directive" ///
+"Did not have advance directive" "Advance directive status unknown" ///
+"Stable, Indep in ADLs n2 to n1" ///
+"Stable, Moderate 1-3 ADL" "Stable, Severe 4-6 ADL" ///
+"Declined, Indep to Moderate" "Declined, Moderate to Severe" ///
+"Declined, Independent to Severe" "Unknown" "Alzheimers/Dementia" "Chronic Kidney Disease" ///
+"Ischemic Heart Disease" "Congestive Heart Failure" "Diabetes" "COPD" ///
+"Stroke or TIA" "Cancer" "Atrial Fibrillation" "Hip Fracture" "Depression" "Osteoporosis" ///
+"Arthritis" "Count of chronic conditions" "SD" "Hosp beds per 10,000 res, mean" "SD" ///
+"Specialists per 100,000, mean" "SD" "HCI index, mean" "SD"
+
+mat list demo
+
+frmttable using `logpath'\spo_weighted_means_tables, statmat(demo) ///
+title("Matched, Weighted Sample - Decedent characteristics") ///
+ctitle("","Hospice users","Non-hospice users","P-value") ///
+sdec(2,2,3) replace
+
+******************************************************************
+//create a table of spouse characteristics - matched and weighted
+******************************************************************
+
+local sdemovar1 s_female s_white_e s_hseduc_n1_n3 ///
+s_medicaid_n1 s_srh_pf_n1 s_smoke_curr_n1 s_alcohol_mis_n1 ///
+s_vig_phy_act_n1 s_hrs_comorb_none_n1 s_hrs_comorb_mild_n1 ///
+s_hrs_comorb_mod_n1 s_cancer_hrs_n1 ///
+s_lung_hrs_n1 s_heart_hrs_n1 s_chf_hrs_n1 s_stroke_hrs_n1 ///
+s_memory_hrs_n1 s_htn_hrs_n1 s_dm_hrs_n1 s_psych_hrs_n1 
+
+local sdemovar2 s_cesd_tot_ge3_n1 ///
+s_cesd_tot_ge3_p1 s_cesd_ge3better s_cesdbetter s_cesdsame s_cesdworse 
+
+local sdemovar3 days_p1_core_dod_lt6m days_p1_core_dod_6_12m days_p1_core_dod_12_18m ///
+	days_p1_core_dod_18_24m days_p1_core_dod_gt2yr 
+
+mat sdemo=J(40,3,.)
+
+//first row, n of hospice and non-hospice
+tab r_hs_12m if weight_1!=., missing matcell(sd1)
+mat sdemo[1,1]=sd1[2,1] //non-hospice n
+mat sdemo[1,2]=sd1[1,1] //hospice users n
+
+local j=1
+foreach h in r_hs_12m non_hosp {
+sum s_age if `h'==1 [iweight=weight_1] //age
+mat sdemo[2,`j']=r(mean)
+mat sdemo[3,`j']=r(sd)
+local i=4
+foreach v in `sdemovar1' {
+	sum `v' if `h'==1 [iweight=weight_1] 
+	mat sdemo[`i',`j']=r(mean)*100
+	local i=`i'+1 //populates rows 4-23
+	}
+sum s_cesd_tot_n1 if `h'==1 [iweight=weight_1] //cesd score n1
+mat sdemo[24,`j']=r(mean)
+sum s_cesd_tot_p1 if `h'==1 [iweight=weight_1] //cesd score p1
+mat sdemo[25,`j']=r(mean)
+sum s_cesdchange if `h'==1 [iweight=weight_1] //cesd score change n1 to p1
+mat sdemo[26,`j']=r(mean)
+local i=27
+foreach v in `sdemovar2' {
+	sum `v' if `h'==1 [iweight=weight_1] 
+	mat sdemo[`i',`j']=r(mean)*100
+	local i=`i'+1 //populates rows 27-32
+	}
+sum days_p1_core_dead if `h'==1 [iweight=weight_1] //days to p1 ivw
+mat sdemo[33,`j']=r(mean)
+mat sdemo[34,`j']=r(sd)
+sum s_1yr_p1_core_dead if `h'==1 [iweight=weight_1]
+mat sdemo[35,`j']=r(mean)*100
+local i=36
+foreach v in `sdemovar3' {
+	sum `v' if `h'==1, detail 
+	mat sdemo[`i',`j']=r(mean)*100
+	local i=`i'+1 //populates rows 36-40
+	}
+local j=`j'+1
+}
+
+//p-values
+logit r_hs_12m s_age [iweight=weight_1]
+test s_age
+mat sdemo[2,3]=r(p)
+local i=4
+foreach v in `sdemovar1' {
+	logit r_hs_12m `v'  [iweight=weight_1]
+	test `v'
+	mat sdemo[`i',3]=r(p)
+	local i=`i'+1 //populates rows 4-23
+	}
+logit r_hs_12m s_cesd_tot_n1  [iweight=weight_1] //cesd score n1
+test s_cesd_tot_n1  
+mat sdemo[24,3]=r(p)
+logit r_hs_12m s_cesd_tot_p1 [iweight=weight_1] //cesd score p1
+test s_cesd_tot_p1 
+mat sdemo[25,3]=r(p)
+logit r_hs_12m s_cesdchange [iweight=weight_1] //cesd score change n1 to p1
+test s_cesdchange 
+mat sdemo[26,3]=r(p)
+local i=27
+foreach v in `sdemovar2' {
+	logit r_hs_12m `v' [iweight=weight_1]
+	test `v'
+	mat sdemo[`i',3]=r(p)
+	local i=`i'+1 //populates rows 27-32
+}
+logit r_hs_12m days_p1_core_dead [iweight=weight_1] //days to p1 ivw
+test days_p1_core_dead 
+mat sdemo[33,3]=r(p)
+logit r_hs_12m s_1yr_p1_core_dead [iweight=weight_1] //p1 1 yr of death
+	test s_1yr_p1_core_dead 
+	mat sdemo[35,3]=r(p)
+local i=36
+foreach v in `sdemovar3' {
+	logit r_hs_12m `v' [iweight=weight_1]
+	test `v'
+	mat sdemo[`i',3]=r(p)
+	local i=`i'+1 //populates rows 36-40
+}
+
+//can't do logit to get test for alchool misuse because no obs in hs group have it
+//tab s_alcohol_mis_n1 r_hs_12m [iweight=weight_1], exact
+//mat sdemo[10,3]=r(p)
+
+mat rownames sdemo ="Sample size n" "Age at r's death, mean" "SD" "Female" "Non-Hispanic White" ///
+"Education, High school grad" "Medicaid" "SRH poor or fair" ///
+"Currently smoker" "Alcohol mis-use" "Vigorous physical activity" ///
+"Comorbidity index - none" "Mild (1-3)" "Moderate (4-6)" ///
+"Cancer" "Lung disease" "Heart disease" "CHF" "Stroke" "Memory disease" ///
+"Hypertension" "Diabetes" "Psychological problems" ///
+"CESD-D raw score n1, mean" "CESD-D raw score p1, mean" "Change in raw CESD n1 to p1" ///
+"Clinical depression pre death" "Clinical depression post death" ///
+ "Clin depr n1 but no p1" "CESD Improved post death" ///
+"Same CESD post death" "CESD Declined post death" "Days R DOD to S P1 ivw" ///
+"SD" "P1 ivw wi 1 year of death" "R DOD to P1 ivw 3-6m" "R DOD to P1 ivw 6-12m" ///
+ "R DOD to P1 ivw 12-18m"  "R DOD to P1 ivw 18-24m"  "R DOD to P1 ivw 2yr+"
+
+mat list sdemo
+
+frmttable using `logpath'\spo_weighted_means_tables, statmat(sdemo) ///
+title("Matched, Weighted sample - Spouse characteristics") ///
+ctitle("","Hospice users","Non-hospice users","P-value") ///
+sdec(2,2,3) addtable
+*/
+*****************************************************************************
+*****************************************************************************
+*****************************************************************************
+*****************************************************************************
+//Px score matching - 7 or more days of hospice use = treatment variable
+*****************************************************************************
+*****************************************************************************
+*****************************************************************************
+*****************************************************************************
+clear all
+
+use spouse_data_sample_v2.dta if (r_adl_sp_helper_x==1 | r_iadl_sp_helper_x==1)
+
+tab r_hs_12m_gt7d, missing
+
+drop if r_hs_12m_gt7d==.
+
+*****************************************************************************
+*****************************************************************************
+//Using Stata's pscore to generate px scores
+*****************************************************************************
+*****************************************************************************
+
+//generate pscore variable hs_pscore
+pscore r_hs_12m_gt7d $matchvars, pscore(hs_pscore7) blockid(hs_block) logit detail
+
+//graph without dropping any observations in the matching process
+psgraph, treated(r_hs_12m_gt7d) pscore(hs_pscore7)
+graph save `logpath'/psgraph_1_gt7d ,replace
+
+//implement radius matching
+gen logitpscore7=ln(hs_pscore7/(1-hs_pscore7))
+sum logitpscore7
+
+sca cal_ps1_7=r(sd)*0.02
+sca list cal_ps1_7
+
+//rule of thumb 0.2*sd
+//psmatch2  r_hs_12m,outcome(s_cesdbetter) pscore(hs_pscore) caliper(.206877) logit
+//try 0.02* sd
+psmatch2  r_hs_12m_gt7d,outcome(s_cesdbetter) pscore(hs_pscore7) radius caliper(.0206877) logit
+//note this creates varaible _weight
+
+//graph including off common support information
+psgraph, treated(r_hs_12m_gt7d) pscore(hs_pscore7)
+graph save `logpath'/psgraph_2_gt7d ,replace
+
+histogram hs_pscore7 if _support==1, by(r_hs_12m_gt7d) 
+
+//look at balance of matched vs unmatched samples
+pstest $matchvars ,treated(r_hs_12m_gt7d) both hist
+graph save `logpath'/psmatch_1_gt7d ,replace
+
+//pstest $matchvars `xvars',treated(r_hs_12m) both graph
+//graph save `logpath'/psmatch_2 ,replace
+
+//look at quantile-quantile plots for continuous variables
+foreach v in cc_all_count_12m_2 s_age {
+gen `v'_treated_7 = `v' if r_hs_12m_gt7d==1 & _support==1
+gen `v'_comparison_7 = `v' if r_hs_12m_gt7d==0 & _support==1
+qqplot `v'_treated_7 `v'_comparison_7
+graph save `logpath'/qqplot_`v'_gt7d, replace
+}
+
+
+mat vr=J(43,6,.)
+//compare variance of covariates before and after matching
+local i=1
+foreach v in $matchvars  {
+sum `v' if r_hs_12m==1 //get variance treated before matching
+mat vr[`i',1]=r(Var)
+sum `v' if r_hs_12m==0 //get variance comparison before matching
+mat vr[`i',2]=r(Var)
+mat vr[`i',3]= vr[`i',1]/vr[`i',2] //ratio
+sum `v' if r_hs_12m==1 & _support==1 //get variance treated after matching
+mat vr[`i',4]=r(Var)
+sum `v' if r_hs_12m==0 [iweight=_weight] //get variance comparison after matching
+mat vr[`i',5]=r(Var)
+mat vr[`i',6]= (vr[`i',4]) / (vr[`i',5]) //ratio
+local i=`i'+1
+}
+
+
+
+mat rownames vr="Count of comorbidities" "Alzheimers/Dementia" "AMI / ISCH" ///
+"CHF" "Diabetes" "Chronic kidney disease" "COPD" "Stroke/TIA" "Cancer" "Atrial fibrilation" ///
+"Hip fracture" "Depression" "Osteoporosis" "Arthritis"  ///
+"R Net worth - lowest quart" "NW - med-low quart" "NW - med-high quart" "Nursing home res" ///
+ "ADL stable partial" "ADL stable severe" "ADL Ind to mod" ///
+"ADL mod to severe" "ADL ind to severe" "ADL n2 to n1 missing" "Medicaid" "Champus" "Medigap" ///
+"Advance directive Y" "Advance directive missing" "R Discuss EOL plans" "R SRH Fair/Poor"  ///
+"S age" "S Female" "S White" "S HS Degree" "S Religion very important" "S SRH Fair/Poor" ///
+"S HRS Comorb Mild 1-3" "S HRS Comorb Mod 4-6" "S Psych Problem HRS n1" ///
+"HCI Index" "Hospital beds" "Specialists"
+
+mat list vr
+
+//using this matching, 6 obs from the treatment group are dropped off common support
+//1 obs dropped because not matched
+//_support ==1 if matched
+tab _support, missing
+tab _support if r_hs_12m_gt7d==1, missing
+tab _support if r_hs_12m_gt7d==0, missing
+tab _weight if r_hs_12m_gt7d==1, missing
+sum _weight if r_hs_12m_gt7d==0, detail
+
+//rename ps variables and save dataset so can call them up later
+rename _support support_7
+rename _weight weight_7
+save spouse_data_sample_v1_ps7.dta, replace
+
+//drop observations that aren't matched using caliper match
+drop if weight_7==.
+
+//now run using weighting , outcome = improved CESD score p1
+//need to include the variables used in the propensity score
+//we probably can't keep both spouse and r gender variables in
+logit s_cesdbetter i.r_hs_12m_gt7d `yearvars' $matchvars [iw=weight_7] , or 
+
+est save logit_matched_7, replace
+
+outreg using `logpath'\spouse_analysis_alt_hs_use_def, ///
+	stats(e_b e_ci p) nosubstat ///
+	title("Reduced spousal depressive symptoms and hospice enrollment" \ ///
+	"Propensity Score Matched, Frequency Weighted Sample" \ ///	
+	"Outcome = CESD Score Decreased (by any amount) n1 to p1" \ ///
+	"R Hospice enrollment 7 or more days") ///	
+	ctitles("" "OR" "95% CI" "P-value") ///
+	note("Base categories are year=2000 and spouse has" \ ///
+	"no comorbidities per HRS survey questions.") ///
+	varlabels starlevels(10 5 1)  summstat( N) addtable
+
+tab s_cesdbetter s_cesd_ge3better, missing
+
+//Run logit with outcome=depressed n1, not depressed p1
+logit s_cesd_ge3better i.r_hs_12m_gt7d `yearvars' $matchvars [iw=weight_7] , or 
+
+outreg using `logpath'\spouse_analysis_alt_hs_use_def, ///
+	stats(e_b e_ci p) nosubstat ///
+	title("Reduced spousal depressive symptoms and hospice enrollment" \ ///
+	"Propensity Score Matched, Frequency Weighted Sample" \ ///	
+	"Outcome = CESD Score 3+ n1 to less than 3 p1" \ ///	
+	"R Hospice enrollment 7 or more days") ///	
+	ctitles("" "OR" "95% CI" "P-value") ///
+	note("Base categories are year=2000 and spouse has" \ ///
+	"no comorbidities per HRS survey questions.") ///
+	varlabels starlevels(10 5 1)  summstat( N) addtable
+
+/*add matched tables here for 7+ day defintion*/
+
+log close
+
+
+H="Analysis - Hospice use 3,7 days, Helpers"
+/*Outcome variable is: CESD improvement indicator, ie any improvement 
+in CESD score from n1 to p1
+
+Defines hospice use as 3 or more days in hospice in last year of life
+(rather than any hospice use as done in earlier analyses)
+
+This Stata code runs following analyses:
+1. Unmatched logit regression on spouse depressive symptoms
+2. Determines propensity scores
+3. Runs summary tables for r and s characteristics using px weighting
+4. Px matched logit regression on reduced spouse depressive symptoms 
+5. Creates means tables of matched, frequency weighted sample
+*/
+
+capture log close
+
+clear all
+set mem 500m
+set more off
+
+//Amy's PC
+//note that I created a separate logpath for the helper sub-sample analysis!
+local logpath E:\data\spouse\logs\helpers
+local datapath E:\data\spouse\final_data
+
+//RG PC
+//local logpath C:\data\Spouse\logs
+//local datapath C:\data\Spouse
+
+log using "`logpath'\7-HRS_Spouse_analysis_alt_hs_use_def.txt", text replace
+
+cd `datapath'
+
+//use dataset that has already dropped observation if missing any of the 
+//analysis variables and has px weighting saved from the 1+ days hospice use definition
+use spouse_data_sample_v2.dta if (r_adl_sp_helper_x==1 | r_iadl_sp_helper_x==1)
+
+tab r_hs_12m_gt3d, missing
+tab r_hs_12m_gt7d, missing
+
+*****************************************************************************
+*****************************************************************************
+//Unmatched logit regression hospice use on reduced spousal depression
+*****************************************************************************
+*****************************************************************************
+local xvars c.s_age i.s_female i.s_white_e i.s_hseduc_n1_n3 i.s_srh_pf_p1 ///
+i.s_hrs_comorb_mild_n1 i.s_hrs_comorb_mod_n1 i.s_psych_overall_hrs_n1 
+
+local yearvars ib2000.r_death_year 
+
+logit s_cesdbetter i.r_hs_12m_gt3d `xvars' `yearvars', or
+
+outreg using `logpath'\helpers_spouse_analysis_alt_hs_use_def, ///
+	stats(e_b e_ci p) nosubstat ///
+	title("Reduced spousal depressive symptoms and hospice enrollment - Unmatched" \ ///
+	"Outcome = CESD Score Decreased (by any amount) n1 to p1" \ ///
+	"R Hospice use 3 days or more last year of life" \ ///
+	"Sample limited to ADL or IADL Primary Helpers") ///	
+	ctitles("" "OR" "95% CI" "P-value") ///
+	note("Base categories are year=2000 and no comorbidities.") ///
+	varlabels starlevels(10 5 1)  summstat( N) replace
+
+logit s_cesdbetter i.r_hs_12m_gt7d `xvars' `yearvars', or
+
+outreg using `logpath'\helpers_spouse_analysis_alt_hs_use_def, ///
+	stats(e_b e_ci p) nosubstat ///
+	title("Reduced spousal depressive symptoms and hospice enrollment - Unmatched" \ ///
+	"Outcome = CESD Score Decreased (by any amount) n1 to p1" \ ///
+	"R Hospice use 7 days or more last year of life" \ ///
+	"Sample limited to ADL or IADL Primary Helpers") ///		
+	ctitles("" "OR" "95% CI" "P-value") ///
+	note("Base categories are year=2000 and no comorbidities.") ///
+	varlabels starlevels(10 5 1)  summstat( N) addtable 	
+	
+*****************************************************************************
+*****************************************************************************
+//Px score matching - 3 or more days of hospice use = treatment variable
+*****************************************************************************
+*****************************************************************************
+tab r_hs_12m_gt3d, missing
+
+*****************************************************************************
+*****************************************************************************
+//Using Stata's pscore to generate px scores
+*****************************************************************************
+*****************************************************************************
+drop if r_hs_12m_gt3d==.
+
+//generate pscore variable hs_pscore
+pscore r_hs_12m_gt3d $matchvars, pscore(hs_pscore3) blockid(hs_block) logit detail
+
+//graph without dropping any observations in the matching process
+psgraph, treated(r_hs_12m_gt3d) pscore(hs_pscore3)
+graph save `logpath'/psgraph_1_gt3d ,replace
+
+//implement radius matching
+gen logitpscore3=ln(hs_pscore3/(1-hs_pscore3))
+sum logitpscore3
+
+sca cal_ps3=r(sd)*0.02
+sca list cal_ps3
+
+//rule of thumb 0.2*sd
+//psmatch2  r_hs_12m,outcome(s_cesdbetter) pscore(hs_pscore) caliper(.1883521) logit
+//try 0.02* sd
+psmatch2  r_hs_12m_gt3d,outcome(s_cesdbetter) pscore(hs_pscore3) radius caliper(.01883521) logit
 //note this creates varaible _weight
 
 //graph including off common support information
@@ -6876,9 +7806,9 @@ sca cal_ps1_7=r(sd)*0.02
 sca list cal_ps1_7
 
 //rule of thumb 0.2*sd
-//psmatch2  r_hs_12m,outcome(s_cesdbetter) pscore(hs_pscore) caliper(.2034228) logit
+//psmatch2  r_hs_12m,outcome(s_cesdbetter) pscore(hs_pscore) caliper(.206877) logit
 //try 0.02* sd
-psmatch2  r_hs_12m_gt7d,outcome(s_cesdbetter) pscore(hs_pscore7) radius caliper(.02034228) logit
+psmatch2  r_hs_12m_gt7d,outcome(s_cesdbetter) pscore(hs_pscore7) radius caliper(.0206877) logit
 //note this creates varaible _weight
 
 //graph including off common support information
@@ -7024,7 +7954,14 @@ log using "`logpath'\8-HRS_Spouse_analysis_create_figure.txt", text replace
 cd `datapath'
 
 //use dataset that has px weighting saved from the 3 hospice use definitions
-use spouse_data_sample_v1_ps1and3and7.dta
+use spouse_data_sample_v1_ps1.dta
+
+//merge in weights from 3+ day hospice model
+merge 1:1 r_id using spouse_data_sample_v1_ps3.dta, keepusing(weight_3 support_3) 
+drop _merge
+
+merge 1:1 r_id using spouse_data_sample_v1_ps7.dta, keepusing(weight_7 support_7) 
+
 
 //comparison of hospice use definitions
 tab r_hs_12m , missing

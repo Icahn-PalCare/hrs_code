@@ -524,12 +524,12 @@ libname oop_int "E:\data\hrs_oop_2010\int_data";
 libname hrs_cln 'E:\data\hrs_cleaned';
 
 proc import datafile="E:\data\hrs_oop_2010\received_data\oopme_final_oldv.dta"  
-out=oop_1; 
+out=oop_1 replace; 
 run;
 
 data oop_2 (keep=id year curr_iw_date prev_iw_date months total_OOP hospital_OOP NH_OOP 
 doctor_OOP dental_OOP patient_OOP 
-hospice_OOP RX_OOP home_OOP special_OOP non_med_OOP helper_OOP insurance_costs);
+hospice_OOP RX_OOP home_OOP special_OOP non_med_OOP helper_OOP insurance_costs NH_NIGHTS);
 set oop_1;
 length id $9 hhid $6 pn $3;
 id=hhid||pn;
@@ -565,7 +565,7 @@ data exit_oop_1;
 set exit_oop;
 run;
 
-/*rename variable macro
+/*rename variable macro*/
 *options macrogen mprint mlogic;
 %macro rename2(lib,dsn,pre,first);
 options pageno=1 nodate;
@@ -760,7 +760,9 @@ H="OOP spending totals 24,60 months before death"
 Adjust all OOP spending for inflation to 2010 dollars
 Get totals by OOP spending type over the 24 and 60 months prior to death date
 
-Final dataset is oop_int.oop_24m
+Also gets nursing home nights (self reported) over the 24 and 60m prior to death
+
+Final dataset is oop_int.oop_24m_60m
 */
 
 /**********************************************************************/
@@ -847,18 +849,22 @@ proc means data=adjust_rx_n3;
 var RX_OOP_x RX_old_x other_oop_n1;
 run;
 
-/*set nursing home spending to 0 where missing in core interviews*/
+/*set nursing home spending and nights to 0 where missing in core interviews*/
 data nh_adj;
 set adjust_rx_n3;
 if nh_oop_n1=. then nh_oop_n1=0;
 if nh_oop_n2=. then nh_oop_n2=0;
 if nh_oop_n3=. then nh_oop_n3=0;
+if nh_nights_n1=. then nh_nights_n1=0;
+if nh_nights_n2=. then nh_nights_n2=0;
+if nh_nights_n3=. then nh_nights_n3=0;
+if nh_nights_x=. then nh_nights_x=0;
 run;
 
 /**********************************************************************/
 /**********************************************************************/
 /*is the OOP dataset interview date from the Exit interview the death date
-It is the month of death??? Yes*/
+It is the month of death??? Yes!*/
 data zzzdates;
 set nh_adj;
 format death_date_e_x date9. ;
@@ -869,7 +875,7 @@ run;
 
 /**********************************************************************/
 /**********************************************************************/
-/*Get totals over 24month period*/
+/*Get totals over 24 and 60 month periods*/
 /**********************************************************************/
 /**********************************************************************/
 /*exit months range 1-202, n1 months=12-145, n2 months=12-152, n3 months=12-118*/
@@ -888,11 +894,11 @@ run;
 
 /*get totals of waves OOP for 24 months and 60 months*/
 %let list=total_OOP helper_OOP hospital_OOP nh_OOP doctor_OOP rx_OOP
- insurance_costs other_oop total_old rx_old;
+ insurance_costs other_oop total_old rx_old nh_nights;
 
 %macro all(su=,months=);
 
-%do i=1 %to 10;
+%do i=1 %to 11;
 %let var=%scan(&list,&i);
 
 data temp_&su._&i;
@@ -935,7 +941,7 @@ run;
 /*merge the temporary datasets back together*/
 /*so dataset all_2 has variables for OOP spending last 24 months of life*/
 data all_2;
-merge temp_24m_1-temp_24m_10 temp_60m_1-temp_60m_10;
+merge temp_24m_1-temp_24m_11 temp_60m_1-temp_60m_11;
 by id;
 run;
 
@@ -2639,9 +2645,159 @@ proc freq data=oop_fnl.hrs_oop_ivws_meet_el_cc_n24m;
 table cc_:;
 run;
 
+
+
+H="Get nights SNF paid for by MC"
+/*this creates the dataset oop_fnl.hrs_oop_with_nh_nights with
+1. HRS interviews (exit, core n1, n2, n3 and restricted data)
+2. OOP spending, nh nights totaled by 24m and 60m
+3. Indicators for ffs mc last 2y and 5y
+4. Elixhauser comorbidity indicators, last 2 years of life
+5. Chronic conditions indicators, last 2 years of life
+6. SNF nights, total and paid for by mc, from MC claims
+This dataset is then merged with the MC claims payments totals datset 
+created in the next few heading sections*/
+
+
+/*first pull all snf claims x years before death*/
+
+%macro snfnights(days_start=,days_bef_death=,name=);
+
+/*identify claims where entire claim is within the x months prior to death*/
+proc sql;
+create table snf_meet as select a.*,b.death_date_e
+from medi.mp_2000_2010(where=(trim(left(SSLSSNF))="N")) a inner join
+oop_int.meet_criteria_2yr b
+on trim(left(a.BID_HRS_19))=trim(left(b.BID_hrs))
+and &days_start<=b.death_date_e-a.admit_date<=&days_bef_death;
+quit;
+
+/*identify claims that span x months prior to death (admission date is prior to start 
+of x months but discharge date is within the x month window*/
+proc sql;
+create table snf_meet2 as select a.*,b.death_date_e
+from medi.mp_2000_2010(where=(trim(left(SSLSSNF))="N")) a inner join
+oop_int.meet_criteria_2yr b
+on trim(left(a.BID_HRS_19))=trim(left(b.BID_hrs))
+and b.death_date_e-a.admit_date>&days_bef_death and b.death_date_e-a.disch_date<=&days_bef_death;
+quit;
+
+/*Reset the start date = x months before death to just capture part of stay that was 
+during the final x months*/
+data snf_meet3;
+set snf_meet2;
+early_admit=1;
+label early_admit="admit outside study window = yes";
+run;
+
+
+data snf_meet_4_&name.;
+set snf_meet snf_meet3;
+
+window_start=death_date_e-&days_bef_death.;
+/*determine days paid for by mc and total snf days for claims fully in the window*/
+if early_admit~=1 then do;
+snf_days_mc_paid=util_day;
+total_snf_los=LOSCNT;
+end;
+
+/*for those that claim starts earlier than time window*/
+if early_admit=1 then do;
+	mc_paid_thru_dt=admit_date+util_day;
+	total_snf_los=LOSCNT-(window_start-admit_date);
+	if window_start=mc_paid_thru_dt then total_snf_los=1;
+	if mc_paid_thru_dt < window_start then do;
+		snf_days_mc_paid=0;
+	end;
+	if mc_paid_thru_dt > window_start then do;
+		snf_days_mc_paid= mc_paid_thru_dt - window_start;
+	end;
+	if mc_paid_thru_dt = window_start then do;
+		snf_days_mc_paid=1;
+	end;
+
+end;
+
+format admit_date date10.;
+format disch_date date10.;
+format mc_paid_thru_dt date10.;
+format death_date_e date10.;
+format window_start date10.;
+label mc_paid_thru_dt="Medicaid covered through this date";
+label total_snf_los="Total claim SNF LOS";
+label snf_days_mc_paid="Claim days paid for by Medicare";
+
+if total_snf_los=snf_days_mc_paid then mc_full=1;
+if total_snf_los>snf_days_mc_paid then mc_full=0;
+label mc_full="Indicator that stay fully paid for by MC";
+
+run; 
+
+proc freq; table mc_full; run;
+
+proc means; var total_snf_los snf_days_mc_paid; run;
+
+/*sum over all claims*/
+proc sql;
+create table snf_&name. as select distinct bid_hrs_19,
+sum(total_snf_los) as snf_stay_all_&name. ,
+sum(snf_days_mc_paid) as los_snf_paid_by_mc_&name. ,
+sum(util_day) as tot_util_days_&name.
+from snf_meet_4_&name. group by bid_hrs_19;
+quit;
+
+proc means; var snf_stay_all_&name. los_snf_paid_by_mc_&name. tot_util_days_&name.; run;
+
+%mend;
+
+%snfnights(days_start=0,days_bef_death=730,name=2y);
+%snfnights(days_start=0,days_bef_death=(5*365),name=5y);
+
+/*merge snf nights into the overall dataset*/
+%macro mergenh(predeath=);
+
+proc sql;
+create table add_nh_&predeath._1
+as select a.*,b.snf_stay_all_2y, b.los_snf_paid_by_mc_2y from
+oop_fnl.hrs_oop_ivws_meet_el_cc_&predeath. a
+left join
+snf_2y b 
+on (a.bid_hrs)=(b.bid_hrs_19);
+quit;
+
+proc sql;
+create table add_nh_&predeath._2
+as select a.*,b.snf_stay_all_5y, b.los_snf_paid_by_mc_5y from
+add_nh_&predeath._1 a
+left join
+snf_5y b 
+on (a.bid_hrs)=(b.bid_hrs_19);
+quit;
+
+%mend;
+
+%mergenh(predeath=n24m);
+
+/*if FFS medicare for the full time period, assign snf stay infrmation as no use*/
+data add_nh_final;
+set add_nh_n24m_2;
+if part_ab_5y=1 and hmo_5y=0 and los_snf_paid_by_mc_5y=. then do;
+	los_snf_paid_by_mc_5y=0; snf_stay_all_5y=0;
+	end;
+if part_ab_2y=1 and hmo_2y=0 and los_snf_paid_by_mc_2y=. then do;
+	los_snf_paid_by_mc_2y=0; snf_stay_all_2y=0;
+	end;
+run;
+
+data oop_fnl.hrs_oop_with_nh_nights;
+set add_nh_final;
+run;
+
+proc freq; table los_snf_paid_by_mc_2y snf_stay_all_2y; run;
+
 /*save version to Stata*/
-proc export data=oop_fnl.hrs_oop_ivws_meet_el_cc_n24m 
-outfile="E:\data\hrs_oop_2010\final_data\hrs_oop_ivws_meet_el_cc_n24m.dta" replace;
+proc export data=oop_fnl.hrs_oop_with_nh_nights 
+outfile="E:\data\hrs_oop_2010\final_data\hrs_oop_with_nh_nights.dta" replace;
 run;
 
 H="Medpar mc spending total"
@@ -2957,7 +3113,8 @@ quit;
 /* Create dataset with cbsa, wage index and zip code */
 /******************************************************************/
 
-/*for zip codes with no cbsa, wage index is left missing*/
+/*for zip codes with no cbsa, wage index is left missing
+there are also many cbsas with missing wage index*/
 proc sql;
 create table zip_cbsa_wage_index as
 select a.*,b.wage_index_2010 from
@@ -2967,7 +3124,7 @@ wage_index2 b
 on a.cbsa_n=b.cbsa_n;
 quit;
 
-/*Check for and remove duplicates by zip - no duplicates*/
+/*Check for and remove duplicates by zip, keep first entry*/
 proc sort data=zip_cbsa_wage_index out=zip_cbsa_wage_index2 nodupkey;
 by zip_n;
 run;
@@ -3135,7 +3292,7 @@ quit;
 /*drop observations with no state or zip code in exit_zip_n
 since those costs cannot be scaled and other regional data cannot
 be brought in for those obs
-2 observations dropped*/
+23 observations dropped*/
 proc sql;
 create table cost_id_wage_index3 as
 select * from cost_id_wage_index2
@@ -3189,19 +3346,25 @@ H="Calculate total spending "
 /* Create new variable for total mc spending of all types */
 /******************************************************************/
 
-data oop_fnl.mc_costs_2yr;
+/*note this final dataset drops observations with missing wage index*/
+
+data oop_fnl.mc_costs_2and5yr;
 set oop_int.costs_all_wi;
 /*total not adjusted for wage index*/
 tot_paid_by_mc_2yr=sum(of ip_paid_by_mc_2yr snf_paid_by_mc_2yr hh_paid_by_mc_2yr hs_paid_by_mc_2yr
 pb_paid_by_mc_2yr op_paid_by_mc_2yr dm_paid_by_mc_2yr);
+tot_paid_by_mc_5yr=sum(of ip_paid_by_mc_5yr snf_paid_by_mc_5yr hh_paid_by_mc_5yr hs_paid_by_mc_5yr
+pb_paid_by_mc_5yr op_paid_by_mc_5yr dm_paid_by_mc_5yr);
 /*total adjusted for wage index*/
 tot_paid_by_mc_2yr_wi=sum(of ip_paid_by_mc_2yr_wi snf_paid_by_mc_2yr_wi hh_paid_by_mc_2yr_wi hs_paid_by_mc_2yr_wi
 pb_paid_by_mc_2yr_wi op_paid_by_mc_2yr_wi dm_paid_by_mc_2yr_wi);
+tot_paid_by_mc_5yr_wi=sum(of ip_paid_by_mc_5yr_wi snf_paid_by_mc_5yr_wi hh_paid_by_mc_5yr_wi hs_paid_by_mc_5yr_wi
+pb_paid_by_mc_5yr_wi op_paid_by_mc_5yr_wi dm_paid_by_mc_5yr_wi);
 run;
 
 /*save version to Stata*/
-proc export data=oop_fnl.mc_costs_2yr 
-outfile="E:\data\hrs_oop_2010\final_data\mc_costs_2yr.dta" replace;
+proc export data=oop_fnl.mc_costs_2and5yr
+outfile="E:\data\hrs_oop_2010\final_data\mc_costs_2and5yr.dta" replace;
 run;
 
 H="Merge mc spending into oop file"
@@ -3226,12 +3389,12 @@ set more off
 local logpath E:\data\hrs_oop_2010\logs
 local datapath E:\data\hrs_oop_2010\final_data
 
-log using `logpath'\mc_oop_2yr_merge-LOG.txt, text replace
+log using `logpath'\mc_oop_2and5yr_merge-LOG.txt, text replace
 
 cd `datapath'
-use hrs_oop_ivws_meet_el_cc_n24m.dta
+use hrs_oop_with_nh_nights.dta
 
-merge 1:1 id using mc_costs_2yr.dta
+merge 1:1 id using mc_costs_2and5yr.dta
 //check merge to see that observations with costs were merged
 sum _merge if(tot_paid_by_mc_2yr==.)
 sum _merge if(tot_paid_by_mc_2yr~=.)
@@ -3241,6 +3404,9 @@ gen mc_total_d=0
 replace mc_total_d=1 if(_merge==3)
 drop _merge
 tab mc_total_d
+//23 missing medciare totals are missing because no link to wage index!
+tab mc_total_d if ( part_ab_2y==1 &  hmo_2y==0)
+
 
 //Label variables for mc spending totals
 la var tot_paid_by_mc_2yr "Total mc payments in last 2 years of life"
@@ -3261,17 +3427,38 @@ la var pb_paid_by_mc_2yr_wi "Wage index adj. Carrier mc payments in last 2 years
 la var op_paid_by_mc_2yr_wi "Wage index adj. Outpatient mc payments in last 2 years of life"
 la var dm_paid_by_mc_2yr_wi "Wage index adj. DME mc payments in last 2 years of life"
 
+la var tot_paid_by_mc_5yr "Total mc payments in last 5 years of life"
+la var ip_paid_by_mc_5yr "Inpatient mc payments in last 5 years of life"
+la var snf_paid_by_mc_5yr "SNF mc payments in last 5 years of life"
+la var hh_paid_by_mc_5yr "Home health mc payments in last 5 years of life"
+la var hs_paid_by_mc_5yr "Hospice mc payments in last 5 years of life"
+la var pb_paid_by_mc_5yr "Carrier mc payments in last 5 years of life"
+la var op_paid_by_mc_5yr "Outpatient mc payments in last 5 years of life"
+la var dm_paid_by_mc_5yr "DME mc payments in last 5 years of life"
+
+la var tot_paid_by_mc_5yr_wi "Total wage index adj. mc payments in last 5 years of life"
+la var ip_paid_by_mc_5yr_wi "Wage index adj. Inpatient mc payments in last 5 years of life"
+la var snf_paid_by_mc_5yr_wi "Wage index adj. SNF mc payments in last 5 years of life"
+la var hh_paid_by_mc_5yr_wi "Wage index adj. Home health mc payments in last 5 years of life"
+la var hs_paid_by_mc_5yr_wi "Wage index adj. Hospice mc payments in last 5 years of life"
+la var pb_paid_by_mc_5yr_wi "Wage index adj. Carrier mc payments in last 5 years of life"
+la var op_paid_by_mc_5yr_wi "Wage index adj. Outpatient mc payments in last 5 years of life"
+la var dm_paid_by_mc_5yr_wi "Wage index adj. DME mc payments in last 5 years of life"
+
 //save dataset with costs merged in
-save oop_resp_sp_restri_24m_mc.dta,replace
+save oop_resp_sp_restri_24mand60m_mc.dta,replace
 
 //local for mc costs adjusted by wage index
-local mccost tot_paid_by_mc_2yr_wi ip_paid_by_mc_2yr_wi snf_paid_by_mc_2yr_wi ///
+local mccost2 tot_paid_by_mc_2yr_wi ip_paid_by_mc_2yr_wi snf_paid_by_mc_2yr_wi ///
 hh_paid_by_mc_2yr_wi hs_paid_by_mc_2yr_wi pb_paid_by_mc_2yr_wi op_paid_by_mc_2yr_wi ///
  dm_paid_by_mc_2yr_wi 
-tabstat `mccost' if(mc_total_d==1), stat(mean sd count) col(stat)
+local mccost5 tot_paid_by_mc_5yr_wi ip_paid_by_mc_5yr_wi snf_paid_by_mc_5yr_wi ///
+hh_paid_by_mc_5yr_wi hs_paid_by_mc_5yr_wi pb_paid_by_mc_5yr_wi op_paid_by_mc_5yr_wi ///
+ dm_paid_by_mc_5yr_wi  
+tabstat `mccost2' `mccost5' if(mc_total_d==1), stat(mean sd count) col(stat)
 
 tabout death_year_e female_x race_e /*age_at_death_e*/ if(mc_total_d==1) ///
-using "C:\data\oop\report\sumstats1.csv", ///
+using `logpath'\sumstats1.csv, ///
 replace sum c(mean tot_paid_by_mc_2yr_wi N tot_paid_by_mc_2yr_wi ) style(csv)
 
 /*
@@ -3297,81 +3484,6 @@ log close
 
 
 
-H="Get nights SNF paid for by MC"
-/*first pull all snf claims x years before death*/
-
-%macro snfnights(days_start=,days_bef_death=,name=);
-
-/*identify claims where entire claim is within the x months prior to death*/
-proc sql;
-create table snf_meet as select a.*,b.death_date_e
-from medi.mp_2000_2010(where=(trim(left(SSLSSNF))="N")) a inner join
-oop_int.meet_criteria_2yr b
-on trim(left(a.BID_HRS_19))=trim(left(b.BID_hrs))
-and &days_start<=b.death_date_e-a.admit_date<=&days_bef_death;
-quit;
-
-/*identify claims that span x months prior to death (admission date is prior to start 
-of x months but discharge date is within the x month window*/
-proc sql;
-create table snf_meet2 as select a.*,b.death_date_e
-from medi.mp_2000_2010(where=(trim(left(SSLSSNF))="N")) a inner join
-oop_int.meet_criteria_2yr b
-on trim(left(a.BID_HRS_19))=trim(left(b.BID_hrs))
-and b.death_date_e-a.admit_date>&days_bef_death and b.death_date_e-a.disch_date<=&days_bef_death;
-quit;
-
-/*Reset the start date = x months before death to just capture part of stay that was 
-during the final x months*/
-data snf_meet3;
-set snf_meet2;
-admit_date_mod=1;
-admit_date_old=admit_date;
-admit_date=death_date_e-&days_bef_death;
-label admit_date="modified admit date";
-run;
-
-
-data snf_meet_4;
-set snf_meet snf_meet3;
-
-exhst_dt_new=exhst_dt;
-if exhst_dt=0000000 then exhst_dt_new=.;
-if exhst_dt=0 then  exhst_dt_new=.;
-
-bene_exh_date = datejul(exhst_dt_new);
-format admit_date date10.;
-format disch_date date10.;
-*format bene_exh_date date10.;
-snf_stay_all=disch_date-admit_date;
-if snf_stay_all=0 then snf_stay_all=1;
-los_snf_paid_by_mc_&name. = bene_exh_date-admit_date;
-if bene_exh_date-admit_date=0 then los_snf_paid_by_mc_&name.=1;
-if bene_exh_date=. then los_snf_paid_by_mc_&name.=snf_stay_all;
-
-run; 
-
-proc freq; table admit_date_mod;
-run;
-
-proc means; var snf_stay_all los_snf_paid_by_mc_2y; run;
-
-/*
-proc sql;
-create table util_days as select distinct
-bid_hrs_19,sum(util_day) as snf_util_&name.
-from post_snf_days_1 group by bid_hrs_19;
-quit;
-
-proc freq;
-table snf_util_post_12m;
-run;*/
-
-%mend;
-
-%snfnights(days_start=0,days_bef_death=730,name=2y);
-
-
 H="Account for missing nh nights"
 /*there are likely observations that had nursing home costs that
 don't appear in the Medicare paid costs or OOP reported spending
@@ -3390,25 +3502,47 @@ log using `logpath'\add_nh_costs-LOG.txt, text replace
 
 cd `datapath'
 
-use oop_resp_sp_restri_24m_mc.dta
+//just use dataset where ffs mc last 2 years of life
+use oop_resp_sp_restri_24mand60m_mc.dta if part_ab_2y==1 & hmo_2y==0
+
+//n=3330
+tab exit_year_x, missing
+sum nh_nights_24m //check for full oop data on nh nights 2 yrs
+sum snf_stay_all_2y //check for full SNF claims data on nh nights 2 yrs
 
 //get self reported nursing home nights last 2, 5 years of life/
+rename nh_nights_24m nh_nights_sr_24m
+rename nh_nights_60m nh_nights_sr_60m
+label var nh_nights_sr_24m "Self Report NH nights 2yrs prior to death"
+label var nh_nights_sr_60m "Self Report NH nights 5yrs prior to death"
 
-foreach i in 24 60 {
-gen nh_nights_`i'm = .
-replace nh_nights_`i'm=nh_nights_x*(`i'/nh_months_x) if months_x>=`i'
-replace nh_nights_`i'm=nh_nights_x + nh_nights_n1*((`i'-months_x)/months_n1) if ///
-	nh_nights_`i'm ==. & (months_x+months_n1)>=`i'
-replace nh_nights_`i'm=nh_nights_x+nh_nights_n1 + nh_nights_n2*((`i'-months_x-months_n1)/months_n2) if ///
-	nh_nights_`i'm ==. & (months_x+months_n1+months_n2)>=`i'
-replace nh_nights_`i'm=nh_nights_x+nh_nights_n1+nh_nights_n2 + ///
-	nh_nights_n3*((`i'-months_x-months_n1-months_n2)/months_n3) if ///
-	nh_nights_`i'm ==. & (months_x+months_n1+months_n2+months_n3)>=`i'
-}
+sum nh_nights_sr_24m , detail
 
-label nh_nights_24m "Self Report NH nights 2yrs prior to death"
-label nh_nights_60m "Self Report NH nights 5yrs prior to death"
+sum nh_nights_sr_60m , detail
 
+//medicare reported nursing home nights
+sum  snf_stay_all_2y , detail
+sum los_snf_paid_by_mc_2y , detail
+
+//if medicare reports more days than self report, assign total days as mc days
+//otherwise, keep just the oop days
+gen nh_nights_24m = nh_nights_sr_24m if (nh_nights_sr_24m>=snf_stay_all_2y | snf_stay_all_2y==.)
+replace nh_nights_24m=snf_stay_all_2y if nh_nights_24m==. & snf_stay_all_2y~=.
+label var nh_nights_24m "Total NH nights 2yrs before death, source=self report or claims"
+sum nh_nights_24m, detail
+
+gen nh_nights_60m = nh_nights_sr_60m if (nh_nights_sr_60m>=snf_stay_all_5y | snf_stay_all_5y==.)
+replace nh_nights_60m=snf_stay_all_5y if nh_nights_60m==. & snf_stay_all_5y~=.
+label var nh_nights_60m "Total NH nights 5yrs before death, source=self report or claims"
+sum nh_nights_60m, detail
+
+//check for nights not paid for by medicare
+gen nh_ni_not_mc_24m = 0
+replace nh_ni_not_mc_24m=(nh_nights_24m - los_snf_paid_by_mc_2y) if (nh_nights_24m - los_snf_paid_by_mc_2y)>0
+label var nh_ni_not_mc_24m "NH Nights not Medicare paid last 2 yrs of life"
+sum nh_ni_not_mc_24m, detail
+
+log close
 
 
 H="Look at dementia samples"

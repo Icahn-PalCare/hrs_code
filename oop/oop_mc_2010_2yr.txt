@@ -1036,7 +1036,8 @@ proc freq;
 table exit_year_x age_ge_70;
 run;
 
-/*get a dataset with just decedents exit year, death_year, death date and ids*/
+/*get a dataset with just decedents exit year, death_year, death date and ids
+Limited to those with xwalk id and age 67+ at death*/
 data oop_int.oop_sample;
 set oop_age_ge67_in_mc ;
 keep id bid_hrs exit_year_x death_year_e death_date_e;
@@ -1045,7 +1046,9 @@ run;
 H="Check to see if medicare and no hmo for 2 and 5 yrs before death"
 /***********************************************************
 ************************************************************
-Determine which observations get dropped from sample because they either (a) don't have medicare the whole 24 months before death or (b) have HMO sometime in the last 24 months before death
+Determine which observations get dropped from sample because they either 
+(a) don't have medicare the whole 24 months before death or 
+(b) have HMO sometime in the last 24 months before death
 
 Save one datasets:
 oop_int.meet_criteria_2yr, this also has the 5 year variables
@@ -1225,6 +1228,8 @@ if index(hmo_24,"000000000000000000000000")=0 then hmo_2y=1;
 end;
 run;
 
+proc freq data=all_insurance_24m; table part_ab_2y*hmo_2y; run;
+
 data all_insurance_60m;
 set dn_death_y_5bef;
 
@@ -1261,10 +1266,12 @@ if index(hmo_60,"000000000000000000000000000000000000000000000000000000000000")=
 end;
 run;
 
+proc freq data=all_insurance_60m; table part_ab_5y*hmo_5y; run;
 
-/*merge the 2 year and 5 year indicators into a single dataset*/
+/*merge the 2 year and 5 year indicators into a single dataset
+Save insurance information to merge with main interview dataset*/
 proc sql;
-create table all_insurance as select
+create table oop_int.all_insurance as select
 a.id,a.bid_hrs,a.death_year_e,a.death_date_e,a.part_ab_2y,a.hmo_2y,a.hmo_24,a.buyin_24,b.part_ab_5y,b.hmo_5y from
 all_insurance_24m a left join
 all_insurance_60m b
@@ -1280,8 +1287,13 @@ proc freq;
 table death_year_e*part_ab_2y death_year_e*part_ab_5y;
 run;
 
+proc freq;
+table part_ab_2y*hmo_2y part_ab_5y*hmo_5y;
+run;
+
+
 proc sql outobs=100;
-select hmo_24,buyin_24,count(*) from all_insurance
+select hmo_24,buyin_24,count(*) from oop_int.all_insurance
 where  part_ab_2y=1 and hmo_2y=0;
 quit;
 
@@ -1295,7 +1307,7 @@ Save this as a permanent dataset*/
 
 proc sql;
 create table oop_int.meet_criteria_2yr as
-select * from all_insurance
+select * from oop_int.all_insurance
 where part_ab_2y=1 and hmo_2y=0;
 quit;
 
@@ -1360,7 +1372,7 @@ proc sort data=oop_int.hrs_oop_ivws out=oop_ivws nodupkey;
 by id;
 run;
 
-proc sort data=oop_int.meet_criteria_2yr out=meet nodupkey;
+proc sort data=oop_int.all_insurance out=meet nodupkey;
 by id;
 run;
 
@@ -1374,14 +1386,11 @@ run;
 proc sql;
 create table oop_fnl.hrs_oop_ivws_meet as select * from
 oop_ivws a left join
-meet(drop=death_year_e death_date_e) b
+meet(drop=death_year_e death_date_e bid_hrs) b
 on a.id=b.id;
 quit;
 
-/*save version to Stata*/
-proc export data=oop_fnl.hrs_oop_ivws_meet 
-outfile="E:\data\hrs_oop_2010\final_data\hrs_oop_ivws_meet.dta" replace;
-run;
+proc freq; table part_ab_2y*hmo_2y part_ab_5y*hmo_5y; run;
 
 H="Elix, cc's 24m prior to death - part 1, get all dx codes"
 /*******************************************************************/
@@ -3273,15 +3282,18 @@ quit;
 /* Scale individual costs by wage index*/
 /******************************************************************/
 
-/*drop observations with no state or zip code in exit_zip_n
-since those costs cannot be scaled and other regional data cannot
-be brought in for those obs
-23 observations dropped*/
-proc sql;
-create table cost_id_wage_index3 as
-select * from cost_id_wage_index2
-where wage_index_20102~=.;
-quit;
+/*if missing wage index, set to 1 and create indicator to note no
+wage index present b/c bad zip code and missing state
+23 observations with wage index assigned = 1*/
+data cost_id_wage_index3; 
+set cost_id_wage_index2;
+wi_missing_yes=0;
+if wage_index_20102=. then wi_missing_yes=1;
+if wage_index_20102=. then wage_index_20102=1;
+label wi_missing_yes="Indicator missing wage index, set to 1";
+run;
+
+proc freq; table wi_missing_yes; run;
 
 proc sort data=cost_id_wage_index3 ;
 by BID_hrs;
@@ -3489,7 +3501,7 @@ cd `datapath'
 //full dataset, all decedents
 use oop_resp_sp_restri_24mand60m_mc.dta 
 
-mat samp=J[5,2,.]
+mat samp=J(7,2,.)
 
 //total number of decedents, same initial sample 2 and 5yr lookback
 sum exit_year_x
@@ -3498,47 +3510,75 @@ mat samp[1,2]=r(N)
 
 *****************************************************
 //2 year lookback column
-sum exit_year_x if age_at_death_e>=67 //decedents 67 and older
+sum exit_year_x if age_at_death_e>=67 & age!=. //decedents 67 and older
 mat samp[2,1]=r(N)
 
-sum exit_year_x if age_at_death_e>=67 & part_ab_2y==1  // with parts a and  b
+sum exit_year_x if age_at_death_e>=67 & age!=. & xwalk_yes==1 //with mc xwalk
 mat samp[3,1]=r(N)
 
-sum exit_year_x if age_at_death_e>=67 & part_ab_2y==1 &  hmo_2y==0 // with ffs mc
+sum exit_year_x if age_at_death_e>=67 & age!=. & xwalk_yes==1 & part_ab_2y!=. //with full insur info
 mat samp[4,1]=r(N)
 
-// with ffs mc and full oop data
-sum exit_year_x if age_at_death_e>=67 & part_ab_2y==1 & hmo_2y==0 & ind_24m_oop_yes==1 
+sum exit_year_x if age_at_death_e>=67 & age!=. & part_ab_2y==1  // with parts a and  b
 mat samp[5,1]=r(N)
+
+sum exit_year_x if age_at_death_e>=67 & age!=. & part_ab_2y==1 &  hmo_2y==0 // with ffs mc
+mat samp[6,1]=r(N)
+
+// with ffs mc and full oop data
+sum exit_year_x if age_at_death_e>=67 & age!=. & part_ab_2y==1 & hmo_2y==0 & ind_24m_oop_yes==1 
+mat samp[7,1]=r(N)
+
+gen byte ind_sample_2yr = 0
+replace ind_sample_2yr=1 if age_at_death_e>=67 & age!=. & part_ab_2y==1 & hmo_2y==0 & ind_24m_oop_yes==1
+tab ind_sample_2yr, missing
+label var ind_sample_2yr "Indicator in 2 yr lookback sample"
 
 *****************************************************
 //5 year lookback column
-sum exit_year_x if age_at_death_e>=70 //decedents 70 and older
+sum exit_year_x if age_at_death_e>=70 & age!=.  //decedents 70 and older
 mat samp[2,2]=r(N)
 
-sum exit_year_x if age_at_death_e>=70 & part_ab_5y==1  // with parts a and  b
+sum exit_year_x if age_at_death_e>=70 & age!=. & xwalk_yes==1 //with mc xwalk
 mat samp[3,2]=r(N)
 
-sum exit_year_x if age_at_death_e>=70 & part_ab_5y==1 &  hmo_5y==0 // with ffs mc
+sum exit_year_x if age_at_death_e>=70 & age!=. & xwalk_yes==1 & part_ab_5y!=. //with full insur info
 mat samp[4,2]=r(N)
 
-// with ffs mc and full oop data
-sum exit_year_x if age_at_death_e>=70 & part_ab_5y==1 & hmo_5y==0 & ind_60m_oop_yes==1 
+sum exit_year_x if age_at_death_e>=70 & age!=. & part_ab_5y==1  // with parts a and  b
 mat samp[5,2]=r(N)
+
+sum exit_year_x if age_at_death_e>=70 & age!=. & part_ab_5y==1 &  hmo_5y==0 // with ffs mc
+mat samp[6,2]=r(N)
+
+// with ffs mc and full oop data
+sum exit_year_x if age_at_death_e>=70 & age!=. & part_ab_5y==1 & hmo_5y==0 & ind_60m_oop_yes==1 
+mat samp[7,2]=r(N)
+
+gen byte ind_sample_5yr = 0
+replace ind_sample_5yr=1 if age_at_death_e>=70 & age!=. & part_ab_5y==1 & hmo_5y==0 & ind_60m_oop_yes==1
+tab ind_sample_5yr, missing
+label var ind_sample_5yr "Indicator in 5 yr lookback sample"
+
+
+save oop_mc_sample.dta, replace
 
 *****************************************************
 
-mat rownames samp="All decedents, 2000-2010" "Age at death 67, 70" ///
-"With Medicare Parts A&B" "With No HMO" "With full OOP data from HRS interviews"
+mat rownames samp="All decedents, 2002-2010" "Age at death 67+, 70+" "With Medicare link" ///
+"Will full insurance info" "With Medicare Parts A&B" "With No HMO" "With full OOP data"
 
 mat colnames samp="2 years" "5 years"
 
 frmttable using `logpath'\2-oop_sample, statmat(samp) ///
-title("Sample size determination \ ///
+title("Sample size determination" \ ///
 "2 and 5 year lookback at HRS and Claims") ///
-sdec(0) addtable
+sdec(0) replace
+
+tab part_ab_2y hmo_2y, missing
 
 log close
+
 
 H="Account for missing nh nights"
 /*there are likely observations that had nursing home costs that
@@ -3559,7 +3599,7 @@ log using `logpath'\3-add_nh_costs-LOG.txt, text replace
 cd `datapath'
 
 //just use dataset where ffs mc last 2 years of life
-use oop_resp_sp_restri_24mand60m_mc.dta if part_ab_2y==1 & hmo_2y==0
+use oop_mc_sample.dta if ind_sample_2yr==1
 
 //n=3330
 tab exit_year_x, missing
@@ -3589,6 +3629,7 @@ sum nh_nights_24m, detail
 
 gen nh_nights_60m = nh_nights_sr_60m if (nh_nights_sr_60m>=snf_stay_all_5y | snf_stay_all_5y==.)
 replace nh_nights_60m=snf_stay_all_5y if nh_nights_60m==. & snf_stay_all_5y~=.
+replace nh_nights_60m=. if ind_sample_5yr == 0
 label var nh_nights_60m "Total NH nights 5yrs before death, source=self report or claims"
 sum nh_nights_60m, detail
 
@@ -3598,11 +3639,22 @@ replace nh_ni_not_mc_24m=(nh_nights_24m - los_snf_paid_by_mc_2y) if (nh_nights_2
 label var nh_ni_not_mc_24m "NH Nights not Medicare paid last 2 yrs of life"
 sum nh_ni_not_mc_24m, detail
 
+gen nh_ni_not_mc_60m = 0
+replace nh_ni_not_mc_60m=(nh_nights_60m - los_snf_paid_by_mc_5y) if (nh_nights_60m - los_snf_paid_by_mc_5y)>0
+replace nh_ni_not_mc_60m = . if ind_sample_5yr==0
+label var nh_ni_not_mc_60m "NH Nights not Medicare paid last 5 yrs of life"
+sum nh_ni_not_mc_60m, detail
+
 //indicator variable for nh total payments imputed
 gen byte nh_total_imp_24m = .
 replace nh_total_imp_24m =1 if nh_ni_not_mc_24m > 0
 replace nh_total_imp_24m =1 if nh_ni_not_mc_24m == 0
-label var nh_total_imp_24m "Total HN nights (2yrs) imputed = yes"
+label var nh_total_imp_24m "Total HN nights payments (2yrs) imputed = yes"
+
+gen byte nh_total_imp_60m = .
+replace nh_total_imp_60m =1 if nh_ni_not_mc_60m > 0
+replace nh_total_imp_60m =1 if nh_ni_not_mc_60m == 0
+label var nh_total_imp_60m "Total HN nights payments (5yrs) imputed = yes"
 
 save oop_24mand60m_mc_add_nh.dta, replace
 

@@ -4674,8 +4674,9 @@ use spouse_data_sample_v1.dta if (p1_wi_90d==0 & no_cc_12m_excl_cataract==0 & su
 
 tab r_hs_12m_gt3d, missing
 
+//n=887, keep 1-2 day hospice use for tables (KO email 4/11)
 //n=838, excluding those with 1-2 days hospice use
-drop if r_hs_12m_gt3d==.
+//drop if r_hs_12m_gt3d==.
 
 //rg modified list
 //uses net worth quartiles, high is omitted category
@@ -5803,19 +5804,41 @@ outreg using `logpath'\spouse_analysis, ///
 
 
 
+log close
 
 
-*************************************************************************************
-*************************************************************************************
-//Create tables of matched / frequency weighted means
-*************************************************************************************
-*************************************************************************************
+
+H="Creates Table 1 & 2 - Decedent/Spouse Descr Char"
+capture log close
+
+clear all
+set mem 500m
+set more off
+set scheme s1color
+
+//Amy's PC
+local logpath E:\data\spouse\logs
+local datapath E:\data\spouse\final_data
+
+//RG PC
+//local logpath C:\data\Spouse\logs
+//local datapath C:\data\Spouse
+
+log using "`logpath'\5-HRS_Spouse_analysis.txt", text replace
+
+cd `datapath'
+
+use spouse_data_sample_v2.dta
 
 *************************************************************************************
-//Table 1 - Respondent characteristics, matched and weighted
 *************************************************************************************
-local t1vars r_medicaid_n1 r_nhres_n1 r_nhres_x r_advdir_y r_advdir_n r_advdir_miss ///
-r_adl_stable_ind_n1n2 ///
+//Create Table 1, Decedent Descriptive Statistics
+//Col 1-3: Unweighted, unmatched sample
+//Col 4-6: Weighted and matched sample
+*************************************************************************************
+*************************************************************************************
+local t1vars r_medicaid_n1 r_nhres_n1 r_nhres_x r_advdir_y r_advdir_n ///
+r_advdir_miss r_adl_stable_ind_n1n2 ///
 r_adl_stable_partial_n1n2 r_adl_stable_severe_n1n2 r_adl_change_i_m_n1n2 ///
 r_adl_change_m_s_n1n2 r_adl_change_i_s_n1n2 r_adl_change_n1n2_miss cc_3_alzhdmta_n12mn0 ///
 cc_6_chrnkidn_n12mn0 cc_12_ischmcht_n12mn0 cc_8_chf_n12mn0 ///
@@ -5830,14 +5853,78 @@ replace non_hosp=1 if r_hs_12m==0
 replace non_hosp=0 if r_hs_12m==1
 tab non_hosp r_hs_12m, missing
 
-mat demo=J(42,3,.)
+mat demo=J(36,6,.)
 
 //first row, n of hospice users and non-users
-tab r_hs_12m if weight_1!=. , missing matcell(d1)
+tab r_hs_12m, missing matcell(d1)
 mat demo[1,1]=d1[2,1] //non-hospice n
 mat demo[1,2]=d1[1,1] //hospice users n
 
 local j=1
+foreach h in r_hs_12m non_hosp {
+sum r_age if `h'==1, detail //age
+mat demo[2,`j']=r(mean)
+mat demo[3,`j']=r(sd)
+sum r_female if `h'==1, detail //female
+mat demo[4,`j']=r(mean)*100
+sum r_white_e if `h'==1, detail //non-hispanic, white
+mat demo[5,`j']=r(mean)*100
+sum r_hseduc_n1_n3 if `h'==1, detail //hs education+
+mat demo[6,`j']=r(mean)*100
+sum r_networth_adj2010_n1 if `h'==1, detail //net worth
+mat demo[7,`j']=r(mean)
+mat demo[8,`j']=r(sd)
+local i=9
+foreach v in `t1vars' {
+	sum `v' if `h'==1, detail 
+	mat demo[`i',`j']=r(mean)*100
+	local i=`i'+1 //populates rows 9-34
+	}
+sum cc_all_count_12m_2 if `h'==1, detail //count of chronic conditions
+mat demo[35,`j']=r(mean)
+mat demo[36,`j']=r(sd)
+local j=`j'+1
+}
+
+//pvalues
+logit r_hs_12m r_age
+test r_age
+mat demo[2,3]=r(p) //p value from t-test
+local j=4
+foreach v in r_female r_white_e r_hseduc_n1_n3{
+	logit r_hs_12m `v' 
+	test `v'
+	mat demo[`j',3]=r(p) //p value from chisq test
+	local j = `j'+1 //rows 4-6
+}
+logit r_hs_12m r_networth_adj2010_n1
+test r_networth_adj2010_n1
+mat demo[7,3]=r(p) //p value from t-test
+local j=9
+foreach v in `t1vars' {
+	logit r_hs_12m `v'
+	test `v' 
+	mat demo[`j',3]=r(p)
+	local j=`j'+1 //populates rows 9-34
+}
+logit r_hs_12m cc_all_count_12m_2
+test cc_all_count_12m_2
+mat demo[35,3]=r(p) //p value from t-test
+
+
+*************************************************************************************
+//Table 1 - cols 4-6: Respondent characteristics, matched and weighted
+*************************************************************************************
+clear
+
+use spouse_data_sample_v1_ps1.dta
+
+//first row, n of hospice users and non-users
+tab r_hs_12m if weight_1!=. , missing matcell(d1)
+mat demo[1,1]=d1[1,5] //non-hospice n
+mat demo[1,2]=d1[1,4] //hospice users n
+
+local j=4
 foreach h in r_hs_12m non_hosp {
 sum r_age if `h'==1 [iweight=weight_1] //age
 mat demo[2,`j']=r(mean)
@@ -5860,45 +5947,33 @@ foreach v in `t1vars' {
 sum cc_all_count_12m_2 if `h'==1 [iweight=weight_1] //count of chronic conditions
 mat demo[35,`j']=r(mean)
 mat demo[36,`j']=r(sd)
-sum hospital_beds if `h'==1 [iweight=weight_1] //hospital beds
-mat demo[37,`j']=r(mean)
-mat demo[38,`j']=r(sd)
-sum medical_specialists if `h'==1 [iweight=weight_1] //medical specialists
-mat demo[39,`j']=r(mean)
-mat demo[40,`j']=r(sd)
-sum hci_index if `h'==1 [iweight=weight_1] //hci index
-mat demo[41,`j']=r(mean)
-mat demo[42,`j']=r(sd)
 local j=`j'+1
 }
 
 //pvalues
 logit r_hs_12m r_age [iweight=weight_1]
 test r_age
-mat demo[2,3]=r(p) //p value from t-test
+mat demo[2,6]=r(p) //p value from t-test
 local j=4
 foreach v in r_female r_white_e r_hseduc_n1_n3{
 logit r_hs_12m `v' [iweight=weight_1]
 test `v'
-mat demo[`j',3]=r(p) //p value from chisq test
+mat demo[`j',6]=r(p) //p value from chisq test
 local j = `j'+1 
 }
 logit r_hs_12m r_networth_adj2010_n1 [iweight=weight_1]
 test r_networth_adj2010_n1 
-mat demo[7,3]=r(p) //p value from t-test
+mat demo[7,6]=r(p) //p value from t-test
 local j=9
 foreach v in `t1vars' {
 	logit r_hs_12m `v' [iweight=weight_1]
 	test `v'
-	mat demo[`j',3]=r(p)
+	mat demo[`j',6]=r(p)
 	local j=`j'+1 //populates rows 9-34
 	}
-local j=35
-foreach v in cc_all_count_12m_2 hospital_beds medical_specialists hci_index{
-logit r_hs_12m `v' [iweight=weight_1]
-	test `v'
-	mat demo[`j',3]=r(p)
-	local j=`j'+2 //populates rows 32-36 (even only)
+logit r_hs_12m cc_all_count_12m_2  [iweight=weight_1]
+	test cc_all_count_12m_2 
+	mat demo[35,6]=r(p)
 }
 
 mat rownames demo ="Sample n" "Age at death, years, mean" "SD" "Female, %" "Race, Non-Hispanic White, %" ///
@@ -5911,19 +5986,26 @@ mat rownames demo ="Sample n" "Age at death, years, mean" "SD" "Female, %" "Race
 "Declined, Independent to Severe" "Unknown" "Alzheimers/Dementia" "Chronic Kidney Disease" ///
 "Ischemic Heart Disease" "Congestive Heart Failure" "Diabetes" "COPD" ///
 "Stroke or TIA" "Cancer" "Atrial Fibrillation" "Hip Fracture" "Depression" "Osteoporosis" ///
-"Arthritis" "Count of chronic conditions" "SD" "Hosp beds per 10,000 res, mean" "SD" ///
-"Specialists per 100,000, mean" "SD" "HCI index, mean" "SD"
+"Arthritis" "Count of chronic conditions" "SD"
 
 mat list demo
 
-frmttable using `logpath'\spo_weighted_means_tables, statmat(demo) ///
-title("Matched, Weighted Sample - Decedent characteristics") ///
-ctitle("","Hospice users","Non-hospice users","P-value") ///
-sdec(2,2,3) replace
+frmttable using `logpath'\spo_Table1_deced_char, statmat(demo) ///
+title("Decedent descriptive characteristics, by any hospice use status") ///
+ctitle("","Unmatched Hospice users","Non-hospice users","P-value","Matched hospice users" ///
+"Non-hospice users" "P-value") ///
+sdec(2,2,3,2,2,3) replace
 
 ******************************************************************
-//create a table of spouse characteristics - matched and weighted
 ******************************************************************
+//Table 2 spouse characteristics
+//Col 1-3: unmatched, unweighted
+//Col 4-6: matched and weighted
+******************************************************************
+******************************************************************
+clear
+
+use use spouse_data_sample_v2.dta
 
 local sdemovar1 s_female s_white_e s_hseduc_n1_n3 ///
 s_medicaid_n1 s_srh_pf_n1 s_smoke_curr_n1 s_alcohol_mis_n1 ///
@@ -5933,19 +6015,86 @@ s_lung_hrs_n1 s_heart_hrs_n1 s_chf_hrs_n1 s_stroke_hrs_n1 ///
 s_memory_hrs_n1 s_htn_hrs_n1 s_dm_hrs_n1 s_psych_hrs_n1 
 
 local sdemovar2 s_cesd_tot_ge3_n1 ///
-s_cesd_tot_ge3_p1 s_cesd_ge3better s_cesdbetter s_cesdsame s_cesdworse 
+s_cesd_tot_ge3_p1 s_cesdbetter s_cesdsame s_cesdworse 
 
-local sdemovar3 days_p1_core_dod_lt6m days_p1_core_dod_6_12m days_p1_core_dod_12_18m ///
-	days_p1_core_dod_18_24m days_p1_core_dod_gt2yr 
-
-mat sdemo=J(40,3,.)
+mat sdemo=J(32,3,.)
 
 //first row, n of hospice and non-hospice
-tab r_hs_12m if weight_1!=., missing matcell(sd1)
+tab r_hs_12m, missing matcell(sd1)
 mat sdemo[1,1]=sd1[2,1] //non-hospice n
 mat sdemo[1,2]=sd1[1,1] //hospice users n
 
 local j=1
+foreach h in r_hs_12m non_hosp {
+sum s_age if `h'==1, detail //age
+mat sdemo[2,`j']=r(mean)
+mat sdemo[3,`j']=r(sd)
+local i=4
+foreach v in `sdemovar1' {
+	sum `v' if `h'==1, detail 
+	mat sdemo[`i',`j']=r(mean)*100
+	local i=`i'+1 //populates rows 4-23
+	}
+sum s_cesd_tot_n1 if `h'==1, detail //cesd score n1
+mat sdemo[24,`j']=r(mean)
+sum s_cesd_tot_p1 if `h'==1, detail //cesd score p1
+mat sdemo[25,`j']=r(mean)
+sum s_cesdchange if `h'==1, detail //cesd score change n1 to p1
+mat sdemo[26,`j']=r(mean)
+local i=27
+foreach v in `sdemovar2' {
+	sum `v' if `h'==1, detail 
+	mat sdemo[`i',`j']=r(mean)*100
+	local i=`i'+1 //populates rows 27-32
+	}
+local j=`j'+1
+}
+
+//p-values
+logit r_hs_12m s_age
+test s_age
+mat sdemo[2,3]=r(p)
+local i=4
+foreach v in `sdemovar1' {
+	logit r_hs_12m `v'
+	test `v'
+	mat sdemo[`i',3]=r(p)
+	local i=`i'+1 //populates rows 4-23
+	}
+local i=24
+foreach v in s_cesd_tot_n1 s_cesd_tot_p1 s_cesdchange{
+	logit r_hs_12m `v'
+	test `v'
+	mat sdemo[`i',3]=r(p)
+	local i=`i'+1 //populates rows 24-26
+	}
+local i=27
+foreach v in `sdemovar2' {
+	logit r_hs_12m `v'
+	test `v'
+	mat sdemo[`i',3]=r(p)
+	local i=`i'+1 //populates rows 27-32
+	}
+}
+
+//can't do logit to get test for alchool misuse because no obs in hs group have it
+tab s_alcohol_mis_n1 r_hs_12m, row chi2
+mat sdemo[10,3]=r(p)
+
+
+**********************************************************************
+//Matched weighted columns 4-6
+**********************************************************************
+clear
+
+use spouse_data_sample_v1_ps1.dta
+
+//first row, n of hospice and non-hospice
+tab r_hs_12m if weight_1!=., missing matcell(sd1)
+mat sdemo[1,4]=sd1[2,1] //hospice n
+mat sdemo[1,5]=sd1[1,1] //non-hospice users n
+
+local j=4
 foreach h in r_hs_12m non_hosp {
 sum s_age if `h'==1 [iweight=weight_1] //age
 mat sdemo[2,`j']=r(mean)
@@ -5967,17 +6116,6 @@ foreach v in `sdemovar2' {
 	sum `v' if `h'==1 [iweight=weight_1] 
 	mat sdemo[`i',`j']=r(mean)*100
 	local i=`i'+1 //populates rows 27-32
-	}
-sum days_p1_core_dead if `h'==1 [iweight=weight_1] //days to p1 ivw
-mat sdemo[33,`j']=r(mean)
-mat sdemo[34,`j']=r(sd)
-sum s_1yr_p1_core_dead if `h'==1 [iweight=weight_1]
-mat sdemo[35,`j']=r(mean)*100
-local i=36
-foreach v in `sdemovar3' {
-	sum `v' if `h'==1, detail 
-	mat sdemo[`i',`j']=r(mean)*100
-	local i=`i'+1 //populates rows 36-40
 	}
 local j=`j'+1
 }
@@ -6009,19 +6147,6 @@ foreach v in `sdemovar2' {
 	mat sdemo[`i',3]=r(p)
 	local i=`i'+1 //populates rows 27-32
 }
-logit r_hs_12m days_p1_core_dead [iweight=weight_1] //days to p1 ivw
-test days_p1_core_dead 
-mat sdemo[33,3]=r(p)
-logit r_hs_12m s_1yr_p1_core_dead [iweight=weight_1] //p1 1 yr of death
-	test s_1yr_p1_core_dead 
-	mat sdemo[35,3]=r(p)
-local i=36
-foreach v in `sdemovar3' {
-	logit r_hs_12m `v' [iweight=weight_1]
-	test `v'
-	mat sdemo[`i',3]=r(p)
-	local i=`i'+1 //populates rows 36-40
-}
 
 //can't do logit to get test for alchool misuse because no obs in hs group have it
 //tab s_alcohol_mis_n1 r_hs_12m [iweight=weight_1], exact
@@ -6037,18 +6162,15 @@ mat rownames sdemo ="Sample size n" "Age at r's death, mean" "SD" "Female" "Non-
 "CESD-D raw score n1, mean" "CESD-D raw score p1, mean" "Change in raw CESD n1 to p1" ///
 "Clinical depression pre death" "Clinical depression post death" ///
  "Clin depr n1 but no p1" "CESD Improved post death" ///
-"Same CESD post death" "CESD Declined post death" "Days R DOD to S P1 ivw" ///
-"SD" "P1 ivw wi 1 year of death" "R DOD to P1 ivw 3-6m" "R DOD to P1 ivw 6-12m" ///
- "R DOD to P1 ivw 12-18m"  "R DOD to P1 ivw 18-24m"  "R DOD to P1 ivw 2yr+"
+"Same CESD post death" "CESD Declined post death" 
 
 mat list sdemo
 
-frmttable using `logpath'\spo_weighted_means_tables, statmat(sdemo) ///
-title("Matched, Weighted sample - Spouse characteristics") ///
-ctitle("","Hospice users","Non-hospice users","P-value") ///
-sdec(2,2,3) addtable
-
-
+frmttable using `logpath'\spo_Table2_deced_char, statmat(sdemo) ///
+title("Spouse descriptive characteristics, by any hospice use status") ///
+ctitle("","Unmatched Hospice users","Non-hospice users","P-value","Matched hospice users" ///
+"Non-hospice users" "P-value") ///
+sdec(2,2,3,2,2,3) replace
 
 log close
 

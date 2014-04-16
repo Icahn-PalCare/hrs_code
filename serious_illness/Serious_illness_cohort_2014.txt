@@ -270,7 +270,7 @@ run;
 
 H="Step 2a - Identify FFS MC 1yr and 2yrs preceeding core interview"
 /*Use denominator file to determine which interviews / r's have ffs mc
-during the time preceeding the core interview*/
+during the full 12 months preceeding the core interview*/
 
 
 proc sort data=medi.dn_2000_2010 out=dn_2000_20102  nodupkey;
@@ -446,11 +446,10 @@ quit;
 
 
 %macro mp(days_start=,days_bef_core=,source=,time_label=);
-%let source0=mp;
 
 proc sql;
 create table &source._meet as select a.*,b.c_ivw_date,b.core_year
-from medi.&source0._2000_2010 a inner join
+from medi.&source._2000_2010 a inner join
 sic_int.core_lmt_xwalk_2 b
 on trim(left(a.bid_hrs_19))=trim(left(b.bid_hrs))
 and &days_start<=b.c_ivw_date-a.admit_date<=&days_bef_core;
@@ -458,7 +457,7 @@ quit;
 
 proc sql;
 create table &source._meet2 as select a.*,b.c_ivw_date,b.core_year
-from medi.&source0._2000_2010 a inner join
+from medi.&source._2000_2010 a inner join
 sic_int.core_lmt_xwalk_2 b
 on trim(left(a.bid_hrs_19))=trim(left(b.bid_hrs))
 and b.c_ivw_date-a.admit_date>&days_bef_core and b.c_ivw_date-a.disch_date<=&days_bef_core;
@@ -470,6 +469,8 @@ run;
 
 %mend;
 
+
+
 /*run to get claims list 6 months pre-core for medpar
 Use to get indicator of hospitalizations 6 m prior to interview*/
 %mp(days_start=0,days_bef_core=183,source=mp );
@@ -477,6 +478,8 @@ Use to get indicator of hospitalizations 6 m prior to interview*/
 /*run to get claims lists 1 year pre-core
 Datasets are sic_int.mp_meet3_365, sic_int.hh_meet_365, etc.*/
 %mp(days_start=0,days_bef_core=365,source=mp );
+%mp(days_start=0,days_bef_core=365,source=ip );
+
 %other(days_start=0,days_bef_core=365,source=hh );
 %other(days_start=0,days_bef_core=365,source=hs );
 %other(days_start=0,days_bef_core=365,source=dm);
@@ -1777,6 +1780,8 @@ em_admit=0;
 if type_adm=1 then em_admit=1;
 urgent_admit=0;
 if type_adm=2 then urgent_admit=1;
+elect_admit=0;
+if type_adm=3 then elect_admit=1;
 ind_ed_charge=0; /*ED charges as another indicator of ED use*/
 if ER_AMT>0 & ER_AMT~=. then ind_ed_charge=1;
 if ER_AMT=0 | ER_AMT=. then ind_ed_charge=0;
@@ -1803,6 +1808,9 @@ count(case when em_admit=1 then em_admit else . end) as n_em_admit_&suffix.
 /*count of urgent admissions, from admission type code*/
 count(case when urgent_admit=1 then urgent_admit else . end) as n_urgent_admit_&suffix. 
 	label="total n of urgent hospital admit &suffix. pre core ivw",
+/*count of elective admissions, from admission type code*/
+count(case when elect_admit=1 then elect_admit else . end) as n_elect_admit_&suffix. 
+	label="total n of elective hospital admit &suffix. pre core ivw",
 /*count of admissions with any ED charges*/
 count(case when ind_ed_charge=1 then ind_ed_charge else . end) as n_ED_ip_&suffix. 
 	label="total n of ED visits with subsequent admit &suffix. pre core ivw"
@@ -1815,12 +1823,25 @@ quit;
 %admissions(days=183,suffix=6m);
 %admissions(days=365,suffix=12m);
 
+data elective_1;
+set ip_365_2;
+if elect_admit=1;
+run;
+
+/*print to file*/
+ ods rtf body="E:\data\serious_ill\logs\elective_primary_dxlist.rtf";
+ title"Primary dx list for admit type = elective, inpatient claims last 12m pre-core";
+proc freq; table dgns_cd01;
+run;
+ods rtf close; 
+
+
 /*merge the new variables with the overall dataset with ivws, elix and cc's
 variables left blank if no ip claims*/
 proc sql;
 create table core_ids_criteria_1a as select a.*,b.icu_days_6m,
 b.n_ip_admit_6m,b.n_hospd_6m,b.n_em_urgent_admit_6m,b.n_em_admit_6m,
-b.n_urgent_admit_6m,b.n_ED_ip_6m
+b.n_urgent_admit_6m,b.n_elect_admit_6m,b.n_ED_ip_6m
 from sic_int.core_ids_elix_cc_1yr_2 a
 left join
 ip_183_3 b 
@@ -1830,7 +1851,7 @@ quit;
 proc sql;
 create table core_ids_criteria_1 as select a.*,b.icu_days_12m,
 b.n_ip_admit_12m,b.n_hospd_12m,b.n_em_urgent_admit_12m,b.n_em_admit_12m,
-b.n_urgent_admit_12m,b.n_ED_ip_12m
+b.n_urgent_admit_12m,b.n_elect_admit_12m,b.n_ED_ip_12m
 from core_ids_criteria_1a a
 left join
 ip_365_3 b 
@@ -1842,9 +1863,9 @@ core interview, can use comorb = ., same as ffs mc 1 year=no*/
  data core_ids_1yr_criteria ;
  set core_ids_criteria_1 ;
  array list icu_days_6m n_ip_admit_6m n_hospd_6m n_em_urgent_admit_6m 
-	n_em_admit_6m n_urgent_admit_6m n_ED_ip_6m
+	n_em_admit_6m n_urgent_admit_6m n_elect_admit_6m n_ED_ip_6m
 	icu_days_12m n_ip_admit_12m n_hospd_12m n_em_urgent_admit_12m
-	n_em_admit_12m n_urgent_admit_12m n_ED_ip_12m;
+	n_em_admit_12m n_urgent_admit_12m n_elect_admit_12m n_ED_ip_12m;
  do over list;
  if list=. & comorb_1_0_1yr~=. then list=0;
  end;
@@ -1864,6 +1885,13 @@ core interview, can use comorb = ., same as ffs mc 1 year=no*/
  if n_urgent_admit_6m=0 then ind_ur_adm_6m=0;
  if n_urgent_admit_6m>0 & n_urgent_admit_6m~=. then ind_ur_adm_6m=1;
  label ind_ur_adm_6m="Ind any urgent hospital admission 6m pre core";
+
+ if (n_ip_admit_6m - n_elect_admit_6m)=0 then ind_nonelect_adm_6m=0;
+ if (n_ip_admit_6m - n_elect_admit_6m)>0 & n_elect_admit_6m~=. then ind_nonelect_adm_6m=1;
+ label ind_nonelect_adm_6m="Ind any non-elective hospital admission 6m pre core";
+
+ n_nonelect_adm_6m=(n_ip_admit_6m - n_elect_admit_6m);
+ label n_nonelect_adm_6m="total n non-elective ip admit 6m pre core";
 
  if n_ED_ip_6m=0 then ind_ED_adm_6m=0;
  if n_ED_ip_6m>0 & n_ED_ip_6m~=. then ind_ED_adm_6m=1;
@@ -1885,6 +1913,13 @@ core interview, can use comorb = ., same as ffs mc 1 year=no*/
  if n_urgent_admit_12m>0 & n_urgent_admit_12m~=. then ind_ur_adm_12m=1;
  label ind_ur_adm_12m="Ind any urgent hospital admission 12m pre core";
 
+ if (n_ip_admit_12m - n_elect_admit_12m)=0 then ind_nonelect_adm_12m=0;
+ if (n_ip_admit_12m - n_elect_admit_12m)>0 & n_elect_admit_12m~=. then ind_nonelect_adm_12m=1;
+ label ind_nonelect_adm_12m="Ind any non-elective hospital admission 12m pre core";
+
+ n_nonelect_adm_12m=(n_ip_admit_12m - n_elect_admit_12m);
+ label n_nonelect_adm_12m="total n non-elective ip admit 12m pre core";
+
  if n_ED_ip_12m=0 then ind_ED_adm_12m=0;
  if n_ED_ip_12m>0 & n_ED_ip_12m~=. then ind_ED_adm_12m=1;
  label ind_ED_adm_12m="Ind ED use with hospital admission 12m pre core, from charges";
@@ -1893,13 +1928,16 @@ run;
 
  proc freq;
  table icu_days_6m n_ip_admit_6m n_hospd_6m ind_hosp_adm_6m n_em_urgent_admit_6m ind_em_ur_adm_6m 
-	ind_em_adm_6m ind_ur_adm_6m n_ED_ip_6m ind_ED_adm_6m ind_em_adm_6m*ind_ED_adm_6m /missprint;
+	ind_em_adm_6m ind_ur_adm_6m ind_nonelect_adm_6m n_nonelect_adm_6m n_ED_ip_6m ind_ED_adm_6m 
+	ind_em_adm_6m*ind_ED_adm_6m /missprint;
  run;
 
 proc freq;
 table icu_days_12m n_ip_admit_12m n_hospd_12m ind_hosp_adm_12m n_em_urgent_admit_12m ind_em_ur_adm_12m
-ind_em_adm_12m ind_ur_adm_12m n_ED_ip_12m ind_ED_adm_12m ind_em_adm_12m*ind_ED_adm_12m /missprint;
+	ind_em_adm_12m ind_ur_adm_12m ind_nonelect_adm_12m n_nonelect_adm_12m n_ED_ip_12m ind_ED_adm_12m 
+	ind_em_adm_12m*ind_ED_adm_12m /missprint;
 run;
+
 /****************************************************************************/
 /****************************************************************************/
 /*Get SNF days, indicator for 12 months preceding the interview*/
@@ -2291,7 +2329,7 @@ group by BID_hrs_19,core_year;
 quit;
 
 /*convert counts of diagnoses for each comorbidity to indicator variables*/ 
-data &name._dx_3(keep=BID_hrs_19 core_year chf_&name._dx copd_&name._dx);
+data &name._dx_3(keep=BID_hrs_19 core_year chf_&name._dx copd_&name._dx hip_&name._dx);
 set &name._dx_2 ;
 array list_com chf_&name. copd_&name. hip_&name.;
 array list_com_bin chf_&name._dx copd_&name._dx hip_&name._dx;
@@ -2357,7 +2395,7 @@ proc freq;
 table chf_pri_dx*chf_adm_dx copd_pri_dx*copd_adm_dx hip_pri_dx*hip_adm_dx ;
 run;
 
-/*Hip fractor criteria, method  by Covinsky
+/*Hip fracture criteria, method  by Covinsky
 One of the (2) criteria met:
 (1) Subject was admitted to a hospital with admitting diagnosis of “820.xx”.
 (2) There is a physician record of “HF procedure” (defined by CPT code of 27230-27248) that is supported by either: 
@@ -2369,7 +2407,102 @@ b. Relevant surgery during hospitalization. (Relevant surgery is defined by ICD9
 Then a)from carrier claims or 
      b) from IP claims
 	
+
+For item (2) checked inpatient claims variables HCPSCD01-45 but none had any of the CPT codes in the list
+Next step, try running with carrier files...
 */
+
+********************************************************************
+/*Physican record of HF procedure, check IP claims*/
+data ip_meet_365;
+set sic_int.ip_meet3_365;
+run;
+
+proc contents data=ip_meet_365;
+run;
+
+data testhf;
+set ip_meet_365;
+if HCPSCD01~='';
+run;
+
+data hfproc_ip;
+set ip_meet_365;
+hf_proc_ind=0;
+array list HCPSCD01-HCPSCD45;
+do over list;
+if list~='' then do;
+	if (list='27230' or
+		list='27231' or
+		list='27232' or
+		list='27233' or
+		list='27234' or
+		list='27235' or
+		list='27236' or
+		list='27237' or
+		list='27238' or
+		list='27239' or
+		list='27240' or
+		list='27241' or
+		list='27242' or
+		list='27243' or
+		list='27244' or
+		list='27245' or
+		list='27246' or
+		list='27247' or
+		list='27248')
+		/*and hf_proc_ind=0*/
+		then hf_proc_ind=1;
+	end;
+end;
+
+
+run;
+
+proc freq; table hf_proc_ind;
+run;
+
+********************************************************************
+/*Physican record of HF procedure, check carrier claims*/
+
+data hfproc_carr;
+set sic_int.pb_meet_365;
+hf_proc_ind=0;
+array list HCPSCD01-HCPSCD13;
+do over list;
+if list~='' then do;
+	if (list='27230' or
+		list='27231' or
+		list='27232' or
+		list='27233' or
+		list='27234' or
+		list='27235' or
+		list='27236' or
+		list='27237' or
+		list='27238' or
+		list='27239' or
+		list='27240' or
+		list='27241' or
+		list='27242' or
+		list='27243' or
+		list='27244' or
+		list='27245' or
+		list='27246' or
+		list='27247' or
+		list='27248')
+		/*and hf_proc_ind=0*/
+		then hf_proc_ind=1;
+	end;
+end;
+
+
+run;
+
+proc freq; table hf_proc_ind;
+run;
+
+
+
 
 /*for b) identify relevant surgeries from IP claims CPT codes and surgery dates*/
 
@@ -2391,6 +2524,7 @@ if list~="" then do;
 	output;
 end;
 end;
+
 
 format procedure_date date10.;
 format admit_date date10.;
@@ -2484,48 +2618,30 @@ if comorb_18_0_1yr=1 then smi_cancer_ind=1;
 if comorb_18_0_1yr=0 then smi_cancer_ind=0;
 label smi_cancer_ind="Indicator of Metastatic Cancer 1yr";
 
-if comorb_13_0_1yr=1  then smi_esrd_ind=1;
-if comorb_13_0_1yr=0  then smi_esrd_ind=0;
-label smi_esrd_ind="Indicator of ESRD 1yr, Elix";
+/*ESRD from either dx code per elixhauser or denominator file flag*/
+if comorb_13_0_1yr=1 | esrd_ind_n=1 then smi_esrd_ind=1;
+if comorb_13_0_1yr=0 & esrd_ind_n=0  then smi_esrd_ind=0;
+label smi_esrd_ind="Indicator of ESRD 1yr, Elix and claims DN file";
 
 /*note needs to add a second criteria for indicator of advanced disease
 for final definition of chf as a serious medical illness*/
-if comorb_1_0_1yr=1  then smi_chf_ind=1;
-if comorb_1_0_1yr=0  then smi_chf_ind=0;
-label smi_chf_ind="Indicator of CHF 1yr, Elix.";
+if chf_pri_dx=1  then smi_chf_ind=1;
+if chf_pri_dx=0  then smi_chf_ind=0;
+label smi_chf_ind="Indicator of CHF 1yr, Primary dx from IP claim";
 
 /*settled on using COPD from Elix, Oxygen use from DME claims*/
 if comorb_9_0_1yr=1 & home_oxygen=1 then smi_lung_02_ind=1;
 if comorb_9_0_1yr=0 | home_oxygen=0 then smi_lung_02_ind=0;
 label smi_lung_02_ind="Indicator of lung disease+home O2 use 1yr, using claims to get o2 use";
 
-/*COPD definition 2, COPD from Elix+o2 OR COPD as primary dx*/
-if smi_lung_02_ind=1 | copd_pri_dx=1 then smi_lung_02_or_pri_ind =1;
-if smi_lung_02_ind=0 & copd_pri_dx=0  then smi_lung_02_or_pri_ind =0;
-label smi_lung_02_or_pri_ind = "Indicator of severe COPD, either with o2 use or primary dx IP";
-
-/*settled on using COPD from Elix, Oxygen use from HRS claims*/
-if comorb_9_0_1yr=1 & lung_o2_hrs=1 then smi_lung_02_HRS_ind=1;
-if comorb_9_0_1yr=0 | lung_o2_hrs=0 then smi_lung_02_HRS_ind=0;
-label smi_lung_02_HRS_ind="Indicator of lung disease+home O2 use 1yr, using HRS to get o2 use";
-
-/*diabetes*/
-if (comorb_10_0_1yr=1 | comorb_11_0_1yr=1 | CC_9_DIABETES_1yr=1 | dm_hrs=1 ) & 
-	(comorb_32_0_1yr=1 | CC_6_CHRNKIDN_1yr=1 | dm_kidn_hrs=1) then diab_compl_ind=1; 
-if (comorb_10_0_1yr=0 & comorb_11_0_1yr=0 & CC_9_DIABETES_1yr=0 & dm_hrs=0 ) & 
-	(comorb_32_0_1yr=0 & CC_6_CHRNKIDN_1yr=0 & dm_kidn_hrs=0) then diab_compl_ind=0; 
-label diab_compl_ind="Any indicator of diabetes+CKD or CAD 1yr";
-
-/*2nd diabetes definition, compl diabetes per elix + one of the following:
-Peripheral Vascular Disorders 5
-Renal Disease 34
-CC_12_ISCHMCHT */
+/*diabetes, Elix 11 (diabetes with complications) if criteria for 
+renal disease (comorb 34), ischemic heart disease (cc 12) or 
+peripheral vascular disease (comorb 5) are present*/
 if comorb_11_0_1yr=1 & (comorb_5_0_1yr=1 | comorb_34_0_1yr=1 | CC_12_ISCHMCHT_1yr =1) then
-	diab_compl_2=1;
+	smi_diab_compl_ind=1;
 if comorb_11_0_1yr=0 | (comorb_5_0_1yr=0 & comorb_34_0_1yr=0 & CC_12_ISCHMCHT_1yr =0) then
-	diab_compl_2=0;
-label diab_compl_2="Elix compl diabetes + peripheral vas, renal or ischem, 1yr";
-
+	smi_diab_compl_ind=0;
+label smi_diab_compl_ind="Elix compl diabetes + peripheral vas, renal or ischem, 1yr";
 
 if comorb_14_0_1yr=1 then smi_liver_ind=1;
 if comorb_14_0_1yr=0 then smi_liver_ind=0;
@@ -2539,9 +2655,14 @@ if comorb_33_0_1yr=1 then smi_als_ind=1;
 if comorb_33_0_1yr=0 then smi_als_ind=0;
 label smi_als_ind="Indicator of ALS 1yr, icd9 code";
 
+/*******************************************************************/
+/*******************************************************************/
+/*Needs revision based on new definition*/
 if CC_11_HIPFRAC_1yr=1 /*| hip_frac_hrs=1*/ then smi_hip_ind=1;
 if CC_11_HIPFRAC_1yr=0 /*& hip_frac_hrs=0*/ then smi_hip_ind=0;
 label smi_hip_ind="Indicator of Hip fracture 1yr, cc";
+/*******************************************************************/
+/*******************************************************************/
 
 /*doesn't use the cc definition excluding cataract,glaucoma cc2_ge4_comorb_1yr */
 if el_ge4_comorb_1yr=1 | cc_ge4_comorb_1yr=1 | comor_c_hrs=1 then multi_any_ind=1;
@@ -2623,7 +2744,7 @@ run;
 
 title "End Stage Renal Disease - elix, claims denominator file year of core ivw";
 proc freq data=age_ge_65_mc ;
-table comorb_13_0_1yr esrd_ind_n comorb_13_0_1yr*esrd_ind_n /missprint;
+table comorb_13_0_1yr esrd_ind_n comorb_13_0_1yr*esrd_ind_n smi_esrd_ind /missprint;
 run;
 
 title "CHF+Indicator of more advanced disease - elix + some utilization measure TBD!";
@@ -2631,13 +2752,9 @@ proc freq data=age_ge_65_mc ;
 table smi_chf_ind chf_pri_dx chf_adm_dx /missprint;
 run;
 
-title "COPD/Lung disease+home o2 - elix, needs work!, Home O2 from DME claims";
+title "COPD/Lung disease+home o2, need to pick one of these def's, either (1) ICD=9 code in any claim + DME claim for home O2 OR (2) COPD as primary dx in IP claim";
 proc freq data=age_ge_65_mc ;
-table comorb_9_0_1yr lung_o2_hrs home_oxygen 
-lung_o2_hrs*home_oxygen comorb_9_0_1yr*lung_o2_hrs comorb_9_0_1yr*home_oxygen 
-smi_chf_ind*home_oxygen 
-smi_lung_02_ind smi_lung_02_HRS_ind smi_lung_02_or_pri_ind smi_lung_02_ind*smi_lung_02_HRS_ind copd_pri_dx
-/missprint;
+table smi_lung_02_ind*copd_pri_dx copd_pri_dx*copd_adm_dx /missprint;
 run;
 
 data o2_no_copd;
@@ -2645,21 +2762,17 @@ set age_ge_65_mc ;
 if smi_lung_02_ind =0 and home_oxygen =1;
 run;
 
-title "O2 use but no COPD, check CHF";
+title "Among interviews with home O2 use but no COPD, check to see if these are CHF patients?";
 proc freq data=o2_no_copd;
 table  smi_chf_ind*home_oxygen /missprint;
 run;
 
-title "Diabetes + CKD or CAD - Complicated diabetes elix, HRS";
+title "Diabetes with severe complications (renal disease, ischemic hd or peripheral vascular disease)";
 proc freq data=age_ge_65_mc ;
-table comorb_11_0_1yr 
-comorb_11_0_1yr*comorb_32_0_1yr 
-comorb_11_0_1yr*CC_6_CHRNKIDN_1yr 
-dm_ins_hrs 
-comorb_11_0_1yr*dm_ins_hrs diab_compl_2 /missprint;
+table smi_diab_compl_ind /missprint;
 run;
 
-title "Advanced liver disease/cirrhosis - elix (check dx codes included, maybe more?)";
+title "Advanced liver disease/cirrhosis - elix";
 proc freq data=age_ge_65_mc ;
 table smi_liver_ind /missprint;
 run;
@@ -2758,6 +2871,20 @@ set core_pre.H10g_hp;
 if MADLNDX=. & MIADLNDX=. & MMNYNDX=.;
 run;
 No observations without one of the three links.
+
+Notes regarding Elixhauser comorbidity coding:
+See the email list of ICD-9 codes provided by Amy on 4/3/14
+This list modifies the original ICD-9 codes used to better suit the serious
+illness definitions
+
+From reading through Elixhauser et al (1998) the original purpose
+was to identify comorbidities that are underlying conditions, so not the
+reason for hospital admission. So if a diagnosis was the primary diagnosis,
+or if it was related to the primary DRG of the patient, it was NOT used 
+in coding the Elixhauser comorbidity index. This is different from what we are
+doing in that we want to identify people with serious illness, regardless
+(and in many cases specifically) if they are the primary disease or diagnosis.
+
 
 
 H="xxxx Additional checks"

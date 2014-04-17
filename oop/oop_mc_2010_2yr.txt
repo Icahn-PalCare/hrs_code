@@ -54,7 +54,10 @@ Copied over on 9/26/2013 by RG
 Folder contains reference wage index adjustment files
 Wage index 2010 downloaded from CMS 3/24/14*/
 
-libname raw_data "C:\data\oop\raw_data";
+libname oop_wi "E:\data\hrs_oop_2010\ref_data\wage_index";
+libname oop_nh "E:\data\hrs_oop_2010\ref_data\nh_costs_by_state";
+libname oop_ref "E:\data\hrs_oop_2010\ref_data";
+
 
 H="Pull exit and restricted interviews and mc xwalk id"
 /*
@@ -237,16 +240,47 @@ run;
 
 /*get restricted dataset that is just decedents*/
 proc sql;
-create table restricted_r as select * from
-restricted_2 where id in (select id from exit_xwalk_3);
+create table restricted_r as select a.*,b.exit_year_x from
+restricted_2 a join
+exit_xwalk_3 b on a.id=b.id;
 quit;
 
+/*get zip code at time of death to use for wage index adjustment*/
+data id_zip;
+set restricted_r(rename=(ZIP10_2000=ZIP10));
+/*use zip code variable from restricted dataset for year of exit interview*/
+zip_exit=vvaluex("zip"||substr(trim(left(exit_year_x)),3,2) );
+run;
+
+/*2 obs have missing zip in exit year
+They have zip in previous wave so use that*/
+data zztestzip1;
+set id_zip;
+if zip_exit = "";
+run;
+
+/*if no zip in exit year, then use zip from wave prior to exit*/
+data id_zip_2;
+set id_zip;
+if zip_exit="" then zip_exit=vvaluex("zip"||substr(trim(left(exit_year_x-2)),3,2)  );
+run;
+
+/*check to see if obs still have missing zip - none*/
+data zztestzip2;
+set id_zip_2;
+if zip_exit = "";
+run;
+
+/*save a version of the dataset before renaming*/
+data restricted_r_1;
+set id_zip_2;
+run;
 
 /*rename variables in restricted dataset with  _e suffix*/
-%rename2(WORK,RESTRICTED_R,_e,);
+%rename2(WORK,RESTRICTED_R_1,_e,);
 
 data restricted_r3;
-set restricted_r;
+set restricted_r_1;
 rename id_e=id;
 age_at_death_e=(death_date_e-birth_date_e)/365.25;
 label age_at_death_e="Age at death";
@@ -512,8 +546,8 @@ out=oop_1 replace;
 run;
 
 data oop_2 (keep=id year curr_iw_date prev_iw_date months total_OOP hospital_OOP NH_OOP 
-doctor_OOP dental_OOP patient_OOP 
-hospice_OOP RX_OOP home_OOP special_OOP non_med_OOP helper_OOP insurance_costs NH_NIGHTS);
+doctor_OOP dental_OOP patient_OOP hospice_OOP RX_OOP home_OOP special_OOP non_med_OOP helper_OOP 
+insurance_costs NH_NIGHTS md_cov);
 set oop_1;
 length id $9 hhid $6 pn $3;
 id=hhid||pn;
@@ -738,6 +772,11 @@ quit;
 proc freq;
 table year_x year_n1 year_n2 year_n3;
 run;
+
+proc freq;
+table md_cov_x md_cov_n1;
+run;
+
 
 H="OOP spending totals 24,60 months before death"
 /*Start with dataset of OOP data exit, core n1 and n2 and n3
@@ -1319,7 +1358,7 @@ quit;
 proc sql;
 select count(distinct id) from oop_int.meet_criteria_2yr
 where part_ab_5y=1 and hmo_5y=0;
-run;
+quit;
 
 
 
@@ -3026,7 +3065,8 @@ H="Adjust for wage index by patient zip code"
 /* Pull in wage index file and clean up for states that are missing WI*/
 /******************************************************************/
 /*bring in 2010 wage index file*/
-proc import datafile="C:\data\oop\raw_data\wage_index_cbsa_2010.xls"  out=oop_int.wage_index 
+proc import datafile="E:\data\hrs_oop_2010\ref_data\wage_index\wage_index_cbsa_2010.xls"
+out=oop_int.wage_index 
 replace;
 run;
 
@@ -3072,7 +3112,7 @@ run;
 Note only keep variables needed from xwalk file because formats 
 are missing for some of the other text variables*/
 data zip_cb;
-set raw_data.xtract(keep=zip5 cbsa state);
+set oop_ref.xtract(keep=zip5 cbsa state);
 zip_n=zip5+0;
 cbsa_n=cbsa+0;
 /*If zip code is not missing, add state code*/
@@ -3131,42 +3171,15 @@ run;
 /* Pull in zip code from restricted data */
 /******************************************************************/
 
-data id_zip;
-set oop_int.exit_restricted_02_to_10_v1(rename=(ZIP10_2000_e=ZIP10_e));
-/*use zip code variable from restricted dataset for year of exit interview*/
-zip_exit=vvaluex("zip"||substr(trim(left(exit_year_x)),3,2)||"_E" );
-run;
-
-/*2 obs have missing zip in exit year
-They have zip in previous wave so use that*/
-data zztestzip1;
-set id_zip;
-if zip_exit = "";
-run;
-
-/*if no zip in exit year, then use zip from wave prior to exit*/
-data id_zip_2;
-set id_zip;
-if zip_exit="" then zip_exit=vvaluex("zip"||substr(trim(left(exit_year_x-2)),3,2)||"_E"  );
-run;
-
-/*check to see if obs still have missing zip - none*/
-data zztestzip2;
-set id_zip_2;
-if zip_exit = "";
-run;
-
-
 /*Add zip code to the cost table by id*/
 proc sql;
 create table cost_zip as
-select a.*,b.zip_exit from 
+select a.*,b.zip_exit_e from 
 oop_int.costs_all a
 left join 
-id_zip_2 b
+oop_int.exit_restricted_02_to_10_v1 b
 on a.id=b.id;
 quit;
-
 
 
 /******************************************************************/
@@ -3179,8 +3192,8 @@ select count(distinct cbsa) from cbsa_zip_final;
 quit;
 
 proc sql;
-select count(distinct zip_exit) from cost_zip
-where zip_exit not in 
+select count(distinct zip_exit_e) from cost_zip
+where zip_exit_e not in 
 (select ZIP5 from cbsa_zip_final);
 quit;
 
@@ -3190,8 +3203,8 @@ where wage_index_2010 is null ;
 quit;
 
 proc sql; 
-select count(distinct zip_exit) from cost_zip
-where zip_exit not in 
+select count(distinct zip_exit_e) from cost_zip
+where zip_exit_e not in 
 (select ZIP5 from zip_cbsa_wage_index2);
 quit;
 
@@ -3205,7 +3218,7 @@ select a.*,b.wage_index_2010,b.state_n from
 cost_zip a
 left join 
 zip_cbsa_wage_index2 b
-on a.zip_exit=b.ZIP5;
+on a.zip_exit_e=b.ZIP5;
 quit;
 
 /*1604 observations do not have wage id by cbsa-zip*/
@@ -3837,6 +3850,12 @@ log close
 
 
 H="Compare dementia to cancer and heart disease groups"
+/*Compares spending for dementia patients (defined as probability of dementia = 50%)
+with that of cancer, heart disease, infectious disease and sudden death (accidents, etc.)
+
+2 sets of tables, 2 and 5 year look backs
+*/
+
 capture log close
 clear all
 set mem 500m
@@ -3891,7 +3910,21 @@ replace heartdis_grp =0 if comorb_1_0d_n24m==0 & comorb_2_0d_n24m==0 & ///
 la var heartdis_grp "Indicator heart disease, per elix 1,2,3,32)
 tab heartdis_grp , missing
 
+gen byte cause_death_sudden = 0
+replace cause_death_sudden = 1 if cause_death_12_n_e==12
+la var cause_death_sudden "Cause of death = Accidents, Suicide, Homicide" 
+tab cause_death_sudden, missing
+
+gen byte cause_death_inf = 0
+replace cause_death_inf = 1 if cause_death_12_n_e==1
+la var cause_death_inf "Cause of death = Infectious Disease (not HIV/AIDS/viral hepatitis)" 
+tab cause_death_inf, missing
+
 table pr_dem_gt50 cancer_grp heartdis_grp , contents(freq)
+
+*****************************************************************************
+//Dementia compared with cancer and heart disease, 2 year lookback
+*****************************************************************************
 
 //get tables comparing mean, median spending for different disease groups
 mat dg_2y=J(20,6,.)
@@ -3903,6 +3936,7 @@ mat dg_2y[1,3]=r1_c[2,1] //with cancer col 2
 tab heartdis_grp , missing matcell(r1_h)
 mat dg_2y[1,5]=r1_h[2,1] //with heart disease col 3
 
+
 //mc vars
 local spvars tot_paid_by_mc_2yr_wi ip_paid_by_mc_2yr_wi snf_paid_by_mc_2yr_wi ///
 hh_paid_by_mc_2yr_wi hs_paid_by_mc_2yr_wi pb_paid_by_mc_2yr_wi op_paid_by_mc_2yr_wi ///
@@ -3912,7 +3946,7 @@ medicaid_x
 
 //totals 2 years, wage index adjusted mc payments, oop spend and nh nights
 local c=1
-foreach d in pr_dem_gt50 cancer_grp heartdis_grp{
+foreach d in pr_dem_gt50 cancer_grp heartdis_grp {
 	local r = 2
 	foreach v in `spvars'{
 		sum `v' if `d'==1, detail
@@ -3928,22 +3962,60 @@ mat rownames dg_2y= "N" "Total medicare" "Medicare IP" "Medicare SNF" "Medicare 
 "OOP Total" "OOP Helper" "OOP Hospital" "OOP NH" "OOP Doctor" "OOP Rx" "OOP Other" ///
 "Total NH nights, SR or claims" "Nights paid by Medicare" "Nights unknown payer" "Medicaid at death?"
 
-mat colnames dg_2y="Prob dem > 50%" "Cancer" "Heart disease" ///
-
+mat colnames dg_2y="Prob dem > 50%" "median" "Cancer" "median" "Heart disease" "median" 
 
 mat list dg_2y
 
-frmttable using `logpath'\oop_dem_initial_tables, statmat(dg_2y) ///
+frmttable using `logpath'\5-oop_dem_initial_tables, statmat(dg_2y) ///
 title("Dementia, Cancer and Heart Disease Patients" \ ///
 "Medicare and OOP Spending Last 2 years of life") ///
 note("Medicare spending totals are adjusted for the 2010 CMS wage index" \ ///
 "All $ values adjusted for inflation to 2010$")  ///
-sdec(2) replace
+sdec(2) landscape replace 
 
-tab medicaid_x, missing
-tab hmo_x medigap_x, missing
+*****************************************************************************
+//Dementia compared with sudden death and infections disease, 2 year lookback
+*****************************************************************************
+//get tables comparing mean, median spending for different disease groups
+mat dg_cd_2y=J(20,6,.)
+//first row n each group
+tab pr_dem_gt50, missing matcell(r1_50)
+mat dg_cd_2y[1,1]=r1_50[2,1] //with dem prob > 50% col 1
+tab cause_death_sudden , missing matcell(r1_s)
+mat dg_cd_2y[1,3]=r1_s[2,1] //with heart disease col 3
+tab cause_death_inf , missing matcell(r1_i)
+mat dg_cd_2y[1,5]=r1_i[2,1] //with heart disease col 5
 
 
+//totals 2 years, wage index adjusted mc payments, oop spend and nh nights
+local c=1
+foreach d in pr_dem_gt50 cause_death_sudden cause_death_inf{
+	local r = 2
+	foreach v in `spvars'{
+		sum `v' if `d'==1, detail
+		mat dg_cd_2y[`r',`c']=r(mean)
+		mat dg_cd_2y[`r',`c'+1]=r(p50)
+		local r = `r'+1
+		}
+	local c = `c'+2
+	}
+
+mat rownames dg_cd_2y= "N" "Total medicare" "Medicare IP" "Medicare SNF" "Medicare HH" ///
+"Medicare hospice" "Medicare Carrier" "Medicare OP" "Medicare DME" ///
+"OOP Total" "OOP Helper" "OOP Hospital" "OOP NH" "OOP Doctor" "OOP Rx" "OOP Other" ///
+"Total NH nights, SR or claims" "Nights paid by Medicare" "Nights unknown payer" "Medicaid at death?"
+
+mat colnames dg_cd_2y="Prob dem > 50%" "median" "Sudden death" "median" "Infect disease" "median"
+
+
+mat list dg_cd_2y
+
+frmttable using `logpath'\5-oop_dem_initial_tables, statmat(dg_cd_2y) ///
+title("Dementia, Sudden death and Infectious diseases Patients" \ ///
+"Medicare and OOP Spending Last 2 years of life") ///
+note("Medicare spending totals are adjusted for the 2010 CMS wage index" \ ///
+"All $ values adjusted for inflation to 2010$")  ///
+sdec(2) landscape addtable 
 
 
 ******************************************************************************
@@ -3986,17 +4058,60 @@ mat rownames dg_5y= "N" "Total medicare" "Medicare IP" "Medicare SNF" "Medicare 
 "OOP Total" "OOP Helper" "OOP Hospital" "OOP NH" "OOP Doctor" "OOP Rx" "OOP Other" ///
 "Total NH nights, SR or claims" "Nights paid by Medicare" "Nights unknown payer" "Medicaid at death?"
 
-mat colnames dg_5y="Prob dem > 50%" "Cancer" "Heart disease"
+mat colnames dg_5y="Prob dem > 50%" "median" "Cancer" "median" "Heart disease" "median"
 
 mat list dg_5y
 
-frmttable using `logpath'\oop_dem_initial_tables, statmat(dg_5y) ///
+frmttable using `logpath'\5-oop_dem_initial_tables, statmat(dg_5y) ///
 title("Dementia, Cancer and Heart Disease Patients" \ ///
-"Medicare and OOP Spending Last 2 years of life") ///
+"Medicare and OOP Spending Last 5 years of life") ///
 note("Medicare spending totals are adjusted for the 2010 CMS wage index" \ ///
 "All $ values adjusted for inflation to 2010$" ) ///
-sdec(2) addtable
+sdec(2) landscape addtable
 
+*****************************************************************************
+//Dementia compared with sudden death and infections disease, 5 year lookback
+*****************************************************************************
+//get tables comparing mean, median spending for different disease groups
+mat dg_cd_5y=J(20,6,.)
+//first row n each group
+tab pr_dem_gt50, missing matcell(r2_d)
+mat dg_cd_5y[1,1]=r2_d[2,1] //with dem prob > 50% col 1
+tab cause_death_sudden, missing matcell(r2_s)
+mat dg_cd_5y[1,3]=r2_s[2,1] //with cancer col 2
+tab cause_death_inf , missing matcell(r2_i)
+mat dg_cd_5y[1,5]=r2_i[2,1] //with heart disease col 3
+
+
+//total mc 2 years, wage index adjusted
+local c=1
+foreach d in pr_dem_gt50 cause_death_sudden cause_death_inf{
+	local r = 2
+	foreach v in `spvars5'{
+		sum `v' if `d'==1, detail
+		mat dg_cd_5y[`r',`c']=r(mean)
+		mat dg_cd_5y[`r',`c'+1]=r(p50)
+		local r = `r'+1
+		}
+	local c = `c'+2
+	}
+
+mat rownames dg_cd_5y= "N" "Total medicare" "Medicare IP" "Medicare SNF" "Medicare HH" ///
+"Medicare hospice" "Medicare Carrier" "Medicare OP" "Medicare DME" ///
+"OOP Total" "OOP Helper" "OOP Hospital" "OOP NH" "OOP Doctor" "OOP Rx" "OOP Other" ///
+"Total NH nights, SR or claims" "Nights paid by Medicare" "Nights unknown payer" "Medicaid at death?"
+
+mat colnames dg_cd_5y="Prob dem > 50%" "median" "Sudden death" "median" "Infect disease" "median"
+
+mat list dg_cd_5y
+
+frmttable using `logpath'\5-oop_dem_initial_tables, statmat(dg_cd_5y) ///
+title("Dementia, Sudden death and Infectious diseases Patients" \ ///
+"Medicare and OOP Spending Last 5 years of life") ///
+note("Medicare spending totals are adjusted for the 2010 CMS wage index" \ ///
+"All $ values adjusted for inflation to 2010$" ) ///
+sdec(2) landscape addtable
 
 
 log close
+

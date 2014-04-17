@@ -1831,7 +1831,7 @@ run;
 /*print to file*/
  ods rtf body="E:\data\serious_ill\logs\elective_primary_dxlist.rtf";
  title"Primary dx list for admit type = elective, inpatient claims last 12m pre-core";
-proc freq; table dgns_cd01;
+proc freq order=freq; table dgns_cd01;
 run;
 ods rtf close; 
 
@@ -1886,6 +1886,10 @@ core interview, can use comorb = ., same as ffs mc 1 year=no*/
  if n_urgent_admit_6m>0 & n_urgent_admit_6m~=. then ind_ur_adm_6m=1;
  label ind_ur_adm_6m="Ind any urgent hospital admission 6m pre core";
 
+ if n_elect_admit_6m =0 then ind_elect_adm_6m=0;
+ if n_elect_admit_6m >0 & n_elect_admit_6m ~=. then ind_elect_adm_6m=1;
+ label ind_elect_adm_6m="Ind any elective hospital admission 6m pre core";
+
  if (n_ip_admit_6m - n_elect_admit_6m)=0 then ind_nonelect_adm_6m=0;
  if (n_ip_admit_6m - n_elect_admit_6m)>0 & n_elect_admit_6m~=. then ind_nonelect_adm_6m=1;
  label ind_nonelect_adm_6m="Ind any non-elective hospital admission 6m pre core";
@@ -1912,6 +1916,10 @@ core interview, can use comorb = ., same as ffs mc 1 year=no*/
  if n_urgent_admit_12m=0 then ind_ur_adm_12m=0;
  if n_urgent_admit_12m>0 & n_urgent_admit_12m~=. then ind_ur_adm_12m=1;
  label ind_ur_adm_12m="Ind any urgent hospital admission 12m pre core";
+
+ if n_elect_admit_12m =0 then ind_elect_adm_12m=0;
+ if n_elect_admit_12m >0 & n_elect_admit_12m ~=. then ind_elect_adm_12m=1;
+ label ind_elect_adm_12m="Ind any elective hospital admission 12m pre core";
 
  if (n_ip_admit_12m - n_elect_admit_12m)=0 then ind_nonelect_adm_12m=0;
  if (n_ip_admit_12m - n_elect_admit_12m)>0 & n_elect_admit_12m~=. then ind_nonelect_adm_12m=1;
@@ -2500,6 +2508,40 @@ run;
 
 proc freq; table hf_proc_ind;
 run;
+********************************************************************
+/*is there also a physican record within 2 days?*/
+proc sort data=hfproc_carr; by BID_HRS_19 FROM_DT THRU_DT hf_proc_ind;
+run;
+
+data hfproc_carr_2;
+set hfproc_carr;
+if eof1=0 then
+	set hfproc_carr (firstobs=2 keep=admit_date disch_date rename=(admit_date=lead1admit disch_date=lead1disch)) end=eof1;
+else do; lead1admit=.;  lead1disch=.; end;
+run;
+
+data hfproc_carr_3;
+set hfproc_carr_2;
+days_next_visit=lead1admit-disch_date;
+days_next_disch=lead1disch-disch_date;
+if hf_proc_ind=1 and days_next_visit<=2 and days_next_visit~=. & days_next_disch>0 then hf_w_visit_2d=1;
+else hf_w_visit_2d=0;
+run;
+
+data hfproc_carr_4;
+set hfproc_carr_3;
+if hf_proc_ind=1;
+run;
+
+proc freq data=hfproc_carr_3;
+table hf_proc_ind hf_w_visit_2d core_year; run;
+
+/*if have hf CPT code from carrier, but no subsequent carrier claim,
+do they have a surgery code from the inpatient claims?*/
+data hfproc_carr_5;
+set hfproc_carr_4;
+if hf_proc_ind=1 and hf_w_visit_2d=0;
+run;
 
 
 
@@ -2511,20 +2553,21 @@ data ip_meet_365;
 set sic_int.mp_meet3_365(where=(trim(left(SSLSSNF))~="N"));
 run;
 
-data proc_long(keep=BID_hrs_19 TYPE_ADM procedure procedure_date AD_DGNS DGNSCD01-DGNSCD25
-	STUS_CD clm_id admit_date disch_date);
+proc contents data=ip_meet_365;
+run;
+
+data proc_long(keep=BID_hrs_19 TYPE_ADM procedure procedure_date AD_DGNS DGNS_CD01-DGNS_CD25
+	 admit_date disch_date core_year);
 set ip_meet_365;
-array list PRCDRCD1-PRCDRCD25;
-array date PRCDRDT1-PRCDRDT25;
+array list PRCDR_CD01-PRCDR_CD25;
+array date PRCDR_DT01-PRCDR_DT25;
 do over list;
 if list~="" then do;
 	procedure=list;
-	procedure_date=mdy(substr(trim(left(date)),5,2),substr(trim(left(date)),7,2),
-	 substr(trim(left(date)),1,4));
+	procedure_date=datejul(date);
 	output;
 end;
 end;
-
 
 format procedure_date date10.;
 format admit_date date10.;
@@ -2534,7 +2577,7 @@ run;
 
 /* Identify surgeries that meet the criteria
 Indicator variable surgery_meet = 1 if yes, include in sample 
-1700 surgeries meet the criteria*/
+79 surgeries meet the criteria*/
 data surgery_meet;
 set proc_long;
 if length(compress(procedure))>3 then do;
@@ -2548,18 +2591,78 @@ if surgery_meet then output;
 run;
 /*End surgery section 1*/
 
+/*who has surgery that meets criteria AND hf CPT code from carrier?*/
+proc sql;
+create table cpt_and_surg as select a.*,b.admit_date as carr_hf_admit, b.disch_date as carr_hf_disch,
+b.hf_proc_ind, b.hf_w_visit_2d from 
+surgery_meet a inner join
+hfproc_carr_5 b
+on a.bid_hrs_19=b.bid_hrs_19;
+quit;
+
+data cpt_and_surg_1;
+set cpt_and_surg;
+format carr_hf_admit carr_hf_disch date9.;
+hf_w_surgery=1;
+run;
+
+/*now merge in lists to get a list of bid's that meet criteria 1 or 2*/
+data cpt_and_surg_2;
+set cpt_and_surg_1;
+keep bid_hrs_19 hf_proc_ind hf_w_surgery core_year;
+run;
+
+proc sort data=cpt_and_surg_2 nodupkey; by bid_hrs_19 ; run;
+
+data hfproc_carr_6;
+set hfproc_carr_4;
+keep bid_hrs_19 hf_proc_ind hf_w_visit_2d core_year;
+if hf_proc_ind=1 and hf_w_visit_2d=1;
+run;
+
+proc sort data=hfproc_carr_6 nodupkey; by bid_hrs_19 ; run;
+
+data hf_meet;
+set hfproc_carr_6 cpt_and_surg_2 ;
+
+/*merge in these hip fracture variables*/
+proc sql;
+create table core_ids_1yr_criteria_4f
+as select a.*,b.hf_w_visit_2d,b.hf_w_surgery from
+sic_int.core_ids_1yr_criteria_4e a left join
+hf_meet b
+on a.bid_hrs=b.bid_hrs_19 and a.core_year=b.core_year;
+quit;
+
+proc freq; table hf_w_visit_2d hf_w_surgery ;
+run;
+
+data sic_int.core_ids_1yr_criteria_4g;
+set core_ids_1yr_criteria_4f;
+
+array list hf_w_visit_2d hf_w_surgery ;
+do over list;
+	if list = . and comorb_1_0_1yr~=. then list=0;
+end;
+label hf_w_visit_2d ="HF CPT + Dr visit within 2 days, 1yr pre ivw";
+label hf_w_surgery ="HF CPT + Surgery, 1yr pre ivw";
+
+run;
+
+
+
 /*Another idea is to check IP claims
 if CPT code (in fields HCPCSCD01-HCPCSCD45 in list then if PRCDRCD1-PRCDRCD25 in list = hip frature = yes*/
 
 
 H="Step 6 - HRS variable cleaning and check criteria"
 proc freq
-data=sic_int.core_ids_1yr_criteria_4e;
+data=sic_int.core_ids_1yr_criteria_4g;
 table comorb_31_0_1yr;
 run;
 
 data sic_int.core_ids_1yr_criteria_5;
-set sic_int.core_ids_1yr_criteria_4e ;
+set sic_int.core_ids_1yr_criteria_4g ;
 
 /*create tics categorical variable*/
 if tics_tot>8 then tics_cat=1 ;
@@ -2655,12 +2758,11 @@ if comorb_33_0_1yr=1 then smi_als_ind=1;
 if comorb_33_0_1yr=0 then smi_als_ind=0;
 label smi_als_ind="Indicator of ALS 1yr, icd9 code";
 
-/*******************************************************************/
-/*******************************************************************/
-/*Needs revision based on new definition*/
-if CC_11_HIPFRAC_1yr=1 /*| hip_frac_hrs=1*/ then smi_hip_ind=1;
-if CC_11_HIPFRAC_1yr=0 /*& hip_frac_hrs=0*/ then smi_hip_ind=0;
-label smi_hip_ind="Indicator of Hip fracture 1yr, cc";
+/*hip fracture, either admitting diagnosis or CPT from carrier claim AND
+surgery or follow up carrier claim within 2 days*/
+if hip_adm_dx=1 | hf_w_visit_2d=1 | hf_w_surgery=1 then smi_hip_ind=1;
+if hip_adm_dx=0 & hf_w_visit_2d=0 & hf_w_surgery=0 then smi_hip_ind=0;
+label smi_hip_ind="Indicator of Hip fracture 1yr, adm dx or from physician claims";
 /*******************************************************************/
 /*******************************************************************/
 
@@ -2806,6 +2908,11 @@ title "Hospital admissions 6m, 12m before core interview";
 proc freq data=age_ge_65_mc  ;
 table ind_hosp_adm_6m*ind_em_ur_adm_6m ind_hosp_adm_12m*ind_em_ur_adm_12m 
 ind_em_adm_12m*ind_ED_adm_12m /missprint;
+run;
+
+title "Elective vs non elective hospital admissions, 12m before core";
+proc freq data=age_ge_65_mc  ;
+table ind_nonelect_adm_12m n_nonelect_adm_12m ind_elect_adm_12m n_elect_admit_12m /missprint;
 run;
 
 title "ED visit without subsequent admission from OP claims, 12m pre interview";

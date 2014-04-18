@@ -545,7 +545,7 @@ proc import datafile="E:\data\hrs_oop_2010\received_data\oopme_final_oldv.dta"
 out=oop_1 replace; 
 run;
 
-data oop_2 (keep=id year curr_iw_date prev_iw_date months total_OOP hospital_OOP NH_OOP 
+data oop_int.oop_2 (keep=id year curr_iw_date prev_iw_date months total_OOP hospital_OOP NH_OOP 
 doctor_OOP dental_OOP patient_OOP hospice_OOP RX_OOP home_OOP special_OOP non_med_OOP helper_OOP 
 insurance_costs NH_NIGHTS md_cov);
 set oop_1;
@@ -553,7 +553,7 @@ length id $9 hhid $6 pn $3;
 id=hhid||pn;
 run;
 
-proc sort data=oop_2 nodupkey;
+proc sort data=oop_int.oop_2 out=oop_2 nodupkey;
 by id year;
 run;
 
@@ -2692,7 +2692,15 @@ H="Get nights SNF paid for by MC"
 5. Chronic conditions indicators, last 2 years of life
 6. SNF nights, total and paid for by mc, from MC claims
 This dataset is then merged with the MC claims payments totals datset 
-created in the next few heading sections*/
+created in the next few heading sections
+
+
+REVISION 4/18
+Need to get nursing home nights by interview cycle!
+working code is in the next heading section*/
+
+/*get list of all interview dates for decedents, use the oop dataset and merge in xwalk id*/
+bid_hrs
 
 
 /*first pull all snf claims x years before death*/
@@ -2835,6 +2843,269 @@ proc freq; table los_snf_paid_by_mc_2y snf_stay_all_2y; run;
 proc export data=oop_fnl.hrs_oop_with_nh_nights 
 outfile="E:\data\hrs_oop_2010\final_data\hrs_oop_with_nh_nights.dta" replace;
 run;
+
+H="Accounting for missing nh nights"
+/*list of all decedents with their mc id*/
+data exit_nh_1;
+set oop_int.exit_restricted_02_to_10_v1;
+keep id bid_hrs exit_year_x death_date_e stateusps: ;
+run;
+
+/*use insurance information to keep only those with ffs medicare last 2 years of life*/
+proc sql;
+create table exit_nh_2 as select * from exit_nh_1 where id
+in (select id from oop_int.meet_criteria_2yr);
+quit;
+
+proc sort data=exit_nh_2 nodupkey; by id; run;
+
+/*get interview dates, nh use, md coverage variables from oop dataset*/
+proc sort data=oop_int.oop_2 nodupkey; by id curr_iw_date; run;
+
+proc sql;
+create table oop_bid_dec_1(drop=id2) as select * from
+oop_int.oop_2 a left join
+exit_nh_2(rename=(id=id2)) b 
+on a.id=b.id2;
+quit;
+
+/*drop those without ffs mc last 2 years of life, they are missing bid*/
+data oop_bid_dec_2;
+set oop_bid_dec_1;
+if bid_hrs~=' ';
+run;
+
+proc freq; table exit_year_x; run;
+
+proc sort data=oop_bid_dec_2; by id year; run;
+
+/*****************************************************************/
+/*Get actual interview dates from core and restricted datasets
+interview dates in oop dataset are just by month*/
+/*****************************************************************/
+
+/*get interview dates from core datasets, ultimately from restricted data*/
+data core_dates;
+set hrs_cln.core_00_to_10;
+keep id core_year c_ivw_date c_ivw_year c_ivw_month c_ivw_day ;
+rename core_year=year;
+rename c_ivw_date=ivw_date_e;
+rename c_ivw_year=ivw_year_e;
+rename c_ivw_month=ivw_month_e;
+rename c_ivw_day=ivw_day_e;
+run;
+
+/*use dod=exit interview date*/
+data exit_dates;
+set oop_int.exit_restricted_02_to_10_v1;
+keep id exit_year_x death_date_e ;
+rename exit_year_x=year;
+rename death_date_e=ivw_date_e;
+run;
+
+data ivw_dates;
+set core_dates exit_dates;
+label year="Wave year"
+ivw_date_e="Interview date, from restricted"
+ivw_year_e="Interview year, restricted"
+ivw_month_e="Interview month, restricted"
+ivw_day_e="Interview day, restricted";
+run;
+
+proc sort data=ivw_dates; by id year;
+run;
+
+data ivw_dates_2;
+set ivw_dates;
+by id;
+prev_ivw_date_e=lag(ivw_date_e);
+label prev_ivw_date_e="Previous interview date";
+if first.id then prev_ivw_date_e=.;
+format prev_ivw_date_e date9.;
+run;
+
+/*****************************************************************/
+/*Merge interview dates into oop interview dataset*/
+/*****************************************************************/
+proc sql;
+create table oop_bid_dec_3 as select a.*,b.ivw_date_e,b.prev_ivw_date_e from
+oop_bid_dec_2 a left join
+ivw_dates_2 b
+on a.id=b.id and a.year=b.year;
+run;
+
+/*only keep interviews within 5 years of death date*/
+data oop_bid_dec_4;
+set oop_bid_dec_3;
+if death_date_e-(365.25*5)<=ivw_date_e and ivw_date_e~=.;
+format death_date_e date9.;
+run;
+
+/*if previous interview date is missing, b/c not in my dataset, assign to be x months
+before current interview to match the oop dataset*/
+data oop_bid_dec_5;
+set oop_bid_dec_4;
+prev_ivw_date_e_imp=0;
+if prev_ivw_date_e=. then do;
+	 prev_ivw_date_e=ivw_date_e-(months*30.5);
+	prev_ivw_date_e_imp=1;
+end;
+label prev_ivw_date_e_imp="Imputed previous interview date, not in restricted ds";
+run;
+proc freq; table prev_ivw_date_e_imp; run;
+
+/*****************************************************************/
+/*Get SNF nights from claims, between interview dates*/
+/*****************************************************************/
+/*first pull all snf claims x years before death*/
+
+%macro snfnights(days_start=,days_bef_death=,name=);
+
+/*get snf claims only from full medpar dataset*/
+data snf_2000_2010;
+set medi.mp_2000_2010(where=(trim(left(SSLSSNF))="N"));
+run;
+
+/*identify claims where entire claim is within the interview window*/
+proc sql;
+create table snf_meet as select a.*,b.ivw_date_e,b.prev_ivw_date_e
+from snf_2000_2010 a inner join
+oop_bid_dec_5 b
+on trim(left(a.BID_HRS_19))=trim(left(b.BID_hrs))
+and b.prev_ivw_date_e<=a.admit_date and a.disch_date<=b.ivw_date_e;
+quit;
+
+/*identify claims that start before the previous interview 
+but go into the interview window per the discharge date*/
+proc sql;
+create table snf_meet2 as select a.*,b.ivw_date_e,b.prev_ivw_date_e
+from snf_2000_2010 a inner join
+oop_bid_dec_5 b
+on trim(left(a.BID_HRS_19))=trim(left(b.BID_hrs))
+and a.admit_date<b.prev_ivw_date_e and a.disch_date>b.prev_ivw_date_e ;
+quit;
+
+/*Create indicators for admit , discharge dates to be manually reset
+No claims span both the current and previous interview dates!*/
+data snf_meet3;
+set snf_meet2;
+admit_trunc=1;
+disch_trunc=0;
+if disch_date>ivw_date_e then disch_trunc=1;
+label admit_trunc="admit outside interview window = yes";
+label disch_trunc="disch outside interview window = yes";
+run;
+
+proc freq; table admit_trunc disch_trunc; run;
+
+/*identify claims that start after the previous interview
+but go past the current interview date*/
+proc sql;
+create table snf_meet4 as select a.*,b.prev_ivw_date_e,b.ivw_date_e
+from snf_2000_2010 a inner join
+oop_bid_dec_5 b
+on trim(left(a.BID_HRS_19))=trim(left(b.BID_hrs))
+and (b.prev_ivw_date_e<=a.admit_date) and (b.ivw_date_e<a.disch_date) 
+and (a.admit_date<b.ivw_date_e);
+quit;
+
+data snf_meet5;
+set snf_meet4;
+disch_trunc=1;
+run;
+
+/*merge the three snf claims lists into single dataset
+and determine mc paid days within window for each claim*/
+data snf_all;
+set snf_meet snf_meet3 snf_meet5;
+if admit_trunc=. then admit_trunc=0;
+if disch_trunc=. then disch_trunc=0;
+if admit_trunc=0 and disch_trunc=0 then do;
+	snf_days_mc_paid=util_day;
+	total_snf_los=LOSCNT;
+	end;
+if admit_trunc=1 and disch_trunc=0 then do;
+	mc_paid_thru_dt=admit_date+util_day;
+	total_snf_los=LOSCNT-(prev_ivw_date_e-admit_date);
+	if prev_ivw_date_e=mc_paid_thru_dt then total_snf_los=1;
+	if mc_paid_thru_dt < prev_ivw_date_e then do;
+		snf_days_mc_paid=0;
+		end;
+	if mc_paid_thru_dt > prev_ivw_date_e then do;
+		snf_days_mc_paid= mc_paid_thru_dt - prev_ivw_date_e;
+		end;
+	if mc_paid_thru_dt = prev_ivw_date_e then do;
+		snf_days_mc_paid=1;
+		end;
+	end;
+if admit_trunc=0 and disch_trunc=1 then do;
+	mc_paid_thru_dt=admit_date+util_day;
+	total_snf_los=LOSCNT-(disch_date-ivw_date_e);
+	if prev_ivw_date_e=mc_paid_thru_dt then total_snf_los=1;
+	if mc_paid_thru_dt < ivw_date_e then do;
+		snf_days_mc_paid=util_day;
+		end;
+	if mc_paid_thru_dt >= ivw_date_e then do;
+		snf_days_mc_paid= ivw_date_e - admit_date;
+		end;
+	end;
+format mc_paid_thru_dt date10.;
+label mc_paid_thru_dt="Medicaid covered through this date";
+label total_snf_los="Total claim SNF LOS";
+label snf_days_mc_paid="Claim days paid for by Medicare";
+
+if total_snf_los=snf_days_mc_paid then mc_full=1;
+if total_snf_los>snf_days_mc_paid then mc_full=0;
+label mc_full="Indicator that stay fully paid for by MC";
+
+run;
+
+proc freq; table admit_trunc disch_trunc total_snf_los snf_days_mc_paid mc_full;
+run;
+
+proc means; var total_snf_los snf_days_mc_paid; run;
+
+/*sum over all claims by interview window*/
+proc sort data=snf_all; by bid_hrs_19 ivw_date_e; run;
+
+proc sql;
+create table snf_ivw as select distinct bid_hrs_19, ivw_date_e,
+sum(total_snf_los) as snf_stay_all_ivw ,
+sum(snf_days_mc_paid) as los_snf_paid_by_mc_ivw ,
+sum(util_day) as tot_util_days_ivw
+from snf_all group by bid_hrs_19 , ivw_date_e;
+quit;
+
+/************************************************************/
+/*merge snf nights data with the oop dataset*/
+/************************************************************/
+proc sort data=oop_bid_dec_5; by bid_hrs ivw_date_e; run;
+
+proc sort data=snf_ivw ; by bid_hrs_19 ivw_date_e; run;
+proc sql;
+
+create table oop_bid_dec_nh(drop=ivw_date_e2) as select * from
+oop_bid_dec_5 a left join
+snf_ivw(rename=(ivw_date_e=ivw_date_e2)) b 
+on a.bid_hrs=b.bid_hrs_19 and a.ivw_date_e=b.ivw_date_e2;
+quit;
+
+proc sql; select count( distinct id) from oop_bid_dec_nh ; quit;
+
+data oop_bid_dec_nh_2;
+set oop_bid_dec_nh;
+if snf_stay_all_ivw =. then snf_stay_all_ivw =0;
+if los_snf_paid_by_mc_ivw =. then los_snf_paid_by_mc_ivw =0;
+if tot_util_days_ivw = . then tot_util_days_ivw=0;
+run;
+
+ods rtf body="E:\data\hrs_oop_2010\logs\nh_by_ivw_dataset.rtf";
+proc contents data=oop_bid_dec_nh_2;
+run;
+proc means; var snf_stay_all_ivw los_snf_paid_by_mc_ivw ; run;
+
+ods rtf close;
+
 
 H="Medpar mc spending total"
 /*Totals are from merged claims files from 2000-2010

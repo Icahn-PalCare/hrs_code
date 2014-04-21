@@ -2683,7 +2683,7 @@ run;
 
 
 
-H="Get nights SNF paid for by MC"
+H="xxxxxGet nights SNF paid for by MC"
 /*this creates the dataset oop_fnl.hrs_oop_with_nh_nights with
 1. HRS interviews (exit, core n1, n2, n3 and restricted data)
 2. OOP spending, nh nights totaled by 24m and 60m
@@ -2844,7 +2844,18 @@ proc export data=oop_fnl.hrs_oop_with_nh_nights
 outfile="E:\data\hrs_oop_2010\final_data\hrs_oop_with_nh_nights.dta" replace;
 run;
 
-H="Accounting for missing nh nights"
+H="Accounting for missing nh nights, part 1"
+/*There are nursing home nights self reported in the interviews
+that don't have expenses accounted for in either the OOP spending or
+the Medicare claims. So method to account for them:
+
+1. Use self reported nursing home nights from oop dataset
+2. Determine nursing home nights from claims for each interview
+	2.a Determmine nursing home nights paid by medicare and also total nights
+		reported in the claims
+3. Use either SR nights or Medicare nights, whichever is greater
+4. 
+
 /*list of all decedents with their mc id*/
 data exit_nh_1;
 set oop_int.exit_restricted_02_to_10_v1;
@@ -3106,6 +3117,175 @@ proc means; var snf_stay_all_ivw los_snf_paid_by_mc_ivw ; run;
 
 ods rtf close;
 
+/************************************************************/
+/*Determine total nh nights during the time from the previous
+interview to the current interview (multiple rows per R)*/
+/************************************************************/
+data oop_int.oop_bid_dec_nh_3;
+set oop_bid_dec_nh_2;
+rename nh_nights=sr_nh_nights;
+
+if sr_nh_nights>=snf_stay_all_ivw | snf_stay_all_ivw =. then nh_nights=sr_nh_nights;
+else nh_nights=snf_stay_all_ivw;
+label nh_nights="NH nights, source=self report or claims";
+
+nh_ni_not_mc = 0;
+if (nh_nights - los_snf_paid_by_mc_ivw)>0 then 
+	nh_ni_not_mc=(nh_nights - los_snf_paid_by_mc_ivw); 
+label nh_ni_not_mc="NH Nights not paid by Medicare";
+
+if nh_ni_not_mc=0 then nh_pmt_imp=0;
+if nh_ni_not_mc~=0 then nh_pmt_imp=1;
+label nh_pmt_imp="Nursing home payments imputed = yes";
+
+run;
+
+
+H="Missing nh nights, part 2, assign prices"
+/*pull in Private nursing home nightly rate*/
+
+/*proc import 
+datafile='E:\data\hrs_oop_2010\ref_data\nh_costs_by_state\from_mmi_2010_nh_cost_by_state.xls'
+out=icd9_21_chronic dbms=xls replace;
+run;
+*/
+
+proc import datafile='H:\OOP\data\nh_costs_by_state\from_mmi_2010_nh_cost_by_state.xls'
+out=private_nh_rate dbms=xls replace;
+run;
+
+data private_nh_rate_1(keep=state_usps_code avg_private_rm_rate avg_semi_rm_rate);
+set private_nh_rate;
+rename i=avg_private_rm_rate;
+rename f=avg_semi_rm_rate;
+if state_usps_code~=' ';
+run;
+
+proc sort data=private_nh_rate_1; by state_usps_code; run
+
+/*get Medicaid nursing home nightly rate*/
+/*proc import 
+datafile='E:\data\hrs_oop_2010\ref_data\nh_costs_by_state\medicaid_to_import.xls'
+out=icd9_21_chronic dbms=xls replace;
+run;
+*/
+
+proc import datafile='H:\OOP\data\nh_costs_by_state\medicaid_to_import.xls'
+out=medicaid_nh_rate dbms=xls replace;
+run;
+
+/*convert for inflation 2010 dollars
+Uses CPI for Medical Services from 
+BLS website, accessed 3/14/2014*/
+data medicaid_nh_rate_1;
+set medicaid_nh_rate;
+if Year>=2010 then rate_per_night=1*rate_per_night;
+if year=2009 then rate_per_night=1.0350*rate_per_night;
+if year=2008 then rate_per_night=1.06823*rate_per_night;
+if year=2007 then rate_per_night=1.11347*rate_per_night;
+if year=2006 then rate_per_night=1.17287*rate_per_night;
+if year=2005 then rate_per_night=1.22119*rate_per_night;
+if year=2004 then rate_per_night=1.27983*rate_per_night;
+if year=2003 then rate_per_night=1.34381*rate_per_night;
+if year=2002 then rate_per_night=1.40392*rate_per_night;
+if year=2001 then rate_per_night=1.47492*rate_per_night;
+if year=2000 then rate_per_night=1.54589*rate_per_night;
+if year<=1999 then rate_per_night=1.61195*rate_per_night;
+rename rate_per_night=medicaid_rate;
+run;
+
+proc sort data=medicaid_nh_rate_1; by usps_code; run;
+
+/*merge the two price lists into a single dataset*/
+
+proc sql;
+create table nh_rates as select a.*,b.medicaid_rate from
+private_nh_rate_1 a left join
+medicaid_nh_rate_1 b
+on a.state_usps_code=b.usps_code;
+quit;
+
+/******************************************************/
+/*Get state of residence for each interview time period,
+from restricted dataset*/
+/******************************************************/
+/*merge all waves, state of residence variables*/
+proc sort data=oop_bid_dec_nh_2; by id year; run;
+
+data state_res;
+set oop_int.exit_restricted_02_to_10_v1;
+keep id stateusps: ;
+run;
+
+proc sort data=state_res; by id; run;
+
+proc sql;
+create table oop_add_state(drop=id2) as select * from
+oop_bid_dec_nh_2 a left join
+state_res(rename id=id2) b
+on a.id=b.id2;
+quit;
+
+data oop_add_state_1;
+set oop_add_state;
+state_wave=vvaluex("stateusps"||substr(trim(left(year)),3,2) );
+run;
+
+proc freq; table state_wave; run;
+
+/*check to see if interviews are missing state of residence*/
+data zzteststate1;
+set oop_add_state_1;
+if state_wave = "";
+run;
+
+/******************************************************/
+/*Merge prices in to the oop dataset by state*/
+/******************************************************/
+proc sql;
+create table oop_add_price as select a*,b.avg_private_rm_rate,b.medicaid_rate
+from oop_add_state_1 a left join
+nh_rates b
+on a.state_wave=b.state_usps_code;
+quit;
+
+/******************************************************/
+/*Need to divide oop nh payments by rate (either medicaid or private)
+and then get a number of nights, these are oop reported nights
+
+Then any nights left get assigned to medicaid or private insurance payer*/
+/******************************************************/
+
+/******************************************************/
+/*Assign missing nights prices, get nursing home payments
+by medicaid, private and total for the interview time period*/
+/******************************************************/
+data oop_nh_costs;
+set oop_add_price;
+nh_cost_medicaid=0;
+nh_cost_private=0;
+if md_cov=1 then do;
+	nh_cost_medicaid=nh_ni_not_mc*medicaid_rate;
+	end;
+if md_cov=0 then do;
+	nh_cost_private=nh_ni_not_mc*avg_private_rm_rate;
+	end;
+label nh_cost_medicaid="Imputed medicaid paid nh payments, ivw pd";
+label nh_cost_private="Imputed private ins paid nh payments, ivw pd";
+run;	
+	
+
+
+/******************************************************/
+
+
+/******************************************************/
+
+/******************************************************/
+
+/******************************************************/
+
+/******************************************************/
 
 H="Medpar mc spending total"
 /*Totals are from merged claims files from 2000-2010
@@ -3868,7 +4048,7 @@ tab part_ab_2y hmo_2y, missing
 log close
 
 
-H="Account for missing nh nights"
+H="xxxxxAccount for missing nh nights"
 /*there are likely observations that had nursing home costs that
 don't appear in the Medicare paid costs or OOP reported spending
 Try to account for that here*/

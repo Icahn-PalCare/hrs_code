@@ -59,6 +59,7 @@ quit;
 
 data sic_int.core_age_1;
 set core_dob;
+format death_date date9.;
 age_at_core=(c_ivw_date-birth_date)/365.25;
 label age_at_core="Age at core interview";
 if age_at_core>=65 then age_ge_65=1;
@@ -67,8 +68,8 @@ label age_ge_65="Age at core interview > 65";
 
 core_to_death=(death_date-c_ivw_date)/365.25;
 label core_to_death="Time from core ivw to death, years";
-if core_to_death<=1 then core_to_dod_1yr=1;
-if core_to_death>1 then core_to_dod_1yr=0;
+if core_to_death<=1 and core_to_death~=. then core_to_dod_1yr=1;
+if core_to_death>1 or core_to_death=. then core_to_dod_1yr=0;
 label core_to_dod_1yr="Died within 1 year of core interviw";
 run;
 
@@ -78,6 +79,7 @@ run;
 
 ods rtf body=" E:\data\serious_ill\logs\core_00_to_08_meet_criteria.rtf" ;
 proc sql;
+title "serious illness cohort, initial core interview criteria";
 title "meet age>=65 at core interview,2000-2008";
 select count(distinct id) from sic_int.core_age_1 
 where age_ge_65=1 and core_year in (2000,2002,2004,2006,2008);
@@ -423,7 +425,7 @@ age_at_core_n=floor(age_at_core);
 run;
 
 proc freq;
-table c_ivw_year*c_ivw_month age_at_core_n;
+table c_ivw_year*c_ivw_month age_at_core_n; run;
 
 
 H="Step 2 - Get claims"
@@ -502,20 +504,20 @@ Datasets are sic_int.mp_meet3_730, sic_int.hh_meet_730, etc.*/
 %other(days_start=0,days_bef_core=730,source=pb );
 
 
-******************************************************************
+/****************************************************************************/
 
-******************************************************************
-******************************************************************
+/****************************************************************************/
+/****************************************************************************/
 /*try running medpar code on the ip claims list to get ip claims 1
 year pre-core
 Use these ip claims for the hip fracture determination*/
 %mp(days_start=0,days_bef_core=365,source=ip );
 
 
-******************************************************************
-******************************************************************
+/****************************************************************************/
+/****************************************************************************/
 
-******************************************************************
+/****************************************************************************/
 
 /****************************************************************************/
 /* Macro to pull dx from claims lists, saves dx lists to int_data folder    */
@@ -1837,8 +1839,12 @@ run;
 /*print to file*/
  ods rtf body="E:\data\serious_ill\logs\elective_primary_dxlist.rtf";
  title"Primary dx list for admit type = elective, inpatient claims last 12m pre-core";
-proc freq order=freq; table dgns_cd01;
+proc freq data=elective_1 order=freq; table dgns_cd01;
 run;
+
+title"Admission type vs indicator for any ED charges from rev center codes, claims level";
+proc freq data=ip_365_2; table ind_ed_charge*type_adm; run;
+
 ods rtf close; 
 
 
@@ -2426,7 +2432,7 @@ For item (2) checked inpatient claims variables HCPSCD01-45 but none had any of 
 Next step, try running with carrier files...
 */
 
-********************************************************************
+/********************************************************************/
 /*Physican record of HF procedure, check IP claims*/
 data ip_meet_365;
 set sic_int.ip_meet3_365;
@@ -2476,8 +2482,9 @@ run;
 proc freq; table hf_proc_ind;
 run;
 
-********************************************************************
+/********************************************************************/
 /*Physican record of HF procedure, check carrier claims*/
+/********************************************************************/
 
 data hfproc_carr;
 set sic_int.pb_meet_365;
@@ -2514,7 +2521,7 @@ run;
 
 proc freq; table hf_proc_ind;
 run;
-********************************************************************
+/********************************************************************/
 /*is there also a physican record within 2 days?*/
 proc sort data=hfproc_carr; by BID_HRS_19 FROM_DT THRU_DT hf_proc_ind;
 run;
@@ -2562,7 +2569,7 @@ run;
 proc contents data=ip_meet_365;
 run;
 
-data proc_long(keep=BID_hrs_19 TYPE_ADM procedure procedure_date AD_DGNS DGNS_CD01-DGNS_CD25
+data proc_long(keep=BID_hrs_19 TYPE_ADM procedure procedure_date date_imp_yes AD_DGNS DGNS_CD01-DGNS_CD25
 	 admit_date disch_date core_year);
 set ip_meet_365;
 array list PRCDR_CD01-PRCDR_CD25;
@@ -2570,7 +2577,13 @@ array date PRCDR_DT01-PRCDR_DT25;
 do over list;
 if list~="" then do;
 	procedure=list;
+	if date=0000000 then do;
+		procedure_date=admit_date;
+		date_imp_yes=1;
+		end;
+	if date~=0000000 then do;
 	procedure_date=datejul(date);
+	end;
 	output;
 end;
 end;
@@ -2580,6 +2593,8 @@ format admit_date date10.;
 format disch_date date10.;
 
 run;
+
+proc freq; table date_imp_yes; run;
 
 /* Identify surgeries that meet the criteria
 Indicator variable surgery_meet = 1 if yes, include in sample 
@@ -2630,6 +2645,7 @@ proc sort data=hfproc_carr_6 nodupkey; by bid_hrs_19 ; run;
 
 data hf_meet;
 set hfproc_carr_6 cpt_and_surg_2 ;
+run;
 
 /*merge in these hip fracture variables*/
 proc sql;
@@ -2738,10 +2754,12 @@ if chf_pri_dx=1  then smi_chf_ind=1;
 if chf_pri_dx=0  then smi_chf_ind=0;
 label smi_chf_ind="Indicator of CHF 1yr, Primary dx from IP claim";
 
-/*settled on using COPD from Elix, Oxygen use from DME claims*/
-if comorb_9_0_1yr=1 & home_oxygen=1 then smi_lung_02_ind=1;
-if comorb_9_0_1yr=0 | home_oxygen=0 then smi_lung_02_ind=0;
-label smi_lung_02_ind="Indicator of lung disease+home O2 use 1yr, using claims to get o2 use";
+/*COPD indicator meets following criteria:
+1. COPD from Elix (any dx field) and Oxygen use from DME claims or
+2. COPD as a primary diagnosis*/
+if (comorb_9_0_1yr=1 & home_oxygen=1) | copd_pri_dx=1 then smi_copd_ind=1;
+if (comorb_9_0_1yr=0 | home_oxygen=0) & copd_pri_dx=0 then smi_copd_ind=0;
+label smi_copd_ind="Indicator of COPD 1yr, copd any dx and home o2 use or copd as prim dx";
 
 /*diabetes, Elix 11 (diabetes with complications) if criteria for 
 renal disease (comorb 34), ischemic heart disease (cc 12) or 
@@ -2778,8 +2796,8 @@ if el_ge4_comorb_1yr=0 & cc_ge4_comorb_1yr=0 & comor_c_hrs=0 then multi_any_ind=
 label multi_any_ind="Any indicator of Multimorbidity 4+ chronic conditions 1yr";
 
 /*total number of serious medical illnesses per these definitions*/
-smi_count=smi_dem_ind + smi_cancer_ind + smi_esrd_ind + smi_chf_ind + smi_lung_02_ind + 
- comorb_11_0_1yr + comorb_14_0_1yr + smi_hiv_ind + smi_als_ind + smi_hip_ind;
+smi_count=smi_dem_ind + smi_cancer_ind + smi_esrd_ind + smi_chf_ind + smi_copd_ind + 
+ smi_diab_compl_ind + smi_liver_ind + smi_hiv_ind + smi_als_ind + smi_hip_ind;
 
 /*indicator for 2+serious medical illnesses*/
 if smi_count>=2 then smi_ge2_ind=1;
@@ -2788,11 +2806,11 @@ label smi_ge2_ind="2 or more serious medical illnesses";
 
 /*indicator for any serious medical illness*/
 if smi_dem_ind =1 | smi_cancer_ind =1 | smi_esrd_ind =1 | smi_chf_ind =1 | 
- smi_lung_02_ind =1 | comorb_11_0_1yr =1 | comorb_14_0_1yr =1 | smi_hiv_ind =1 | 
+ smi_copd_ind =1 | comorb_11_0_1yr =1 | comorb_14_0_1yr =1 | smi_hiv_ind =1 | 
  smi_als_ind =1 | smi_hip_ind=1
  then ser_med_illness=1;
 if smi_dem_ind =0 & smi_cancer_ind =0 & comorb_13_0_1yr =0 & smi_chf_ind =0 & 
- smi_lung_02_ind =0 & comorb_11_0_1yr =0 & comorb_14_0_1yr =0 & smi_hiv_ind =0 & 
+ smi_copd_ind =0 & comorb_11_0_1yr =0 & comorb_14_0_1yr =0 & smi_hiv_ind =0 & 
  smi_als_ind =0 & smi_hip_ind=0
  then ser_med_illness=0;
 label ser_med_illness="Any indicator of serious medical illness 1yr";
@@ -2807,6 +2825,13 @@ if adl_helper_count>0 & adl_helper_count~=. then smi_helper_ind=1;
 if adl_helper_count=0 then smi_helper_ind=0;
 label smi_helper_ind="Indicator of having any helpers with ADL, core";
 
+/*backfill adl status if adl helper variable is complete*/
+adl_ind_core_n = adl_independent_core;
+if adl_independent_core=. and smi_helper_ind=1 then adl_ind_core_n=0;
+if adl_independent_core=. and smi_helper_ind=0 then adl_ind_core_n=1;
+label adl_ind_core_n = "ADL independent at core interview, using SR and helper file";
+
+
 /*indicator for any ED visit, either OP or IP*/
 if ind_ed_op_12m=1 | ind_ED_adm_12m=1 then ind_ed_op_or_ip_12m=1;
 if ind_ed_op_12m=0 & ind_ED_adm_12m=0 then ind_ed_op_or_ip_12m=0;
@@ -2816,21 +2841,20 @@ run;
 
  ods rtf body="E:\data\serious_ill\logs\criteria_vars_before_coredate.rtf";
 
-title="Serious illness cohort, working definitions of selection criteria";
-text= "Number of unique people in full cohort 2000-2010";
+title "Number of unique people in full cohort 2000-2010";
 proc sql;
 select count(distinct id) from sic_int.core_ids_1yr_criteria_5
 where core_year in (2000,2002,2004,2006,2008,2010);
 
-text="Unique R's w/ Age 65+";
+title "Unique R's w/ Age 65+";
 select count(distinct id) from sic_int.core_ids_1yr_criteria_5
 where age_ge_65=1 and core_year in (2000,2002,2004,2006,2008,2010);
 
-text="Unique R's w/ Age 65+, With mc xwalk id";
+title "Unique R's w/ Age 65+, With mc xwalk id";
 select count(distinct id) from sic_int.core_ids_1yr_criteria_5
 where age_ge_65=1 and xwalk_yes=1 and core_year in (2000,2002,2004,2006,2008,2010);
 
-text="Unique R's w/ Age 65+, With mc xwalk id, and FFS 1yr pre-ivw";
+title "Unique R's w/ Age 65+, With mc xwalk id, and FFS 1yr pre-ivw";
 select count(distinct id) from sic_int.core_ids_1yr_criteria_5
 where age_ge_65=1 and xwalk_yes=1 and part_ab_12m=1 and hmo_d_12m=0 
 and core_year in (2000,2002,2004,2006,2008,2010);
@@ -2841,19 +2865,19 @@ where age_ge_65=1 and xwalk_yes=1 and part_ab_12m=1 and hmo_d_12m=0
 and core_year in (2000,2002,2004,2006,2008,2010);
 quit;
 
-text="Dementia - elix";
+title "Dementia - elix";
 proc freq data=age_ge_65_mc ;
 table smi_dem_ind /missprint;
 run;
 
-text="Cancer - elix, metastatic or hematologic cancer";
+title "Cancer - elix, metastatic or hematologic cancer";
 proc freq data=age_ge_65_mc ;
 table smi_cancer_ind /missprint ;
 run;
 
 title "End Stage Renal Disease - elix, claims denominator file year of core ivw";
 proc freq data=age_ge_65_mc ;
-table comorb_13_0_1yr esrd_ind_n comorb_13_0_1yr*esrd_ind_n smi_esrd_ind /missprint;
+table comorb_13_0_1yr esrd_ind_n comorb_13_0_1yr*esrd_ind_n ind_hosp_adm_12m*esrd_ind_n smi_esrd_ind /missprint;
 run;
 
 title "CHF+Indicator of more advanced disease - elix + some utilization measure TBD!";
@@ -2861,42 +2885,42 @@ proc freq data=age_ge_65_mc ;
 table smi_chf_ind chf_pri_dx chf_adm_dx /missprint;
 run;
 
-title "COPD/Lung disease+home o2, need to pick one of these def's, either (1) ICD=9 code in any claim + DME claim for home O2 OR (2) COPD as primary dx in IP claim";
+title "COPD, Either (1) ICD=9 code in any claim + DME claim for home O2 OR (2) COPD as primary dx in IP claim";
 proc freq data=age_ge_65_mc ;
-table smi_lung_02_ind*copd_pri_dx copd_pri_dx*copd_adm_dx /missprint;
+table smi_copd_ind /missprint;
 run;
 
-data o2_no_copd;
-set age_ge_65_mc ;
-if smi_lung_02_ind =0 and home_oxygen =1;
-run;
+*data o2_no_copd;
+*set age_ge_65_mc ;
+*if smi_lung_02_ind =0 and home_oxygen =1;
+*run;
 
-title "Among interviews with home O2 use but no COPD, check to see if these are CHF patients?";
-proc freq data=o2_no_copd;
-table  smi_chf_ind*home_oxygen /missprint;
-run;
+*title "Among interviews with home O2 use but no COPD, check to see if these are CHF patients?";
+*proc freq data=o2_no_copd;
+*table  smi_chf_ind*home_oxygen /missprint;
+*run;
 
-text= "Diabetes with severe complications (renal disease, ischemic hd or peripheral vascular disease)";
+title "Diabetes with severe complications (renal disease, ischemic hd or peripheral vascular disease)";
 proc freq data=age_ge_65_mc ;
 table smi_diab_compl_ind /missprint;
 run;
 
-text="Advanced liver disease/cirrhosis - elix";
+title "Advanced liver disease/cirrhosis - elix";
 proc freq data=age_ge_65_mc ;
 table smi_liver_ind /missprint;
 run;
 
-text="HIV with and AIDS defining illness - elix";
+title "HIV with and AIDS defining illness - elix";
 proc freq data=age_ge_65_mc ;
 table smi_hiv_ind /missprint;
 run;
 
-text="ALS - just single dx code ";
+title "ALS - just single dx code ";
 proc freq data=age_ge_65_mc ;
 table smi_als_ind /missprint;
 run;
 
-text="Hip fracture, CC";
+title "Hip fracture, CC";
 proc freq data=age_ge_65_mc ;
 table smi_hip_ind /missprint;
 run;
@@ -2914,7 +2938,7 @@ run;
 title "Hospital admissions 6m, 12m before core interview";
 proc freq data=age_ge_65_mc  ;
 table ind_hosp_adm_6m*ind_em_ur_adm_6m ind_hosp_adm_12m*ind_em_ur_adm_12m 
-ind_em_adm_12m*ind_ED_adm_12m /missprint;
+ind_em_adm_12m*ind_ED_adm_12m ind_em_ur_adm_12m*ind_ED_adm_12m /missprint;
 run;
 
 title "Elective vs non elective hospital admissions, 12m before core";
@@ -2934,46 +2958,146 @@ run;
 
 title "Any helper with ADLs, core interview";
 proc freq data=age_ge_65_mc  ;
-table smi_helper_ind /missprint;
+table smi_helper_ind smi_helper_ind*adl_independent_core adl_ind_core_n /missprint;
 run;
 
-text="Number of R's that meet A)Any serious illness";
+title "Number of R's that meet A)Any serious illness";
 proc sql;
 select count(distinct id) from age_ge_65_mc  
 where ser_med_illness=1;
 
-text="Number of R's that meet B)Any ADL help";
+title "Number of R's that meet B)Any ADL help";
 proc sql;
 select count(distinct id) from age_ge_65_mc  
-where adl_independent_core=0;
+where adl_ind_core_n=0;
 
-text="Number of R's that meet C)Any hospital admission 12m preceding core interview";
+title "Number of R's that meet C)Any urgent or emergent hospital admission 12m preceding core interview";
 proc sql;
 select count(distinct id) from age_ge_65_mc  
-where ind_hosp_adm_12m=1;
+where ind_em_ur_adm_12m=1;
 
-text="Number of R's that meet D)NH resident at interview or any SNF claim 12m pre interview";
+title "Number of R's that meet D)NH resident at interview or any SNF claim 12m pre interview";
 proc sql;
 select count(distinct id) from age_ge_65_mc  
 where smi_nh_ind=1;
 
-text="Number of R's that meet E)Any helper with ADLs core interview";
+title "Number of R's that meet E)Any helper with ADLs core interview";
 proc sql;
 select count(distinct id) from age_ge_65_mc  
 where smi_helper_ind=1;
 
-text="Number of R's that meet A)Any serious illness + B)ADL help";
+title "Number of R's that meet A)Any serious illness + B)ADL help";
 proc sql;
 select count(distinct id) from age_ge_65_mc  
-where (ser_med_illness=1 and adl_independent_core=0) ;
+where (ser_med_illness=1 and adl_ind_core_n=0) ;
 
-text="Number of R's that meet A)Any serious illness + C)Hospital admission";
+title "Number of R's that meet A)Any serious illness + C)Urgent or Emergency hospital admission";
 proc sql;
 select count(distinct id) from age_ge_65_mc  
-where (ser_med_illness=1 and ind_hosp_adm_12m=1) ;
+where (ser_med_illness=1 and ind_em_ur_adm_12m=1) ;
 
 ods rtf close; 
 
+/*17 observations where esrd flag in denominator file = 1 but no esrd comorbidity
+what are these peoples diagnoses?*/
+data esrd_check_1;
+set age_ge_65_mc;
+if esrd_ind_n=1 and comorb_13_0_1yr=0;
+run;
+
+proc freq data=esrd_check_1; table part_ab_12m hmo_d_12m; run;
+
+proc sql;
+create table esrd_check_2 as select a.* from 
+dx_all_last_1yr a join
+esrd_check_1 b
+on a.bid_hrs_19=b.bid_hrs and a.core_year=b.core_year;
+quit;
+
+ods rtf body="E:\data\serious_ill\logs\check_esrd.rtf";
+title "n=17 with esrd flag in denominator file but not from elixhauser comorb definition";
+proc freq data=esrd_check_2 order=freq; table diag; run;
+quit;
+ods rtf close;
+
+/*export full dataset to Stata*/
+proc export data=sic_int.core_ids_1yr_criteria_5
+outfile="E:\data\serious_ill\int_data\core_ids_1yr_criteria_5.dta" replace;
+run;
+
+
+H="Step 7 - Stata do file to get sample, criteria"
+/*Stata do file to look at sample selection and serious illness cohort criteria*/
+
+capture log close
+
+clear all
+set mem 500m
+set more off
+
+local logpath E:\data\serious_ill\logs
+local datapath E:\data\serious_ill\int_data
+
+log using "`logpath'\2-sic_initial_criteria.txt", text replace
+
+cd `datapath'
+
+use core_ids_1yr_criteria_5.dta
+*******************************************************************
+mat sample_set=J(5,1,.)
+
+tab core_year, missing
+sum core_year
+mat sample_set[1,1]=r(N)
+
+sum core_year if inlist(core_year,2000,2002,2004,2006,2008,2010)
+mat sample_set[2,1]=r(N)
+
+sum core_year if inlist(core_year,2000,2002,2004,2006,2008,2010) & age_ge_65==1
+mat sample_set[3,1]=r(N)
+
+sum core_year if inlist(core_year,2000,2002,2004,2006,2008,2010) & age_ge_65==1 & xwalk_yes==1
+mat sample_set[4,1]=r(N)
+
+sum core_year if inlist(core_year,2000,2002,2004,2006,2008,2010) & age_ge_65==1 & xwalk_yes==1 & ///
+part_ab_12m==1 & hmo_d_12m==0
+mat sample_set[5,1]=r(N)
+
+mat rownames sample_set="Core interviews" "Core Interviews 2000-2010" "Age 65+" ///
+"With xwalk id" "With FFS MC 1yr pre-ivw"
+
+mat colnames sample_set="Interviews"
+
+mat list sample_set
+
+//drop interviews that don't meet above criteria
+keep if inlist(core_year,2000,2002,2004,2006,2008,2010) & age_ge_65==1 & xwalk_yes==1 & ///
+part_ab_12m==1 & hmo_d_12m==0
+
+save core_ids_1yr_criteria_5_sample1.dta, replace
+*******************************************************************
+//look at criteria variables at the interview level
+//serious medical illness variables
+local smi_vars smi_dem_ind smi_cancer_ind smi_esrd_ind smi_chf_ind smi_copd_ind ///
+smi_diab_compl_ind smi_liver_ind smi_hiv_ind smi_als_ind smi_hip_ind ///
+ser_med_illness smi_count smi_ge2_ind 
+
+foreach v in `smi_vars' {
+tab `v'
+}
+
+//look at additional criteria
+tab adl_ind_core_n, missing
+tab ind_em_ur_adm_12m, missing
+tab smi_nh_ind, missing
+
+//look at combinations
+tab ser_med_illness adl_ind_core_n, missing
+tab ser_med_illness ind_em_ur_adm_12m, missing
+tab ser_med_illness smi_nh_ind, missing
+
+*******************************************************************
+log close
 
 
 H="Determine outcomes after meet criteria"
@@ -3135,43 +3259,72 @@ core interview, can use comorb = ., same as ffs mc 1 year=no*/
  if n_em_urgent_admit_p12m=0 then ind_em_ur_adm_p12m=0;
  if n_em_urgent_admit_p12m>0 & n_em_urgent_admit_p12m~=. then ind_em_ur_adm_p12m=1;
  label ind_em_ur_adm_p12m="Ind any urgent or emergent hospital admission 12m after core";
-********************************************************
- if n_em_admit_12m=0 then ind_em_adm_12m=0;
- if n_em_admit_12m>0 & n_em_admit_12m~=. then ind_em_adm_12m=1;
- label ind_em_adm_12m="Ind any emergency hospital admission 12m pre core";
 
- if n_urgent_admit_12m=0 then ind_ur_adm_12m=0;
- if n_urgent_admit_12m>0 & n_urgent_admit_12m~=. then ind_ur_adm_12m=1;
- label ind_ur_adm_12m="Ind any urgent hospital admission 12m pre core";
+ if n_em_admit_p12m=0 then ind_em_adm_p12m=0;
+ if n_em_admit_p12m>0 & n_em_admit_p12m~=. then ind_em_adm_p12m=1;
+ label ind_em_adm_p12m="Ind any emergency hospital admission 12m after core";
 
- if n_elect_admit_12m =0 then ind_elect_adm_12m=0;
- if n_elect_admit_12m >0 & n_elect_admit_12m ~=. then ind_elect_adm_12m=1;
- label ind_elect_adm_12m="Ind any elective hospital admission 12m pre core";
+ if n_urgent_admit_p12m=0 then ind_ur_adm_p12m=0;
+ if n_urgent_admit_p12m>0 & n_urgent_admit_p12m~=. then ind_ur_adm_p12m=1;
+ label ind_ur_adm_p12m="Ind any urgent hospital admission 12m after core";
 
- if (n_ip_admit_12m - n_elect_admit_12m)=0 then ind_nonelect_adm_12m=0;
- if (n_ip_admit_12m - n_elect_admit_12m)>0 & n_elect_admit_12m~=. then ind_nonelect_adm_12m=1;
- label ind_nonelect_adm_12m="Ind any non-elective hospital admission 12m pre core";
+ if n_elect_admit_p12m =0 then ind_elect_adm_p12m=0;
+ if n_elect_admit_p12m >0 & n_elect_admit_p12m ~=. then ind_elect_adm_p12m=1;
+ label ind_elect_adm_p12m="Ind any elective hospital admission 12m after core";
 
- n_nonelect_adm_12m=(n_ip_admit_12m - n_elect_admit_12m);
- label n_nonelect_adm_12m="total n non-elective ip admit 12m pre core";
+ if (n_ip_admit_p12m - n_elect_admit_p12m)=0 then ind_nonelect_adm_p12m=0;
+ if (n_ip_admit_p12m - n_elect_admit_p12m)>0 & n_elect_admit_p12m~=. then ind_nonelect_adm_p12m=1;
+ label ind_nonelect_adm_p12m="Ind any non-elective hospital admission 12m after core";
 
- if n_ED_ip_12m=0 then ind_ED_adm_12m=0;
- if n_ED_ip_12m>0 & n_ED_ip_12m~=. then ind_ED_adm_12m=1;
- label ind_ED_adm_12m="Ind ED use with hospital admission 12m pre core, from charges";
+ n_nonelect_adm_p12m=(n_ip_admit_p12m - n_elect_admit_p12m);
+ label n_nonelect_adm_p12m="total n non-elective ip admit 12m after core";
+
+ if n_ED_ip_p12m=0 then ind_ED_adm_p12m=0;
+ if n_ED_ip_p12m>0 & n_ED_ip_p12m~=. then ind_ED_adm_p12m=1;
+ label ind_ED_adm_p12m="Ind ED use with hospital admission 12m after core, from charges";
 
 run;
-
- proc freq;
- table icu_days_6m n_ip_admit_6m n_hospd_6m ind_hosp_adm_6m n_em_urgent_admit_6m ind_em_ur_adm_6m 
-	ind_em_adm_6m ind_ur_adm_6m ind_nonelect_adm_6m n_nonelect_adm_6m n_ED_ip_6m ind_ED_adm_6m 
-	ind_em_adm_6m*ind_ED_adm_6m /missprint;
- run;
 
 proc freq;
-table icu_days_12m n_ip_admit_12m n_hospd_12m ind_hosp_adm_12m n_em_urgent_admit_12m ind_em_ur_adm_12m
-	ind_em_adm_12m ind_ur_adm_12m ind_nonelect_adm_12m n_nonelect_adm_12m n_ED_ip_12m ind_ED_adm_12m 
-	ind_em_adm_12m*ind_ED_adm_12m /missprint;
+table icu_days_p12m n_ip_admit_p12m n_hospd_p12m ind_hosp_adm_p12m n_em_urgent_admit_p12m ind_em_ur_adm_p12m
+	ind_em_adm_p12m ind_ur_adm_p12m ind_nonelect_adm_p12m n_nonelect_adm_p12m n_ED_ip_p12m ind_ED_adm_p12m 
+	ind_em_adm_p12m*ind_ED_adm_p12m /missprint;
 run;
+
+/**********************************************************************/
+/**********************************************************************/
+/*Indicator of any hospice enrollment after interview
+Use suffix p12m to indicate post interview*/
+/**********************************************************************/
+/**********************************************************************/
+%macro hospice(days=,suffix=);
+
+data hs_meet_post_2_&days.;
+set sic_int.hs_meet_post_&days.;
+hs_admit_&suffix.=1;
+label hs_admit_&suffix.="Hospice admission &suffix. after interview";
+run;
+
+%mend;
+
+%hospice(days=365,suffix=p12m);
+
+/*merge hospice indicator with full dataset*/
+proc sql;
+create table core_ids_admit_hs_post_2 as select a.*,coalesce(b.hs_admit_&suffix.,0) as hs_admit_&suffix. from
+core_ids_admit_post_2 a left join
+hs_meet_post_2_365 b
+on trim(left(a.bid_hrs))=trim(left(b.bid_hrs_19)) and a.core_year=b.core_year;
+quit;
+
+proc freq; table hs_admit_p12m; run;
+
+data sic_int.core_ids_init_outcomes;
+set core_ids_admit_hs_post_2;
+run;
+
+proc contents; run;
+
 
 
 H="xxxxNotes"

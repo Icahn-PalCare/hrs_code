@@ -2831,11 +2831,19 @@ if adl_independent_core=. and smi_helper_ind=1 then adl_ind_core_n=0;
 if adl_independent_core=. and smi_helper_ind=0 then adl_ind_core_n=1;
 label adl_ind_core_n = "ADL independent at core interview, using SR and helper file";
 
+if adl_ind_core_n=1 then adl_impair_core = 0;
+if adl_ind_core_n=0 then adl_impair_core = 1;
+label adl_impair_core = "ADL impairment at core interview, using SR and helper file";
 
 /*indicator for any ED visit, either OP or IP*/
 if ind_ed_op_12m=1 | ind_ED_adm_12m=1 then ind_ed_op_or_ip_12m=1;
 if ind_ed_op_12m=0 & ind_ED_adm_12m=0 then ind_ed_op_or_ip_12m=0;
 label ind_ed_op_or_ip_12m="Indicator any ED use 12m pre ivw";
+
+/*criteria (B) serious medical illness or ADL impairment AND nh res or urgent/emergent hosp*/
+if (ser_med_illness=1 | adl_impair_core =1) & (ind_em_ur_adm_12m=1 | smi_nh_ind=1) then criteria_b=1;
+if (ser_med_illness=0 & adl_impair_core =0) | (ind_em_ur_adm_12m=0 & smi_nh_ind=0) then criteria_b=0;
+label criteria_b="SMI or ADL impair and hospital admit or nh use";
 
 run;
 
@@ -2958,7 +2966,7 @@ run;
 
 title "Any helper with ADLs, core interview";
 proc freq data=age_ge_65_mc  ;
-table smi_helper_ind smi_helper_ind*adl_independent_core adl_ind_core_n /missprint;
+table smi_helper_ind smi_helper_ind*adl_independent_core adl_impair_core /missprint;
 run;
 
 title "Number of R's that meet A)Any serious illness";
@@ -2969,7 +2977,17 @@ where ser_med_illness=1;
 title "Number of R's that meet B)Any ADL help";
 proc sql;
 select count(distinct id) from age_ge_65_mc  
-where adl_ind_core_n=0;
+where adl_impair_core=1;
+
+title "Number of R's that meet A) Serious medical illness or B)Any ADL help";
+proc sql;
+select count(distinct id) from age_ge_65_mc  
+where (ser_med_illness=1 or adl_impair_core=1);
+
+title "Number of R's that meet A) Serious medical illness or B)Any ADL help and NH use or Hospitalization";
+proc sql;
+select count(distinct id) from age_ge_65_mc  
+where criteria_b=1;
 
 title "Number of R's that meet C)Any urgent or emergent hospital admission 12m preceding core interview";
 proc sql;
@@ -2989,7 +3007,7 @@ where smi_helper_ind=1;
 title "Number of R's that meet A)Any serious illness + B)ADL help";
 proc sql;
 select count(distinct id) from age_ge_65_mc  
-where (ser_med_illness=1 and adl_ind_core_n=0) ;
+where (ser_med_illness=1 and adl_impair_core=1) ;
 
 title "Number of R's that meet A)Any serious illness + C)Urgent or Emergency hospital admission";
 proc sql;
@@ -2998,6 +3016,7 @@ where (ser_med_illness=1 and ind_em_ur_adm_12m=1) ;
 
 ods rtf close; 
 
+/*******************************************************************************/
 /*17 observations where esrd flag in denominator file = 1 but no esrd comorbidity
 what are these peoples diagnoses?*/
 data esrd_check_1;
@@ -3070,33 +3089,136 @@ mat colnames sample_set="Interviews"
 
 mat list sample_set
 
+frmttable using `logpath'\sic_Table1_sample, statmat(sample_set) ///
+title("Serious illness cohort, sample criteria") ///
+ctitle("","N Interviews") ///
+sdec(0) replace
+
 //drop interviews that don't meet above criteria
 keep if inlist(core_year,2000,2002,2004,2006,2008,2010) & age_ge_65==1 & xwalk_yes==1 & ///
 part_ab_12m==1 & hmo_d_12m==0
 
 save core_ids_1yr_criteria_5_sample1.dta, replace
+
+*******************************************************************
+log close
+
+
+H="Step 7a - Stata looking at criteria"
+capture log close
+
+clear all
+set mem 500m
+set more off
+
+local logpath E:\data\serious_ill\logs
+local datapath E:\data\serious_ill\int_data
+
+log using "`logpath'\3-sic_initial_criteria_2.txt", text replace
+
+cd `datapath'
+
+use core_ids_1yr_criteria_5_sample1.dta
+
 *******************************************************************
 //look at criteria variables at the interview level
+
+//create new temp variable for medical illness or adl impairment
+gen byte smi_or_adl=.
+replace smi_or_adl=1 if ser_med_illness==1 | adl_impair_core==1
+replace smi_or_adl=0 if ser_med_illness==0 & adl_impair_core==0
+tab smi_or_adl, missing
+
 //serious medical illness variables
 local smi_vars smi_dem_ind smi_cancer_ind smi_esrd_ind smi_chf_ind smi_copd_ind ///
 smi_diab_compl_ind smi_liver_ind smi_hiv_ind smi_als_ind smi_hip_ind ///
-ser_med_illness smi_count smi_ge2_ind 
+ser_med_illness smi_ge2_ind adl_impair_core smi_or_adl criteria_b
 
+mat criteria=J(16,2,.)
+
+//overall n interviews
+sum core_year
+sca sample=r(N)
+mat criteria[1,1]=r(N)
+
+local j=2
 foreach v in `smi_vars' {
-tab `v'
+tab `v',matcell(x_`j')
+mat criteria[`j',1]=x_`j'[2,1]
+mat criteria[`j',2]=x_`j'[2,1]/sample*100
+local j = `j'+1
 }
 
+mat rownames criteria="Overall n interviews" "Dementia" "Cancer" "ESRD" "CHF" "COPD" "Diabetes" ///
+"Liver disease" "HIV" "ALS" "Hip fracture" "Any serious medical illness" "2 or more SMI's" ///
+"ADL Impairment" "Med Ill or ADL Impairment" "Med Ill or ADL Imp + SNF or Hosp"
+
+mat list criteria
+
+frmttable using `logpath'\sic_Table2_criteria, statmat(criteria) ///
+title("Serious illness cohort, criteria") ///
+ctitle("","N Interviews","% interviews") ///
+sdec(0,2) replace
+
+
+**********************************************************************************
 //look at additional criteria
-tab adl_ind_core_n, missing
+tab adl_impair_core, missing
 tab ind_em_ur_adm_12m, missing
 tab smi_nh_ind, missing
 
 //look at combinations
-tab ser_med_illness adl_ind_core_n, missing
+tab ser_med_illness adl_impair_core, missing matcell(smi_adl)
+
+frmttable using `logpath'\sic_Table2_criteria, statmat(smi_adl) ///
+title("Serious illness cohort, serious medical condition vs ADL impairment") ///
+ctitle("","ADL Impair, no" "ADL Impair, yes") ///
+rtitle("Serious med ill, no" \ "Serious med ill, yes") ///
+sdec(0) addtable
+
 tab ser_med_illness ind_em_ur_adm_12m, missing
 tab ser_med_illness smi_nh_ind, missing
+tab adl_impair_core smi_nh_ind, missing  matcell(nh_adl)
 
-*******************************************************************
+frmttable using `logpath'\sic_Table2_criteria, statmat(nh_adl) ///
+title("Serious illness cohort, nursing home use vs ADL impairment") ///
+ctitle("","ADL Impair, no" "ADL Impair, yes") ///
+rtitle("Nursing home use, no" \ "Nursing home use, yes") ///
+sdec(0) addtable
+
+tab criteria_b, missing
+
+**********************************************************************************
+
+//collapse dataset to look at unique R's that meet each of the criteria
+collapse core_year `smi_vars' smi_nh_ind ,by(id)
+
+mat criteria_r=J(16,2,.)
+
+sum core_year
+sca sample_r=r(N)
+mat criteria_r[1,1]=r(N)
+
+local j=2
+foreach v in `smi_vars' {
+replace `v'=1 if `v'>0 & `v'!=.
+tab `v',matcell(x1_`j')
+mat criteria_r[`j',1]=x1_`j'[2,1]
+mat criteria_r[`j',2]=x1_`j'[2,1]/sample_r*100
+local j = `j'+1
+}
+
+mat rownames criteria_r="Overall n R's" "Dementia" "Cancer" "ESRD" "CHF" "COPD" "Diabetes" ///
+"Liver disease" "HIV" "ALS" "Hip fracture" "Any serious medical illness" "2 or more SMI's" ///
+"ADL Impairment" "Med Ill or ADL Impairment" "Med Ill or ADL Imp + SNF or Hosp"
+
+mat list criteria_r
+
+frmttable using `logpath'\sic_Table2_criteria, statmat(criteria_r) ///
+title("Serious illness cohort, criteria, respondent level") ///
+ctitle("","N Respondents","% respondents") ///
+sdec(0,2) addtable
+
 log close
 
 
@@ -3104,7 +3226,7 @@ H="Determine outcomes after meet criteria"
 /*While still determining criteria, create variables looking at the 1 year
 after interview for all interviews (regardless of when meet criteria*/
 
-/*ds of those interviews with ffs medicare year preceding interview and 65+*/
+/*ids of those interviews with ffs medicare year preceding interview and 65+*/
 proc sql;
 create table age_ge_65_mc as 
 select * from sic_int.core_ids_1yr_criteria_5
@@ -3130,7 +3252,7 @@ create table &source._meet_post as select a.*,b.c_ivw_date,b.core_year
 from medi.&source._2000_2010 a inner join
 age_ge_65_mc b
 on trim(left(a.bid_hrs_19))=trim(left(b.bid_hrs))
-and &days_start<=a.disch-date-b.c_ivw_date<=&days_after_core;
+and &days_start<=a.disch_date-b.c_ivw_date<=&days_after_core;
 quit;
 
 proc sql;
@@ -3163,7 +3285,7 @@ quit;
 
 
 %mp(days_start=0,days_after_core=365,source=mp );
-%hs(days_start=0,days_after_core=365,source=hs );
+%other(days_start=0,days_after_core=365,source=hs );
 
 /**********************************************************************/
 /**********************************************************************/
@@ -3309,7 +3431,9 @@ run;
 
 %hospice(days=365,suffix=p12m);
 
-/*merge hospice indicator with full dataset*/
+/*merge hospice indicator with full dataset
+THIS MERGE DOES NOT WORK , APPARENTLY CAN'T FILL IN MACRO WITHIN THE SQL STATEMENT??
+ALSO CHECK COALESCE SYNTAX*/
 proc sql;
 create table core_ids_admit_hs_post_2 as select a.*,coalesce(b.hs_admit_&suffix.,0) as hs_admit_&suffix. from
 core_ids_admit_post_2 a left join

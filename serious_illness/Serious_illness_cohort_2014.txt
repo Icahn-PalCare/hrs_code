@@ -3422,8 +3422,15 @@ Use suffix p12m to indicate post interview*/
 /**********************************************************************/
 %macro hospice(days=,suffix=);
 
+proc sort data=sic_int.hs_meet_post_&days.;
+by bid_hrs_19;
+run;
+
+/*just keep 1 claim per beneficiary since only need indicator of hospice use*/
 data hs_meet_post_2_&days.;
 set sic_int.hs_meet_post_&days.;
+by bid_hrs_19;
+if first.bid_hrs_19;
 hs_admit_&suffix.=1;
 label hs_admit_&suffix.="Hospice admission &suffix. after interview";
 run;
@@ -3435,7 +3442,7 @@ run;
 /*merge hospice indicator with full dataset
 CHECK THIS MERGE, SHOULD BE FIXED NOW!!*/
 proc sql;
-create table core_ids_admit_hs_post_2 as select a.*,b.hs_admit_&suffix. from
+create table core_ids_admit_hs_post_2 as select a.*,b.hs_admit_p12m from
 core_ids_admit_post_2 a left join
 hs_meet_post_2_365 b
 on trim(left(a.bid_hrs))=trim(left(b.bid_hrs_19)) and a.core_year=b.core_year;
@@ -3449,6 +3456,8 @@ data core_ids_admit_hs_post_3 ;
 set core_ids_admit_hs_post_2 ;
 if hs_admit_p12m=. & comorb_1_0_1yr~=. then hs_admit_p12m=0;
 run;
+proc freq; table hs_admit_p12m; run;
+
 
 data sic_int.core_ids_init_outcomes;
 set core_ids_admit_hs_post_3 ;
@@ -3466,8 +3475,8 @@ B) Serious medical illness or ADL impairment AND either Urgent/Emerg hopspital a
 or nursing home use*/
 
 data ivw_meet_a;
-set sic_int.core_ids_init_outcomes(keep id seriou_medical_illnes core_year) ;
-if serious_medical_illness=1;
+set sic_int.core_ids_init_outcomes(keep=id ser_med_illness core_year) ;
+if ser_med_illness=1;
 run;
 
 proc sort data=ivw_meet_a;
@@ -3477,7 +3486,7 @@ run;
 data ivw_meet_a_1;
 set ivw_meet_a;
 by id;
-if first.core_year then ivw_meet_crit_a=1;
+if first.id then ivw_meet_crit_a=1;
 else ivw_meet_crit_a=0;
 label ivw_meet_crit_a="Ind. 1st time meets Criteria A";
 run;
@@ -3486,7 +3495,7 @@ proc freq; table ivw_meet_crit_a;
 run;
 
 data ivw_meet_b;
-set sic_int.core_ids_init_outcomes(keep id seriou_medical_illnes core_year) ;
+set sic_int.core_ids_init_outcomes(keep=id criteria_b core_year) ;
 if criteria_b=1;
 run;
 
@@ -3497,7 +3506,7 @@ run;
 data ivw_meet_b_1;
 set ivw_meet_b;
 by id;
-if first.core_year then ivw_meet_crit_b=1;
+if first.id then ivw_meet_crit_b=1;
 else ivw_meet_crit_b=0;
 label ivw_meet_crit_b="Ind. 1st time meets Criteria B";
 run;
@@ -3505,15 +3514,14 @@ run;
 proc freq; table ivw_meet_crit_b;
 run;
 
-proc sql;
-create table crit_ab(drop=id2 core_year2) as select * from
-ivw_meet_a_1 a full join
-ivw_meet_b_1(rename=(id=id2) (core_year=core_year2)) b
-on a.id=b.id2 and a.core_year=b.core_year2;
-quit;
+data crit_ab;
+merge ivw_meet_a_1 ivw_meet_b_1;
+by id core_year;
+run;
+
 
 /*merge in new variables with the overall dataset*/
-proc sort data=sic_int.core_ids_init_outcomes out=ivw_to_merge; by id core_year; run;
+proc sort data=sic_int.core_ids_init_outcomes out=ivw_to_merge nodupkey; by id core_year; run;
 
 proc sql;
 create table ivws_crit as select a.*,b.ivw_meet_crit_a,b.ivw_meet_crit_b from
@@ -3527,9 +3535,10 @@ set ivws_crit;
 array list ivw_meet_crit_a ivw_meet_crit_b ;
 do over list;
 if list=. & comorb_1_0_1yr~=. then list=0;
+end;
 run;
 
-/*should be 7469 and 4207*/
+/*should be 4393 and 2955*/
 proc freq;
 table ivw_meet_crit_a ivw_meet_crit_b;
 run;
@@ -3542,9 +3551,6 @@ set sic_int.ivws_crit_1;
 if ivw_meet_crit_a=1;
 run;
 
-proc freq;
-table core_to_dod_1yr hs_admit_p12m n_urgent_admit_p12m*n_em_admit_p12m;
-run;
 
 /*for Criteria B*/
 data criteria_b;
@@ -3552,11 +3558,19 @@ set sic_int.ivws_crit_1;
 if ivw_meet_crit_b=1;
 run;
 
-proc freq;
-table core_to_dod_1yr hs_admit_p12m n_urgent_admit_p12m*n_em_admit_p12m;
+ods rtf body="E:\data\serious_ill\logs\outcomes_first_look.rtf";
+title "Outcomes 1 year after initially meeting criteria A) Any serious medical illness";
+proc freq data=criteria_a;
+table core_to_dod_1yr hs_admit_p12m ind_em_ur_adm_p12m;
 run;
 
-H="Structure dataset based on time meet criteria A"
+title "Outcomes 1 year after initially meeting criteria B) Any ser med illness or ADL Impair + SNF or Hospital.";
+proc freq data=criteria_b;
+table core_to_dod_1yr hs_admit_p12m ind_em_ur_adm_p12m;
+run;
+ods rtf close;
+
+H="Core interviews - set up from time 0=meet criteria"
 /*From this point on, there are 2 datasets, one for those that
 meet Criteria A) Serious medical illness and one for those that 
 meet Criteria B) (Serious medical illness or ADL Impairment) and (nursing
@@ -3572,14 +3586,15 @@ _n1 - interview prior to first meeting criteria
 _p1 and _p2 - 2 interviews after meeting criteria
 */
 
-/*****************************************************/
-/*rename macro */
-/*****************************************************/
-%macro rename2(lib,dsn,pre,first);
+*****************************************************;
+*rename macro *;
+*****************************************************;
+%macro rename(lib,dsn,pre);
 options pageno=1 nodate;
 proc contents data=&lib..&dsn;
 title "Before Renaming All Variables";
 run;
+
 proc sql noprint;
 select nvar into :num_vars
 from dictionary.tables
@@ -3589,15 +3604,15 @@ select distinct(name) into :var1-
 :var%TRIM(%LEFT(&num_vars))
 from dictionary.columns
 where libname="&LIB" and
-memname="&DSN" ;
+memname="&DSN";
 quit;
 run;
+
 proc datasets library=&LIB;
 modify &DSN;
 rename
 %do i=1 %to &num_vars;
-
-&&var&i=&first.&&var&i.&&pre.
+&&var&i=&&var&i.._&pre 
 %end;
 ;
 quit;
@@ -3606,53 +3621,55 @@ options pageno=1 nodate;
 proc contents data=&lib..&dsn;
 title "After Renaming All Variables";
 run;
-%mend ;
+%mend rename;
 
-/****************************************************************/
+
+****************************************************************;
 /*set up datasets with reference time 0 = time initially meet criteria
 time =0 has n0 suffix
 interviews before have n1, n2, etc suffix
 interviews after have p1, p2 suffix */
-/****************************************************************/
+****************************************************************;
 
-%macro time(crit=,var=);
+%macro ds_restr(crit=);
 
-/*get id's, first time they met criteria*/
-data criteria_&crit._1;
+*get ids, first time they met criteria;
+data n0_&crit._1;
 set sic_int.ivws_crit_1;
-if &var.=1;
+if ivw_meet_crit_&crit.=1;
 run;
 
-data criteria_&crit._2;
-set criteria_&crit._1;
+data TEST;
+set n0_&crit._1;
 run;
 
-%rename2(WORK,CRITERIA_&crit._2,_n0,);
+*add _n0 suffix for interview variables for year that first meets criteria;
+%rename(WORK,TEST,n0);
 
-data criteria_&crit._3;
-set criteria_n0_&crit._2;
+data n0_&crit._3;
+set TEST;
 rename id_n0=id;
 rename bid_hrs_n0=bid_hrs;
 run;
 
-/****************************************************************/
-/*get n1 interview, interiew prior to meeting criteria*/
-/*list of all core interviews before meeting the criteria*/
+****************************************************************;
+*get n1 interview, interiew prior to meeting criteria*;
+*list of all core interviews before meeting the criteria*;
 proc sql;
-create table all_ivw_bef_meet_&crit.(drop=id)
+create table all_ivw_bef_meet_&crit.
 as select b.*
- from criteria_&crit._3 a 
+ from n0_&crit._3 a 
  inner join
 sic_int.ivws_crit_1 b
-  on a.id=b.id and a.c_ivw_date>b.c_ivw_date;
+  on a.id=b.id and a.c_ivw_date_n0>b.c_ivw_date;
   quit;
 
 proc sort data=all_ivw_bef_meet_&crit. ;
 by id c_ivw_date;
 run;
 
-/*keep only the n1 core interview
-xxx interviews identified*/
+*keep only the n1 core interview;
+*2222 interviews identified;
 data core_n1_&crit.;
 set all_ivw_bef_meet_&crit.;
 by id c_ivw_date;
@@ -3663,13 +3680,13 @@ proc freq;
 table core_year;
 run;
 
-/*check on number of pre interviews present in the dataset
-for those that meet the criteria*/
-proc sq;
+*check on number of pre interviews present in the dataset;
+*for those that meet the criteria;
+proc sql;
 create table ivw_count_before_&crit. as select distinct id,
-count(*) as n_ivws_bef_&crit. label=n ivws before meet criteria &crit."
+count(*) as n_ivws_bef_&crit. label="n ivws before meet criteria &crit."
 from 
-set all_ivw_bef_meet_&crit.  group by id;
+all_ivw_bef_meet_&crit.  group by id;
 quit;
 
 proc freq; table n_ivws_bef_&crit.;
@@ -3677,24 +3694,24 @@ run;
 
 
 
-/****************************************************************/
-/*get p1 interview, interview after meeting criteria*/
-/*list of all core interviews after meeting the criteria*/
+****************************************************************;
+*get p1 interview, interview after meeting criteria*;
+*list of all core interviews after meeting the criteria*;
 proc sql;
-create table all_ivw_aft_meet_&crit.(drop=id)
+create table all_ivw_aft_meet_&crit.
 as select b.*
- from criteria_&crit._3 a 
+ from n0_&crit._3 a 
  inner join
 sic_int.ivws_crit_1 b
-  on a.id=b.id and a.c_ivw_date<b.c_ivw_date;
+  on a.id=b.id and a.c_ivw_date_n0<b.c_ivw_date;
   quit;
 
 proc sort data=all_ivw_aft_meet_&crit. ;
 by id c_ivw_date;
 run;
 
-/*keep only the p1 core interview
-xxx interviews identified*/
+*keep only the p1 core interview;
+*2260 interviews identified;
 data core_p1_&crit.;
 set all_ivw_aft_meet_&crit.;
 by id c_ivw_date;
@@ -3705,24 +3722,24 @@ proc freq;
 table core_year;
 run;
 
-/*check on number of post-interviews present in the dataset
-for those that meet the criteria*/
-proc sq;
+*check on number of post-interviews present in the dataset;
+*for those that meet the criteria;
+proc sql;
 create table ivw_count_after_&crit. as select distinct id,
-count(*) as n_ivws_after_&crit. label=n ivws after meet criteria &crit."
+count(*) as n_ivws_after_&crit. label="n ivws after meet criteria &crit."
 from 
-set all_ivw_aft_meet_&crit.  group by id;
+all_ivw_aft_meet_&crit.  group by id;
 quit;
 
 proc freq; table n_ivws_after_&crit.;
 run;
 
 
-/****************************************************************/
-/*get p2 interview, interview after meeting criteria*/
-/*list of all core interviews after the p1 interview*/
+****************************************************************;
+*get p2 interview, interview after meeting criteria*;
+*list of all core interviews after the p1 interview*;
 proc sql;
-create table all2_ivw_aft_meet_&crit.(drop=id)
+create table all2_ivw_aft_meet_&crit.
 as select b.*
  from core_p1_&crit. a 
  inner join
@@ -3734,8 +3751,8 @@ proc sort data=all2_ivw_aft_meet_&crit. ;
 by id c_ivw_date;
 run;
 
-/*keep only the p2 core interview
-xxx interviews identified*/
+*keep only the p2 core interview;
+*1400 interviews identified;
 data core_p2_&crit.;
 set all2_ivw_aft_meet_&crit.;
 by id c_ivw_date;
@@ -3746,31 +3763,45 @@ proc freq;
 table core_year;
 run;
 
-/*rename the n1, p1 and p2 interviews*/
-%rename2(WORK,CORE_N1_&crit.,_n1,);
-%rename2(WORK,CORE_P1_&crit.,_p1,);
-%rename2(WORK,CORE_P2_&crit._2,_p1,);
+*rename the n1, p1 and p2 interviews*;
 
+*n1 interview;
+data TEST;
+set CORE_N1_&crit.;
+run;
+
+%rename(WORK,TEST,n1);
 data core_n1_&crit._1;
-set core_n1_&crit.;
+set TEST;
 rename id_n1=id;
 rename bid_hrs_n1=bid_hrs;
 run;
 
+*p1 interview;
+data TEST;
+set CORE_P1_&crit.;
+run;
+%rename(WORK,TEST,p1);
 data core_p1_&crit._1;
-set core_p1_&crit.;
+set TEST;
 rename id_p1=id;
 rename bid_hrs_p1=bid_hrs;
 run;
 
+*p2 interview;
+data TEST;
+set CORE_P2_&crit.;
+run;
+
+%rename(WORK,TEST,p2);
 data core_p2_&crit._1;
-set core_p2_&crit.;
+set TEST;
 rename id_p2=id;
 rename bid_hrs_p2=bid_hrs;
 run;
 
-/*merge the datasets together*/
-proc sort data=criteria_n0_&crit._2 nodupkey;
+*merge the datasets together*;
+proc sort data=n0_&crit._3 nodupkey;
 by id;
 run;
 
@@ -3787,14 +3818,14 @@ by id;
 run;
 
 data sic_fin.n0_n1_p1_p2_criteria_&crit.;
-merge criteria_n0_&crit._2 core_n1_&crit._1 core_p1_&crit._1 core_p2_&crit._1
+merge n0_&crit._3 core_n1_&crit._1 core_p1_&crit._1 core_p2_&crit._1;
 by id;
 run;
 
-%mend;
+%mend ds_restr;
 
-%time(crit=a,var=serious_medical_illness);
-%time(crit=b,var=criteria_b);
+%ds_restr(crit=a);
+%ds_restr(crit=b);
 
 proc freq data=sic_fin.n0_n1_p1_p2_criteria_a;
 table core_year_n1 core_year_n0 core_year_p1 core_year_p2;
@@ -3803,6 +3834,9 @@ run;
 proc freq data=sic_fin.n0_n1_p1_p2_criteria_b;
 table core_year_n1 core_year_n0 core_year_p1 core_year_p2;
 run;
+
+
+H="Add exit interviews to dataset"
 
 
 H="xxxxNotes"

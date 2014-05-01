@@ -23,11 +23,16 @@ libname sic_int 'E:\data\serious_ill\int_data';
 libname sic_fin 'E:\data\serious_ill\final_data';
 libname sic_ref 'E:\data\serious_ill\ref_data';
 
+%let logdir='E:\data\serious_ill\logs';
 
 H="Initial core criteria"
 /***********************************************************************/
 /*Core interview dataset, merge with dob, dod from restricted               */
 /***********************************************************************/
+
+proc printto log='&logdir.\sas_1_sic_core_criteria_log' new
+	print='&logdir.\sas_1_sic_core_criteria_out' new
+run;
 
 libname hrs_fnl 'E:\data\hrs_cleaned';
 
@@ -208,6 +213,10 @@ log close
 H="Process Claims Relative to Core Interview Date"
 /*Get claims 1 year and 2 year before each core interview*/
 
+proc printto log='&logdir.\sas_2_sic_add_xwalk_log' new
+	print='&logdir.\sas_2_sic_add_xwalk_out' new
+run;
+
 /*Step 1: Bring in mc xwalk id
 sic_int.core_xwalk_1 has core interviews, age and claims xwalk id */
 
@@ -277,10 +286,17 @@ if xwalk_yes=1;
 run;
 
 
-H="Step 2a - Identify FFS MC 1yr and 2yrs preceeding core interview"
+H="Step 2a - Identify FFS MC 1yr and 6mos preceeding core interview"
 /*Use denominator file to determine which interviews / r's have ffs mc
-during the full 12 months preceeding the core interview*/
+during the full 12 months preceeding the core interview
 
+2 sets of variables created, 1 for 12 month lookback,
+one for 6 month lookback to see what the difference in sample
+size would be with the more relaxed requirement*/
+
+proc printto log='&logdir.\sas_3_sic_ffs_log' new
+	print='&logdir.\sas_3_sic_ffs_out' new
+run;
 
 proc sort data=medi.dn_2000_2010 out=dn_2000_20102  nodupkey;
 by BID_HRS_19 year;
@@ -363,7 +379,7 @@ proc freq data=all_insurance;
 table c_ivw_year*year_bef_civw /missprint;
 run;
 
-/*merge surgery year and year before surgery buy-in and hmo variables
+/*merge interview year and year before interview buy-in and hmo variables
 Trim so the final variable _12m is 12 months pre-interview
 Note: indicator variables for parts a and b and hmo are null if don't
 have information for full 12 months pre-interview*/
@@ -375,7 +391,9 @@ hmo_2y=trim(left(hmo_bef))||trim(left(hmo_dy));
 buyin_2y_r=reverse(trim(buyin_2y));
 hmo_2y_r=reverse(trim(hmo_2y));
 
-/*create 12 month variable*/
+*************************************************;
+** 12 month variables                          **;
+*************************************************;
 if length(buyin_2y_r)>11 then buyin_12m_r=substr(trim(left(buyin_2y)),1,12);
 if length(hmo_2y_r)>11 then hmo_12m_r=substr(trim(left(hmo_2y)),1,12);
 
@@ -395,24 +413,47 @@ if index(hmo_12m,"00000000000") then hmo_d_12m=0;
 if index(hmo_12m,"00000000000")=0 then hmo_d_12m=1;
 end;
 
+*************************************************;
+** 6 month variables                          **;
+*************************************************;
+if length(buyin_2y_r)>5 then buyin_6m_r=substr(trim(left(buyin_2y)),1,6);
+if length(hmo_2y_r)>5 then hmo_6m_r=substr(trim(left(hmo_2y)),1,6);
+
+if length(buyin_2y_r)<6 then buyin_6m_r="";
+if length(hmo_2y_r)<6 then hmo_6m_r="";
+
+buyin_6m=reverse(trim(buyin_6m_r));
+hmo_6m=reverse(trim(hmo_6m_r));
+
+/*create indicator variable for mc coverage 6 mo. 0=no, 1=yes*/
+if length(buyin_6m)=6 then do;
+if indexc(buyin_6m,"0","1","2","A","B") then part_ab_6m=0;
+if indexc(buyin_6m,"0","1","2","A","B")=0 then part_ab_6m=1;
+end;
+if length(hmo_6m)=6 then do;
+if index(hmo_6m,"000000") then hmo_d_6m=0;
+if index(hmo_6m,"000000")=0 then hmo_d_6m=1;
+end;
+
 run;
 
 /*12954 observations don't have full denominator data re insurance status
 either interview Before Jan 2001 or are missing year -1 dn file*/
 proc freq;
-table part_ab_12m hmo_d_12m part_ab_12m*age_at_core_n;
+table part_ab_12m hmo_d_12m part_ab_12m*age_at_core_n part_ab_6m hmo_d_6m;
 run;
 
 /*bring indicators into full interview dataset*/
 proc sql;
-create table sic_int.core_xwalk_ins as select a.*,b.part_ab_12m,b.hmo_d_12m from
+create table sic_int.core_xwalk_ins as select a.*,b.part_ab_12m,b.hmo_d_12m,b.part_ab_6m,b.hmo_d_6m
+ from
 sic_int.core_xwalk_1 a left join
 all_insurance2 b
 on a.bid_hrs=b.bid_hrs and a.c_ivw_year=b.c_ivw_year;
 quit;
 
 proc freq;
-table age_ge_65*part_ab_12m /missprint;
+table age_ge_65*part_ab_12m age_ge_65*part_ab_6m /missprint;
 run;
 
 proc freq;
@@ -434,6 +475,10 @@ H="Step 2 - Get claims"
 
 /*Step 2: Pull claims lists using mc xwalk id and interview date
 Save claims lists to project folder for use later */
+
+proc printto log='&logdir.\sas_4_sic_get_claims_log' new
+	print='&logdir.\sas_4_sic_get_claims_out' new
+run;
 
 
 /****************************************************************************/
@@ -707,6 +752,11 @@ run;
 
 
 H="Step 3 - Elixhauser comorbidities"
+proc printto log='&logdir.\sas_5_sic_elix_log' new
+	print='&logdir.\sas_5_sic_elix_out' new
+run;
+
+
 /****************************************************************************/
 /* Rename variables macro                                                   */
 /****************************************************************************/
@@ -1406,6 +1456,11 @@ run;
 H="Step 4 - DW chronic conditions"
 /*CMS Data Warehouse Chronic Conditions*/
 
+proc printto log='&logdir.\sas_6_sic_cc_log' new
+	print='&logdir.\sas_6_sic_cc_out' new
+run;
+
+
 /****************************************************************************/
 /*First get the dx list into dot format using Stata*/
 /****************************************************************************/
@@ -1766,6 +1821,11 @@ H="Step 5 - Get additional utilization information from claims"
 /*These additional variables are just added to the dataset with the
 elixhauser and cc's 1 year preceeding the interview, can add them
 later when required to get the 2 year look-back dataset*/
+
+proc printto log='&logdir.\sas_7_sic_util_log' new
+	print='&logdir.\sas_7_sic_util_out' new
+run;
+
 
 /****************************************************************************/
 /*Get indicator of any hospital admission 6 and 12 months pre-core interview*/
@@ -2222,6 +2282,12 @@ run;
 
 
 H="Step 5a - Get outpatient ED use info"
+proc printto log='&logdir.\sas_8_sic_op_ed_log' new
+	print='&logdir.\sas_8_sic_op_ed_out' new
+run;
+
+
+
 data op_meet_365;
 set sic_int.op_meet_365(keep=bid_hrs_19 admit_date disch_date c_ivw_date core_year RVCNTR01-RVCNTR45);
 run;
@@ -2279,7 +2345,12 @@ table n_ed_op_visits_12m*ind_ed_op_12m;
 run;
 
 H="Step 5b - Classify serious illness based on just primary dx"
-/*recode as a macro and use either the primary diagnosis or admitting diagnoses AD_DGNS */
+proc printto log='&logdir.\sas_9_sic_pri_dx_log' new
+	print='&logdir.\sas_9_sic_pri_dx_out' new
+run;
+
+
+/*recoded as a macro and use either the primary diagnosis or admitting diagnoses AD_DGNS */
 
 /*start with IP claim list, 1 year before interview*/
 
@@ -2679,6 +2750,10 @@ if CPT code (in fields HCPCSCD01-HCPCSCD45 in list then if PRCDRCD1-PRCDRCD25 in
 
 
 H="Step 6 - HRS variable cleaning and check criteria"
+proc printto log='&logdir.\sas_10_sic_crit_log' new
+	print='&logdir.\sas_10_sic_crit_out' new
+run;
+
 proc freq
 data=sic_int.core_ids_1yr_criteria_4g;
 table comorb_31_0_1yr;
@@ -3064,7 +3139,7 @@ cd `datapath'
 
 use core_ids_1yr_criteria_5.dta
 *******************************************************************
-mat sample_set=J(5,1,.)
+mat sample_set=J(6,1,.)
 
 tab core_year, missing
 sum core_year
@@ -3083,8 +3158,13 @@ sum core_year if inlist(core_year,2000,2002,2004,2006,2008,2010) & age_ge_65==1 
 part_ab_12m==1 & hmo_d_12m==0
 mat sample_set[5,1]=r(N)
 
+//check if only require 6 month ffs pre interview, what changes??
+sum core_year if inlist(core_year,2000,2002,2004,2006,2008,2010) & age_ge_65==1 & xwalk_yes==1 & ///
+part_ab_6m==1 & hmo_d_6m==0
+mat sample_set[6,1]=r(N)
+
 mat rownames sample_set="Core interviews" "Core Interviews 2000-2010" "Age 65+" ///
-"With xwalk id" "With FFS MC 1yr pre-ivw"
+"With xwalk id" "With FFS MC 1yr pre-ivw" "With FFS MC 6m pre-ivw"
 
 mat colnames sample_set="Interviews"
 
@@ -3225,7 +3305,17 @@ log close
 
 H="Determine outcomes after meet criteria"
 /*While still determining criteria, create variables looking at the 1 year
-after interview for all interviews (regardless of when meet criteria*/
+after interview for all interviews (regardless of when meet criteria)
+
+Outcomes are:
+1. Urgent or emergency hospital admissions 1 year after meet critera
+2. Hospice enrollment 1 year after meet criteria
+3. Total Medicare payments 1 year after meet criteria
+*/
+
+proc printto log='&logdir.\sas_11_sic_outcomes_log' new
+	print='&logdir.\sas_11_sic_outcomes_out' new
+run;
 
 /*ids of those interviews with ffs medicare year preceding interview and 65+*/
 proc sql;
@@ -3239,9 +3329,7 @@ proc freq; table core_to_dod_1yr; run;
 
 /**********************************************************************/
 /**********************************************************************/
-/*get claims 1 year after interview
-Outcomes looking at are hospital admissions and hospice enrollment
-so just pull medpar and hospice claims for now*/
+*get claims 1 year after interview, all claim types;
 /**********************************************************************/
 /**********************************************************************/
 /*medpar claims
@@ -3270,13 +3358,14 @@ run;
 
 %mend;
 
-/*hospice claims
+/*otherclaims, Just keep payment info to limit size of dataset
 Pull list of any claims with admission date within 1 year of the interview*/
 %macro other(days_start=,days_after_core=,source= );
 
 proc sql;
-create table sic_int.&source._meet_post_&days_after_core. as select a.*,b.c_ivw_date,b.core_year
-from medi.&source._2000_2010 a inner join
+create table sic_int.&source._meet_post_&days_after_core. as select 
+a.*,b.c_ivw_date,b.core_year
+from medi.&source._2000_2010(keep=admit_date BID_hrs_19 pmt_amt) a inner join
 age_ge_65_mc b
 on trim(left(a.bid_hrs_19))=trim(left(b.bid_hrs))
 and &days_start<=a.admit_date-b.c_ivw_date<=&days_after_core;
@@ -3286,7 +3375,11 @@ quit;
 
 
 %mp(days_start=0,days_after_core=365,source=mp );
+%other(days_start=0,days_after_core=365,source=op );
+%other(days_start=0,days_after_core=365,source=pb );
+%other(days_start=0,days_after_core=365,source=hh );
 %other(days_start=0,days_after_core=365,source=hs );
+%other(days_start=0,days_after_core=365,source=dm );
 
 /**********************************************************************/
 /**********************************************************************/
@@ -3439,8 +3532,7 @@ run;
 
 %hospice(days=365,suffix=p12m);
 
-/*merge hospice indicator with full dataset
-CHECK THIS MERGE, SHOULD BE FIXED NOW!!*/
+*merge hospice indicator with full dataset;
 proc sql;
 create table core_ids_admit_hs_post_2 as select a.*,b.hs_admit_p12m from
 core_ids_admit_post_2 a left join
@@ -3465,6 +3557,13 @@ run;
 
 proc contents; run;
 
+proc freq; table core_year; run;
+
+/**********************************************************************/
+/**********************************************************************/
+/*Add total costs from claims 1 year after interview*/
+/**********************************************************************/
+/**********************************************************************/
 
 
 H="Identify interview where criteria is first met"
@@ -3473,6 +3572,10 @@ H="Identify interview where criteria is first met"
 A) Any serious medical illness
 B) Serious medical illness or ADL impairment AND either Urgent/Emerg hopspital admission
 or nursing home use*/
+
+proc printto log='&logdir.\sas_12_sic_n0_log' new
+	print='&logdir.\sas_12_sic_n0_out' new
+run;
 
 data ivw_meet_a;
 set sic_int.core_ids_init_outcomes(keep=id ser_med_illness core_year) ;
@@ -3586,6 +3689,11 @@ _n1 - interview prior to first meeting criteria
 _p1 and _p2 - 2 interviews after meeting criteria
 */
 
+proc printto log='&logdir.\sas_13_sic_ivw_time_log' new
+	print='&logdir.\sas_13_sic_ivw_time_out' new
+run;
+
+
 *****************************************************;
 *rename macro *;
 *****************************************************;
@@ -3654,7 +3762,7 @@ run;
 
 ****************************************************************;
 *get n1 interview, interiew prior to meeting criteria*;
-*list of all core interviews before meeting the criteria*;
+*list of all core interviews with ffs medicare 1 year prior before meeting the criteria*;
 proc sql;
 create table all_ivw_bef_meet_&crit.
 as select b.*
@@ -3669,7 +3777,7 @@ by id c_ivw_date;
 run;
 
 *keep only the n1 core interview;
-*2222 interviews identified;
+*2222 interviews identified that have ffs medicare 1 year prior to n1 interview;
 data core_n1_&crit.;
 set all_ivw_bef_meet_&crit.;
 by id c_ivw_date;
@@ -3678,6 +3786,44 @@ run;
 
 proc freq;
 table core_year;
+run;
+
+*supplement the list with interviews with no or unknown ffs medicare 1 year;
+*prior to interview in order to fill in for those with interviews in 2000;
+proc sql;
+create table noffsreq_ivw_bef_meet_&crit.
+as select b.*
+ from n0_&crit._3 a 
+ inner join
+sic_int.core_ids_1yr_criteria_5 b
+  on a.id=b.id and a.c_ivw_date_n0>b.c_ivw_date;
+  quit;
+
+proc sql;
+create table noffsreq_ivw_bef_meet_&crit._1 as select * from
+noffsreq_ivw_bef_meet_&crit.
+where id not in (select id from core_n1_&crit.);
+quit;
+
+proc sort data=noffsreq_ivw_bef_meet_&crit._1 ;
+by id c_ivw_date;
+run;
+
+*keep only the n1 core interview;
+*xxxx interviews identified;
+data noffsreq_core_n1_&crit.;
+set noffsreq_ivw_bef_meet_&crit._1;
+by id c_ivw_date;
+if last.id;
+run;
+
+*append to get full list of n1 interviews;
+data core_n1_&crit._1;
+set core_n1_&crit. noffsreq_core_n1_&crit.;
+run;
+
+proc sort data=core_n1_&crit._1 ;
+by id;
 run;
 
 *check on number of pre interviews present in the dataset;
@@ -3767,7 +3913,7 @@ run;
 
 *n1 interview;
 data TEST;
-set CORE_N1_&crit.;
+set core_n1_&crit._1 ;
 run;
 
 %rename(WORK,TEST,n1);
@@ -3835,8 +3981,86 @@ proc freq data=sic_fin.n0_n1_p1_p2_criteria_b;
 table core_year_n1 core_year_n0 core_year_p1 core_year_p2;
 run;
 
+*************************************************************;
+** Looking at who has missing n1 core interviews  ***********;
+*************************************************************;
+proc freq data=sic_fin.n0_n1_p1_p2_criteria_a;
+table part_ab_12m*hmo_d_12m part_ab_6m*hmo_d_6m /missprint;
+run;
+
+data no_n1_core_1;
+set sic_fin.n0_n1_p1_p2_criteria_a;
+if core_year_n1=.;
+run;
+
+proc freq;
+table core_year_n0;
+run;
 
 H="Add exit interviews to dataset"
+/*adds exit interview variables (with _x suffix) to the dataset that
+is formatted with the n0 as time0 interview, etc.
+
+Note for now, this just adds interview information, nothing pulled from claims
+prior to death, may need to revisit this if we need outcomes prior to exit
+interview*/
+
+proc printto log='&logdir.\sas_14_sic_exit_log' new
+	print='&logdir.\sas_14_sic_exit_out' new
+run;
+
+data exit;
+set hrs_fnl.exit_02_to_10_dt;
+run;
+
+proc sort data=exit out=EXIT_1;
+by id;
+run;
+
+*rename with _x suffix;
+%rename(WORK,EXIT_1,x);
+data exit_2;
+set exit_1;
+rename id_x=id;
+run;
+
+*use macro to do for criteria a and b datasets;
+
+%macro exit(crit=);
+
+*keep for those R's that meet criteria at some time;
+proc sql;
+create table exit_meet_&crit. as select * from
+exit where id in (select id from sic_fin.n0_n1_p1_p2_criteria_&crit.);
+quit;
+
+proc sort data=exit_meet_&crit. nodupkey; by id; run;
+proc sort data=sic_fin.n0_n1_p1_p2_criteria_&crit. out=ivws nodupkey; by id; run;
+
+data n0_n1_p1_p2_x_criteria_&crit_1.
+merge ivws exit_meet_&crit.;
+run;
+
+proc freq; table exit_year_x; run;
+
+data sic_fin.n0_n1_p1_p2_x_criteria_&crit.;
+set n0_n1_p1_p2_x_criteria_&crit_1.;
+if exit_year_x-core_year_n0=2 then ind_exit_p1_yes=1;
+else ind_exit_p1_yes=0;
+if exit_year_x-core_year_n0=4 then ind_exit_p2_yes=1;
+else ind_exit_p2_yes=0;
+label ind_exit_p1_yes="Exit interview in wave following n0 ivw";
+label ind_exit_p2_yes="Exit interview in wave following p1 ivw";
+run;
+
+proc freq; 
+table ind_exit_p1_yes*core_year_p1 ind_exit_p2_yes*core_year_p2 /missprint; 
+run;
+
+%mend exit;
+
+%exit(crit=a);
+%exit(crit=b);
 
 
 H="xxxxNotes"

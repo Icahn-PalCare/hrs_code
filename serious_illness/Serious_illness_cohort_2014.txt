@@ -23,29 +23,31 @@ libname sic_int 'E:\data\serious_ill\int_data';
 libname sic_fin 'E:\data\serious_ill\final_data';
 libname sic_ref 'E:\data\serious_ill\ref_data';
 
-%let logdir='E:\data\serious_ill\logs';
+%let logdir=E:\data\serious_ill\logs;
+
 
 H="Initial core criteria"
 /***********************************************************************/
-/*Core interview dataset, merge with dob, dod from restricted               */
+/*Core interview dataset, merge variables from restricted              */
 /***********************************************************************/
 
-proc printto log='&logdir.\sas_1_sic_core_criteria_log' new
-	print='&logdir.\sas_1_sic_core_criteria_out' new
-run;
+/*proc printto new log='&logdir.\sas_1_sic_core_criteria_log.log'
+	print='&logdir.\sas_1_sic_core_criteria_out.lst' 
+run;*/
 
 libname hrs_fnl 'E:\data\hrs_cleaned';
 
 data core;
 set hrs_fnl.core_00_to_10;
+label c_ivw_year="Core interview year";
 run;
 
 proc sort data=core nodupkey;
 by id core_year;
 run;
 
-data restr;
-set hrs_fnl.restricted_v2010;
+data restr(rename=(ZIP10_2000=ZIP10));
+set hrs_fnl.restricted_v2010(keep=birth_date death_date white black hisp_eth other_na_api_race zip:);
 id_c=trim(hhid)||trim(pn);
 drop id;
 rename id_c=id;
@@ -55,15 +57,15 @@ proc sort data=restr nodupkey;
 by id;
 run;
 
-/*need to merge in the dob and core interview date to get age at core ivw*/
+proc contents data=restr; run;
+
 proc sql;
-create table core_dob as select a.*, b.birth_date,b.death_date
-from core a left join
+create table core_dob as select * from core a left join
 restr b
 on a.id=b.id;
 quit;
 
-data sic_int.core_age_1;
+data core_age_1;
 set core_dob;
 format death_date date9.;
 age_at_core=(c_ivw_date-birth_date)/365.25;
@@ -79,18 +81,139 @@ if core_to_death>1 or core_to_death=. then core_to_dod_1yr=0;
 label core_to_dod_1yr="Died within 1 year of core interviw";
 run;
 
-proc freq data=sic_int.core_age_1;
+proc freq data=core_age_1;
 table age_ge_65 core_to_dod_1yr /missprint;
 run;
+
+
+****************************************************************;
+*get clean zip code variable by wave;
+proc sort data=core_age_1; by id core_year; run;
+
+/*get list of first and last interview years*/
+data ivw_years_1;
+set core_age_1;
+by id; 
+if first.id then first_ivw_year=core_year;
+if last.id then last_ivw_year=core_year;
+run;
+
+data ivw_years_1a;
+set ivw_years_1;
+if first_ivw_year~=.;
+run;
+
+data ivw_years_1b;
+set ivw_years_1;
+if last_ivw_year~=.;
+run;
+
+proc sql;
+create table ivw_years_2 as select a.id,a.first_ivw_year,b.last_ivw_year
+from ivw_years_1a a left join
+ivw_years_1b b
+on a.id=b.id;
+run;
+
+proc freq; table first_ivw_year last_ivw_year; run;
+
+*merge into overall dataset;
+proc sql;
+create table core_age_zip_1 as select
+a.*, b.first_ivw_year,b.last_ivw_year from
+core_age_1 a left join
+ivw_years_2 b
+on a.id=b.id;
+run;
+
+proc freq; table first_ivw_year last_ivw_year; run;
+
+/*clean up missing zip variables
+1. if missing, use interview prior
+2. if still missing, use interview after
+3. if still missing, use interview 2x prior...*/
+
+data core_age_zip_2 ;
+set core_age_zip_1 ;
+/*1998 updates, use 2000 zip*/
+if zip98='' & first_ivw_year<=1998<=last_ivw_year then do;
+	zip_98_imp_yes=1;
+	zip98=zip00;
+	end;
+/*2000 updates, use 1998 zip*/
+if zip00='' & first_ivw_year<=2000<=last_ivw_year then do;
+	zip_00_imp_yes=1;
+	zip00=zip98;
+	end;
+/*2002 updates, use 2000 or 2004 zip*/
+if zip02='' & first_ivw_year<=2002<=last_ivw_year then do;
+	zip_02_imp_yes=1;
+	zip02=zip00;
+		if zip02='' then do;
+		zip02=zip04;
+		end;
+	end;
+/*2004 updates, use 2002 or 2006 zip*/
+if zip04='' & first_ivw_year<=2004<=last_ivw_year then do;
+	zip_04_imp_yes=1;
+	zip04=zip02;
+		if zip04='' then do;
+		zip04=zip06;
+		end; /*1 obs still missing, use 1998 zip for this person*/
+				if zip04='' then do;
+				zip04=zip98;
+				end; 
+	end;
+/*2006 updates, use 2004 or 2008 zip*/
+if zip06='' & first_ivw_year<=2006<=last_ivw_year then do;
+	zip_06_imp_yes=1;
+	zip06=zip04;
+		if zip06='' then do;
+		zip06=zip08;
+		end; /*1 obs still missing, use 1998 zip for this person*/
+				if zip06='' then do;
+				zip06=zip98;
+				end; 
+	end;
+/*2008 updates, use 2006 zip*/
+if zip08_e='' & first_ivw_year<=2008<=last_ivw_year then do;
+	zip_08_imp_yes=1;
+	zip08=zip06;
+	end;
+/*2010 updates, use 2008 zip*/
+if zip10='' & first_ivw_year<=2010<=last_ivw_year then do;
+	zip_10_imp_yes=1;
+	zip10=zip08;
+	end;
+
+run;
+
+proc sort data=core_age_zip_2; by id core_year; run;
+
+*save dataset and drop raw zip code variables;
+data sic_int.core_age_zip;
+set core_age_zip_2;
+zip_wave=vvaluex("zip"||substr(trim(left(core_year)),3,2) );
+zip_imputed=vvaluex("zip_"||substr(trim(left(core_year)),3,2)||"_imp_yes" );
+drop zip9: zip0: zip1: ;
+label zip_wave="ZIP code, residence at time of interview";
+label zip_imputed="ZIP code imputed";
+run;
+
+proc means; vars zip_wave; run;
+
+proc freq; table zip_imputed /missprint ; run;
+
+****************************************************************;
 
 ods rtf body=" E:\data\serious_ill\logs\core_00_to_08_meet_criteria.rtf" ;
 proc sql;
 title "serious illness cohort, initial core interview criteria";
 title "meet age>=65 at core interview,2000-2008";
-select count(distinct id) from sic_int.core_age_1 
+select count(distinct id) from sic_int.core_age_zip
 where age_ge_65=1 and core_year in (2000,2002,2004,2006,2008);
 create table age_ge_65 as 
-select * from sic_int.core_age_1 
+select * from sic_int.core_age_zip
 where age_ge_65=1 and core_year in (2000,2002,2004,2006,2008);
 
 title "those meet age>=65,srf(poor,fair)";
@@ -213,9 +336,9 @@ log close
 H="Process Claims Relative to Core Interview Date"
 /*Get claims 1 year and 2 year before each core interview*/
 
-proc printto log='&logdir.\sas_2_sic_add_xwalk_log' new
-	print='&logdir.\sas_2_sic_add_xwalk_out' new
-run;
+/*proc printto new log='&logdir.\sas_2_sic_add_xwalk_log.log'
+	print='&logdir.\sas_2_sic_add_xwalk_out.lst' 
+run;*/
 
 /*Step 1: Bring in mc xwalk id
 sic_int.core_xwalk_1 has core interviews, age and claims xwalk id */
@@ -294,9 +417,9 @@ during the full 12 months preceeding the core interview
 one for 6 month lookback to see what the difference in sample
 size would be with the more relaxed requirement*/
 
-proc printto log='&logdir.\sas_3_sic_ffs_log' new
-	print='&logdir.\sas_3_sic_ffs_out' new
-run;
+/*proc printto new log='&logdir.\sas_3_sic_ffs_log.log'
+	print='&logdir.\sas_3_sic_ffs_out.lst' 
+run;*/
 
 proc sort data=medi.dn_2000_2010 out=dn_2000_20102  nodupkey;
 by BID_HRS_19 year;
@@ -476,9 +599,9 @@ H="Step 2 - Get claims"
 /*Step 2: Pull claims lists using mc xwalk id and interview date
 Save claims lists to project folder for use later */
 
-proc printto log='&logdir.\sas_4_sic_get_claims_log' new
-	print='&logdir.\sas_4_sic_get_claims_out' new
-run;
+/*proc printto new log='&logdir.\sas_4_sic_get_claims_log.log'
+	print='&logdir.\sas_4_sic_get_claims_out.lst' 
+run;*/
 
 
 /****************************************************************************/
@@ -752,9 +875,9 @@ run;
 
 
 H="Step 3 - Elixhauser comorbidities"
-proc printto log='&logdir.\sas_5_sic_elix_log' new
-	print='&logdir.\sas_5_sic_elix_out' new
-run;
+/*proc printto new log='&logdir.\sas_5_sic_elix_log.log'
+	print='&logdir.\sas_5_sic_elix_out.lst' 
+run;*/
 
 
 /****************************************************************************/
@@ -1455,11 +1578,9 @@ run;
 
 H="Step 4 - DW chronic conditions"
 /*CMS Data Warehouse Chronic Conditions*/
-
-proc printto log='&logdir.\sas_6_sic_cc_log' new
-	print='&logdir.\sas_6_sic_cc_out' new
-run;
-
+/*proc printto new log='&logdir.\sas_6_sic_cc_log.log'
+	print='&logdir.\sas_6_sic_cc_out.lst' 
+run;*/
 
 /****************************************************************************/
 /*First get the dx list into dot format using Stata*/
@@ -1822,9 +1943,9 @@ H="Step 5 - Get additional utilization information from claims"
 elixhauser and cc's 1 year preceeding the interview, can add them
 later when required to get the 2 year look-back dataset*/
 
-proc printto log='&logdir.\sas_7_sic_util_log' new
-	print='&logdir.\sas_7_sic_util_out' new
-run;
+/*proc printto new log='&logdir.\sas_7_sic_util_log.log'
+	print='&logdir.\sas_7_sic_util_out.lst' 
+run;*/
 
 
 /****************************************************************************/
@@ -2282,11 +2403,9 @@ run;
 
 
 H="Step 5a - Get outpatient ED use info"
-proc printto log='&logdir.\sas_8_sic_op_ed_log' new
-	print='&logdir.\sas_8_sic_op_ed_out' new
-run;
-
-
+/*proc printto new log='&logdir.\sas_8_sic_op_ed_log.log'
+	print='&logdir.\sas_8_sic_op_ed_out.lst' 
+run;*/
 
 data op_meet_365;
 set sic_int.op_meet_365(keep=bid_hrs_19 admit_date disch_date c_ivw_date core_year RVCNTR01-RVCNTR45);
@@ -2345,9 +2464,9 @@ table n_ed_op_visits_12m*ind_ed_op_12m;
 run;
 
 H="Step 5b - Classify serious illness based on just primary dx"
-proc printto log='&logdir.\sas_9_sic_pri_dx_log' new
-	print='&logdir.\sas_9_sic_pri_dx_out' new
-run;
+/*proc printto new log='&logdir.\sas_9_sic_pri_dx_log.log'
+	print='&logdir.\sas_9_sic_pri_dx_out.lst' 
+run;*/
 
 
 /*recoded as a macro and use either the primary diagnosis or admitting diagnoses AD_DGNS */
@@ -2750,9 +2869,9 @@ if CPT code (in fields HCPCSCD01-HCPCSCD45 in list then if PRCDRCD1-PRCDRCD25 in
 
 
 H="Step 6 - HRS variable cleaning and check criteria"
-proc printto log='&logdir.\sas_10_sic_crit_log' new
-	print='&logdir.\sas_10_sic_crit_out' new
-run;
+/*proc printto new log='&logdir.\sas_10_sic_crit_log.log'
+	print='&logdir.\sas_10_sic_crit_out.lst' 
+run;*/
 
 proc freq
 data=sic_int.core_ids_1yr_criteria_4g;
@@ -3313,9 +3432,9 @@ Outcomes are:
 3. Total Medicare payments 1 year after meet criteria
 */
 
-proc printto log='&logdir.\sas_11_sic_outcomes_log' new
-	print='&logdir.\sas_11_sic_outcomes_out' new
-run;
+/*proc printto new log='&logdir.\sas_11_sic_outcomes_log.log'
+	print='&logdir.\sas_11_sic_outcomes_out.lst' 
+run;*/
 
 /*ids of those interviews with ffs medicare year preceding interview and 65+*/
 proc sql;
@@ -3333,7 +3452,7 @@ proc freq; table core_to_dod_1yr; run;
 /**********************************************************************/
 /**********************************************************************/
 /*medpar claims
-List of claims with admission date within 1 year of interview*/
+List of claims with some time within 1 year of interview*/
 %macro mp(days_start=,days_after_core=,source=,time_label=);
 
 proc sql;
@@ -3354,6 +3473,7 @@ quit;
 
 data sic_int.&source._meet3_post_&days_after_core.;
 set &source._meet_post &source._meet2_post;
+format admit_date date9. disch_date date9.;
 run;
 
 %mend;
@@ -3389,16 +3509,14 @@ Use suffix p12m to indicate post interview*/
 /**********************************************************************/
 %macro admissions(days=,suffix=);
 
-/*pull list of ip claims from all medpar claims x days pre-interview*/
+/*pull list of ip claims from all medpar claims x days after interview*/
 data ip_meet_post_&days.;
 set sic_int.mp_meet3_post_&days.(where=(trim(left(SSLSSNF))~="N"));
+if admit_date>=c_ivw_date;
 run;
 
 data ip_post_&days._2;
 set ip_meet_post_&days.;
-if icarecnt=. then icarecnt=0; /*medpar intensive care day count*/
-if CRNRYDAY=. then CRNRYDAY=0; /*medpar coronary day count*/
-icu_days=icarecnt+CRNRYDAY;
 em_urgent_admit=0; /*Urgent , emergent admissions from admission type*/
 if type_adm in (1,2) then em_urgent_admit=1;
 em_admit=0;
@@ -3418,12 +3536,8 @@ run;
 
 proc sql;
 create table ip_post_&days._3 as select distinct BID_hrs_19,core_year,
-/*total ICU days*/
-sum(icu_days) as icu_days_&suffix. label="total icu days &suffix. after core ivw",
 /*count of IP admissions, all types*/
 count(*) as n_ip_admit_&suffix. label="total n of hospital admit &suffix. after core ivw",
-/*total Hospital LOS*/
-sum(LOSCNT) as n_hospd_&suffix. label="total hospital days &suffix. after core ivw",
 /*count urgent or emergency admissions*/
 count(case when em_urgent_admit=1 then em_urgent_admit else . end) as n_em_urgent_admit_&suffix. 
 	label="total n of urgent/emergent hospital admit &suffix. after core ivw",
@@ -3448,8 +3562,8 @@ quit;
 %admissions(days=365,suffix=p12m);
 
 proc sql;
-create table core_ids_admit_post_1 as select a.*,b.icu_days_p12m,
-b.n_ip_admit_p12m,b.n_hospd_p12m,b.n_em_urgent_admit_p12m,b.n_em_admit_p12m,
+create table core_ids_admit_post_1 as select a.*,
+b.n_ip_admit_p12m,b.n_em_urgent_admit_p12m,b.n_em_admit_p12m,
 b.n_urgent_admit_p12m,b.n_elect_admit_p12m,b.n_ED_ip_p12m
 from age_ge_65_mc a
 left join
@@ -3462,7 +3576,7 @@ core interview, can use comorb = ., same as ffs mc 1 year=no*/
  data core_ids_admit_post_2;
  set core_ids_admit_post_1;
  array list 
-	icu_days_p12m n_ip_admit_p12m n_hospd_p12m n_em_urgent_admit_p12m
+	n_ip_admit_p12m n_em_urgent_admit_p12m
 	n_em_admit_p12m n_urgent_admit_p12m n_elect_admit_p12m n_ED_ip_p12m;
  do over list;
  if list=. & comorb_1_0_1yr~=. then list=0;
@@ -3502,7 +3616,7 @@ core interview, can use comorb = ., same as ffs mc 1 year=no*/
 run;
 
 proc freq;
-table icu_days_p12m n_ip_admit_p12m n_hospd_p12m ind_hosp_adm_p12m n_em_urgent_admit_p12m ind_em_ur_adm_p12m
+table n_ip_admit_p12m ind_hosp_adm_p12m n_em_urgent_admit_p12m ind_em_ur_adm_p12m
 	ind_em_adm_p12m ind_ur_adm_p12m ind_nonelect_adm_p12m n_nonelect_adm_p12m n_ED_ip_p12m ind_ED_adm_p12m 
 	ind_em_adm_p12m*ind_ED_adm_p12m /missprint;
 run;
@@ -3513,6 +3627,13 @@ run;
 Use suffix p12m to indicate post interview*/
 /**********************************************************************/
 /**********************************************************************/
+/*check of hospice claim list*/
+data hospice_check;
+set sic_int.hs_meet_post_365;
+ivw_to_admit=admit_date-c_ivw_date;
+run;
+proc means; var ivw_to_admit;run;
+
 %macro hospice(days=,suffix=);
 
 proc sort data=sic_int.hs_meet_post_&days.;
@@ -3559,11 +3680,269 @@ proc contents; run;
 
 proc freq; table core_year; run;
 
-/**********************************************************************/
-/**********************************************************************/
-/*Add total costs from claims 1 year after interview*/
-/**********************************************************************/
-/**********************************************************************/
+
+
+H="Get Medicare payments 1 year after interview"
+/*Add total Medicare payments from claims 1 year after interview*/
+
+/*Claims files from 2000-2010, claims pulled in previous section
+to get just claims that are within 1 year of the interview dates*/
+
+/**********************************************************/
+/**********************************************************/
+/*totals from mp file*/
+/*Note: variable SSLSSNF from mp claims is N=Skilled nursing facility*/
+/*Two totals are calculated - one for skilled nursing facility claims
+and one for all other claims in the mp file (inpatient claims)*/
+/**********************************************************/
+/**********************************************************/
+
+/*get count of snf vs ip claims from claim list */
+data snf_all;
+set sic_int.mp_meet3_post_365(where=(trim(left(SSLSSNF))="N")) ;
+ivw_to_admit=admit_date-c_ivw_date;
+ivw_to_disch=disch_date-c_ivw_date;
+run;
+
+proc means; var ivw_to_admit ivw_to_disch; run;
+
+data ip_all;
+set sic_int.mp_meet3_post_365(where=(trim(left(SSLSSNF))~="N")) ;
+run;
+
+
+%macro mp(month_n=,days_start=,days_after_core=,source=,equ=,name=);
+%let source0=mp;
+
+/*Case 1 - no adjustment needed - claims where entire claim is within the x months after the interview*/
+proc sql;
+create table &source._meet_post_1 as select *
+from sic_int.&source0._meet3_post_&days_after_core.(where=(trim(left(SSLSSNF))&equ.="N")) 
+where &days_start<=disch_date-c_ivw_date<=&days_after_core and
+&days_start<=admit_date-c_ivw_date<=&days_after_core;
+quit;
+
+data zz_&source._meet_post_1;
+set &source._meet_post_1;
+ivw_to_admit=admit_date-c_ivw_date;
+ivw_to_disch=disch_date-c_ivw_date;
+run;
+proc means; var ivw_to_admit ivw_to_disch; run;
+
+/*Case 2 - adjustment needed because part of stay is in the window but part is after the window has ended
+Claims with admission date within start of x months but discharge date is after the x month window*/
+proc sql;
+create table &source._meet2_post as select *
+from sic_int.&source0._meet3_post_&days_after_core.(where=(trim(left(SSLSSNF))&equ.="N")) 
+where disch_date-c_ivw_date>&days_after_core and 0<=admit_date-c_ivw_date<=&days_after_core;
+quit;
+
+data zz_&source._meet2_post;
+set &source._meet2_post;
+ivw_to_admit=admit_date-c_ivw_date;
+ivw_to_disch=disch_date-c_ivw_date;
+run;
+proc means; var ivw_to_admit ivw_to_disch; run;
+
+
+/*identify fraction of claims that span x month period that should be 
+attributed to the x month period
+by just using the fraction of time that was included in the span*/
+data &source._meet3_post;
+set &source._meet2_post;
+pct_xm=((c_ivw_date+&days_after_core)-admit_date)/(disch_date-admit_date);
+array list pmt_amt passthru;
+do over list;
+if list=. then list=0;
+/*scale the partial claims by the time within the x month period*/
+list=list*pct_xm;
+end;
+
+run;
+
+/*Case 3 - adjustment needed because part of stay is in the window but part is before the window started
+Claims with discharge date within start of x months but admit date is before the interview date*/
+proc sql;
+create table &source._meet4_post as select *
+from sic_int.&source0._meet3_post_&days_after_core.(where=(trim(left(SSLSSNF))&equ.="N")) 
+where disch_date-c_ivw_date<=&days_after_core and admit_date-c_ivw_date<&days_start;
+quit;
+
+data zz_&source._meet4_post;
+set &source._meet4_post;
+ivw_to_admit=admit_date-c_ivw_date;
+ivw_to_disch=disch_date-c_ivw_date;
+run;
+proc means; var ivw_to_admit ivw_to_disch; run;
+
+
+data &source._meet5_post;
+set &source._meet4_post;
+pct_xm=(disch_date-c_ivw_date)/(disch_date-admit_date);
+array list pmt_amt passthru;
+do over list;
+if list=. then list=0;
+/*scale the partial claims by the time within the x month period*/
+list=list*pct_xm;
+end;
+
+run;
+
+/*adjust for inflation, Uses CPI for Medical Services from 
+BLS website, accessed 3/14/2014*/
+
+/*create table merging both the claims fully in the 2 year period 
+and those partially in that time
+adjust for inflation here also*/
+data &source._cost_post;
+set &source._meet_post_1 &source._meet3_post &source._meet5_post;
+array list pmt_amt passthru;
+do over list;
+if list=. then list=0;
+end;
+
+if year(admit_date)>=2010 then rate=1;
+if year(admit_date)=2009 then rate=1.0350;
+if year(admit_date)=2008 then rate=1.06823;
+if year(admit_date)=2007 then rate=1.11347;
+if year(admit_date)=2006 then rate=1.17287;
+if year(admit_date)=2005 then rate=1.22119;
+if year(admit_date)=2004 then rate=1.27983;
+if year(admit_date)=2003 then rate=1.34381;
+if year(admit_date)=2002 then rate=1.40392;
+if year(admit_date)=2001 then rate=1.47492;
+if year(admit_date)=2000 then rate=1.54589;
+if year(admit_date)<=1999 then rate=1.61195;
+
+
+&source._paid_by_mc=rate*(pmt_amt+passthru);
+run;
+
+*calculates total of mc charges for the claim type by hrs bid;
+proc sql;
+create table &source._pay_post as select distinct bid_hrs_19,core_year,
+sum(&source._paid_by_mc) as &source._paid_by_mc 
+from &source._cost_post group by BID_HRS_19,core_year;
+quit;
+
+*merges the totals above with the full interview list;
+proc sql;
+create table &source._&name. as select
+a.BID_hrs,a.id,a.core_year,coalesce(b.&source._paid_by_mc,0) as &source._paid_by_mc_&name.
+from sic_int.core_ids_init_outcomes a
+left join
+ &source._pay_post b
+ on trim(left(a.BID_hrs))=trim(left(b.bid_hrs_19)) and a.core_year=b.core_year;
+ quit;
+
+ proc sort data=&source._&name. ;
+ by BID_hrs core_year;
+ run;
+%mend;
+
+/*Runs macro to get total for the SNF claims*/
+%mp(days_start=0,days_after_core=365,source=snf,equ=,name=1yr );
+/*Runs macro to get total for the inpatient (not SNF) claims*/
+%mp(days_start=0,days_after_core=365,source=ip,equ=~,name=1yr );
+
+/**********************************************************/
+/**********************************************************/
+/*totals from other claim types*/
+/**********************************************************/
+/**********************************************************/
+/*macro to calculate totals for the claims that are not in medpar files*/
+%macro all_other(source=,month_n=,days_start=,days_after_core=);
+
+/*Adjust for inflation*/
+data &source._meet2_post;
+set sic_int.&source._meet_post_&days_after_core.;
+/*adjust to 2010 dollars*/
+if year(admit_date)>=2010 then rate=1;
+if year(admit_date)=2009 then rate=1.0350;
+if year(admit_date)=2008 then rate=1.06823;
+if year(admit_date)=2007 then rate=1.11347;
+if year(admit_date)=2006 then rate=1.17287;
+if year(admit_date)=2005 then rate=1.22119;
+if year(admit_date)=2004 then rate=1.27983;
+if year(admit_date)=2003 then rate=1.34381;
+if year(admit_date)=2002 then rate=1.40392;
+if year(admit_date)=2001 then rate=1.47492;
+if year(admit_date)=2000 then rate=1.54589;
+if year(admit_date)<=1999 then rate=1.61195;
+
+&source._paid_by_mc=rate*(pmt_amt);
+run;
+
+/*Calculate total mc payments by ID*/
+proc sql;
+create table &source._pay_post as select distinct BID_hrs_19,core_year,
+sum(&source._paid_by_mc) as &source._paid_by_mc
+from &source._meet2_post group by BID_hrs_19,core_year;
+quit;
+
+/*merge in mc totals with interview list*/
+proc sql;
+create table &source.&month_n._post as select
+a.BID_hrs,a.id,a.core_year,coalesce(b.&source._paid_by_mc,0) as &source._paid_by_mc&month_n 
+from sic_int.core_ids_init_outcomes a
+left join
+ &source._pay_post b
+ on trim(left(a.BID_hrs))=trim(left(b.BID_hrs_19)) and a.core_year=b.core_year;
+ quit;
+
+ proc sort data=&source&month_n._post ;
+ by BID_hrs core_year;
+ run;
+ %mend;
+
+/******************************************************************/
+/* Run the macro over the mc claims files for 2 years prior to death*/
+/******************************************************************/
+
+ %all_other(source=op,month_n=_1yr,days_start=0,days_after_core=365);
+  %all_other(source=pb,month_n=_1yr,days_start=0,days_after_core=365);
+   %all_other(source=hh,month_n=_1yr,days_start=0,days_after_core=365);
+    %all_other(source=hs,month_n=_1yr,days_start=0,days_after_core=365);
+     %all_other(source=dm,month_n=_1yr,days_start=0,days_after_core=365);
+
+/******************************************************************/
+/* Get totals across all claim types */
+/******************************************************************/
+
+*first merge into single dataset;
+data mc_costs_all;
+merge ip_1yr snf_1yr hh_1yr_post hs_1yr_post pb_1yr_post op_1yr_post dm_1yr_post;
+by BID_hrs core_year;
+run;
+
+data sic_int.mc_costs_1yr;
+set mc_costs_all;
+/*total not adjusted for wage index*/
+tot_paid_by_mc_1yr=sum(of ip_paid_by_mc_1yr snf_paid_by_mc_1yr hh_paid_by_mc_1yr hs_paid_by_mc_1yr
+pb_paid_by_mc_1yr op_paid_by_mc_1yr dm_paid_by_mc_1yr);
+label tot_paid_by_mc_1yr="Medicare payment total 1 year following interview"
+ip_paid_by_mc_1yr="IP Medicare payments 1 year following interview" 
+snf_paid_by_mc_1yr="SNF Medicare payments 1 year following interview"
+hh_paid_by_mc_1yr="Home health Medicare payments 1 year following interview" 
+hs_paid_by_mc_1yr="Hospice Medicare payments 1 year following interview"
+pb_paid_by_mc_1yr="Carrier Medicare payments 1 year following interview" 
+op_paid_by_mc_1yr="OP Medicare payments 1 year following interview" 
+dm_paid_by_mc_1yr="DME Medicare payments 1 year following interview"
+;
+run;
+
+*merge into overall dataset*;
+proc sql;
+create table sic_int.core_ids_init_outcomes_2 as select * from
+sic_int.core_ids_init_outcomes a left join
+sic_int.mc_costs_1yr b
+on trim(left(a.bid_hrs))=trim(left(b.bid_hrs_19)) and a.core_year=b.core_year;
+quit;
+
+proc means; 
+var ip_paid_by_mc_1yr snf_paid_by_mc_1yr hh_paid_by_mc_1yr hs_paid_by_mc_1yr
+pb_paid_by_mc_1yr op_paid_by_mc_1yr dm_paid_by_mc_1yr tot_paid_by_mc_1yr;
+run;
 
 
 H="Identify interview where criteria is first met"
@@ -3573,12 +3952,12 @@ A) Any serious medical illness
 B) Serious medical illness or ADL impairment AND either Urgent/Emerg hopspital admission
 or nursing home use*/
 
-proc printto log='&logdir.\sas_12_sic_n0_log' new
-	print='&logdir.\sas_12_sic_n0_out' new
-run;
+/*proc printto new log='&logdir.\sas_12_sic_n0_log.log'
+	print='&logdir.\sas_12_sic_n0_out.lst' 
+run;*/
 
 data ivw_meet_a;
-set sic_int.core_ids_init_outcomes(keep=id ser_med_illness core_year) ;
+set sic_int.core_ids_init_outcomes_2(keep=id ser_med_illness core_year) ;
 if ser_med_illness=1;
 run;
 
@@ -3598,7 +3977,7 @@ proc freq; table ivw_meet_crit_a;
 run;
 
 data ivw_meet_b;
-set sic_int.core_ids_init_outcomes(keep=id criteria_b core_year) ;
+set sic_int.core_ids_init_outcomes_2(keep=id criteria_b core_year) ;
 if criteria_b=1;
 run;
 
@@ -3624,7 +4003,7 @@ run;
 
 
 /*merge in new variables with the overall dataset*/
-proc sort data=sic_int.core_ids_init_outcomes out=ivw_to_merge nodupkey; by id core_year; run;
+proc sort data=sic_int.core_ids_init_outcomes_2 out=ivw_to_merge nodupkey; by id core_year; run;
 
 proc sql;
 create table ivws_crit as select a.*,b.ivw_meet_crit_a,b.ivw_meet_crit_b from
@@ -3666,11 +4045,19 @@ title "Outcomes 1 year after initially meeting criteria A) Any serious medical i
 proc freq data=criteria_a;
 table core_to_dod_1yr hs_admit_p12m ind_em_ur_adm_p12m;
 run;
+proc means; 
+vars ip_paid_by_mc_1yr snf_paid_by_mc_1yr hh_paid_by_mc_1yr hs_paid_by_mc_1yr
+pb_paid_by_mc_1yr op_paid_by_mc_1yr dm_paid_by_mc_1yr tot_paid_by_mc_1yr; run;
 
 title "Outcomes 1 year after initially meeting criteria B) Any ser med illness or ADL Impair + SNF or Hospital.";
 proc freq data=criteria_b;
 table core_to_dod_1yr hs_admit_p12m ind_em_ur_adm_p12m;
 run;
+proc means; 
+vars ip_paid_by_mc_1yr snf_paid_by_mc_1yr hh_paid_by_mc_1yr hs_paid_by_mc_1yr
+pb_paid_by_mc_1yr op_paid_by_mc_1yr dm_paid_by_mc_1yr tot_paid_by_mc_1yr; run;
+
+
 ods rtf close;
 
 H="Core interviews - set up from time 0=meet criteria"
@@ -3689,9 +4076,9 @@ _n1 - interview prior to first meeting criteria
 _p1 and _p2 - 2 interviews after meeting criteria
 */
 
-proc printto log='&logdir.\sas_13_sic_ivw_time_log' new
-	print='&logdir.\sas_13_sic_ivw_time_out' new
-run;
+/*proc printto new log='&logdir.\sas_13_sic_ivw_time_log.log'
+	print='&logdir.\sas_13_sic_ivw_time_out.lst' 
+run;*/
 
 
 *****************************************************;
@@ -3761,6 +4148,10 @@ rename bid_hrs_n0=bid_hrs;
 run;
 
 ****************************************************************;
+*variable list for dropping unneeded variables from restricted dataset, ;
+*pull in for _n0 only since don't change between interviews;
+%let dropvar=birth_date death_date white black hisp_eth other_na_api_race
+
 *get n1 interview, interiew prior to meeting criteria*;
 *list of all core interviews with ffs medicare 1 year prior before meeting the criteria*;
 proc sql;
@@ -3768,7 +4159,7 @@ create table all_ivw_bef_meet_&crit.
 as select b.*
  from n0_&crit._3 a 
  inner join
-sic_int.ivws_crit_1 b
+sic_int.ivws_crit_1(drop=&dropvar.) b
   on a.id=b.id and a.c_ivw_date_n0>b.c_ivw_date;
   quit;
 
@@ -3848,7 +4239,7 @@ create table all_ivw_aft_meet_&crit.
 as select b.*
  from n0_&crit._3 a 
  inner join
-sic_int.ivws_crit_1 b
+sic_int.ivws_crit_1(drop=&dropvar.) b
   on a.id=b.id and a.c_ivw_date_n0<b.c_ivw_date;
   quit;
 
@@ -3889,7 +4280,7 @@ create table all2_ivw_aft_meet_&crit.
 as select b.*
  from core_p1_&crit. a 
  inner join
-sic_int.ivws_crit_1 b
+sic_int.ivws_crit_1(drop=&dropvar.) b
   on a.id=b.id and a.c_ivw_date<b.c_ivw_date;
   quit;
 
@@ -4005,9 +4396,9 @@ Note for now, this just adds interview information, nothing pulled from claims
 prior to death, may need to revisit this if we need outcomes prior to exit
 interview*/
 
-proc printto log='&logdir.\sas_14_sic_exit_log' new
-	print='&logdir.\sas_14_sic_exit_out' new
-run;
+/*proc printto new log='&logdir.\sas_14_sic_exit_log.log'
+	print='&logdir.\sas_14_sic_exit_out.lst' 
+run;*/
 
 data exit;
 set hrs_fnl.exit_02_to_10_dt;
@@ -4061,6 +4452,188 @@ run;
 
 %exit(crit=a);
 %exit(crit=b);
+
+/*export to Stata for remaining processing*/
+proc export data=sic_fin.n0_n1_p1_p2_x_criteria_a
+outfile="E:\data\serious_ill\final_data\n0_n1_p1_p2_x_criteria_a.dta" replace;
+run;
+
+proc export data=sic_fin.n0_n1_p1_p2_x_criteria_b
+outfile="E:\data\serious_ill\final_data\n0_n1_p1_p2_x_criteria_b.dta" replace;
+run;
+
+
+H="Create additional variables, changes between ivws"
+/*switched to Stata
+Data cleaning, create new variables
+Code can be run on either criteria a or criteria b datasets, comments indicate
+sections to be modified when switching between them*/
+
+capture log close
+
+clear all
+set mem 500m
+set more off
+
+local logpath E:\data\serious_ill\logs
+local datapath E:\data\serious_ill\final_data
+
+log using "`logpath'\4a-sic_data_cleaning_crit_a.txt", text replace
+//log using "`logpath'\4b-sic_data_cleaning_crit_b.txt", text replace
+
+cd `datapath'
+
+use n0_n1_p1_p2_x_criteria_a.dta
+//use n0_n1_p1_p2_x_criteria_b.dta
+
+tab core_year_n0, missing
+
+*******************************************************************
+//age when meet criteria
+sum age_at_core_n0
+
+gen age_cat_n0 = .
+replace age_cat_n0 = 1 if age_at_core_n0<75
+replace age_cat_n0 = 2 if age_at_core_n0=>75 & age_at_core_n0<85
+replace age_cat_n0 = 3 if age_at_core_n0=>85 & age_at_core_n0!=.
+la var age_cat_n0 "Age when meets criteria, categorical"
+la def age_cat 1 "Age 65-74" 2 "Age 75-84" 3"Age 85+"
+la val age_cat_n0 age_cat
+tab age_cat_n0, missing
+
+//female gender indicator variable
+tab female_n0, missing
+
+//create race and ethnicity categorical variable
+gen re_cat = .
+replace re_cat = 1 if black_n0==1
+replace re_cat = 3 if white_n0==1
+replace re_cat = 2 if hisp_eth_n0==1
+replace re_cat = 4 if other_na_api_race_n0==1
+la var re_cat "Race & Ethnicity"
+la def re_cat 1 "African American" 3 "White" 2 "Hispanic" 4 "Other"
+la val re_cat re_cat
+tab re_cat, missing
+
+//education categorical variable
+label define educ 0 "No Formal Education" 1 "Grades 1-11" 2 "High School" 3 "Some College" 4 "College" ///
+      5 "Post College"
+label values educ_n0 educ 
+tab educ_n0, missing
+tab educ_n1 educ_n0, missing
+
+
+//self reported health status
+tab srh_n0 srh_n1, missing
+
+*******************************************************************
+//Change in functional status variables
+//Looking back, change from core before meet criteria to core when meet criteria
+label define adl_cat_core 0 "Independent" 1 "Partial Dependence" 2 "Severe Dependence"
+label values adl_cat_core_n0 adl_cat_core 
+tab adl_cat_core_n0 , missing 
+
+
+//stable ind = 1 if stays the same or improves (0 if declines)
+gen byte adl_stable_ind_n0n1=0
+replace adl_stable_ind_n0n1=1 if adl_cat_core_n0==0 & inlist(adl_cat_core_n1,0,1,2) 
+
+gen byte adl_stable_partial_n0n1=0
+replace adl_stable_partial_n0n1=1 if adl_cat_core_n0==1 & inlist(adl_cat_core_n1,1,2) 
+
+gen byte adl_stable_severe_n0n1=0
+replace adl_stable_severe_n0n1=1 if adl_cat_core_n0==2 & adl_cat_core_n1==2 
+
+gen byte adl_change_i_m_n0n1=0
+replace adl_change_i_m_n0n1=1 if adl_cat_core_n0==1 & adl_cat_core_n1==0
+
+gen byte adl_change_i_s_n0n1=0
+replace adl_change_i_s_n0n1=1 if adl_cat_core_n0==2 & adl_cat_core_n1==0
+
+gen byte adl_change_m_s_n0n1=0
+replace adl_change_m_s_n0n1=1 if adl_cat_core_n0==2 & r_adl_cat_core_n1==1
+
+gen byte adl_improved_n0n1=0
+replace adl_improved_n0n1=1 if inlist(adl_cat_core_n0,0,1) & adl_cat_core_n1==2
+replace adl_improved_n0n1=1 if adl_cat_core_n0==0 & adl_cat_core_n1==1
+
+local adlchange adl_stable_ind_n0n1 adl_stable_partial_n0n1 adl_stable_severe_n0n1
+adl_change_i_m_n0n1 adl_change_i_s_n0n1 adl_change_m_s_n0n1 adl_improved_n0n1
+
+foreach v in `adlchange' {
+replace `v'=. if adl_cat_core_n0==. | adl_cat_core_n1==.
+}
+
+//keep missing category out for now, see what the data looks like
+//if decide on missing category, just change line in foreach loop above
+//adl_change_n1n2_miss=0;
+//if adl_cat_core_n1=. or  adl_cat_core_n2=.  then adl_change_n1n2_miss=1;
+
+la var adl_stable_ind_n0n1="R ADL Ind. stable or improving n1 to n0, 1=Yes";
+la var adl_stable_partial_n0n1="R ADL Partial Depend, stable n1 to n0, 1=Yes";
+la var adl_stable_severe_n0n1="R ADL Severe Depend, stable n1 to n0, 1=Yes";
+la var adl_change_i_m_n0n1="R ADL Indep. to Partial Depend n1 to n0, 1=Yes";
+la var adl_change_i_s_n0n1="R ADL Indep. to Severe Depend n1 to n0, 1=Yes";
+la var adl_change_m_s_n0n1="R ADL Partial to Severe Depend n1 to n0, 1=Yes";
+la var adl_improved_n0n1="R ADL Improvement n1 to n0, 1=Yes";
+//la var adl_change_n0n1_miss="R ADL n1 to n0 unknown";
+
+foreach v in `adlchange' {
+tab `v' , missing
+}
+
+*******************************************************************
+//Change in functional status variables
+//Looking forward, change from core meet criteria to next interview (core or death)
+tab adl_cat_core_p1 adl_cat_core_x, missing
+
+//stable ind = 1 if stays the same or improves (0 if declines)
+gen byte adl_stable_ind_n0p1=0
+replace adl_stable_ind_n0p1=1 if adl_cat_core_p1==0 & inlist(adl_cat_core_n0,0,1,2) 
+
+gen byte adl_stable_partial_n0p1=0
+replace adl_stable_partial_n0p1=1 if adl_cat_core_p1==1 & inlist(adl_cat_core_n0,1,2) 
+
+gen byte adl_stable_severe_n0p1=0
+replace adl_stable_severe_n0p1=1 if adl_cat_core_p1==2 & adl_cat_core_n0==2 
+
+gen byte adl_change_i_m_n0p1=0
+replace adl_change_i_m_n0p1=1 if adl_cat_core_p1==1 & adl_cat_core_n0==0
+
+gen byte adl_change_i_s_n0p1=0
+replace adl_change_i_s_n0p1=1 if adl_cat_core_p1==2 & adl_cat_core_n0==0
+
+gen byte adl_change_m_s_n0p1=0
+replace adl_change_m_s_n0p1=1 if adl_cat_core_p1==2 & r_adl_cat_core_n0==1
+
+gen byte adl_improved_n0p1=0
+replace adl_improved_n0p1=1 if inlist(adl_cat_core_p1,0,1) & adl_cat_core_n0==2
+replace adl_improved_n0p1=1 if adl_cat_core_p1==0 & adl_cat_core_n0==1
+
+local adlchange adl_stable_ind_n0p1 adl_stable_partial_n0p1 adl_stable_severe_n0p1
+adl_change_i_m_n0p1 adl_change_i_s_n0p1 adl_change_m_s_n0p1 adl_improved_n0p1
+
+foreach v in `adlchange' {
+replace `v'=. if adl_cat_core_n0==. | adl_cat_core_n1==.
+}
+
+//keep missing category out for now, see what the data looks like
+//if decide on missing category, just change line in foreach loop above
+//adl_change_n1n2_miss=0;
+//if adl_cat_core_n1=. or  adl_cat_core_n2=.  then adl_change_n1n2_miss=1;
+
+la var adl_stable_ind_n0p1="R ADL Ind. stable or improving n0 to p1, 1=Yes";
+la var adl_stable_partial_n0p1="R ADL Partial Depend, stable n0 to p1, 1=Yes";
+la var adl_stable_severe_n0p1="R ADL Severe Depend, stable n0 to p1, 1=Yes";
+la var adl_change_i_m_n0p1="R ADL Indep. to Partial Depend n0 to p1, 1=Yes";
+la var adl_change_i_s_n0p1="R ADL Indep. to Severe Depend n0 to p1, 1=Yes";
+la var adl_change_m_s_n0p1="R ADL Partial to Severe Depend n0 to p1, 1=Yes";
+la var adl_improved_n0p1="R ADL Improvement n0 to p1, 1=Yes";
+//la var adl_change_n0p1_miss="R ADL n0 to p1 unknown";
+
+foreach v in `adlchange' {
+tab `v' , missing
+}
 
 
 H="xxxxNotes"

@@ -46,11 +46,18 @@ proc sort data=core nodupkey;
 by id core_year;
 run;
 
+*3 obs have missing pn in core 2004;
+data core_test;
+set core;
+if pn=.;
+run;
+
 data restr(rename=(ZIP10_2000=ZIP10));
-set hrs_fnl.restricted_v2010(keep=birth_date death_date white black hisp_eth other_na_api_race zip:);
+set hrs_fnl.restricted_v2010(keep=hhid pn id birth_date death_date white black hisp_eth other_na_api_race zip:);
 id_c=trim(hhid)||trim(pn);
 drop id;
 rename id_c=id;
+restr_yes=1;
 run;
 
 proc sort data=restr nodupkey;
@@ -60,10 +67,18 @@ run;
 proc contents data=restr; run;
 
 proc sql;
-create table core_dob as select * from core a left join
-restr b
-on a.id=b.id;
+create table core_dob(drop=id2) as select * from core a left join
+restr(rename=(id=id2) drop=hhid pn) b 
+on a.id=b.id2;
 quit;
+
+*18 obs have no match in the restricted dataset;
+proc freq data=core_dob; table restr_yes /missprint; run;
+
+data restr_test;
+set core_dob;
+if restr_yes=.;
+run;
 
 data core_age_1;
 set core_dob;
@@ -113,7 +128,7 @@ create table ivw_years_2 as select a.id,a.first_ivw_year,b.last_ivw_year
 from ivw_years_1a a left join
 ivw_years_1b b
 on a.id=b.id;
-run;
+quit;
 
 proc freq; table first_ivw_year last_ivw_year; run;
 
@@ -124,7 +139,7 @@ a.*, b.first_ivw_year,b.last_ivw_year from
 core_age_1 a left join
 ivw_years_2 b
 on a.id=b.id;
-run;
+quit;
 
 proc freq; table first_ivw_year last_ivw_year; run;
 
@@ -133,19 +148,26 @@ proc freq; table first_ivw_year last_ivw_year; run;
 2. if still missing, use interview after
 3. if still missing, use interview 2x prior...*/
 
+
+
 data core_age_zip_2 ;
 set core_age_zip_1 ;
-/*1998 updates, use 2000 zip*/
+/*1998 updates, use 2000 zip
+1 obs only has one interview in our dataset for 1998 and is missing zip that year, won't be
+in the final sample so leave as missing now*/
 if zip98='' & first_ivw_year<=1998<=last_ivw_year then do;
 	zip_98_imp_yes=1;
 	zip98=zip00;
 	end;
-/*2000 updates, use 1998 zip*/
+/*2000 updates, use 1998 zip
+2 obs only have one interview in the dataset for 2000, missing zip that year, again not
+in final sample so leave missing here*/
 if zip00='' & first_ivw_year<=2000<=last_ivw_year then do;
 	zip_00_imp_yes=1;
 	zip00=zip98;
 	end;
-/*2002 updates, use 2000 or 2004 zip*/
+/*2002 updates, use 2000 or 2004 zip
+1 obs has only the 2002 interview, leave zip missing for that person*/
 if zip02='' & first_ivw_year<=2002<=last_ivw_year then do;
 	zip_02_imp_yes=1;
 	zip02=zip00;
@@ -153,7 +175,8 @@ if zip02='' & first_ivw_year<=2002<=last_ivw_year then do;
 		zip02=zip04;
 		end;
 	end;
-/*2004 updates, use 2002 or 2006 zip*/
+/*2004 updates, use 2002 or 2006 zip
+13 obs has only the 2004 interview, leave zip missing for those observations*/
 if zip04='' & first_ivw_year<=2004<=last_ivw_year then do;
 	zip_04_imp_yes=1;
 	zip04=zip02;
@@ -164,28 +187,27 @@ if zip04='' & first_ivw_year<=2004<=last_ivw_year then do;
 				zip04=zip98;
 				end; 
 	end;
-/*2006 updates, use 2004 or 2008 zip*/
+/*2006 updates, use 2004 or 2008 zip
+no observations missing*/
 if zip06='' & first_ivw_year<=2006<=last_ivw_year then do;
 	zip_06_imp_yes=1;
 	zip06=zip04;
 		if zip06='' then do;
 		zip06=zip08;
-		end; /*1 obs still missing, use 1998 zip for this person*/
-				if zip06='' then do;
-				zip06=zip98;
-				end; 
+		end; 
 	end;
-/*2008 updates, use 2006 zip*/
-if zip08_e='' & first_ivw_year<=2008<=last_ivw_year then do;
+/*2008 updates, use 2006 zip
+no observations missing*/
+if zip08='' & first_ivw_year<=2008<=last_ivw_year then do;
 	zip_08_imp_yes=1;
 	zip08=zip06;
 	end;
-/*2010 updates, use 2008 zip*/
+/*2010 updates, use 2008 zip
+1 obs has only 2010 interview and missing zip that year, so leave missing*/
 if zip10='' & first_ivw_year<=2010<=last_ivw_year then do;
 	zip_10_imp_yes=1;
 	zip10=zip08;
 	end;
-
 run;
 
 proc sort data=core_age_zip_2; by id core_year; run;
@@ -200,7 +222,7 @@ label zip_wave="ZIP code, residence at time of interview";
 label zip_imputed="ZIP code imputed";
 run;
 
-proc means; vars zip_wave; run;
+proc freq; table zip_wave  /missprint ; run;
 
 proc freq; table zip_imputed /missprint ; run;
 
@@ -655,7 +677,6 @@ Use to get indicator of hospitalizations 6 m prior to interview*/
 /*run to get claims lists 1 year pre-core
 Datasets are sic_int.mp_meet3_365, sic_int.hh_meet_365, etc.*/
 %mp(days_start=0,days_bef_core=365,source=mp );
-%mp(days_start=0,days_bef_core=365,source=ip );
 
 %other(days_start=0,days_bef_core=365,source=hh );
 %other(days_start=0,days_bef_core=365,source=hs );
@@ -677,8 +698,7 @@ Datasets are sic_int.mp_meet3_730, sic_int.hh_meet_730, etc.*/
 
 /****************************************************************************/
 /****************************************************************************/
-/*try running medpar code on the ip claims list to get ip claims 1
-year pre-core
+/*Run medpar code on the ip claims list to get ip claims 1 year pre-core
 Use these ip claims for the hip fracture determination*/
 %mp(days_start=0,days_bef_core=365,source=ip );
 
@@ -1975,6 +1995,19 @@ if type_adm=3 then elect_admit=1;
 ind_ed_charge=0; /*ED charges as another indicator of ED use*/
 if ER_AMT>0 & ER_AMT~=. then ind_ed_charge=1;
 if ER_AMT=0 | ER_AMT=. then ind_ed_charge=0;
+
+/*truncate stays where the admit is more than x days before interview
+or discharge is after the interview date so can get accurate LOS*/
+if c_ivw_date-admit_date>&days. then do;
+	admit_date=c_ivw_date-&days.;
+	admit_trunc=1;
+	end;
+if c_ivw_date<disch_date then do;
+	disch_date=c_ivw_date;
+	disch_trunc=1;	
+	end;
+adj_los=disch_date-admit_date;
+if disch_date-admit_date=0 then adj_los=1;
 run;
 
 proc sort data=ip_&days._2;
@@ -1988,7 +2021,7 @@ sum(icu_days) as icu_days_&suffix. label="total icu days &suffix. pre core ivw",
 /*count of IP admissions, all types*/
 count(*) as n_ip_admit_&suffix. label="total n of hospital admit &suffix. pre core ivw",
 /*total Hospital LOS*/
-sum(LOSCNT) as n_hospd_&suffix. label="total hospital days &suffix. pre core ivw",
+sum(adj_los) as n_hospd_&suffix. label="total hospital days &suffix. pre core ivw",
 /*count urgent or emergency admissions*/
 count(case when em_urgent_admit=1 then em_urgent_admit else . end) as n_em_urgent_admit_&suffix. 
 	label="total n of urgent/emergent hospital admit &suffix. pre core ivw",
@@ -2007,6 +2040,11 @@ count(case when ind_ed_charge=1 then ind_ed_charge else . end) as n_ED_ip_&suffi
 
  from ip_&days._2 group by BID_hrs_19,core_year;
 quit;
+
+data ip_&days._4;
+set ip_&days._3;
+if icu_days_&suffix.>n_hospd_&suffix. then icu_days_&suffix.=n_hospd_&suffix.;
+run;
 
 %mend;
 
@@ -3508,11 +3546,10 @@ Use suffix p12m to indicate post interview*/
 /**********************************************************************/
 /**********************************************************************/
 %macro admissions(days=,suffix=);
-
 /*pull list of ip claims from all medpar claims x days after interview*/
 data ip_meet_post_&days.;
 set sic_int.mp_meet3_post_&days.(where=(trim(left(SSLSSNF))~="N"));
-if admit_date>=c_ivw_date;
+*if admit_date>=c_ivw_date;
 run;
 
 data ip_post_&days._2;
@@ -3528,6 +3565,20 @@ if type_adm=3 then elect_admit=1;
 ind_ed_charge=0; /*ED charges as another indicator of ED use*/
 if ER_AMT>0 & ER_AMT~=. then ind_ed_charge=1;
 if ER_AMT=0 | ER_AMT=. then ind_ed_charge=0;
+
+*truncate admit and discharge dates to get all days within the window;
+admit_trunc=0;
+disch_trunc=0;
+if admit_date<c_ivw_date then do;
+	admit_date=c_ivw_date;
+	admit_trunc=1;
+end;
+if disch_date-c_ivw_date>&days. then do;
+	disch_date=c_ivw_date+&days.;
+	disch_trunc=1;
+end;
+adj_los=disch_date-admit_date;
+if disch_date-admit_date=0 then adj_los=1;
 run;
 
 proc sort data=ip_post_&days._2;
@@ -3538,6 +3589,8 @@ proc sql;
 create table ip_post_&days._3 as select distinct BID_hrs_19,core_year,
 /*count of IP admissions, all types*/
 count(*) as n_ip_admit_&suffix. label="total n of hospital admit &suffix. after core ivw",
+/*count of nights in hospital*/
+sum(adj_los) as n_hospd_&suffix. label="total n of hospital nights &suffix. after core ivw",
 /*count urgent or emergency admissions*/
 count(case when em_urgent_admit=1 then em_urgent_admit else . end) as n_em_urgent_admit_&suffix. 
 	label="total n of urgent/emergent hospital admit &suffix. after core ivw",
@@ -3552,10 +3605,17 @@ count(case when elect_admit=1 then elect_admit else . end) as n_elect_admit_&suf
 	label="total n of elective hospital admit &suffix. after core ivw",
 /*count of admissions with any ED charges*/
 count(case when ind_ed_charge=1 then ind_ed_charge else . end) as n_ED_ip_&suffix. 
-	label="total n of ED visits with subsequent admit &suffix. after core ivw"
+	label="total n of ED visits with subsequent admit &suffix. after core ivw",
+sum(admit_trunc) as adm_trunc_ind_&suffix.
+	label="admit before interview indicator, counted as both pre and post admit"
 
  from ip_post_&days._2 group by BID_hrs_19,core_year;
 quit;
+
+data ip_post_&days._4;
+set ip_post_&days._3;
+if adm_trunc_ind_&suffix.>1 then adm_trunc_ind_&suffix.=1;
+run;
 
 %mend;
 
@@ -3563,11 +3623,12 @@ quit;
 
 proc sql;
 create table core_ids_admit_post_1 as select a.*,
-b.n_ip_admit_p12m,b.n_em_urgent_admit_p12m,b.n_em_admit_p12m,
+b.n_ip_admit_p12m,b.adm_trunc_ind_p12m,b.n_hospd_p12m,
+b.n_em_urgent_admit_p12m,b.n_em_admit_p12m,
 b.n_urgent_admit_p12m,b.n_elect_admit_p12m,b.n_ED_ip_p12m
 from age_ge_65_mc a
 left join
-ip_post_365_3 b 
+ip_post_365_4 b 
 on trim(left(a.bid_hrs))=trim(left(b.bid_hrs_19)) and a.core_year=b.core_year;
 quit;
 
@@ -3576,7 +3637,7 @@ core interview, can use comorb = ., same as ffs mc 1 year=no*/
  data core_ids_admit_post_2;
  set core_ids_admit_post_1;
  array list 
-	n_ip_admit_p12m n_em_urgent_admit_p12m
+	n_ip_admit_p12m n_hospd_p12m n_em_urgent_admit_p12m
 	n_em_admit_p12m n_urgent_admit_p12m n_elect_admit_p12m n_ED_ip_p12m;
  do over list;
  if list=. & comorb_1_0_1yr~=. then list=0;
@@ -3616,7 +3677,7 @@ core interview, can use comorb = ., same as ffs mc 1 year=no*/
 run;
 
 proc freq;
-table n_ip_admit_p12m ind_hosp_adm_p12m n_em_urgent_admit_p12m ind_em_ur_adm_p12m
+table n_ip_admit_p12m adm_trunc_ind_p12m n_hospd_p12m ind_hosp_adm_p12m n_em_urgent_admit_p12m ind_em_ur_adm_p12m
 	ind_em_adm_p12m ind_ur_adm_p12m ind_nonelect_adm_p12m n_nonelect_adm_p12m n_ED_ip_p12m ind_ED_adm_p12m 
 	ind_em_adm_p12m*ind_ED_adm_p12m /missprint;
 run;
@@ -3893,7 +3954,7 @@ left join
  proc sort data=&source&month_n._post ;
  by BID_hrs core_year;
  run;
- %mend;
+ %mend all_other;
 
 /******************************************************************/
 /* Run the macro over the mc claims files for 2 years prior to death*/
@@ -3931,12 +3992,16 @@ dm_paid_by_mc_1yr="DME Medicare payments 1 year following interview"
 ;
 run;
 
+proc sort data=sic_int.core_ids_init_outcomes; by bid_hrs core_year; run;
+proc sort data=sic_int.mc_costs_1yr; by bid_hrs core_year; run;
+
+
 *merge into overall dataset*;
 proc sql;
-create table sic_int.core_ids_init_outcomes_2 as select * from
+create table sic_int.core_ids_init_outcomes_2(drop=bid_hrs2 id2 core_year2) as select * from
 sic_int.core_ids_init_outcomes a left join
-sic_int.mc_costs_1yr b
-on trim(left(a.bid_hrs))=trim(left(b.bid_hrs_19)) and a.core_year=b.core_year;
+sic_int.mc_costs_1yr(rename=(bid_hrs=bid_hrs2) rename=(id=id2) rename=(core_year=core_year2)) b
+on trim(left(a.bid_hrs))=trim(left(b.bid_hrs2)) and a.core_year=b.core_year2;
 quit;
 
 proc means; 
@@ -3950,7 +4015,9 @@ H="Identify interview where criteria is first met"
 2 criteria used:
 A) Any serious medical illness
 B) Serious medical illness or ADL impairment AND either Urgent/Emerg hopspital admission
-or nursing home use*/
+or nursing home use
+
+Creates file with outcomes as well*/
 
 /*proc printto new log='&logdir.\sas_12_sic_n0_log.log'
 	print='&logdir.\sas_12_sic_n0_out.lst' 

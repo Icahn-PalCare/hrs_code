@@ -46,12 +46,6 @@ proc sort data=core nodupkey;
 by id core_year;
 run;
 
-*3 obs have missing pn in core 2004;
-data core_test;
-set core;
-if pn=.;
-run;
-
 data restr(rename=(ZIP10_2000=ZIP10));
 set hrs_fnl.restricted_v2010(keep=hhid pn id birth_date death_date white black hisp_eth other_na_api_race zip:);
 id_c=trim(hhid)||trim(pn);
@@ -72,7 +66,8 @@ restr(rename=(id=id2) drop=hhid pn) b
 on a.id=b.id2;
 quit;
 
-*18 obs have no match in the restricted dataset;
+*5 obs have no match in the restricted dataset;
+*These obs each only have 1 inteview, so can't use them anyway;
 proc freq data=core_dob; table restr_yes /missprint; run;
 
 data restr_test;
@@ -367,7 +362,7 @@ sic_int.core_xwalk_1 has core interviews, age and claims xwalk id */
 
 /*prepare core dataset to merge*/
 data core_id;
-set sic_int.core_age_1;
+set sic_int.core_age_zip;
 run;
 
 proc sort data=core_id nodupkey;
@@ -390,7 +385,7 @@ drop bid_hrs_19;
 run;
 
 proc sort data= crosswalk_2;
-by bid_hrs;
+by id;
 run;
 
 /*bring in xwalk id to core interview dataset*/
@@ -404,7 +399,7 @@ on a.id=b.id;
 quit;
 
 /*check for missing xwalk ids
-38947 of 130333 interviews are missing xwalk ids*/
+38934 of 130320 interviews are missing xwalk ids*/
 data check1;
 set core_xwalk ;
 if bid_hrs ='';
@@ -454,6 +449,11 @@ run;
 proc freq;
 table c_ivw_year;
 run;
+
+*2 obs have missing core year because no restricted data (no ivw date or dob);
+proc freq data=core_mc_ids; table c_ivw_year /missprint; run;
+
+data core_year_test; set core_mc_ids; if c_ivw_year=.; run;
 
 /*pull medicare and hmo status variables from dn file
 for the core interview years
@@ -2862,7 +2862,7 @@ set cpt_and_surg_1;
 keep bid_hrs_19 hf_proc_ind hf_w_surgery core_year;
 run;
 
-proc sort data=cpt_and_surg_2 nodupkey; by bid_hrs_19 ; run;
+proc sort data=cpt_and_surg_2 nodupkey; by bid_hrs_19 core_year ; run;
 
 data hfproc_carr_6;
 set hfproc_carr_4;
@@ -2870,22 +2870,26 @@ keep bid_hrs_19 hf_proc_ind hf_w_visit_2d core_year;
 if hf_proc_ind=1 and hf_w_visit_2d=1;
 run;
 
-proc sort data=hfproc_carr_6 nodupkey; by bid_hrs_19 ; run;
+proc sort data=hfproc_carr_6 nodupkey; by bid_hrs_19  core_year ; run;
 
+*merge the datasets;
 data hf_meet;
-set hfproc_carr_6 cpt_and_surg_2 ;
+merge hfproc_carr_6 cpt_and_surg_2 ;
+by bid_hrs_19 core_year;
 run;
+
+proc sort data=hf_meet out=hf_meet2 nodupkey; by bid_hrs_19  core_year; run;
 
 /*merge in these hip fracture variables*/
 proc sql;
 create table core_ids_1yr_criteria_4f
 as select a.*,b.hf_w_visit_2d,b.hf_w_surgery from
 sic_int.core_ids_1yr_criteria_4e a left join
-hf_meet b
+hf_meet2 b
 on a.bid_hrs=b.bid_hrs_19 and a.core_year=b.core_year;
 quit;
 
-proc freq; table hf_w_visit_2d hf_w_surgery ;
+proc freq; table hf_w_visit_2d*hf_w_surgery /missprint;
 run;
 
 data sic_int.core_ids_1yr_criteria_4g;
@@ -4087,7 +4091,7 @@ if list=. & comorb_1_0_1yr~=. then list=0;
 end;
 run;
 
-/*should be 4393 and 2955*/
+/*should be 4394 and 2956*/
 proc freq;
 table ivw_meet_crit_a ivw_meet_crit_b;
 run;
@@ -4100,7 +4104,6 @@ set sic_int.ivws_crit_1;
 if ivw_meet_crit_a=1;
 run;
 
-
 /*for Criteria B*/
 data criteria_b;
 set sic_int.ivws_crit_1;
@@ -4112,9 +4115,9 @@ title "Outcomes 1 year after initially meeting criteria A) Any serious medical i
 proc freq data=criteria_a;
 table core_to_dod_1yr hs_admit_p12m ind_em_ur_adm_p12m;
 run;
-proc means; 
+proc means data=criteria_a; 
 vars ip_paid_by_mc_1yr snf_paid_by_mc_1yr hh_paid_by_mc_1yr hs_paid_by_mc_1yr
-pb_paid_by_mc_1yr op_paid_by_mc_1yr dm_paid_by_mc_1yr tot_paid_by_mc_1yr; run;
+pb_paid_by_mc_1yr op_paid_by_mc_1yr dm_paid_by_mc_1yr tot_paid_by_mc_1yr n_hospd_p12m; run;
 
 title "Outcomes 1 year after initially meeting criteria B) Any ser med illness or ADL Impair + SNF or Hospital.";
 proc freq data=criteria_b;
@@ -4122,7 +4125,7 @@ table core_to_dod_1yr hs_admit_p12m ind_em_ur_adm_p12m;
 run;
 proc means; 
 vars ip_paid_by_mc_1yr snf_paid_by_mc_1yr hh_paid_by_mc_1yr hs_paid_by_mc_1yr
-pb_paid_by_mc_1yr op_paid_by_mc_1yr dm_paid_by_mc_1yr tot_paid_by_mc_1yr; run;
+pb_paid_by_mc_1yr op_paid_by_mc_1yr dm_paid_by_mc_1yr tot_paid_by_mc_1yr n_hospd_p12m; run;
 
 
 ods rtf close;
@@ -4193,6 +4196,19 @@ interviews before have n1, n2, etc suffix
 interviews after have p1, p2 suffix */
 ****************************************************************;
 
+*drop variables from interview dataset that we don't need for the n1, p1, etc datasets;
+*these are variables from the restricted dataset;
+data core_to_use;
+set sic_int.ivws_crit_1(drop=birth_date death_date white black hisp_eth other_na_api_race 
+zip_0: zip_10: zip_98: first_ivw_year last_ivw_year restr_yes);
+run;
+
+data core_all_drop;
+set sic_int.core_ids_1yr_criteria_5(drop=birth_date death_date white black hisp_eth other_na_api_race 
+zip_0: zip_10: zip_98: first_ivw_year last_ivw_year restr_yes);
+run;
+
+*note interview counts listed are for criteria a dataset, they are different for criteria b;
 %macro ds_restr(crit=);
 
 *get ids, first time they met criteria;
@@ -4202,7 +4218,7 @@ if ivw_meet_crit_&crit.=1;
 run;
 
 data TEST;
-set n0_&crit._1;
+set n0_&crit._1(drop=zip_0: zip_10: zip_98:);
 run;
 
 *add _n0 suffix for interview variables for year that first meets criteria;
@@ -4215,18 +4231,14 @@ rename bid_hrs_n0=bid_hrs;
 run;
 
 ****************************************************************;
-*variable list for dropping unneeded variables from restricted dataset, ;
-*pull in for _n0 only since don't change between interviews;
-%let dropvar=birth_date death_date white black hisp_eth other_na_api_race
-
 *get n1 interview, interiew prior to meeting criteria*;
-*list of all core interviews with ffs medicare 1 year prior before meeting the criteria*;
+*list of 4244 core interviews with ffs medicare 1 year prior before meeting the criteria*;
 proc sql;
 create table all_ivw_bef_meet_&crit.
 as select b.*
  from n0_&crit._3 a 
  inner join
-sic_int.ivws_crit_1(drop=&dropvar.) b
+core_to_use b
   on a.id=b.id and a.c_ivw_date_n0>b.c_ivw_date;
   quit;
 
@@ -4253,10 +4265,11 @@ create table noffsreq_ivw_bef_meet_&crit.
 as select b.*
  from n0_&crit._3 a 
  inner join
-sic_int.core_ids_1yr_criteria_5 b
+core_all_drop b
   on a.id=b.id and a.c_ivw_date_n0>b.c_ivw_date;
   quit;
 
+*5304 of the ivws are not in the list that already have the n1 ivw;
 proc sql;
 create table noffsreq_ivw_bef_meet_&crit._1 as select * from
 noffsreq_ivw_bef_meet_&crit.
@@ -4268,19 +4281,19 @@ by id c_ivw_date;
 run;
 
 *keep only the n1 core interview;
-*xxxx interviews identified;
+*2114 interviews identified;
 data noffsreq_core_n1_&crit.;
 set noffsreq_ivw_bef_meet_&crit._1;
 by id c_ivw_date;
 if last.id;
 run;
 
-*append to get full list of n1 interviews;
+*append to get full list of 4336 n1 interviews;
 data core_n1_&crit._1;
 set core_n1_&crit. noffsreq_core_n1_&crit.;
 run;
 
-proc sort data=core_n1_&crit._1 ;
+proc sort data=core_n1_&crit._1 nodupkey;
 by id;
 run;
 
@@ -4296,8 +4309,6 @@ quit;
 proc freq; table n_ivws_bef_&crit.;
 run;
 
-
-
 ****************************************************************;
 *get p1 interview, interview after meeting criteria*;
 *list of all core interviews after meeting the criteria*;
@@ -4306,7 +4317,7 @@ create table all_ivw_aft_meet_&crit.
 as select b.*
  from n0_&crit._3 a 
  inner join
-sic_int.ivws_crit_1(drop=&dropvar.) b
+core_to_use b
   on a.id=b.id and a.c_ivw_date_n0<b.c_ivw_date;
   quit;
 
@@ -4347,7 +4358,7 @@ create table all2_ivw_aft_meet_&crit.
 as select b.*
  from core_p1_&crit. a 
  inner join
-sic_int.ivws_crit_1(drop=&dropvar.) b
+core_to_use b
   on a.id=b.id and a.c_ivw_date<b.c_ivw_date;
   quit;
 
@@ -4443,7 +4454,7 @@ run;
 ** Looking at who has missing n1 core interviews  ***********;
 *************************************************************;
 proc freq data=sic_fin.n0_n1_p1_p2_criteria_a;
-table part_ab_12m*hmo_d_12m part_ab_6m*hmo_d_6m /missprint;
+table part_ab_12m_n1*hmo_d_12m_n1 part_ab_6m_n1*hmo_d_6m_n1 /missprint;
 run;
 
 data no_n1_core_1;
@@ -4452,7 +4463,7 @@ if core_year_n1=.;
 run;
 
 proc freq;
-table core_year_n0;
+table core_year_n0 first_ivw_year_n0;
 run;
 
 H="Add exit interviews to dataset"
@@ -4482,27 +4493,28 @@ set exit_1;
 rename id_x=id;
 run;
 
-*use macro to do for criteria a and b datasets;
+/*use macro to do for criteria a and b datasets*/
 
 %macro exit(crit=);
 
-*keep for those R's that meet criteria at some time;
+/*keep for those R's that meet criteria at some time*/
 proc sql;
-create table exit_meet_&crit. as select * from
-exit where id in (select id from sic_fin.n0_n1_p1_p2_criteria_&crit.);
+create table exit_meet_&crit. as select * 
+from exit_2 
+where id in (select id from sic_fin.n0_n1_p1_p2_criteria_&crit.);
 quit;
 
 proc sort data=exit_meet_&crit. nodupkey; by id; run;
 proc sort data=sic_fin.n0_n1_p1_p2_criteria_&crit. out=ivws nodupkey; by id; run;
 
-data n0_n1_p1_p2_x_criteria_&crit_1.
+data n0_n1_p1_p2_x_criteria_&crit._1;
 merge ivws exit_meet_&crit.;
 run;
 
 proc freq; table exit_year_x; run;
 
 data sic_fin.n0_n1_p1_p2_x_criteria_&crit.;
-set n0_n1_p1_p2_x_criteria_&crit_1.;
+set n0_n1_p1_p2_x_criteria_&crit._1;
 if exit_year_x-core_year_n0=2 then ind_exit_p1_yes=1;
 else ind_exit_p1_yes=0;
 if exit_year_x-core_year_n0=4 then ind_exit_p2_yes=1;
@@ -4561,24 +4573,30 @@ sum age_at_core_n0
 
 gen age_cat_n0 = .
 replace age_cat_n0 = 1 if age_at_core_n0<75
-replace age_cat_n0 = 2 if age_at_core_n0=>75 & age_at_core_n0<85
-replace age_cat_n0 = 3 if age_at_core_n0=>85 & age_at_core_n0!=.
+replace age_cat_n0 = 2 if age_at_core_n0>=75 & age_at_core_n0<85
+replace age_cat_n0 = 3 if age_at_core_n0>=85 & age_at_core_n0!=.
 la var age_cat_n0 "Age when meets criteria, categorical"
 la def age_cat 1 "Age 65-74" 2 "Age 75-84" 3"Age 85+"
 la val age_cat_n0 age_cat
 tab age_cat_n0, missing
 
+sum age_at_core_n0 if age_cat_n0 ==1
+sum age_at_core_n0 if age_cat_n0 ==2
+sum age_at_core_n0 if age_cat_n0 ==3
+
 //female gender indicator variable
 tab female_n0, missing
 
 //create race and ethnicity categorical variable
+//may want to backfill from claims and check this variable!
 gen re_cat = .
 replace re_cat = 1 if black_n0==1
 replace re_cat = 3 if white_n0==1
 replace re_cat = 2 if hisp_eth_n0==1
 replace re_cat = 4 if other_na_api_race_n0==1
+replace re_cat = 5 if black_n0!=1 & white_n0!=1 & hisp_eth_n0~=1 & other_na_api_race_n0~=1
 la var re_cat "Race & Ethnicity"
-la def re_cat 1 "African American" 3 "White" 2 "Hispanic" 4 "Other"
+la def re_cat 1 "African American" 3 "White" 2 "Hispanic" 4 "Other" 5 "Unknown race" , replace
 la val re_cat re_cat
 tab re_cat, missing
 
@@ -4589,6 +4607,11 @@ label values educ_n0 educ
 tab educ_n0, missing
 tab educ_n1 educ_n0, missing
 
+//need to backfill with n2, n3 information, don't have it in the dataset now
+gen educ = educ_n0
+replace educ=educ_n1 if educ_n0==.
+label values educ educ
+tab educ core_year_n0, missing
 
 //self reported health status
 tab srh_n0 srh_n1, missing
@@ -4618,13 +4641,13 @@ gen byte adl_change_i_s_n0n1=0
 replace adl_change_i_s_n0n1=1 if adl_cat_core_n0==2 & adl_cat_core_n1==0
 
 gen byte adl_change_m_s_n0n1=0
-replace adl_change_m_s_n0n1=1 if adl_cat_core_n0==2 & r_adl_cat_core_n1==1
+replace adl_change_m_s_n0n1=1 if adl_cat_core_n0==2 & adl_cat_core_n1==1
 
 gen byte adl_improved_n0n1=0
 replace adl_improved_n0n1=1 if inlist(adl_cat_core_n0,0,1) & adl_cat_core_n1==2
 replace adl_improved_n0n1=1 if adl_cat_core_n0==0 & adl_cat_core_n1==1
 
-local adlchange adl_stable_ind_n0n1 adl_stable_partial_n0n1 adl_stable_severe_n0n1
+local adlchange adl_stable_ind_n0n1 adl_stable_partial_n0n1 adl_stable_severe_n0n1 ///
 adl_change_i_m_n0n1 adl_change_i_s_n0n1 adl_change_m_s_n0n1 adl_improved_n0n1
 
 foreach v in `adlchange' {
@@ -4636,13 +4659,13 @@ replace `v'=. if adl_cat_core_n0==. | adl_cat_core_n1==.
 //adl_change_n1n2_miss=0;
 //if adl_cat_core_n1=. or  adl_cat_core_n2=.  then adl_change_n1n2_miss=1;
 
-la var adl_stable_ind_n0n1="R ADL Ind. stable or improving n1 to n0, 1=Yes";
-la var adl_stable_partial_n0n1="R ADL Partial Depend, stable n1 to n0, 1=Yes";
-la var adl_stable_severe_n0n1="R ADL Severe Depend, stable n1 to n0, 1=Yes";
-la var adl_change_i_m_n0n1="R ADL Indep. to Partial Depend n1 to n0, 1=Yes";
-la var adl_change_i_s_n0n1="R ADL Indep. to Severe Depend n1 to n0, 1=Yes";
-la var adl_change_m_s_n0n1="R ADL Partial to Severe Depend n1 to n0, 1=Yes";
-la var adl_improved_n0n1="R ADL Improvement n1 to n0, 1=Yes";
+la var adl_stable_ind_n0n1 "R ADL Ind. stable or improving n1 to n0, 1=Yes"
+la var adl_stable_partial_n0n1 "R ADL Partial Depend, stable n1 to n0, 1=Yes"
+la var adl_stable_severe_n0n1 "R ADL Severe Depend, stable n1 to n0, 1=Yes"
+la var adl_change_i_m_n0n1 "R ADL Indep. to Partial Depend n1 to n0, 1=Yes"
+la var adl_change_i_s_n0n1 "R ADL Indep. to Severe Depend n1 to n0, 1=Yes"
+la var adl_change_m_s_n0n1 "R ADL Partial to Severe Depend n1 to n0, 1=Yes"
+la var adl_improved_n0n1 "R ADL Improvement n1 to n0, 1=Yes"
 //la var adl_change_n0n1_miss="R ADL n1 to n0 unknown";
 
 foreach v in `adlchange' {
@@ -4652,7 +4675,8 @@ tab `v' , missing
 *******************************************************************
 //Change in functional status variables
 //Looking forward, change from core meet criteria to next interview (core or death)
-tab adl_cat_core_p1 adl_cat_core_x, missing
+//Need to code up for if missing p1, check the exit interviews!
+tab adl_cat_core_p1 adl_cat_core_n0, missing
 
 //stable ind = 1 if stays the same or improves (0 if declines)
 gen byte adl_stable_ind_n0p1=0
@@ -4671,17 +4695,17 @@ gen byte adl_change_i_s_n0p1=0
 replace adl_change_i_s_n0p1=1 if adl_cat_core_p1==2 & adl_cat_core_n0==0
 
 gen byte adl_change_m_s_n0p1=0
-replace adl_change_m_s_n0p1=1 if adl_cat_core_p1==2 & r_adl_cat_core_n0==1
+replace adl_change_m_s_n0p1=1 if adl_cat_core_p1==2 & adl_cat_core_n0==1
 
 gen byte adl_improved_n0p1=0
 replace adl_improved_n0p1=1 if inlist(adl_cat_core_p1,0,1) & adl_cat_core_n0==2
 replace adl_improved_n0p1=1 if adl_cat_core_p1==0 & adl_cat_core_n0==1
 
-local adlchange adl_stable_ind_n0p1 adl_stable_partial_n0p1 adl_stable_severe_n0p1
+local adlchange adl_stable_ind_n0p1 adl_stable_partial_n0p1 adl_stable_severe_n0p1 ///
 adl_change_i_m_n0p1 adl_change_i_s_n0p1 adl_change_m_s_n0p1 adl_improved_n0p1
 
 foreach v in `adlchange' {
-replace `v'=. if adl_cat_core_n0==. | adl_cat_core_n1==.
+replace `v'=. if adl_cat_core_n0==. | adl_cat_core_p1==.
 }
 
 //keep missing category out for now, see what the data looks like
@@ -4689,18 +4713,22 @@ replace `v'=. if adl_cat_core_n0==. | adl_cat_core_n1==.
 //adl_change_n1n2_miss=0;
 //if adl_cat_core_n1=. or  adl_cat_core_n2=.  then adl_change_n1n2_miss=1;
 
-la var adl_stable_ind_n0p1="R ADL Ind. stable or improving n0 to p1, 1=Yes";
-la var adl_stable_partial_n0p1="R ADL Partial Depend, stable n0 to p1, 1=Yes";
-la var adl_stable_severe_n0p1="R ADL Severe Depend, stable n0 to p1, 1=Yes";
-la var adl_change_i_m_n0p1="R ADL Indep. to Partial Depend n0 to p1, 1=Yes";
-la var adl_change_i_s_n0p1="R ADL Indep. to Severe Depend n0 to p1, 1=Yes";
-la var adl_change_m_s_n0p1="R ADL Partial to Severe Depend n0 to p1, 1=Yes";
-la var adl_improved_n0p1="R ADL Improvement n0 to p1, 1=Yes";
+la var adl_stable_ind_n0p1 "R ADL Ind. stable or improving n0 to p1, 1=Yes"
+la var adl_stable_partial_n0p1 "R ADL Partial Depend, stable n0 to p1, 1=Yes"
+la var adl_stable_severe_n0p1 "R ADL Severe Depend, stable n0 to p1, 1=Yes"
+la var adl_change_i_m_n0p1 "R ADL Indep. to Partial Depend n0 to p1, 1=Yes"
+la var adl_change_i_s_n0p1 "R ADL Indep. to Severe Depend n0 to p1, 1=Yes"
+la var adl_change_m_s_n0p1 "R ADL Partial to Severe Depend n0 to p1, 1=Yes"
+la var adl_improved_n0p1 "R ADL Improvement n0 to p1, 1=Yes"
 //la var adl_change_n0p1_miss="R ADL n0 to p1 unknown";
 
 foreach v in `adlchange' {
 tab `v' , missing
 }
+*******************************************************************
+
+//need to save the cleaned up dataset!
+log close
 
 
 H="xxxxNotes"

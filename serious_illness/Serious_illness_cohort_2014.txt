@@ -3464,7 +3464,7 @@ sdec(0,2) addtable
 log close
 
 
-H="Determine outcomes after meet criteria"
+H="Step 8a - Determine outcomes after meet criteria"
 /*While still determining criteria, create variables looking at the 1 year
 after interview for all interviews (regardless of when meet criteria)
 
@@ -3747,7 +3747,7 @@ proc freq; table core_year; run;
 
 
 
-H="Get Medicare payments 1 year after interview"
+H="Step 8b - Get Medicare payments 1 year after interview"
 /*Add total Medicare payments from claims 1 year after interview*/
 
 /*Claims files from 2000-2010, claims pulled in previous section
@@ -4014,7 +4014,9 @@ pb_paid_by_mc_1yr op_paid_by_mc_1yr dm_paid_by_mc_1yr tot_paid_by_mc_1yr;
 run;
 
 
-H="Identify interview where criteria is first met"
+
+
+H="Step 9 - Identify interview where criteria is first met"
 /*create variable that identifies first interview that the criteria is met
 2 criteria used:
 A) Any serious medical illness
@@ -4130,7 +4132,99 @@ pb_paid_by_mc_1yr op_paid_by_mc_1yr dm_paid_by_mc_1yr tot_paid_by_mc_1yr n_hospd
 
 ods rtf close;
 
-H="Core interviews - set up from time 0=meet criteria"
+/*export full dataset to Stata*/
+proc export data=sic_int.ivws_crit_1
+outfile="E:\data\serious_ill\int_data\ivws_crit_1.dta" replace;
+run;
+
+
+H="Looking at outcomes"
+capture log close
+
+clear all
+set mem 500m
+set more off
+
+local logpath E:\data\serious_ill\logs
+local datapath E:\data\serious_ill\int_data
+
+log using "`logpath'\4-sic_initial_outcomes_1.txt", text replace
+
+cd `datapath'
+
+//use dataset with outcomes, just obs that meet interview sample inclusion criteria
+use ivws_crit_1.dta if inlist(core_year,2000,2002,2004,2006,2008,2010) & /// 
+age_ge_65==1 & xwalk_yes==1 & part_ab_12m==1 & hmo_d_12m==0
+*******************************************************************
+
+sum core_year
+
+//categorical variable for serious illness vs adl impairment
+gen cat_smi_adl=.
+replace cat_smi_adl=1 if ser_med_illness==0 & adl_impair_core==0
+replace cat_smi_adl=2 if ser_med_illness==1 & adl_impair_core==0
+replace cat_smi_adl=3 if ser_med_illness==0 & adl_impair_core==1
+replace cat_smi_adl=4 if ser_med_illness==1 & adl_impair_core==1
+la var cat_smi_adl "Serious illness and/or adl impariment, categorical"
+la def cat_smi_adl 1 "No serious illness or adl impairment" ///
+2 "Serious medical illness but no adl impair" 3 "ADL impairment, no serious medical ill" ///
+4 "Serious medical illness and adl impairment"
+la val cat_smi_adl cat_smi_adl
+tab cat_smi_adl core_year
+tab cat_smi_adl ser_med_illness
+tab cat_smi_adl adl_impair_core
+
+//table of outcomes, interview level (so R may be represented 5x)
+local outcome1 core_to_dod_1yr hs_admit_p12m ind_em_ur_adm_p12m
+
+local outcome2 ip_paid_by_mc_1yr snf_paid_by_mc_1yr hh_paid_by_mc_1yr hs_paid_by_mc_1yr ///
+pb_paid_by_mc_1yr op_paid_by_mc_1yr dm_paid_by_mc_1yr tot_paid_by_mc_1yr n_hospd_p12m
+
+mat table1=J(34,4)
+//first row, n for each category
+tab cat_smi_adl,matcell(row1)
+table1[1,1]=row1[1,1]
+table1[1,2]=row1[2,1]
+table1[1,3]=row1[3,1]
+table1[1,4]=row1[4,1]
+
+forvals i=1/4{
+local r=2
+foreach v of `outcome1'{
+	sum `v' if cat_smi_adl==`i', detail
+	mat table1[`r',`i']=r(mean)
+	mat table1[`r'+1,`i']=r(sd)
+	r=r+2 //populates rows 2-7 for indicator variable outcomes
+	}
+
+local r=8
+foreach v of `outcome2'{
+	sum `v' if cat_smi_adl==`i', detail
+	mat table1[`r',`i']=r(mean)
+	mat table1[`r'+1,`i']=r(p50)
+	mat table1[`r'+2,`i']=r(sd)
+	r=r+3 //populates rows 8-34 for continuous variables
+	}
+}
+
+mat rownames table1="Died, mean" "SD" "Hospice enr., mean" "SD" "Emerg/urgent hospital admit, mean" "SD" ///
+"IP Medicaid payments, mean" "Median" "SD" "SNF Medicaid payments, mean" "Median" "SD" ///
+"HH Medicaid payments, mean" "Median" "SD" "Hospice Medicaid payments, mean" "Median" "SD" ///
+"Carrier Medicaid payments, mean" "Median" "SD" "OP Medicaid payments, mean" "Median" "SD" ///
+"DME Medicaid payments, mean" "Median" "SD" "Total Medicaid payments, mean" "Median" "SD" ///
+
+mat colnames table1="No ser. med ill or impair" "Ser Med Ill" "ADL Impair" "SMI and ADL Impair"
+
+frmttable using "`logpath'\sic_table2_outcomes", statmat(table1) ///
+title("Comparison of outcomes at 1 year, serious medical illness vs ADL impairment" \ ///
+Interview level") sdec(2) replace
+
+//create another version of this table for when first meets the criteria??
+//not sure how to do it at the person level since the outcomes change each interview
+
+
+
+H="Step 10 - Core interviews - set up from time 0=meet criteria"
 /*From this point on, there are 2 datasets, one for those that
 meet Criteria A) Serious medical illness and one for those that 
 meet Criteria B) (Serious medical illness or ADL Impairment) and (nursing
@@ -4466,7 +4560,7 @@ proc freq;
 table core_year_n0 first_ivw_year_n0;
 run;
 
-H="Add exit interviews to dataset"
+H="Step 11 - Add exit interviews to dataset"
 /*adds exit interview variables (with _x suffix) to the dataset that
 is formatted with the n0 as time0 interview, etc.
 
@@ -4542,7 +4636,7 @@ outfile="E:\data\serious_ill\final_data\n0_n1_p1_p2_x_criteria_b.dta" replace;
 run;
 
 
-H="Create additional variables, changes between ivws"
+H="Step 12 - Create additional variables, changes between ivws"
 /*switched to Stata
 Data cleaning, create new variables
 Code can be run on either criteria a or criteria b datasets, comments indicate
@@ -4554,16 +4648,18 @@ clear all
 set mem 500m
 set more off
 
+local crit a
+//local crit b
+
 local logpath E:\data\serious_ill\logs
 local datapath E:\data\serious_ill\final_data
 
-log using "`logpath'\4a-sic_data_cleaning_crit_a.txt", text replace
-//log using "`logpath'\4b-sic_data_cleaning_crit_b.txt", text replace
+log using "`logpath'\4`crit'-sic_data_cleaning_crit_`crit'.txt", text replace
+//log using "`logpath'\4`crit'-sic_data_cleaning_crit_`crit'.txt", text replace
 
 cd `datapath'
 
-use n0_n1_p1_p2_x_criteria_a.dta
-//use n0_n1_p1_p2_x_criteria_b.dta
+use n0_n1_p1_p2_x_criteria_`crit'.dta
 
 tab core_year_n0, missing
 
@@ -4727,9 +4823,94 @@ tab `v' , missing
 }
 *******************************************************************
 
-//need to save the cleaned up dataset!
+save n0_n1_p1_p2_x_criteria_`crit'_v1.dta, replace
+
 log close
 
+
+H="Tables, looking from 1st interiew where meet criteria"
+/*Stata
+Create tables comparing outcomes for the criteria
+Code can be run on either criteria a or criteria b datasets*/
+
+capture log close
+
+clear all
+set mem 500m
+set more off
+
+local crit a
+//local crit b
+local critvar ser_med_illness
+//local critvar criteria_b
+
+local logpath E:\data\serious_ill\logs
+local datapath E:\data\serious_ill\final_data
+
+log using "`logpath'\4`crit'-sic_data_cleaning_crit_`crit'.txt", text replace
+//log using "`logpath'\4`crit'-sic_data_cleaning_crit_`crit'.txt", text replace
+
+cd `datapath'
+
+use n0_n1_p1_p2_x_criteria_`crit'_v1.dta
+
+//may want to create a tabulation of what smi's are present in n0 interview prior
+//to this table (like in the 7a section, but just for interview where first meet
+//criteria for both criteria a and b??)
+*******************************************************
+*** Table of serious medical conditions
+*******************************************************
+local smivars_n0 smi_dem_ind_n0 smi_cancer_ind_n0 smi_esrd_ind_n0 smi_chf_ind_n0 smi_copd_ind_n0 ///
+smi_diab_compl_ind_n0 smi_liver_ind_n0 smi_hiv_ind_n0 smi_als_ind_n0 smi_hip_ind_n0
+
+mat table1=J(10,10,.)
+
+sum core_year_n0
+sca n=r(N)
+local nsamp=n
+
+local r=1
+foreach a in `smivars'{
+	local c=1
+	foreach b in `smivars'{
+		tab `a' `b', matcell(r`r'c`c')
+		mat table1[`r',`c']=r`r'c`c'[2,2]
+	local c=`c'+1
+	}
+	local r=`r'+1
+}
+
+mat rownames table1="dementia" "cancer" "esrd" "chf" "copd" "diabetes" "liver disease" ///
+"HIV" "ALS" "Hip fracture"
+
+mat colnames table1="dementia" "cancer" "esrd" "chf" "copd" "diabetes" "liver disease" ///
+"HIV" "ALS" "Hip fracture"
+
+frmttable using "`logpath'\sic_Tables_3_outcomes_crit_`crit'", statmat(table1) ///
+title("Comparison of serious medical conditions" \ ///
+"Interview when first meet criteria" \ ///
+"Criteria `crit' n=`nsamp'") sdec(0) replace
+
+*******************************************************
+*** Meet criteria p1 interview?
+*******************************************************
+mat p1_crit=J(2,2,.)
+sum `critvar'_n0
+mat p1_crit[1,1]=r(N) //overall n meet criteria
+mat p1_crit[1,2]=100
+
+tab `critvar'_p1, matcell(p1)
+mat p1_crit[2,1]=r(N) //n that meet criteria p1
+mat p1_crit[2,2]=(p1_crit[2,1] / p1_crit[1,1])
+
+frmttable using "`logpath'\sic_Tables_3_outcomes_crit_`crit'", statmat(p1_crit) ///
+title("Meet criteria `crit' in p1 interview")  ///
+sdec(0) addtable
+
+
+
+*******************************************************
+log close
 
 H="xxxxNotes"
 Helper files - A respondant gets an entry (or many entries) in the helper file

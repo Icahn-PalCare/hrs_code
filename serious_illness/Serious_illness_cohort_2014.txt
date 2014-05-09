@@ -4418,6 +4418,10 @@ set sic_int.core_ids_1yr_criteria_5(drop=birth_date death_date white black hisp_
 zip_0: zip_10: zip_98: first_ivw_year last_ivw_year restr_yes);
 run;
 
+data core_educ_only;
+set sic_int.core_ids_1yr_criteria_5(keep=id core_year c_ivw_date educ);
+run;
+
 *note interview counts listed are for criteria a dataset, they are different for criteria b;
 %macro ds_restr(crit=);
 
@@ -4518,6 +4522,48 @@ quit;
 
 proc freq; table n_ivws_bef_&crit.;
 run;
+****************************************************************;
+*get n2 and n3 interviews to backfill education variable;
+proc sql;
+create table before_n1_&crit. 
+as select b.*
+ from core_n1_&crit._1 a
+ inner join
+core_educ_only b
+  on a.id=b.id and a.c_ivw_date>b.c_ivw_date;
+  quit;
+
+proc sort data= before_n1_&crit. ;
+by id c_ivw_date;
+run;
+
+*keep n2 core;
+data core_n2_&crit.;
+set before_n1_&crit.;
+by id c_ivw_date;
+if last.id;
+run;
+
+proc sql;
+create table before_n2_&crit. 
+as select b.*
+ from core_n2_&crit. a
+ inner join
+before_n1_&crit. b
+  on a.id=b.id and a.c_ivw_date>b.c_ivw_date;
+  quit;
+
+proc sort data= before_n2_&crit. ;
+by id c_ivw_date;
+run;
+
+*keep n3 core;
+data core_n3_&crit.;
+set before_n2_&crit.;
+by id c_ivw_date;
+if last.id;
+run;
+
 
 ****************************************************************;
 *get p1 interview, interview after meeting criteria*;
@@ -4602,6 +4648,28 @@ rename id_n1=id;
 rename bid_hrs_n1=bid_hrs;
 run;
 
+*n2 interview;
+data TEST;
+set core_n2_&crit. ;
+run;
+
+%rename(WORK,TEST,n2);
+data core_n2_&crit._1;
+set TEST;
+rename id_n2=id;
+run;
+
+*n3 interview;
+data TEST;
+set core_n3_&crit. ;
+run;
+
+%rename(WORK,TEST,n3);
+data core_n3_&crit._1;
+set TEST;
+rename id_n3=id;
+run;
+
 *p1 interview;
 data TEST;
 set CORE_P1_&crit.;
@@ -4634,6 +4702,14 @@ proc sort data=core_n1_&crit._1 nodupkey;
 by id;
 run;
 
+proc sort data=core_n2_&crit._1 nodupkey;
+by id;
+run;
+
+proc sort data=core_n3_&crit._1 nodupkey;
+by id;
+run;
+
 proc sort data=core_p1_&crit._1 nodupkey;
 by id;
 run;
@@ -4643,7 +4719,7 @@ by id;
 run;
 
 data sic_fin.n0_n1_p1_p2_criteria_&crit.;
-merge n0_&crit._3 core_n1_&crit._1 core_p1_&crit._1 core_p2_&crit._1;
+merge n0_&crit._3 core_n1_&crit._1 core_n2_&crit._1 core_n3_&crit._1 core_p1_&crit._1 core_p2_&crit._1;
 by id;
 run;
 
@@ -4653,11 +4729,11 @@ run;
 %ds_restr(crit=b);
 
 proc freq data=sic_fin.n0_n1_p1_p2_criteria_a;
-table core_year_n1 core_year_n0 core_year_p1 core_year_p2;
+table core_year_n3 core_year_n2 core_year_n1 core_year_n0 core_year_p1 core_year_p2;
 run;
 
 proc freq data=sic_fin.n0_n1_p1_p2_criteria_b;
-table core_year_n1 core_year_n0 core_year_p1 core_year_p2;
+table core_year_n3 core_year_n2 core_year_n1 core_year_n0 core_year_p1 core_year_p2;
 run;
 
 *************************************************************;
@@ -4821,6 +4897,8 @@ tab educ_n1 educ_n0, missing
 //need to backfill with n2, n3 information, don't have it in the dataset now
 gen educ = educ_n0
 replace educ=educ_n1 if educ_n0==.
+replace educ=educ_n2 if educ_n0==. & educ_n1==.
+replace educ=educ_n3 if educ_n0==. & educ_n1==. & educ_n2==.
 label values educ educ
 tab educ core_year_n0, missing
 
@@ -4989,8 +5067,8 @@ local critvar criteria_b
 local logpath E:\data\serious_ill\logs
 local datapath E:\data\serious_ill\final_data
 
-log using "`logpath'\4`crit'-sic_data_cleaning_crit_`crit'.txt", text replace
-//log using "`logpath'\4`crit'-sic_data_cleaning_crit_`crit'.txt", text replace
+log using "`logpath'\4`crit'-sic_changes_tables_crit_`crit'.txt", text replace
+//log using "`logpath'\4`crit'-sic_changes_tables_crit_`crit'.txt", text replace
 
 cd `datapath'
 

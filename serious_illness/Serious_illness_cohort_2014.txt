@@ -48,7 +48,7 @@ run;
 
 data restr(rename=(ZIP10_2000=ZIP10));
 set hrs_fnl.restricted_v2010(keep=hhid pn id birth_date death_date white black hisp_eth native_amer 
-asian_pi other_race other_na_api_race zip:);
+asian_pi other_race other_na_api_race zip: cause_death_12n );
 id_c=trim(hhid)||trim(pn);
 drop id;
 rename id_c=id;
@@ -274,8 +274,6 @@ or adl_independent_core=0;
 quit;
 ods rtf close;
 
-
-
 H="Create frequency tables of core variables"
 /*creates log file to review with Amy for new variables*/
 
@@ -426,6 +424,34 @@ set sic_int.core_xwalk_1(keep=id core_year c_ivw_date c_ivw_year c_ivw_month age
 if xwalk_yes=1;
 run;
 
+/********************************************************************/
+/* Get claims death date, from denominator file as a check
+where dod from interview is imputed or after exit interview date */
+/********************************************************************/
+proc sort data=medi.dn_2000_2010 out=dn_dod_1  nodupkey;
+by BID_HRS_19 year;
+run;
+
+/*just keep dod from last year*/
+data dn_dod_2;
+set dn_dod_1;
+by BID_HRS_19 year;
+if last.BID_HRS_19;
+run;
+
+proc freq;
+table death_dt /missprint;
+run;
+
+/*add to the core dataset with xwalk id*/
+proc sort; data=sic_int.core_xwalk_1 out core_xwalk_1; by bid_hrs; run;
+
+proc sql;
+create table sic_int.core_xwalk_2 as select a.*,b.death_dt as dod_claims
+from core_xwalk_1 a left join
+dn_dod_2 b
+on a.bid_hrs=b.BID_HRS_19;
+quit;
 
 H="Step 2a - Identify FFS MC 1yr and 6mos preceeding core interview"
 /*Use denominator file to determine which interviews / r's have ffs mc
@@ -593,7 +619,7 @@ run;
 proc sql;
 create table sic_int.core_xwalk_ins as select a.*,b.part_ab_12m,b.hmo_d_12m,b.part_ab_6m,b.hmo_d_6m
  from
-sic_int.core_xwalk_1 a left join
+sic_int.core_xwalk_2 a left join
 all_insurance2 b
 on a.bid_hrs=b.bid_hrs and a.c_ivw_year=b.c_ivw_year;
 quit;
@@ -4412,13 +4438,13 @@ interviews after have p1, p2 suffix */
 data core_to_use;
 set sic_int.ivws_crit_1(drop=birth_date death_date white black hisp_eth native_amer 
 asian_pi other_race other_na_api_race 
-zip_0: zip_10: zip_98: first_ivw_year last_ivw_year restr_yes);
+zip_0: zip_10: zip_98: first_ivw_year last_ivw_year restr_yes dod_claims cause_death_12n);
 run;
 
 data core_all_drop;
 set sic_int.core_ids_1yr_criteria_5(drop=birth_date death_date white black hisp_eth native_amer 
 asian_pi other_race other_na_api_race  
-zip_0: zip_10: zip_98: first_ivw_year last_ivw_year restr_yes);
+zip_0: zip_10: zip_98: first_ivw_year last_ivw_year restr_yes dod_claims cause_death_12n);
 run;
 
 data core_educ_only;
@@ -4596,6 +4622,45 @@ proc freq;
 table core_year;
 run;
 
+*supplement the list with interviews with no or unknown ffs medicare 1 year;
+*prior to interview in order to fill in missing p1 ivws;
+proc sql;
+create table noffsreq_ivw_aft_meet_&crit.
+as select b.*
+ from n0_&crit._3 a 
+ inner join
+core_all_drop b
+  on a.id=b.id and a.c_ivw_date_n0<b.c_ivw_date;
+  quit;
+
+*xxx of the ivws are not in the list that already have the p1 ivw;
+proc sql;
+create table noffsreq_ivw_aft_meet_&crit._1 as select * from
+noffsreq_ivw_aft_meet_&crit.
+where id not in (select id from core_p1_&crit.);
+quit;
+
+proc sort data=noffsreq_ivw_aft_meet_&crit._1 ;
+by id c_ivw_date;
+run;
+
+*keep only the p1 core interview;
+*xxx interviews identified;
+data noffsreq_core_p1_&crit.;
+set noffsreq_ivw_aft_meet_&crit._1;
+by id c_ivw_date;
+if first.id;
+run;
+
+*append to get full list of 4336 n1 interviews;
+data core_p1_&crit._1;
+set core_p1_&crit. noffsreq_core_p1_&crit.;
+run;
+
+proc sort data=core_p1_&crit._1 nodupkey;
+by id;
+run;
+
 *check on number of post-interviews present in the dataset;
 *for those that meet the criteria;
 proc sql;
@@ -4675,7 +4740,7 @@ run;
 
 *p1 interview;
 data TEST;
-set CORE_P1_&crit.;
+set CORE_P1_&crit._1;
 run;
 %rename(WORK,TEST,p1);
 data core_p1_&crit._1;
@@ -4985,6 +5050,7 @@ tab dod_to_exit_days, missing
 //so bring in claims dod and compare it to see if can get clean dod!
 tab e_ivw_date_x if dod_to_exit_days<0
 tab e_ivw_date_x death_date_n0 if dod_to_exit_days<0
+tab death_date_n0 dod_claims_n0 if dod_to_exit_days<0 //check claims dod
 
 *******************************************************************
 //Change in functional status variables
@@ -5095,6 +5161,63 @@ la var adl_improved_n0p1 "R ADL Improvement n0 to p1, 1=Yes"
 foreach v in `adlchange' {
 tab `v' , missing
 }
+
+*******************************************************************
+//Change in functional status variables
+//Looking forward, change from core meet criteria to exit interview 
+//This is populated for all r's with exit interviews, only really relevant
+//for those that are missing the p1 interview
+tab adl_cat_x adl_cat_core_n0 if ind_x_interview==1 & ind_p1_interview==0, missing
+tab adl_cat_x adl_cat_core_n0, missing
+
+//stable ind = 1 if stays the same or improves (0 if declines)
+gen byte adl_stable_ind_n0x=0
+replace adl_stable_ind_n0x=1 if adl_cat_x==0 & inlist(adl_cat_core_n0,0,1,2) & 
+
+gen byte adl_stable_partial_n0x=0
+replace adl_stable_partial_n0x=1 if adl_cat_x==1 & inlist(adl_cat_core_n0,1,2) 
+
+gen byte adl_stable_severe_n0x=0
+replace adl_stable_severe_n0x=1 if adl_cat_x==2 & adl_cat_core_n0==2 
+
+gen byte adl_change_i_m_n0x=0
+replace adl_change_i_m_n0x=1 if adl_cat_x==1 & adl_cat_core_n0==0
+
+gen byte adl_change_i_s_n0x=0
+replace adl_change_i_s_n0x=1 if adl_cat_x==2 & adl_cat_core_n0==0
+
+gen byte adl_change_m_s_n0x=0
+replace adl_change_m_s_n0x=1 if adl_cat_x==2 & adl_cat_core_n0==1
+
+gen byte adl_improved_n0x=0
+replace adl_improved_n0x=1 if inlist(adl_cat_x,0,1) & adl_cat_core_n0==2
+replace adl_improved_n0x=1 if adl_cat_x==0 & adl_cat_core_n0==1
+
+local adlchange adl_stable_ind_n0x adl_stable_partial_n0x adl_stable_severe_n0x ///
+adl_change_i_m_n0x adl_change_i_s_n0x adl_change_m_s_n0x adl_improved_n0x
+
+foreach v in `adlchange' {
+replace `v'=. if adl_cat_core_n0==. | adl_cat_core_x==.
+}
+
+//keep missing category out for now, see what the data looks like
+//if decide on missing category, just change line in foreach loop above
+//adl_change_n1n2_miss=0;
+//if adl_cat_core_n1=. or  adl_cat_core_n2=.  then adl_change_n1n2_miss=1;
+
+la var adl_stable_ind_n0x "R ADL Ind. stable or improving n0 to exit, 1=Yes"
+la var adl_stable_partial_n0x "R ADL Partial Depend, stable n0 to exit, 1=Yes"
+la var adl_stable_severe_n0x "R ADL Severe Depend, stable n0 to exit, 1=Yes"
+la var adl_change_i_m_n0x "R ADL Indep. to Partial Depend n0 to exit, 1=Yes"
+la var adl_change_i_s_n0x "R ADL Indep. to Severe Depend n0 to exit, 1=Yes"
+la var adl_change_m_s_n0x "R ADL Partial to Severe Depend n0 to exit, 1=Yes"
+la var adl_improved_n0x "R ADL Improvement n0 to exit, 1=Yes"
+//la var adl_change_n0x_miss="R ADL n0 to exit unknown";
+
+foreach v in `adlchange' {
+tab `v' , missing
+}
+
 *******************************************************************
 
 save n0_n1_p1_p2_x_criteria_`crit'_v1.dta, replace

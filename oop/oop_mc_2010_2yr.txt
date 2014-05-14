@@ -206,7 +206,7 @@ rename bid_hrs_x=BID_hrs;
 rename xwalk_yes_x=xwalk_yes;
 run;
 
-proc print data=exit_xwalk_3(keep=id BID_hrs obs=10);
+proc print data=exit_xwalk_3(keep=id BID_hrs xwalk_yes obs=10);
 run;
 proc sort data=exit_xwalk_3;
 by id;
@@ -443,6 +443,7 @@ length id $9 hhid $6 pn $3;
 id=hhid||pn;
 run;
 
+/*dementia probablility 1998-2006 core years*/
 proc freq;
 table core_year_imp;
 run;
@@ -859,7 +860,7 @@ Save this as a permanent dataset*/
 want to include nh_nights, curr_iw_date, prev_iw_date, months, md_cov private_ltc 
 /***********************************************************************/
 proc sql;
-create table oop_int.meet_criteria_2yr as
+create table oop_int.meet_criteria_2yr(drop=hmo_24 buyin_24) as
 select * from oop_int.all_insurance
 where part_ab_2y=1 and hmo_2y=0;
 quit;
@@ -877,8 +878,9 @@ quit;
 proc sql;
 create table oop_int.interviews_ffs_mc_2yr 
 as select * from oop_int.r_x_r_n1_n2 
-where id in (select id from oop_int.all_insurance);
-run;
+where id in (select id from oop_int.meet_criteria_2yr);
+quit;
+
 
 H="Report on how to get final sample size"
 /*report on how to get to final sample size
@@ -940,15 +942,42 @@ proc import datafile="E:\data\hrs_oop_2010\received_data\oopme_final_oldv.dta"
 out=oop_1 replace; 
 run;
 
+/*only keep years 1998 and later since those are the years in our core dataset*/
 data oop_int.oop_2 (keep=id year curr_iw_date prev_iw_date months total_OOP hospital_OOP NH_OOP 
 doctor_OOP dental_OOP patient_OOP hospice_OOP RX_OOP home_OOP special_OOP non_med_OOP helper_OOP 
 insurance_costs sr_nh_nights md_cov);
 set oop_1;
+if year>=1998;
 length id $9 hhid $6 pn $3;
 id=hhid||pn;
 rename NH_NIGHTS = sr_nh_nights;
 run;
 
+proc freq; table year; run;
+
+/*helper dataset*/
+proc import datafile="E:\data\hrs_oop_2010\received_data\helper_hours_oldv.dta"  
+out=helper_1 replace; 
+run;
+
+/*helper dataset 2000-2010*/
+proc freq; table year; run;
+
+data oop_int.helper_2;
+set helper_1;
+length id $9 hhid $6 pn $3;
+id=hhid||pn;
+run;
+
+proc sort data=oop_int.oop_2; by id year; run;
+proc sort data=oop_int.helper_2; by id year; run;
+
+proc sql;
+create table oop_int.oop_helper(drop=id2 year2) as select * from
+oop_int.oop_2 a left join
+oop_int.helper_2(rename=(id=id2) rename=(year=year2)) b
+on a.id=b.id2 and a.year=b.year2;
+quit;
 
 H="Accounting for missing nh nights, part 1"
 /*There are nursing home nights self reported in the interviews
@@ -957,10 +986,16 @@ the Medicare claims. So method to account for them:
 
 1. Use self reported nursing home nights from oop dataset
 2. Determine nursing home nights from claims for each interview
-	2.a Determmine nursing home nights paid by medicare and also total nights
+	2.a Determine nursing home nights paid by medicare and also total nights
 		reported in the claims
 3. Use either SR nights or Medicare nights, whichever is greater
-4. 
+4. If there are nights not in the claims, assign a price per night and divide
+	oop nh spending / price to get #oop paid nights
+	4.a Price per night is either medicaid price if R reports having
+		Medicaid coverage in the interview or private price if no Medicaid
+		is reported
+5. If there are remaining nights not medicare or OOP, assign a price to get
+	additonal spending - either Medicaid or private payer spending
 
 /*list of decedents with mc id, for those with ffs mc last 2 years of life*/
 data exit_nh_1;
@@ -971,11 +1006,11 @@ run;
 proc sort data=exit_nh_1 out=exit_nh_2 nodupkey; by id; run;
 
 /*get interview dates, nh use, md coverage variables from oop dataset*/
-proc sort data=oop_int.oop_2 nodupkey; by id curr_iw_date; run;
+proc sort data=oop_int.oop_helper nodupkey; by id curr_iw_date; run;
 
 /*drop oop interview data for those without ffs medicare*/
 proc sql;
-create table oop_meet_2 as select * from oop_int.oop_2
+create table oop_meet_2 as select * from oop_int.oop_helper
 where id in (select id from exit_nh_1);
 quit;
 
@@ -988,16 +1023,11 @@ exit_nh_2(rename=(id=id2)) b
 on a.id=b.id2;
 quit;
 
-/*drop those without ffs mc last 2 years of life, they are missing bid
-This step should no longer be necessary!*/
-data oop_bid_dec_2;
-set oop_bid_dec_1;
-if bid_hrs~=' ';
-run;
+proc freq data=oop_bid_dec_1; table exit_year_x; run;
 
-proc freq; table exit_year_x; run;
+proc sort data=oop_bid_dec_1; by id year; run;
 
-proc sort data=oop_bid_dec_2; by id year; run;
+proc sql; select count(unique id) from oop_bid_dec_1; quit;
 
 /*****************************************************************/
 /*Get actual interview dates from core and restricted datasets
@@ -1015,7 +1045,7 @@ rename c_ivw_month=ivw_month_e;
 rename c_ivw_day=ivw_day_e;
 run;
 
-/*use dod=exit interview date*/
+/*use dod=exit interview date to match oop dataset*/
 data exit_dates;
 set oop_int.exit_restricted_02_to_10_v1;
 keep id exit_year_x death_date_e ;
@@ -1049,10 +1079,10 @@ run;
 /*****************************************************************/
 proc sql;
 create table oop_bid_dec_3 as select a.*,b.ivw_date_e,b.prev_ivw_date_e from
-oop_bid_dec_2 a left join
+oop_bid_dec_1 a left join
 ivw_dates_2 b
 on a.id=b.id and a.year=b.year;
-run;
+quit;
 
 /*only keep interviews within 5 years of death date*/
 data oop_bid_dec_4;
@@ -1193,6 +1223,8 @@ sum(util_day) as tot_util_days_ivw
 from snf_all group by bid_hrs_19 , ivw_date_e;
 quit;
 
+proc means; var snf_stay_all_ivw los_snf_paid_by_mc_ivw tot_util_days_ivw; run;
+
 /************************************************************/
 /*merge snf nights data with the oop dataset*/
 /************************************************************/
@@ -1201,7 +1233,7 @@ proc sort data=oop_bid_dec_5; by bid_hrs ivw_date_e; run;
 proc sort data=snf_ivw ; by bid_hrs_19 ivw_date_e; run;
 
 proc sql;
-create table oop_bid_dec_nh(drop=ivw_date_e2) as select * from
+create table oop_bid_dec_nh(drop=ivw_date_e2 bid_hrs_19) as select * from
 oop_bid_dec_5 a left join
 snf_ivw(rename=(ivw_date_e=ivw_date_e2)) b 
 on a.bid_hrs=b.bid_hrs_19 and a.ivw_date_e=b.ivw_date_e2;
@@ -1235,7 +1267,7 @@ data oop_int.oop_bid_dec_nh_3;
 set oop_bid_dec_nh_2;
 if sr_nh_nights=. then sr_nh_nights=0;
 label sr_nh_nights="Self reported nh nights, from interview";
-if sr_nh_nights>=snf_stay_all_ivw | snf_stay_all_ivw =. then nh_nights=sr_nh_nights;
+if sr_nh_nights>=snf_stay_all_ivw then nh_nights=sr_nh_nights;
 else nh_nights=snf_stay_all_ivw;
 label nh_nights="NH nights, source=self report or claims";
 label los_snf_paid_by_mc_ivw="NH nights, paid by Medicare";
@@ -1267,6 +1299,7 @@ out=private_nh_rate dbms=xls replace;
 run;
 */
 
+/*keep overall state average price, drop those for metro areas*/
 data private_nh_rate_1;
 set private_nh_rate;
 if state_usps_code~=' ';
@@ -1508,6 +1541,13 @@ if nh_pmt_imp=1 and md_cov=1 then do;
 if nh_pmt_imp=1 and md_cov=0 then do;
 	oop_nh_nights=floor(NH_OOP/avg_private_rm_rate);
 	end;
+/*check calculated oop nights vs self reported nights not paid by medicare
+	reset oop nights to total not medicare nights if calculated oop nights
+	is higher than self report nights*/
+if oop_nh_nights>nh_ni_not_mc then do;
+	oop_nh_nights_adj=1;
+	oop_nh_nights=nh_ni_not_mc;
+	end;
 
 /*variable for nursing home nights not covered by Medicare or OOP reported spending
 	If number of nights computed for OOP is greater than the self reported nights, then set this to zero*/
@@ -1515,11 +1555,12 @@ if nh_ni_not_mc<=oop_nh_nights and oop_nh_nights~=. then other_nh_nights=0;
 if nh_ni_not_mc>oop_nh_nights then other_nh_nights=floor(nh_ni_not_mc-oop_nh_nights);
 
 label oop_nh_nights="Imputed nh nights paid OOP, ivw pd";
+label oop_nh_nights_adj="OOP nights set to balance of self report nights-MC paid nights";
 label other_nh_nights="Imputed nh nights not medicare or OOP, ivw pd";
 run;	
 
 /*80 obs missing, 77 have missing medicaid status, 3 have no prices (b/c Puerto Rico resident)*/
-proc freq; table oop_nh_nights other_nh_nights; run;
+proc freq; table oop_nh_nights oop_nh_nights_adj other_nh_nights; run;
 
 /*now assign medicaid or private insurance payments for remaining nights*/
 data oop_int.oop_nh_costs_2;
@@ -1553,7 +1594,12 @@ run;
 
 proc contents; run;
 
+data zztestnights; set  oop_int.oop_nh_costs_2; if nh_nights>730; 
+nights_from_months = months*30.5;
+pct_in_nh = nh_nights/nights_from_months;
+run;
 
+proc means; var pct_in_nh months; run;
 
 H="Get OOP data for exit, n1, n2 and n3 cores"
 /*
@@ -1563,9 +1609,29 @@ Dataset is oop_int.oop_x_n1_n2_n3
 libname oop_int "E:\data\hrs_oop_2010\int_data";
 libname hrs_cln 'E:\data\hrs_cleaned';
 
-/*sorts dataset that has the added nursing home stay, costs information
+/*OOP dataset with added nursing home stay, costs information
 This dataset is limited to those decedents with ffs medicare last 2 years of life*/
-proc sort data=oop_int.oop_nh_costs_2 out=oop_nh_costs_2 nodupkey;
+
+/*clean up dataset prior to adding suffix, merging*/
+data oop_nh_costs_3(drop=hhid pn inx STATEUSPS: state_0: state_98_imp_yes state_10_imp_yes);
+set oop_int.oop_nh_costs_2;
+
+if year=exit_year_x then exit_int_yes=1;
+else exit_int_yes=0;
+label exit_int_yes='Indicator for exit interview';
+
+if hhid='.' then do;
+helper_missing_yes=1;
+end;
+else helper_missing_yes=0;
+label helper_missing_yes='Indicator for no entry in helper dataset';
+
+run;
+
+/*only 3288 exit interviews in oop dataset*/
+proc freq; table exit_int_yes; run;
+
+proc sort data=oop_nh_costs_3 out=oop_nh_costs_4 nodupkey;
 by id year;
 run;
 
@@ -1581,26 +1647,20 @@ by id exit_year_x;
 run;
 
 proc sql;
-create table exit_oop
+create table exit_oop(drop=id2)
 as select * from 
 exit_meet_2 a left join
-oop_nh_costs_2 b
-on a.id=b.id and a.exit_year_x=b.year;
+oop_nh_costs_4(rename=(id=id2) drop=exit_year_x death_date_e) b
+on a.id=b.id2 and a.exit_year_x=b.year;
 quit;
 
-/*drop if no OOP data to merge*/
-data exit_oop_2;
-set exit_oop;
-if year~=.;
-run;
-
-/*5 decedents do not have OOP imputed data from exit interviews*/
-proc freq data=exit_oop_2;
-table year;
+/*42 decedents do not have OOP imputed data from exit interviews*/
+proc freq data=exit_oop;
+table year helper_missing_yes;
 run;
 
 data exit_oop_3;
-set exit_oop_2;
+set exit_oop;
 run;
 
 /*rename variable macro*/
@@ -1644,6 +1704,7 @@ run;
 data EXIT_OOP_4;
 set EXIT_OOP_3;
 rename id_x=id;
+rename BID_hrs_x=bid_hrs;
 run;
 
 /***************************************************************************/
@@ -1652,16 +1713,15 @@ run;
 /***************************************************************************/
 /***************************************************************************/
 
-proc freq data=exit_oop_2;
-table year_x;
-run;
+proc sort data=exit_oop_4; by id curr_iw_date_x; run;
+proc sort data=oop_nh_costs_4; by id curr_iw_date; run;
 
 /*first get all OOP data for decedents for their core interviews (before the exit ivw)*/
 proc sql;
 create table all_c_oop_deced
 as select b.* from
 exit_oop_4 a inner join
-oop_nh_costs_2 b
+oop_nh_costs_4 b
 on a.id=b.id and a.curr_iw_date_x>b.curr_iw_date;
 quit;
 
@@ -1669,7 +1729,7 @@ proc sort data=all_c_oop_deced;
 by id curr_iw_date;
 run;
 
-/*keep the n1 core interview*/
+/*keep the n1 core interview n=3213 interviews*/
 data oop_n1;
 set all_c_oop_deced;
 by id curr_iw_date;
@@ -1693,7 +1753,7 @@ proc sort data=oop_n2_1;
 by id curr_iw_date;
 run;
 
-/*keep the n2 core interview*/
+/*keep the n2 core interview n=3022*/
 data oop_n2;
 set oop_n2_1;
 by id curr_iw_date;
@@ -1717,7 +1777,7 @@ proc sort data=oop_n3_1;
 by id curr_iw_date;
 run;
 
-/*keep the n3 core interview*/
+/*keep the n3 core interview n=1045*/
 data oop_n3;
 set oop_n3_1;
 by id curr_iw_date;
@@ -1767,24 +1827,24 @@ by id;
 run;
 
 proc sql;
-create table oop_x_n1 as select * from 
+create table oop_x_n1(drop=id2) as select * from 
 exit_oop_4 a left join
-oop_n1_2 b
-on a.id=b.id ;
+oop_n1_2(rename=(id=id2)) b
+on a.id=b.id2 ;
 quit;
 
 proc sql;
-create table oop_x_n1_n2 as select * from
+create table oop_x_n1_n2(drop=id2) as select * from
 oop_x_n1 a left join
-oop_n2_2 b
-on a.id=b.id ;
+oop_n2_2(rename=(id=id2)) b
+on a.id=b.id2 ;
 quit;
 
 proc sql;
-create table oop_int.oop_x_n1_n2_n3 as select * from
+create table oop_int.oop_x_n1_n2_n3(drop=id2) as select * from
 oop_x_n1_n2 a left join
-oop_n3_2 b
-on a.id=b.id ;
+oop_n3_2(rename=(id=id2)) b
+on a.id=b.id2 ;
 quit;
 
 /*********************************************************/
@@ -1801,7 +1861,7 @@ with the full oop dataset */
 /*********************************************************/
 /*********************************************************/
 
-/*all have exit OOP data, 75 missing n1, 266 missing n2, 2243 missing n3*/
+/*42 missing exit OOP data, 117 missing n1, 308 missing n2, 2285 missing n3*/
 proc freq;
 table year_x year_n1 year_n2 year_n3;
 run;
@@ -1828,7 +1888,9 @@ Uses CPI for Medical Services from BLS website, accessed 2/5/2014*/
 /**********************************************************************/
 /**********************************************************************/
 
-/*create macro to run through all OOP variables to adjust for inflation*/
+/*create macro to run through all OOP variables to adjust for inflation
+Adjustment already made for imputed NH costs based on Medicaid / private rates
+so not done here*/
 data adjust_oop_start;
 set oop_int.oop_x_n1_n2_n3;
 run;
@@ -1906,60 +1968,42 @@ proc means data=adjust_rx_n3;
 var RX_OOP_x RX_old_x other_oop_n1;
 run;
 
-/*set nursing home spending and nights to 0 where missing in core interviews*/
-data nh_adj;
-set adjust_rx_n3;
-if nh_oop_n1=. then nh_oop_n1=0;
-if nh_oop_n2=. then nh_oop_n2=0;
-if nh_oop_n3=. then nh_oop_n3=0;
-if nh_nights_n1=. then nh_nights_n1=0;
-if nh_nights_n2=. then nh_nights_n2=0;
-if nh_nights_n3=. then nh_nights_n3=0;
-if nh_nights_x=. then nh_nights_x=0;
-run;
-
-/**********************************************************************/
-/**********************************************************************/
-/*is the OOP dataset interview date from the Exit interview the death date
-It is the month of death??? Yes!*/
-data zzzdates;
-set nh_adj;
-format death_date_e_x date9. ;
-run;
-/**********************************************************************/
-/**********************************************************************/
-
 
 /**********************************************************************/
 /**********************************************************************/
 /*Get totals over 24 and 60 month periods*/
 /**********************************************************************/
 /**********************************************************************/
-/*exit months range 1-202, n1 months=12-145, n2 months=12-152, n3 months=12-118*/
-proc freq data=nh_adj;
-table months_x months_n1 months_n2 months_n3;
+/*exit months range 1-202, n1 months=14-145, n2 months=13-152, n3 months=13-98*/
+proc means data=adjust_rx_n3;
+var months_x months_n1 months_n2 months_n3;
 run;
 
 data check_months;
-set nh_adj;
+set adjust_rx_n3;
 total_mos= sum(months_x,months_n1,months_n2,months_n3);
 run;
 
-proc freq;
-table total_mos;
+proc means;
+var total_mos;
 run;
 
-/*get totals of waves OOP for 24 months and 60 months*/
+/*get totals of waves OOP for 24 months and 60 months
+Check this variable list, I think all of these are needed but need to check
+when see the actual dataset
+add helper variables!*/
 %let list=total_OOP helper_OOP hospital_OOP nh_OOP doctor_OOP rx_OOP
- insurance_costs other_oop total_old rx_old sr_nh_nights;
+ insurance_costs other_oop total_old rx_old sr_nh_nights nh_nights 
+los_snf_paid_by_mc_ivw nh_ni_not_mc
+ oop_nh_nights other_nh_nights nh_cost_medicaid nh_cost_private;
 
 %macro all(su=,months=);
 
-%do i=1 %to 11;
+%do i=1 %to 18;
 %let var=%scan(&list,&i);
 
 data temp_&su._&i;
-set nh_adj;
+set adjust_rx_n3;
 
 /*if all 24 months accounted for in exit interview*/
 if months_x>=&months.  then do;
@@ -1998,7 +2042,7 @@ run;
 /*merge the temporary datasets back together*/
 /*so dataset all_2 has variables for OOP spending last 24 months of life*/
 data all_2;
-merge temp_24m_1-temp_24m_11 temp_60m_1-temp_60m_11;
+merge temp_24m_1-temp_24m_18 temp_60m_1-temp_60m_18;
 by id;
 run;
 
@@ -2015,8 +2059,8 @@ check_months b
 on a.id=b.id;
 quit;
 
-proc freq;
-table total_mos months_x months_n1 months_n2 months_n3;
+proc means;
+var total_mos months_x months_n1 months_n2 months_n3;
 run;
 
 data complete_oop_1;
@@ -4450,7 +4494,7 @@ mat p50[1,2]=r1_50[1,1] //with dem prob < 50% col 2
 local spvars tot_paid_by_mc_2yr_wi ip_paid_by_mc_2yr_wi snf_paid_by_mc_2yr_wi ///
 hh_paid_by_mc_2yr_wi hs_paid_by_mc_2yr_wi pb_paid_by_mc_2yr_wi op_paid_by_mc_2yr_wi ///
 dm_paid_by_mc_2yr_wi total_oop_24m helper_oop_24m hospital_oop_24m nh_oop_24m ///
-doctor_oop_24m rx_oop_24m other_oop_24m
+doctor_oop_24m rx_oop_24m other_oop_24m 
 
 //total mc 2 years, wage index adjusted
 local r = 2
@@ -4585,7 +4629,7 @@ table pr_dem_gt50 cancer_grp heartdis_grp , contents(freq)
 *****************************************************************************
 
 //get tables comparing mean, median spending for different disease groups
-mat dg_2y=J(21,6,.)
+mat dg_2y=J(25,6,.)
 //first row n each group
 tab pr_dem_gt50, missing matcell(r1_50)
 mat dg_2y[1,1]=r1_50[2,1] //with dem prob > 50% col 1
@@ -4594,13 +4638,12 @@ mat dg_2y[1,3]=r1_c[2,1] //with cancer col 2
 tab heartdis_grp , missing matcell(r1_h)
 mat dg_2y[1,5]=r1_h[2,1] //with heart disease col 3
 
-
 //mc vars
 local spvars age_at_death_e tot_paid_by_mc_2yr_wi ip_paid_by_mc_2yr_wi snf_paid_by_mc_2yr_wi ///
 hh_paid_by_mc_2yr_wi hs_paid_by_mc_2yr_wi pb_paid_by_mc_2yr_wi op_paid_by_mc_2yr_wi ///
 dm_paid_by_mc_2yr_wi total_oop_24m helper_oop_24m hospital_oop_24m nh_oop_24m ///
 doctor_oop_24m rx_oop_24m other_oop_24m nh_nights_24m los_snf_paid_by_mc_2y nh_ni_not_mc_24m ///
-medicaid_x
+oop_nh_nights_24m other_nh_nights_24m nh_cost_medicaid_24m nh_cost_private_24m medicaid_x
 
 //totals 2 years, wage index adjusted mc payments, oop spend and nh nights
 local c=1
@@ -4618,7 +4661,9 @@ foreach d in pr_dem_gt50 cancer_grp heartdis_grp {
 mat rownames dg_2y= "N" "Age at death" "Total medicare" "Medicare IP" "Medicare SNF" "Medicare HH" ///
 "Medicare hospice" "Medicare Carrier" "Medicare OP" "Medicare DME" ///
 "OOP Total" "OOP Helper" "OOP Hospital" "OOP NH" "OOP Doctor" "OOP Rx" "OOP Other" ///
-"Total NH nights, SR or claims" "Nights paid by Medicare" "Nights unknown payer" "Medicaid at death?"
+"Total NH nights, SR or claims" "Nights paid by Medicare" "Nights not Medicare" ///
+"OOP Nights, imputed" "Medicaid or private payer nights" "Medicaid NH Payments" ///
+"Private payer NH Payments" "Medicaid at death?"
 
 mat colnames dg_2y="Prob dem > 50%" "median" "Cancer" "median" "Heart disease" "median" 
 
@@ -4661,7 +4706,9 @@ foreach d in pr_dem_gt50 cause_death_sudden cause_death_inf{
 mat rownames dg_cd_2y= "N" "Age at death" "Total medicare" "Medicare IP" "Medicare SNF" "Medicare HH" ///
 "Medicare hospice" "Medicare Carrier" "Medicare OP" "Medicare DME" ///
 "OOP Total" "OOP Helper" "OOP Hospital" "OOP NH" "OOP Doctor" "OOP Rx" "OOP Other" ///
-"Total NH nights, SR or claims" "Nights paid by Medicare" "Nights unknown payer" "Medicaid at death?"
+"Total NH nights, SR or claims" "Nights paid by Medicare" "Nights not Medicare" ///
+"OOP Nights, imputed" "Medicaid or private payer nights" "Medicaid NH Payments" ///
+"Private payer NH Payments"  "Medicaid at death?"
 
 mat colnames dg_cd_2y="Prob dem > 50%" "median" "Sudden death" "median" "Infect disease" "median"
 
@@ -4695,8 +4742,9 @@ mat dg_5y[1,5]=r2_h[2,1] //with heart disease col 3
 local spvars5 age_at_death_e tot_paid_by_mc_5yr_wi ip_paid_by_mc_5yr_wi snf_paid_by_mc_5yr_wi ///
 hh_paid_by_mc_5yr_wi hs_paid_by_mc_5yr_wi pb_paid_by_mc_5yr_wi op_paid_by_mc_5yr_wi ///
 dm_paid_by_mc_5yr_wi total_oop_60m helper_oop_60m hospital_oop_60m nh_oop_60m ///
-doctor_oop_60m rx_oop_60m other_oop_60m nh_nights_24m los_snf_paid_by_mc_2y ///
-nh_ni_not_mc_24m medicaid_x
+doctor_oop_60m rx_oop_60m other_oop_60m nh_nights_60m los_snf_paid_by_mc_5y ///
+nh_ni_not_mc_60m oop_nh_nights_60m other_nh_nights_60m nh_cost_medicaid_60m ///
+nh_cost_private_60m medicaid_x
 
 //total mc 2 years, wage index adjusted
 local c=1
@@ -4714,7 +4762,9 @@ foreach d in pr_dem_gt50 cancer_grp heartdis_grp{
 mat rownames dg_5y= "N" "Age at death" "Total medicare" "Medicare IP" "Medicare SNF" "Medicare HH" ///
 "Medicare hospice" "Medicare Carrier" "Medicare OP" "Medicare DME" ///
 "OOP Total" "OOP Helper" "OOP Hospital" "OOP NH" "OOP Doctor" "OOP Rx" "OOP Other" ///
-"Total NH nights, SR or claims" "Nights paid by Medicare" "Nights unknown payer" "Medicaid at death?"
+"Total NH nights, SR or claims" "Nights paid by Medicare" "Nights not Medicare" ///
+"OOP Nights, imputed" "Medicaid or private payer nights" "Medicaid NH Payments" ///
+"Private payer NH Payments"  "Medicaid at death?"
 
 mat colnames dg_5y="Prob dem > 50%" "median" "Cancer" "median" "Heart disease" "median"
 
@@ -4757,7 +4807,9 @@ foreach d in pr_dem_gt50 cause_death_sudden cause_death_inf{
 mat rownames dg_cd_5y= "N" "Age at death" "Total medicare" "Medicare IP" "Medicare SNF" "Medicare HH" ///
 "Medicare hospice" "Medicare Carrier" "Medicare OP" "Medicare DME" ///
 "OOP Total" "OOP Helper" "OOP Hospital" "OOP NH" "OOP Doctor" "OOP Rx" "OOP Other" ///
-"Total NH nights, SR or claims" "Nights paid by Medicare" "Nights unknown payer" "Medicaid at death?"
+"Total NH nights, SR or claims" "Nights paid by Medicare" "Nights not Medicare" ///
+"OOP Nights, imputed" "Medicaid or private payer nights" "Medicaid NH Payments" ///
+"Private payer NH Payments"  "Medicaid at death?"
 
 mat colnames dg_cd_5y="Prob dem > 50%" "median" "Sudden death" "median" "Infect disease" "median"
 

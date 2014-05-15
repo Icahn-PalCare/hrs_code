@@ -1991,15 +1991,13 @@ run;
 Check this variable list, I think all of these are needed but need to check
 when see the actual dataset
 add helper variables!*/
+
+%macro all(su=,months=);
+
 %let list=total_OOP helper_OOP hospital_OOP nh_OOP doctor_OOP rx_OOP
  insurance_costs other_oop total_old rx_old sr_nh_nights nh_nights 
 los_snf_paid_by_mc_ivw nh_ni_not_mc
  oop_nh_nights other_nh_nights nh_cost_medicaid nh_cost_private;
-
-%let list_help=hlphrs hlphrs_p hlphrs_s hlphrs_e hlphrs_u hlphrs_d hlphrs_m 
-n_hp n_p n_s n_e n_u n_d n_m;
-
-%macro all(su=,months=);
 
 /*for variables where sum over all interviews*/
 %do i=1 %to 18;
@@ -2041,30 +2039,35 @@ run;
 Takes average of hours/month and number of helpers, weighting by months 
 covered by the interview time period
 If missing hours, then the variable is left blank in final dataset*/
+%let list2=hlphrs hlphrs_p hlphrs_s hlphrs_e hlphrs_u hlphrs_d hlphrs_m 
+n_hp n_p n_s n_e n_u n_d n_m;
+
 %do i=19 %to 32;
-%let var=%scan(&list_help,&i);
+%let var=%scan(&list2,(&i-18));
 
 data temp_&su._&i;
 set adjust_rx_n3;
 
 /*if all 24 months accounted for in exit interview*/
-if months_x>=&months. and nomisshrs~=0 then do;
+if months_x>=&months. and nomisshrs_x~=0 then do;
 &var._&su.=&var._x;
 end;
 
 /*if need n1+ exit*/
-if months_x+months_n1>=&months. and &var._&su.=. and nomisshrs~=0 then do;
+if months_x+months_n1>=&months. and &var._&su.=. and nomisshrs_x~=0 and nomisshrs_n1~=0 then do;
 &var._&su.=&var._x*(months_x/&months.)+&var._n1*(&months.-months_x)/(&months.);
 end;
 
 /*if need n1+n2+ exit*/
-if months_x+months_n1+months_n2>=&months. and &var._&su.=. and nomisshrs~=0 then do;
+if months_x+months_n1+months_n2>=&months. and &var._&su.=. and nomisshrs_x~=0 
+	and nomisshrs_n1~=0 and nomisshrs_n2~=0 then do;
 &var._&su.=&var._x*(months_x/&months.)+&var._n1*(months_n1/&months.)+
 	&var._n2*((&months.-months_x-months_n1)/&months.);
 end;
 
 /*if need n1+n2+n3+ exit*/
-if months_x+months_n1+months_n2+months_n3>=&months. and &var._&su.=. and nomisshrs~=0 then do;
+if months_x+months_n1+months_n2+months_n3>=&months. and &var._&su.=. and nomisshrs_x~=0 
+	and nomisshrs_n1~=0 and nomisshrs_n2~=0 and nomisshrs_n3~=0  then do;
 &var._&su.=&var._x*(months_x/&months.)+&var._n1*(months_n1/&months.)+
 	&var._n2*(months_n2/&months.)+&var._n3*((&months.-months_x-months_n1-months_n2)/&months.);
 end;
@@ -2178,7 +2181,6 @@ quit;
 
 
 H="Merge meet criteria with oop, ivw dataset and save"
-
 proc sort data=oop_int.hrs_oop_ivws out=oop_ivws nodupkey;
 by id;
 run;
@@ -2187,18 +2189,12 @@ proc sort data=oop_int.all_insurance out=meet nodupkey;
 by id;
 run;
 
-/**********************************************************************/
-/**********************************************************************/
-/*Check this merge, drop some of the variables in the meet criteria dataset */
-/**********************************************************************/
-/**********************************************************************/
-
 /*merge oop / HRS interview dataset with meet criteria variables*/
 proc sql;
-create table oop_fnl.hrs_oop_ivws_meet as select * from
+create table oop_fnl.hrs_oop_ivws_meet(drop=id2) as select * from
 oop_ivws a left join
-meet(drop=death_year_e death_date_e bid_hrs) b
-on a.id=b.id;
+meet(rename=(id=id2) drop=death_year_e death_date_e bid_hrs hmo_24 buyin_24) b
+on a.id=b.id2;
 quit;
 
 proc freq; table part_ab_2y*hmo_2y part_ab_5y*hmo_5y; run;
@@ -3148,7 +3144,7 @@ This is STATA code*/
 /*
 /*******************************************************************/
 
-clear
+clear all
 set memory 500m
 
 //process diagnosis codes 24 months pre-surgery
@@ -3449,6 +3445,10 @@ proc freq data=oop_fnl.hrs_oop_ivws_meet_el_cc_n24m;
 table cc_:;
 run;
 
+/*save version to Stata*/
+proc export data=oop_fnl.hrs_oop_ivws_meet_el_cc_n24m 
+outfile="E:\data\hrs_oop_2010\final_data\hrs_oop_ivws_meet_el_cc_n24m.dta" replace;
+run;
 
 
 H="xxxxxGet nights SNF paid for by MC"
@@ -3607,10 +3607,7 @@ run;
 
 proc freq; table los_snf_paid_by_mc_2y snf_stay_all_2y; run;
 
-/*save version to Stata*/
-proc export data=oop_fnl.hrs_oop_with_nh_nights 
-outfile="E:\data\hrs_oop_2010\final_data\hrs_oop_with_nh_nights.dta" replace;
-run;
+
 
 H="Medpar mc spending total"
 /*Totals are from merged claims files from 2000-2010
@@ -4086,7 +4083,7 @@ if wage_index_20102=. then wage_index_20102=1;
 label wi_missing_yes="Indicator missing wage index, set to 1";
 run;
 
-proc freq; table wi_missing_yes; run;
+proc freq data=cost_id_wage_index3; table wi_missing_yes; run;
 
 proc sort data=cost_id_wage_index3 ;
 by BID_hrs;
@@ -4117,13 +4114,24 @@ run;
 %wageind(ctype=dm);
 
 /*merge individual adjusted costs into single dataset*/
-data oop_int.costs_all_wi;
+data costs_all_wi_1;
 merge costs_ip_wi costs_snf_wi costs_hh_wi costs_hs_wi costs_pb_wi
  costs_op_wi costs_dm_wi;
 by BID_hrs id;
 run;
 
+/*bring in indicator for having the wage index*/
+proc sort data=costs_all_wi_1; by BID_hrs ; run;
+proc sort data=cost_id_wage_index3; by BID_hrs ; run;
 
+proc sql;
+create table oop_int.costs_all_wi as select a.*,b.wi_missing_yes from
+costs_all_wi_1 a left join
+cost_id_wage_index3 b
+on a.BID_hrs=b.BID_hrs;
+quit;
+
+proc freq; table wi_missing_yes ; run;
 
 
 
@@ -4181,7 +4189,7 @@ local datapath E:\data\hrs_oop_2010\final_data
 log using `logpath'\1-mc_oop_2and5yr_merge-LOG.txt, text replace
 
 cd `datapath'
-use hrs_oop_with_nh_nights.dta
+use hrs_oop_ivws_meet_el_cc_n24m.dta
 
 merge 1:1 id using mc_costs_2and5yr.dta
 //check merge to see that observations with costs were merged
@@ -4193,8 +4201,9 @@ gen mc_total_d=0
 replace mc_total_d=1 if(_merge==3)
 drop _merge
 tab mc_total_d
-//23 missing medciare totals are missing because no link to wage index!
-tab mc_total_d if ( part_ab_2y==1 &  hmo_2y==0)
+
+//23 have wi=1 because no link to wage index
+tab wi_missing_yes if ( part_ab_2y==1 &  hmo_2y==0)
 
 
 //Label variables for mc spending totals
@@ -4266,11 +4275,6 @@ using `logpath'\sumstats2.csv, ///
 replace sum c(mean tot_paid_by_mc_2yr_wi N tot_paid_by_mc_2yr_wi ) style(csv)
 */
 log close
-
-
-
-
-
 
 
 H="Table with sample size 2 and 5yr lookbacks"
@@ -4519,7 +4523,7 @@ log using `logpath'\4-mc_oop_dementia_initial-LOG.txt, text replace
 cd `datapath'
 
 //this dataset is already limited to ffs, full info last 2 years of life
-use oop_24mand60m_mc_add_nh.dta
+use oop_mc_sample.dta
 
 // look at dementia probability sample sizes
 
@@ -4645,7 +4649,7 @@ log using `logpath'\5-mc_oop_dementia_initial-LOG.txt, text replace
 cd `datapath'
 
 //use just sample that meet 2 year criteria (full mc and oop data 2 years from death)
-use oop_24mand60m_mc_add_nh.dta if (age_at_death_e>=67 & part_ab_2y==1 & hmo_2y==0  & ind_24m_oop_yes==1) 
+use oop_mc_sample.dta if (age_at_death_e>=67 & part_ab_2y==1 & hmo_2y==0  & ind_24m_oop_yes==1) 
 
 
 // look at dementia probability sample sizes
@@ -4698,12 +4702,17 @@ tab cause_death_inf, missing
 
 table pr_dem_gt50 cancer_grp heartdis_grp , contents(freq)
 
+//total nursing home payments
+gen total_nh_costs_24m=snf_paid_by_mc_2yr_wi+nh_oop_24m+nh_cost_medicaid_24m+nh_cost_private_24m
+gen total_nh_costs_60m=snf_paid_by_mc_5yr_wi+nh_oop_60m+nh_cost_medicaid_60m+nh_cost_private_60m
+
+
 *****************************************************************************
 //Dementia compared with cancer and heart disease, 2 year lookback
 *****************************************************************************
 
 //get tables comparing mean, median spending for different disease groups
-mat dg_2y=J(25,6,.)
+mat dg_2y=J(26,6,.)
 //first row n each group
 tab pr_dem_gt50, missing matcell(r1_50)
 mat dg_2y[1,1]=r1_50[2,1] //with dem prob > 50% col 1
@@ -4716,8 +4725,14 @@ mat dg_2y[1,5]=r1_h[2,1] //with heart disease col 3
 local spvars age_at_death_e tot_paid_by_mc_2yr_wi ip_paid_by_mc_2yr_wi snf_paid_by_mc_2yr_wi ///
 hh_paid_by_mc_2yr_wi hs_paid_by_mc_2yr_wi pb_paid_by_mc_2yr_wi op_paid_by_mc_2yr_wi ///
 dm_paid_by_mc_2yr_wi total_oop_24m helper_oop_24m hospital_oop_24m nh_oop_24m ///
-doctor_oop_24m rx_oop_24m other_oop_24m nh_nights_24m los_snf_paid_by_mc_2y nh_ni_not_mc_24m ///
-oop_nh_nights_24m other_nh_nights_24m nh_cost_medicaid_24m nh_cost_private_24m medicaid_x
+doctor_oop_24m rx_oop_24m other_oop_24m nh_nights_24m los_snf_paid_by_mc_ivw_24m nh_ni_not_mc_24m ///
+oop_nh_nights_24m other_nh_nights_24m nh_cost_medicaid_24m nh_cost_private_24m total_nh_costs_24m ///
+medicaid_x
+
+//n=65 have missing medicaid status so some of their NH imputations are also missing
+sum total_nh_costs_24m
+sum snf_paid_by_mc_2yr_wi
+sum oop_nh_nights_24m
 
 //totals 2 years, wage index adjusted mc payments, oop spend and nh nights
 local c=1
@@ -4731,13 +4746,17 @@ foreach d in pr_dem_gt50 cancer_grp heartdis_grp {
 		}
 	local c = `c'+2
 	}
-
-mat rownames dg_2y= "N" "Age at death" "Total medicare" "Medicare IP" "Medicare SNF" "Medicare HH" ///
+//convert medicaid rate to percent
+forvalues i = 1/6{
+mat dg_2y[26,`i']=dg_2y[26,`i']*100	
+}	
+	
+mat rownames dg_2y= "N" "Age at death" "Total Medicare payments" "Medicare IP" "Medicare SNF" "Medicare HH" ///
 "Medicare hospice" "Medicare Carrier" "Medicare OP" "Medicare DME" ///
 "OOP Total" "OOP Helper" "OOP Hospital" "OOP NH" "OOP Doctor" "OOP Rx" "OOP Other" ///
 "Total NH nights, SR or claims" "Nights paid by Medicare" "Nights not Medicare" ///
 "OOP Nights, imputed" "Medicaid or private payer nights" "Medicaid NH Payments" ///
-"Private payer NH Payments" "Medicaid at death?"
+"Private payer NH Payments" "Total NH costs, all payers" "Medicaid at death? (percent)"
 
 mat colnames dg_2y="Prob dem > 50%" "median" "Cancer" "median" "Heart disease" "median" 
 
@@ -4748,7 +4767,7 @@ title("Dementia, Cancer and Heart Disease Patients" \ ///
 "Medicare and OOP Spending Last 2 years of life") ///
 note("Medicare spending totals are adjusted for the 2010 CMS wage index" \ ///
 "All $ values adjusted for inflation to 2010$")  ///
-sdec(2) landscape replace 
+sdec(0) landscape replace 
 
 *****************************************************************************
 //Dementia compared with cancer and heart disease, 2 year lookback
@@ -4769,8 +4788,8 @@ tab heartdis_grp , missing matcell(r1_h)
 mat dg_2y_h[1,5]=r1_h[2,1] //with heart disease col 3
 
 //mc vars
-local helpvars age_at_death_e hlphrs_24m hlphrs_p_24m hlphrs_s_24m hlphrs_e_24m 
-hlphrs_u_24m hlphrs_dm_24m n_hp_24m n_p_24m n_s_24m n_e_24m
+local helpvars age_at_death_e hlphrs_24m hlphrs_p_24m hlphrs_s_24m hlphrs_e_24m ///
+hlphrs_u_24m hlphrs_dm_24m n_hp_24m n_p_24m n_s_24m n_e_24m ///
  n_u_24m n_dm_24m
 
 //average 5 years, helper counts and hours/month
@@ -4800,8 +4819,9 @@ mat list dg_2y_h
 frmttable using `logpath'\5-oop_dem_initial_tables, statmat(dg_2y_h) ///
 title("Dementia, Cancer and Heart Disease Patients" \ ///
 "Average helper burden, last 2 years of life") ///
-notes("n columns show number of helpers for which we have full information" \ ///
-"If hours were missing in dataset, then variable is missing from mean calculation") ///
+note("n columns show number of helpers for which we have full information" \ ///
+"If hours were missing in dataset, then variable is missing from mean calculation" \ ///
+"Hours/month and number of helpers are mean reported over the last 5 years of life") ///
 sdec(2) landscape addtable 
 
 
@@ -4809,7 +4829,7 @@ sdec(2) landscape addtable
 //Dementia compared with sudden death and infections disease, 2 year lookback
 *****************************************************************************
 //get tables comparing mean, median spending for different disease groups
-mat dg_cd_2y=J(21,6,.)
+mat dg_cd_2y=J(26,6,.)
 //first row n each group
 tab pr_dem_gt50, missing matcell(r1_50)
 mat dg_cd_2y[1,1]=r1_50[2,1] //with dem prob > 50% col 1
@@ -4832,12 +4852,17 @@ foreach d in pr_dem_gt50 cause_death_sudden cause_death_inf{
 	local c = `c'+2
 	}
 
-mat rownames dg_cd_2y= "N" "Age at death" "Total medicare" "Medicare IP" "Medicare SNF" "Medicare HH" ///
+//convert medicaid rate to percent
+forvalues i = 1/6{
+mat dg_cd_2y[26,`i']=dg_cd_2y[26,`i']*100	
+}	
+
+mat rownames dg_cd_2y= "N" "Age at death" "Total Medicare payments" "Medicare IP" "Medicare SNF" "Medicare HH" ///
 "Medicare hospice" "Medicare Carrier" "Medicare OP" "Medicare DME" ///
 "OOP Total" "OOP Helper" "OOP Hospital" "OOP NH" "OOP Doctor" "OOP Rx" "OOP Other" ///
 "Total NH nights, SR or claims" "Nights paid by Medicare" "Nights not Medicare" ///
 "OOP Nights, imputed" "Medicaid or private payer nights" "Medicaid NH Payments" ///
-"Private payer NH Payments"  "Medicaid at death?"
+"Private payer NH Payments" "Total NH Costs, all payers" "Medicaid at death? (percent)"
 
 mat colnames dg_cd_2y="Prob dem > 50%" "median" "Sudden death" "median" "Infect disease" "median"
 
@@ -4849,7 +4874,7 @@ title("Dementia, Sudden death and Infectious diseases Patients" \ ///
 "Medicare and OOP Spending Last 2 years of life") ///
 note("Medicare spending totals are adjusted for the 2010 CMS wage index" \ ///
 "All $ values adjusted for inflation to 2010$")  ///
-sdec(2) landscape addtable 
+sdec(0) landscape addtable 
 
 
 ******************************************************************************
@@ -4858,7 +4883,7 @@ sdec(2) landscape addtable
 keep if part_ab_5y==1 & hmo_5y==0 & ind_60m_oop_yes==1
 
 //get tables comparing mean, median spending for different disease groups
-mat dg_5y=J(21,6,.)
+mat dg_5y=J(26,6,.)
 //first row n each group
 tab pr_dem_gt50, missing matcell(r2_d)
 mat dg_5y[1,1]=r2_d[2,1] //with dem prob > 50% col 1
@@ -4871,9 +4896,9 @@ mat dg_5y[1,5]=r2_h[2,1] //with heart disease col 3
 local spvars5 age_at_death_e tot_paid_by_mc_5yr_wi ip_paid_by_mc_5yr_wi snf_paid_by_mc_5yr_wi ///
 hh_paid_by_mc_5yr_wi hs_paid_by_mc_5yr_wi pb_paid_by_mc_5yr_wi op_paid_by_mc_5yr_wi ///
 dm_paid_by_mc_5yr_wi total_oop_60m helper_oop_60m hospital_oop_60m nh_oop_60m ///
-doctor_oop_60m rx_oop_60m other_oop_60m nh_nights_60m los_snf_paid_by_mc_5y ///
+doctor_oop_60m rx_oop_60m other_oop_60m nh_nights_60m los_snf_paid_by_mc_ivw_60m ///
 nh_ni_not_mc_60m oop_nh_nights_60m other_nh_nights_60m nh_cost_medicaid_60m ///
-nh_cost_private_60m medicaid_x
+nh_cost_private_60m total_nh_costs_60m medicaid_x
 
 //total mc 2 years, wage index adjusted
 local c=1
@@ -4887,13 +4912,17 @@ foreach d in pr_dem_gt50 cancer_grp heartdis_grp{
 		}
 	local c = `c'+2
 	}
+//convert medicaid rate to percent
+forvalues i = 1/6{
+mat dg_5y[26,`i']=dg_5y[26,`i']*100	
+}	
 
-mat rownames dg_5y= "N" "Age at death" "Total medicare" "Medicare IP" "Medicare SNF" "Medicare HH" ///
+mat rownames dg_5y= "N" "Age at death" "Total Medicare payments" "Medicare IP" "Medicare SNF" "Medicare HH" ///
 "Medicare hospice" "Medicare Carrier" "Medicare OP" "Medicare DME" ///
 "OOP Total" "OOP Helper" "OOP Hospital" "OOP NH" "OOP Doctor" "OOP Rx" "OOP Other" ///
 "Total NH nights, SR or claims" "Nights paid by Medicare" "Nights not Medicare" ///
 "OOP Nights, imputed" "Medicaid or private payer nights" "Medicaid NH Payments" ///
-"Private payer NH Payments"  "Medicaid at death?"
+"Private payer NH Payments" "Total NH costs, all payers" "Medicaid at death? (percent)"
 
 mat colnames dg_5y="Prob dem > 50%" "median" "Cancer" "median" "Heart disease" "median"
 
@@ -4904,10 +4933,10 @@ title("Dementia, Cancer and Heart Disease Patients" \ ///
 "Medicare and OOP Spending Last 5 years of life") ///
 note("Medicare spending totals are adjusted for the 2010 CMS wage index" \ ///
 "All $ values adjusted for inflation to 2010$" ) ///
-sdec(2) landscape addtable
+sdec(0) landscape addtable
 
 *****************************************************************************
-//Dementia compared with cancer and heart disease, 2 year lookback
+//Dementia compared with cancer and heart disease, 5 year lookback
 //Helper counts
 *****************************************************************************
 
@@ -4925,8 +4954,8 @@ tab heartdis_grp , missing matcell(r1_h)
 mat dg_5y_h[1,5]=r1_h[2,1] //with heart disease col 3
 
 //mc vars
-local helpvars age_at_death_e hlphrs_60m hlphrs_p_60m hlphrs_s_60m hlphrs_e_60m 
-hlphrs_u_60m hlphrs_dm_60m n_hp_60m n_p_60m n_s_60m n_e_60m
+local helpvars age_at_death_e hlphrs_60m hlphrs_p_60m hlphrs_s_60m hlphrs_e_60m ///
+hlphrs_u_60m hlphrs_dm_60m n_hp_60m n_p_60m n_s_60m n_e_60m ///
  n_u_60m n_dm_60m
 
 //Average 5 years, hours/mo and number of helpers
@@ -4956,8 +4985,9 @@ mat list dg_5y_h
 frmttable using `logpath'\5-oop_dem_initial_tables, statmat(dg_5y_h) ///
 title("Dementia, Cancer and Heart Disease Patients" \ ///
 "Average helper burden, last 5 years of life") ///
-notes("n columns show number of helpers for which we have full information" \ ///
-"If hours were missing in dataset, then variable is missing from mean calculation") ///
+note("n columns show number of helpers for which we have full information" \ ///
+"If hours were missing in dataset, then variable is missing from mean calculation" \ ///
+"Hours/month and number of helpers are mean reported over the last 5 years of life") ///
 sdec(2) landscape addtable 
 
 
@@ -4966,7 +4996,7 @@ sdec(2) landscape addtable
 //Dementia compared with sudden death and infections disease, 5 year lookback
 *****************************************************************************
 //get tables comparing mean, median spending for different disease groups
-mat dg_cd_5y=J(21,6,.)
+mat dg_cd_5y=J(26,6,.)
 //first row n each group
 tab pr_dem_gt50, missing matcell(r2_d)
 mat dg_cd_5y[1,1]=r2_d[2,1] //with dem prob > 50% col 1
@@ -4988,13 +5018,18 @@ foreach d in pr_dem_gt50 cause_death_sudden cause_death_inf{
 		}
 	local c = `c'+2
 	}
+	
+//convert medicaid rate to percent
+forvalues i = 1/6{
+mat dg_cd_5y[26,`i']=dg_cd_5y[26,`i']*100	
+}	
 
-mat rownames dg_cd_5y= "N" "Age at death" "Total medicare" "Medicare IP" "Medicare SNF" "Medicare HH" ///
+mat rownames dg_cd_5y= "N" "Age at death" "Total Medicare payments" "Medicare IP" "Medicare SNF" "Medicare HH" ///
 "Medicare hospice" "Medicare Carrier" "Medicare OP" "Medicare DME" ///
 "OOP Total" "OOP Helper" "OOP Hospital" "OOP NH" "OOP Doctor" "OOP Rx" "OOP Other" ///
 "Total NH nights, SR or claims" "Nights paid by Medicare" "Nights not Medicare" ///
 "OOP Nights, imputed" "Medicaid or private payer nights" "Medicaid NH Payments" ///
-"Private payer NH Payments"  "Medicaid at death?"
+"Private payer NH Payments" "Total NH costs, all payers" "Medicaid at death? (percent)"
 
 mat colnames dg_cd_5y="Prob dem > 50%" "median" "Sudden death" "median" "Infect disease" "median"
 
@@ -5005,7 +5040,7 @@ title("Dementia, Sudden death and Infectious diseases Patients" \ ///
 "Medicare and OOP Spending Last 5 years of life") ///
 note("Medicare spending totals are adjusted for the 2010 CMS wage index" \ ///
 "All $ values adjusted for inflation to 2010$" ) ///
-sdec(2) landscape addtable
+sdec(0) landscape addtable
 
 
 log close

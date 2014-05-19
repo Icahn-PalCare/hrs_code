@@ -18,6 +18,23 @@ H="Denominator file set up"
 /*add hrr, hsa, state from dartmouth xwalk file to individual year denominator files 
 based on beneficiary zip code*/
 
+/*formats for age group and medicare status codes*/
+proc format;
+value AgeGrp
+0='0: <65'
+1='1: 65-69'
+2='2: 70-74'
+3='3: 75-79'
+4='4: 80-84'
+5='5: 85-99'
+6='6: over 99';
+value $msc  
+'10'='10 Aged w/o ESRD'
+'11'='11 Aged w/ ESRD'
+'20'='20 Disabled w/o ESRD'
+'21'='21 Disabled w/ ESRD'
+'31'='31 ESRD only';run; 
+
 /*read in excel xwalks for each year*/
 %macro imphrr;
 %do i=0 %to 10;
@@ -90,7 +107,7 @@ run;
 		notPartAB Medicare65plusFFS MS_CD);
 		length HRR 3. HSA 5. notPartAB HMO Age Age5 3.;
 	set denom.dn_&yrxx.
-		(keep=BID_HRS_19 BENE_ZIP sex race BENE_DOB DEATH_DT hmo1-hmo12 entitl1-entitl12 MS_CD 	 
+		(keep=BID_HRS_19 BENE_ZIP sex race BENE_DOB DEATH_DT BUYIN HMOIND MS_CD 	 
 		%if 2008>=&SourceYr.>=2009 %then %do;
 			flag20 fivepct 
 		%end;
@@ -101,6 +118,107 @@ run;
 			flag20 flag5
 		%end;*/
 		);
+
+	/*create individual variables for each month for buy in and hmo status*/
+	%do m=1 %to 12;
+	hmo&m.=substr(HMOIND12,&m.,1);
+	entitl&m.=substr(BUYIN12,&m.,1);
+	%end;
+
+	array h{*} $ hmo1-hmo12;
+	array e{*} $ entitl1-entitl12;
+
+	*delete all deceased in prior years;
+	if DEATH_DT~=. and year(DEATH_DT)<&yrxx. then delete;
+
+	*age and entitlement;
+	if BENE_DOB~=. then do;
+   		Age=int(("1jan&yrxx."D-BENE_DOB)/365.25);
+	    	Age5=input(put(age,age5n.),2.);
+   	 	AgeEnd=int(&yrxx.-year(BENE_DOB));
+	end;
+
+	HMO=0;
+	notPartAB=0;
+
+	if AgeEnd=65 and "1jan&yrxx."D<=DEATH_DT<="31dec&yrxx."D then do;
+ 	   month_birth=month(BENE_DOB);
+ 	   month_dead=month(BENE_DOB);
+    	do i=month_birth to month_dead;
+      		if h{i} in ('1','2','A','B','C') then HMO=1;
+      		if e{i} not in ('3','C') then notPartAB=1;
+    		end;
+	   end;
+	else if AgeEnd=65 and (sdod=. or (sdod^=. and year(sdod)>&SourceYr.)) then do;
+    		month_birth=month(sdob);
+    		do i=month_birth to 12;
+      			if h{i} in ('1','2','A','B','C') then hmo=1;
+     	 		if e{i} not in ('3','C') then notPartAB=1;
+    		end;
+	end;
+else
+if AgeEnd>65 and "1jan&SourceYr."D<=sdod<="31dec&SourceYr."D then do;
+    month_dead=month(sdod);
+    do i=1 to month_dead;
+      if h{i} in ('1','2','A','B','C') then hmo=1;
+      if e{i} not in ('3','C') then notPartAB=1;
+    end;
+end;
+else
+if AgeEnd>65 and (sdod=. or (sdod^=. and year(sdod)>&SourceYr.)) then do;
+   do i=1 to 12;
+      if h{i} in ('1','2','A','B','C') then hmo=1;
+      if e{i} not in ('3','C') then notPartAB=1;
+    end;
+end;
+else
+if AgeEnd<65 and "1jan&SourceYr."D<=sdod<="31dec&SourceYr."D then do;
+    month_dead=month(sdod);
+    do i=1 to month_dead;
+      if h{i} in ('1','2','A','B','C') then hmo=1;
+      if e{i} not in ('3','C') then notPartAB=1;
+    end;
+end;
+else
+if AgeEnd<65 and (sdod=. or (sdod^=. and year(sdod)>&SourceYr.)) then do;
+   do i=1 to 12;
+      if h{i} in ('1','2','A','B','C') then hmo=1;
+      if e{i} not in ('3','C') then notPartAB=1;
+    end;
+end;
+
+*geography;
+zipnum=(input(zipcode,5.))*1;
+HSA=input(put(zipnum,ZHSA&DatasetYr.F.),5.);
+HRR=input(put(hsa,hsahrrf.), 5.);
+
+attrib State length=$2 label='State (derived from Bene Mailing Zipcode, Denom file)';
+State=zipstate(zipcode);*use SAS function first; 
+if State='' then State=put(hsa,hsast.);*then as backup, use HSA (which came from Bene zip);
+
+*filter flag;
+attrib Medicare65plusFFS length=3 label='Medicare Beneficiary FFS: 1=age of 65-99, No HMO, PartAB, USA HRR only';
+Medicare65plusFFS=0;
+if 1<=Age5<=5 /*age 65 to 99*/
+& notPartAB^=1
+& hmo^=1
+& hrr>0 /*USA only*/
+then Medicare65plusFFS=1;
+
+format age5 agegrp. msc $msc.;
+
+*labels;
+label 
+hrr='Beneficiary HRR' 
+hsa='Beneficiary HSA'  
+sex="1=male/2=Female"
+Age="Age at the beginning of the year"
+Age5="Age in 5 categories at the beginning of the year"
+notPartAB="non-entitlemt for PartAB in any month from jan/month turn 65 to month or death/dec"
+hmo="HMO indicator for any month from the month turn 65/jan to the month of death/dec";
+
+	run;
+
 	%end;
 
 %mend ffs;
@@ -109,6 +227,7 @@ var notes: age5 created?
 BENE_ZIP
 HSA, HRR, HMO, notPartAB,Medicare65plusFFS, msc (medicare status code MS_CD) - all created
 
+hmo1-hmo12 entitl1-entitl12
 
 H="Part a - medpar inpatient"
 /*for adjusting Part a claims from medpar
@@ -275,17 +394,29 @@ H="Notes, questions"
 I think I need some format files from Dartmouth
 Ones I've found so far are:
 
+
+************************************************************************
+*** Part A (medpar) file questions *************
+************************************************************************
 From Part A
 drg&DatasetYr.rw. - for 2000-2010 years
 msdrg&DatasetYr.rw.
-
-From denominator file:
-Format needed:
-hsamsaf.
-
-Also, in the denominator file, are hrr, hsa, state the hrr , hsa numbers? What about state?
 
 Not sure about finding the provider, msa, county crosswalk 
 wind&DatasetYr..hosp_msa&DataSetYr. 
 	wind&DatasetYr..hosp_msa&pyr
 	wind&DatasetYr..hosp_msa&nyr
+
+************************************************************************
+*** Denominator file questions *************
+************************************************************************
+From denominator file:
+Format needed:
+hsamsaf.
+Formats referenced in denominator file are:
+xwalks.zip2hsa xwalks.hsahrr xwalks.agefmts
+where xwalks path = '/general_resources/xwalks'
+
+Also, in the denominator file, are hrr, hsa, state the hrr , hsa numbers? What about state?
+
+

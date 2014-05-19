@@ -5074,3 +5074,232 @@ sdec(0) landscape addtable
 
 log close
 
+
+
+H="Mutually exclusive comparison groups"
+/*Define the groups as follows:
+1. All obs where prob dementia > 50%
+2. Of remaining obs, where cause of death = cancer
+3. , where cause of death = heart disease
+4. Everyone else
+
+2 and 5 year lookbacks 
+
+Note:Sample limited to those with Age 67+ when die, FFS medicare last 2/5 years of life,
+full OOP spending data last 2/5 years of life and resident of 50 States + DC (drops PR resident)*/
+
+capture log close
+clear all
+set mem 500m
+set more off
+
+local logpath E:\data\hrs_oop_2010\logs
+local datapath E:\data\hrs_oop_2010\final_data
+
+log using `logpath'\6-mc_oop_dementia-LOG.txt, text replace
+
+cd `datapath'
+
+//use just sample that meet 2 year criteria (full mc and oop data 2 years from death)
+use oop_mc_sample.dta if (age_at_death_e>=67 & part_ab_2y==1 & hmo_2y==0 & ind_24m_oop_yes==1) 
+
+//look at dementia probability sample sizes
+gen byte dem_miss_n1 = .
+replace dem_miss_n1=1 if prob_dementia_n1==.
+replace dem_miss_n1=0 if prob_dementia_n1!=.
+
+gen byte dem_miss_n2 = .
+replace dem_miss_n2=1 if prob_dementia_n2==.
+replace dem_miss_n2=0 if prob_dementia_n2!=.
+
+tab dem_miss_n1 dem_miss_n2, missing
+
+//if missing, carry forward n2 probability
+gen prob_dem_n1n2 = prob_dementia_n1
+replace prob_dem_n1n2=prob_dementia_n2 if prob_dementia_n1==.
+
+//histogram prob_dem_n1n2
+
+la def cause_death 1 "Infectious disease" 2 "HIV/AIDS" ///
+3 "Cardiovascular disease" 4 "Chronic lower resperiatory disease" ///
+5 "Other Respiratory disease" 6 "Diabetes" 7 "Alzheimers Disease" ///
+8 "N/A" 9 "Neoplasms" 10 "Kidney Disease (not infectious)" ///
+11 "Liver, Gallbladder, Stomach and/or Intestinal disease" ///
+12 "Accidents, Suicide, Homicide" 13 "Other" ///
+14 "Unknown (coded as 999 in original data)"
+la val cause_death_12_n_e cause_death 
+
+replace cause_death_12_n_e=14 if cause_death_12_n_e==.
+
+tab cause_death_12_n_e , missing
+
+gen byte pr_dem_gt50 = .
+replace pr_dem_gt50 = 0 if prob_dem_n1n2<=.5 & prob_dem_n1n2!=.
+replace pr_dem_gt50 = 1 if prob_dem_n1n2>.5 & prob_dem_n1n2!=.
+la var pr_dem_gt50 "Indicator dementia prob gt 0.5"
+tab pr_dem_gt50, missing
+tab cause_death_12_n_e pr_dem_gt50 , missing
+
+//cancer as cause of death
+gen byte cancer_grp = 0
+replace cancer_grp=1 if cause_death_12_n_e==9 & pr_dem_gt50!=1
+la var cancer_grp "Indicator cancer, per cause of death)"
+tab cancer_grp, missing
+
+//heart disease as cause of death
+gen byte heartdis_grp  = 0
+replace heartdis_grp =1 if cause_death_12_n_e==3 & pr_dem_gt50!=1
+la var heartdis_grp  "Indicator heart disease, per cause of death)"
+tab heartdis_grp , missing
+
+//other group
+gen byte other_grp = 0
+replace other_grp=1 if inlist(pr_dem_gt50,0,.) & cancer_grp==0 & heartdis_grp==0
+la var other_grp "Comparison group, other cause of death"
+tab other_grp, missing
+
+//categorical variable for disease groups
+gen dis_group_cat = .
+replace dis_group_cat=1 if pr_dem_gt50==1
+replace dis_group_cat=2 if cancer_grp==1
+replace dis_group_cat=3 if heartdis_grp==1
+replace dis_group_cat=4 if other_grp==1
+la var dis_group_cat "Disease group, categorical"
+la def dis_group_cat 1 "Dementia" 2 "Cancer" 3 "Heart disease" 4 "Other"
+la val dis_group_cat dis_group_cat
+tab dis_group_cat, missing
+
+// 1 obs has no price assigned because Puerto Rico resident, therefore, drop from sample
+drop if nh_cost_medicaid_24m==.
+
+//total nursing home payments
+gen total_nh_costs_24m=snf_paid_by_mc_2yr_wi+nh_oop_24m+nh_cost_medicaid_24m+nh_cost_private_24m
+gen total_nh_costs_60m=snf_paid_by_mc_5yr_wi+nh_oop_60m+nh_cost_medicaid_60m+nh_cost_private_60m
+
+//total payments all types
+gen total_costs_24m = tot_paid_by_mc_2yr_wi+total_oop_24m+nh_cost_medicaid_24m+nh_cost_private_24m
+gen total_costs_60m = tot_paid_by_mc_5yr_wi+total_oop_60m+nh_cost_medicaid_60m+nh_cost_private_60m
+
+******************************************************************************
+//get tables comparing mean, median spending for different disease groups
+mat dg_2y=J(27,8,.)
+//first row n each group
+tab pr_dem_gt50, missing matcell(r1_50)
+mat dg_2y[1,1]=r1_50[2,1] //with dem prob > 50% col 1
+tab cancer_grp, missing matcell(r1_c)
+mat dg_2y[1,3]=r1_c[2,1] //with cancer col 2
+tab heartdis_grp , missing matcell(r1_h)
+mat dg_2y[1,5]=r1_h[2,1] //with heart disease col 3
+tab other_grp , missing matcell(r1_o)
+mat dg_2y[1,7]=r1_o[2,1] //with other disease col 4
+
+//mc vars
+local spvars age_at_death_e total_costs_24m tot_paid_by_mc_2yr_wi ip_paid_by_mc_2yr_wi snf_paid_by_mc_2yr_wi ///
+hh_paid_by_mc_2yr_wi hs_paid_by_mc_2yr_wi pb_paid_by_mc_2yr_wi op_paid_by_mc_2yr_wi ///
+dm_paid_by_mc_2yr_wi total_oop_24m helper_oop_24m hospital_oop_24m nh_oop_24m ///
+doctor_oop_24m rx_oop_24m other_oop_24m nh_nights_24m los_snf_paid_by_mc_ivw_24m nh_ni_not_mc_24m ///
+oop_nh_nights_24m other_nh_nights_24m nh_cost_medicaid_24m nh_cost_private_24m total_nh_costs_24m ///
+medicaid_x
+
+//totals 2 years, wage index adjusted mc payments, oop spend and nh nights
+local c=1
+foreach d in pr_dem_gt50 cancer_grp heartdis_grp other_grp{
+	local r = 2
+	foreach v in `spvars'{
+		sum `v' if `d'==1, detail
+		mat dg_2y[`r',`c']=r(mean)
+		mat dg_2y[`r',`c'+1]=r(p50)
+		local r = `r'+1
+		}
+	local c = `c'+2
+	}
+//convert medicaid rate to percent
+forvalues i = 1/8{
+mat dg_2y[27,`i']=dg_2y[27,`i']*100	
+}	
+	
+mat rownames dg_2y= "N" "Age at death" "Total payments, all types" "Total Medicare payments" "Medicare IP" "Medicare SNF" "Medicare HH" ///
+"Medicare hospice" "Medicare Carrier" "Medicare OP" "Medicare DME" ///
+"OOP Total" "OOP Helper" "OOP Hospital" "OOP NH" "OOP Doctor" "OOP Rx" "OOP Other" ///
+"Total NH nights, SR or claims" "Nights paid by Medicare" "Nights not Medicare" ///
+"OOP Nights, imputed" "Medicaid or private payer nights" "Medicaid NH Payments" ///
+"Private payer NH Payments" "Total NH costs, all payers" "Medicaid at death? (percent)"
+
+mat colnames dg_2y="Prob dem > 50%" "median" "Cancer" "median" "Heart disease" "median" "Other disease" "median" 
+
+mat list dg_2y
+
+frmttable using `logpath'\6-oop_dem_tables, statmat(dg_2y) ///
+title("Dementia, Cancer and Heart Disease Patients" \ ///
+"Medicare and OOP Spending Last 2 years of life") ///
+note("Medicare spending totals are adjusted for the 2010 CMS wage index" \ ///
+"All $ values adjusted for inflation to 2010$" \ ///
+"Total NH spending = Medicare + OOP + Medicaid or Private Payer")  ///
+ctitles("" "Prob dem > 50%" "" "Cancer" "" "Heart disease" "" "Other disease" "" \ ///
+"" "Mean" "Median" "Mean" "Median" "Mean" "Median" "Mean" "Median" ) ///
+sdec(0) landscape replace 
+
+******************************************************************************
+//Table last 5 years spending
+******************************************************************************
+keep if part_ab_5y==1 & hmo_5y==0 & ind_60m_oop_yes==1
+
+//get tables comparing mean, median spending for different disease groups
+mat dg_5y=J(27,8,.)
+//first row n each group
+tab pr_dem_gt50, missing matcell(r1_50)
+mat dg_5y[1,1]=r1_50[2,1] //with dem prob > 50% col 1
+tab cancer_grp, missing matcell(r1_c)
+mat dg_5y[1,3]=r1_c[2,1] //with cancer col 2
+tab heartdis_grp , missing matcell(r1_h)
+mat dg_5y[1,5]=r1_h[2,1] //with heart disease col 3
+tab other_grp , missing matcell(r1_o)
+mat dg_5y[1,7]=r1_o[2,1] //with other disease col 4
+
+//mc vars
+local spvars_5y age_at_death_e total_costs_60m tot_paid_by_mc_5yr_wi ip_paid_by_mc_5yr_wi snf_paid_by_mc_5yr_wi ///
+hh_paid_by_mc_5yr_wi hs_paid_by_mc_5yr_wi pb_paid_by_mc_5yr_wi op_paid_by_mc_5yr_wi ///
+dm_paid_by_mc_5yr_wi total_oop_60m helper_oop_60m hospital_oop_60m nh_oop_60m ///
+doctor_oop_60m rx_oop_60m other_oop_60m nh_nights_60m los_snf_paid_by_mc_ivw_60m nh_ni_not_mc_60m ///
+oop_nh_nights_60m other_nh_nights_60m nh_cost_medicaid_60m nh_cost_private_60m total_nh_costs_60m ///
+medicaid_x
+
+//totals 5 years, wage index adjusted mc payments, oop spend and nh nights
+local c=1
+foreach d in pr_dem_gt50 cancer_grp heartdis_grp other_grp{
+	local r = 2
+	foreach v in `spvars_5y'{
+		sum `v' if `d'==1, detail
+		mat dg_5y[`r',`c']=r(mean)
+		mat dg_5y[`r',`c'+1]=r(p50)
+		local r = `r'+1
+		}
+	local c = `c'+2
+	}
+//convert medicaid rate to percent
+forvalues i = 1/8{
+mat dg_5y[27,`i']=dg_5y[27,`i']*100	
+}	
+	
+mat rownames dg_5y= "N" "Age at death" "Total payments, all types" "Total Medicare payments" "Medicare IP" "Medicare SNF" "Medicare HH" ///
+"Medicare hospice" "Medicare Carrier" "Medicare OP" "Medicare DME" ///
+"OOP Total" "OOP Helper" "OOP Hospital" "OOP NH" "OOP Doctor" "OOP Rx" "OOP Other" ///
+"Total NH nights, SR or claims" "Nights paid by Medicare" "Nights not Medicare" ///
+"OOP Nights, imputed" "Medicaid or private payer nights" "Medicaid NH Payments" ///
+"Private payer NH Payments" "Total NH costs, all payers" "Medicaid at death? (percent)"
+
+mat colnames dg_5y="Prob dem > 50%" "median" "Cancer" "median" "Heart disease" "median" "Other disease" "median" 
+
+mat list dg_5y
+
+frmttable using `logpath'\6-oop_dem_tables, statmat(dg_5y) ///
+title("Dementia, Cancer and Heart Disease Patients" \ ///
+"Medicare and OOP Spending Last 5 years of life") ///
+note("Medicare spending totals are adjusted for the 2010 CMS wage index" \ ///
+"All $ values adjusted for inflation to 2010$" \ ///
+"Total NH spending = Medicare + OOP + Medicaid or Private Payer")  ///
+ctitles("" "Prob dem > 50%" "" "Cancer" "" "Heart disease" "" "Other disease" "" \ ///
+"" "Mean" "Median" "Mean" "Median" "Mean" "Median" "Mean" "Median" ) ///
+sdec(0) landscape addtable 
+
+log close

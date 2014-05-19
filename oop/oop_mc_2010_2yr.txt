@@ -951,6 +951,13 @@ if year>=1998;
 length id $9 hhid $6 pn $3;
 id=hhid||pn;
 rename NH_NIGHTS = sr_nh_nights;
+
+array list total_OOP hospital_OOP NH_OOP 
+doctor_OOP dental_OOP patient_OOP hospice_OOP RX_OOP home_OOP special_OOP non_med_OOP helper_OOP 
+insurance_costs sr_nh_nights;
+do over list;
+if list=. then list=0;
+end;
 run;
 
 proc freq; table year; run;
@@ -1287,7 +1294,12 @@ proc means; var nh_nights sr_nh_nights los_snf_paid_by_mc_ivw nh_ni_not_mc nh_pm
 
 
 H="Missing nh nights, part 2, assign prices"
-/*pull in Private nursing home nightly rate*/
+/*pull in Private nursing home nightly rate
+
+Note: Have to run the code in previous 2 heading sections (starting with Initial
+set up of OOP dataset...) prior to running this because of formats from the 
+oop dataset in Stata, if skip those steps, get error that formats are missing
+for a few of the variables when run in SAS*/
 
 proc import 
 datafile='E:\data\hrs_oop_2010\ref_data\nh_costs_by_state\from_mmi_2010_nh_cost_by_state.xls'
@@ -1529,12 +1541,11 @@ proc freq data=oop_add_price ; table nh_pmt_imp*md_cov /missprint; run;
 data oop_nh_costs_1;
 set oop_add_price;
 /*if there are no nursing home nights that aren't paid by medicare, then set oop nights=0
-????? If missing medicaid coverage, what should I do, assume medicaid coverage and use the lower
-medicaid prices??? 
-For now these people with missing medicaid coverage = don't get nights imputed*/
+If missing medicaid coverage, assume medicaid coverage and use the lower medicaid price
+*/
 if nh_pmt_imp=0 then oop_nh_nights=0;
 /*if there are some non medicare nights and report medicaid coverage, use medicaid price*/
-if nh_pmt_imp=1 and md_cov=1 then do;
+if nh_pmt_imp=1 and (md_cov=1 or md_cov=.) then do;
 	oop_nh_nights=floor(NH_OOP/medicaid_rate);
 	end;
 /*if there are some non medicare nights and do not report medicaid coverage, use private price*/
@@ -1559,8 +1570,18 @@ label oop_nh_nights_adj="OOP nights set to balance of self report nights-MC paid
 label other_nh_nights="Imputed nh nights not medicare or OOP, ivw pd";
 run;	
 
-/*80 obs missing, 77 have missing medicaid status, 3 have no prices (b/c Puerto Rico resident)*/
+/*3 obs (same R, 3 ivws) have no prices (b/c Puerto Rico resident)*/
 proc freq; table oop_nh_nights oop_nh_nights_adj other_nh_nights; run;
+
+/*look at obs that had to have oop nights adjusted down*/
+data zzz_oop_nights_adj;
+set oop_nh_costs_1;
+if nh_pmt_imp=1;
+run;
+
+/*n=280 of 2341 had OOP nights adjusted down to be balance of non-medicare paid nights
+ (total nights - snf_medicare=oop)*/
+proc freq; table oop_nh_nights_adj /missprint; run;
 
 /*now assign medicaid or private insurance payments for remaining nights*/
 data oop_int.oop_nh_costs_2;
@@ -1571,7 +1592,7 @@ nh_cost_private=0;
 end;
 
 if other_nh_nights>0 then do;
-	if md_cov=1 then do;
+	if md_cov=1 | md_cov=. then do;
 		nh_cost_medicaid=other_nh_nights*medicaid_rate;
 		nh_cost_private=0;
 		end;
@@ -1964,9 +1985,8 @@ run;
 %rxadj(wave=_n3,start=_n2);
 
 proc means data=adjust_rx_n3;
-var RX_OOP_x RX_old_x other_oop_n1;
+var RX_OOP_x RX_old_x other_oop_x;
 run;
-
 
 /**********************************************************************/
 /**********************************************************************/
@@ -1986,6 +2006,15 @@ run;
 proc means;
 var total_mos;
 run;
+
+/*1 obs missing oop_nh_nights_x other_nh_nights_x b/c PR resident, no matched price*/
+proc means data=adjust_rx_n3;
+var total_OOP: helper_OOP: hospital_OOP: nh_OOP: doctor_OOP: rx_OOP:
+ insurance_costs: other_oop: total_old: rx_old: sr_nh_nights: nh_nights: 
+los_snf_paid_by_mc_ivw: nh_ni_not_mc:
+ oop_nh_nights: other_nh_nights: nh_cost_medicaid: nh_cost_private:  ;
+run;
+
 
 /*get totals of waves OOP for 24 months and 60 months
 Check this variable list, I think all of these are needed but need to check

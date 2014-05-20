@@ -3746,6 +3746,10 @@ quit;
 
 proc freq; table core_to_dod_1yr; run;
 
+data age_ge_65_mc_ltd;
+set age_ge_65_mc(keep=bid_hrs c_ivw_date core_year);
+run;
+
 /**********************************************************************/
 /**********************************************************************/
 *get claims 1 year after interview, all claim types;
@@ -3758,7 +3762,7 @@ List of claims with some time within 1 year of interview*/
 proc sql;
 create table &source._meet_post as select a.*,b.c_ivw_date,b.core_year
 from medi.&source._2000_2010 a inner join
-age_ge_65_mc b
+age_ge_65_mc_ltd b
 on trim(left(a.bid_hrs_19))=trim(left(b.bid_hrs))
 and &days_start<=a.disch_date-b.c_ivw_date<=&days_after_core;
 quit;
@@ -3766,7 +3770,7 @@ quit;
 proc sql;
 create table &source._meet2_post as select a.*,b.c_ivw_date,b.core_year
 from medi.&source._2000_2010 a inner join
-age_ge_65_mc b
+age_ge_65_mc_ltd b
 on trim(left(a.bid_hrs_19))=trim(left(b.bid_hrs))
 and a.disch_date-b.c_ivw_date>&days_after_core and a.admit_date-b.c_ivw_date<=&days_after_core;
 quit;
@@ -3786,7 +3790,7 @@ proc sql;
 create table sic_int.&source._meet_post_&days_after_core. as select 
 a.*,b.c_ivw_date,b.core_year
 from medi.&source._2000_2010(keep=admit_date BID_hrs_19 pmt_amt) a inner join
-age_ge_65_mc b
+age_ge_65_mc_ltd b
 on trim(left(a.bid_hrs_19))=trim(left(b.bid_hrs))
 and &days_start<=a.admit_date-b.c_ivw_date<=&days_after_core;
 quit;
@@ -3888,21 +3892,21 @@ create table core_ids_admit_post_1 as select a.*,
 b.n_ip_admit_p12m,b.adm_trunc_ind_p12m,b.n_hospd_p12m,
 b.n_em_urgent_admit_p12m,b.n_em_admit_p12m,
 b.n_urgent_admit_p12m,b.n_elect_admit_p12m,b.n_ED_ip_p12m
-from age_ge_65_mc a
+from age_ge_65_mc_ltd(drop=c_ivw_date) a
 left join
 ip_post_365_4 b 
 on trim(left(a.bid_hrs))=trim(left(b.bid_hrs_19)) and a.core_year=b.core_year;
 quit;
 
-/*Since set comorbidities = 0 if no dx but have ffs mc 1 year preceeding the
-core interview, can use comorb = ., same as ffs mc 1 year=no*/
+/*Since dataset is just those with ffs mc 1 year preceeding the
+core interview, replace admit info with 0 if missing b/c there were no ip claims*/
  data core_ids_admit_post_2;
  set core_ids_admit_post_1;
  array list 
 	n_ip_admit_p12m n_hospd_p12m n_em_urgent_admit_p12m
 	n_em_admit_p12m n_urgent_admit_p12m n_elect_admit_p12m n_ED_ip_p12m;
  do over list;
- if list=. & comorb_1_0_1yr~=. then list=0;
+ if list=. then list=0;
  end;
 
  if n_ip_admit_p12m=0 then ind_hosp_adm_p12m=0;
@@ -3987,21 +3991,33 @@ quit;
 proc freq; table hs_admit_p12m; run;
 
 /*replace with 0 when have full info but no hospice claims
-core interview, can use comorb = ., same as ffs mc 1 year=no*/
+core interview*/
 data core_ids_admit_hs_post_3 ;
 set core_ids_admit_hs_post_2 ;
-if hs_admit_p12m=. & comorb_1_0_1yr~=. then hs_admit_p12m=0;
+if hs_admit_p12m=. then hs_admit_p12m=0;
 run;
 proc freq; table hs_admit_p12m; run;
 
-
-data sic_int.core_ids_init_outcomes;
-set core_ids_admit_hs_post_3 ;
-run;
+/*bring new outcomes variables into full interview dataset for those with ffs medicare */
+proc sql;
+create table sic_int.core_ids_init_outcomes(drop=bid_hrs2 core_year2)
+as select * from
+age_ge_65_mc a left join
+core_ids_admit_hs_post_3(rename=(bid_hrs=bid_hrs2) rename=(core_year=core_year2)) b
+on a.bid_hrs=b.bid_hrs2 and a.core_year=b.core_year2;
+quit;
 
 proc contents; run;
 
 proc freq; table core_year; run;
+
+proc freq; table hs_admit_p12m; run;
+
+proc freq;
+table n_ip_admit_p12m adm_trunc_ind_p12m n_hospd_p12m ind_hosp_adm_p12m n_em_urgent_admit_p12m ind_em_ur_adm_p12m
+	ind_em_adm_p12m ind_ur_adm_p12m ind_nonelect_adm_p12m n_nonelect_adm_p12m n_ED_ip_p12m ind_ED_adm_p12m 
+	ind_em_adm_p12m*ind_ED_adm_p12m /missprint;
+run;
 
 
 

@@ -1294,7 +1294,12 @@ proc means; var nh_nights sr_nh_nights los_snf_paid_by_mc_ivw nh_ni_not_mc nh_pm
 
 
 H="Missing nh nights, part 2, assign prices"
-/*pull in Private nursing home nightly rate
+/*This section pulls in 3 sets of prices:
+1. Private nursing home nightly rate from MetLife survey
+2. Medicaid nursing home nightly rate from various sources
+3. Private home health aide from MetLife 
+
+pull in Private nursing home nightly rate
 
 Note: Have to run the code in previous 2 heading sections (starting with Initial
 set up of OOP dataset...) prior to running this because of formats from the 
@@ -1370,6 +1375,37 @@ create table nh_rates as select a.*,b.medicaid_rate from
 private_nh_rate_2 a left join
 medicaid_nh_rate_1 b
 on a.state_usps_code=b.usps_code;
+quit;
+
+/*get private home health aide rate, from MetLife Survey, 2010*/
+
+proc import 
+datafile='E:\data\hrs_oop_2010\ref_data\nh_costs_by_state\from_mmi_2010_hhaide_cost_by_state.xls'
+out=hhaide_rate dbms=xls replace;
+run;
+
+data hhaide_rate_1;
+set hhaide_rate;
+if state_usps_code~=' ';
+run;
+
+data hhaide_rate_2(keep=state_usps_code avg_hh_aide_rate );
+set hhaide_rate_1;
+format HHAIDE_AVG 3.;
+avg_hh_aide_rate=HHAIDE_AVG+0;
+
+label avg_hh_aide_rate='Home health aide avg rate per hour';
+
+run;
+
+proc sort data=hhaide_rate_2; by state_usps_code; run;
+
+/*merge with the nursing home price lists*/
+proc sql;
+create table nh_hh_rates as select a.*,b.avg_hh_aide_rate from
+nh_rates a left join
+hhaide_rate_2 b
+on a.state_usps_code=b.state_usps_code;
 quit;
 
 /******************************************************/
@@ -1509,13 +1545,13 @@ proc freq; table state_wave; run;
 /*Merge prices in to the oop dataset by state*/
 /******************************************************/
 proc sql;
-create table oop_add_price as select a.*,b.avg_private_rm_rate,b.medicaid_rate
+create table oop_add_price as select a.*,b.avg_private_rm_rate,b.medicaid_rate,b.avg_hh_aide_rate
 from oop_add_state_1 a left join
-nh_rates b
+nh_hh_rates b
 on a.state_wave=b.state_usps_code;
 quit;
 
-proc means; var avg_private_rm_rate medicaid_rate; run;
+proc means; var avg_private_rm_rate medicaid_rate avg_hh_aide_rate; run;
 
 /*1 bid is missing prices b/c state of residence = Puerto Rico
 This person will be dropped from the analysis, leave prices as missing*/
@@ -1622,6 +1658,59 @@ run;
 
 proc means; var pct_in_nh months; run;
 
+H="Accounting for informal home care"
+/*use private home health aide rate, from MetLife Survey, 2010
+Merged into dataset in previous heading section
+
+This needs some work once hear from Jon and Kathleen re capping spending, etc.
+
+Also, need to subtract any OOP costs that were reported for helpers,
+need clarification on OOP dataset from Kathleen*/
+
+data oop_int.oop_nh_hh_costs;
+set oop_int.oop_nh_costs_2;
+
+/*note category of employee of instistution not imputed here because
+assumed to be covered under nursing home costs*/
+hh_cost_per_mo=hlphrs*avg_hh_aide_rate;
+hh_p_cost_per_mo=hlphrs_p*avg_hh_aide_rate;
+hh_s_cost_per_mo=hlphrs_s*avg_hh_aide_rate;
+hh_u_cost_per_mo=hlphrs_u*avg_hh_aide_rate;
+hh_dm_cost_per_mo=(hlphrs_d + hlphrs_m)*avg_hh_aide_rate;
+
+label hh_cost_per_mo="Helpers (all types) cost per month";
+label hh_p_cost_per_mo="Other paid helpers cost per month";
+label hh_s_cost_per_mo="Spouse helpers cost per month";
+label hh_u_cost_per_mo="Other unpaid helpers cost per month";
+label hh_dm_cost_per_mo="Unknown paid or not helpers cost per month";
+
+/*multiply over number of months covered by interview
+less the reported OOP helper costs paid*/
+hh_cost_ivw=hh_cost_per_mo*months - ;
+hh_p_cost_ivw=hh_p_cost_per_mo*months;
+hh_s_cost_ivw=hh_s_cost_per_mo*months;
+hh_u_cost_ivw=hh_u_cost_per_mo*months;
+hh_dm_cost_ivw=hh_dm_cost_per_mo*months;
+
+label hh_cost_ivw="Helpers (all types) cost ivw time period";
+label hh_p_cost_ivw="Other paid helpers cost ivw time period";
+label hh_s_cost_ivw="Spouse helpers cost ivw time period";
+label hh_u_cost_ivw="Other unpaid helpers cost ivw time period";
+label hh_dm_cost_ivw="Unknown paid or not helpers cost ivw time period";
+
+run;
+
+proc means; 
+var hh_cost_per_mo hh_p_cost_per_mo hh_s_cost_per_mo hh_u_cost_per_mo hh_dm_cost_per_mo;
+run;
+
+proc means; 
+var hh_cost_ivw hh_p_cost_ivw hh_s_cost_ivw hh_u_cost_ivw hh_dm_cost_ivw;
+run;
+
+
+
+
 H="Get OOP data for exit, n1, n2 and n3 cores"
 /*
 Collects OOP data for decedents from exit, n1, n2, and n3 core interview imputations
@@ -1635,13 +1724,13 @@ This dataset is limited to those decedents with ffs medicare last 2 years of lif
 
 /*clean up dataset prior to adding suffix, merging*/
 data oop_nh_costs_3(drop=hhid pn inx STATEUSPS: state_0: state_98_imp_yes state_10_imp_yes);
-set oop_int.oop_nh_costs_2;
+set oop_int.oop_nh_hh_costs;
 
 if year=exit_year_x then exit_int_yes=1;
 else exit_int_yes=0;
 label exit_int_yes='Indicator for exit interview';
 
-if hhid='.' then do;
+if hhid='' then do;
 helper_missing_yes=1;
 end;
 else helper_missing_yes=0;
@@ -1649,12 +1738,15 @@ label helper_missing_yes='Indicator for no entry in helper dataset';
 
 /*replace missing helper info with 0*/
 array list_hlp hlphrs hlphrs_p hlphrs_s hlphrs_e hlphrs_u hlphrs_d hlphrs_m 
-n_hp n_p n_s n_e n_u n_d n_m;
+n_hp n_p n_s n_e n_u n_d n_m hh_cost_per_mo hh_p_cost_per_mo hh_s_cost_per_mo 
+hh_u_cost_per_mo hh_dm_cost_per_mo;
 do over list_hlp;
 if list_hlp=. then list_hlp=0;
 end;
 
 run;
+
+proc freq; table helper_missing_yes; run;
 
 /*only 3288 exit interviews in oop dataset*/
 proc freq; table exit_int_yes; run;
@@ -2026,10 +2118,11 @@ add helper variables!*/
 %let list=total_OOP helper_OOP hospital_OOP nh_OOP doctor_OOP rx_OOP
  insurance_costs other_oop total_old rx_old sr_nh_nights nh_nights 
 los_snf_paid_by_mc_ivw nh_ni_not_mc
- oop_nh_nights other_nh_nights nh_cost_medicaid nh_cost_private;
+ oop_nh_nights other_nh_nights nh_cost_medicaid nh_cost_private 
+hh_cost_ivw hh_p_cost_ivw hh_s_cost_ivw hh_u_cost_ivw hh_dm_cost_ivw;
 
 /*for variables where sum over all interviews*/
-%do i=1 %to 18;
+%do i=1 %to 23;
 %let var=%scan(&list,&i);
 
 data temp_&su._&i;
@@ -2071,8 +2164,8 @@ If missing hours, then the variable is left blank in final dataset*/
 %let list2=hlphrs hlphrs_p hlphrs_s hlphrs_e hlphrs_u hlphrs_d hlphrs_m 
 n_hp n_p n_s n_e n_u n_d n_m;
 
-%do i=19 %to 32;
-%let var=%scan(&list2,(&i-18));
+%do i=24 %to 37;
+%let var=%scan(&list2,(&i-23));
 
 data temp_&su._&i;
 set adjust_rx_n3;
@@ -2118,7 +2211,7 @@ run;
 /*merge the temporary datasets back together*/
 /*so dataset all_2 has variables for OOP spending last 24 months of life*/
 data all_2;
-merge temp_24m_1-temp_24m_32 temp_60m_1-temp_60m_32;
+merge temp_24m_1-temp_24m_37 temp_60m_1-temp_60m_37;
 by id;
 run;
 
@@ -2185,6 +2278,18 @@ label n_p_24m='Avg no. other paid helpers last 24m'
 	hlphrs_u_60m='Avg hours/month other unpaid help last 60m'
 	hlphrs_d_60m='Avg hours/month, DN/NA/RF paid, help last 60m'
 	hlphrs_m_60m='Avg hours/month, missing paid, help last 60m'
+;
+
+label hh_cost_ivw_24m='Imputed helper replacement cost last 24m'
+hh_p_cost_ivw_24m='Imputed paid helper cost last 24m'
+hh_s_cost_ivw_24m='Imputed spouse helper replacement cost last 24m'
+hh_u_cost_ivw_24m='Imputed other unpaid helper replacement cost last 24m'
+hh_dm_cost_ivw_24m='Imputed pay status unk. helper replacement cost last 24m'
+hh_cost_ivw_60m='Imputed helper replacement cost last 60m'
+hh_p_cost_ivw_60m='Imputed paid helper cost last 60m'
+hh_s_cost_ivw_60m='Imputed spouse helper replacement cost last 60m'
+hh_u_cost_ivw_60m='Imputed other unpaid helper replacement cost last 60m'
+hh_dm_cost_ivw_60m='Imputed pay status unk. helper replacement cost last 60m'
 ;
 
 run;
@@ -5177,12 +5282,12 @@ gen total_nh_costs_24m=snf_paid_by_mc_2yr_wi+nh_oop_24m+nh_cost_medicaid_24m+nh_
 gen total_nh_costs_60m=snf_paid_by_mc_5yr_wi+nh_oop_60m+nh_cost_medicaid_60m+nh_cost_private_60m
 
 //total payments all types
-gen total_costs_24m = tot_paid_by_mc_2yr_wi+total_oop_24m+nh_cost_medicaid_24m+nh_cost_private_24m
-gen total_costs_60m = tot_paid_by_mc_5yr_wi+total_oop_60m+nh_cost_medicaid_60m+nh_cost_private_60m
+gen total_costs_24m = tot_paid_by_mc_2yr_wi+total_oop_24m+nh_cost_medicaid_24m+nh_cost_private_24m+hh_cost_ivw_24m
+gen total_costs_60m = tot_paid_by_mc_5yr_wi+total_oop_60m+nh_cost_medicaid_60m+nh_cost_private_60m+hh_cost_ivw_60m
 
 ******************************************************************************
 //get tables comparing mean, median spending for different disease groups
-mat dg_2y=J(27,8,.)
+mat dg_2y=J(28,8,.)
 //first row n each group
 tab pr_dem_gt50, missing matcell(r1_50)
 mat dg_2y[1,1]=r1_50[2,1] //with dem prob > 50% col 1
@@ -5198,7 +5303,7 @@ local spvars age_at_death_e total_costs_24m tot_paid_by_mc_2yr_wi ip_paid_by_mc_
 hh_paid_by_mc_2yr_wi hs_paid_by_mc_2yr_wi pb_paid_by_mc_2yr_wi op_paid_by_mc_2yr_wi ///
 dm_paid_by_mc_2yr_wi total_oop_24m helper_oop_24m hospital_oop_24m nh_oop_24m ///
 doctor_oop_24m rx_oop_24m other_oop_24m nh_nights_24m los_snf_paid_by_mc_ivw_24m nh_ni_not_mc_24m ///
-oop_nh_nights_24m other_nh_nights_24m nh_cost_medicaid_24m nh_cost_private_24m total_nh_costs_24m ///
+oop_nh_nights_24m other_nh_nights_24m nh_cost_medicaid_24m nh_cost_private_24m total_nh_costs_24m hh_cost_ivw_24m ///
 medicaid_x
 
 //totals 2 years, wage index adjusted mc payments, oop spend and nh nights
@@ -5215,7 +5320,7 @@ foreach d in pr_dem_gt50 cancer_grp heartdis_grp other_grp{
 	}
 //convert medicaid rate to percent
 forvalues i = 1/8{
-mat dg_2y[27,`i']=dg_2y[27,`i']*100	
+mat dg_2y[28,`i']=dg_2y[28,`i']*100	
 }	
 	
 mat rownames dg_2y= "N" "Age at death" "Total payments, all types" "Total Medicare payments" "Medicare IP" "Medicare SNF" "Medicare HH" ///
@@ -5223,7 +5328,7 @@ mat rownames dg_2y= "N" "Age at death" "Total payments, all types" "Total Medica
 "OOP Total" "OOP Helper" "OOP Hospital" "OOP NH" "OOP Doctor" "OOP Rx" "OOP Other" ///
 "Total NH nights, SR or claims" "Nights paid by Medicare" "Nights not Medicare" ///
 "OOP Nights, imputed" "Medicaid or private payer nights" "Medicaid NH Payments" ///
-"Private payer NH Payments" "Total NH costs, all payers" "Medicaid at death? (percent)"
+"Private payer NH Payments" "Total NH costs, all payers" "Imputed helper costs" "Medicaid at death? (percent)"
 
 mat colnames dg_2y="Prob dem > 50%" "median" "Cancer" "median" "Heart disease" "median" "Other disease" "median" 
 
@@ -5245,7 +5350,7 @@ sdec(0) landscape replace
 keep if part_ab_5y==1 & hmo_5y==0 & ind_60m_oop_yes==1
 
 //get tables comparing mean, median spending for different disease groups
-mat dg_5y=J(27,8,.)
+mat dg_5y=J(28,8,.)
 //first row n each group
 tab pr_dem_gt50, missing matcell(r1_50)
 mat dg_5y[1,1]=r1_50[2,1] //with dem prob > 50% col 1
@@ -5262,7 +5367,7 @@ hh_paid_by_mc_5yr_wi hs_paid_by_mc_5yr_wi pb_paid_by_mc_5yr_wi op_paid_by_mc_5yr
 dm_paid_by_mc_5yr_wi total_oop_60m helper_oop_60m hospital_oop_60m nh_oop_60m ///
 doctor_oop_60m rx_oop_60m other_oop_60m nh_nights_60m los_snf_paid_by_mc_ivw_60m nh_ni_not_mc_60m ///
 oop_nh_nights_60m other_nh_nights_60m nh_cost_medicaid_60m nh_cost_private_60m total_nh_costs_60m ///
-medicaid_x
+hh_cost_ivw_60m medicaid_x
 
 //totals 5 years, wage index adjusted mc payments, oop spend and nh nights
 local c=1
@@ -5278,7 +5383,7 @@ foreach d in pr_dem_gt50 cancer_grp heartdis_grp other_grp{
 	}
 //convert medicaid rate to percent
 forvalues i = 1/8{
-mat dg_5y[27,`i']=dg_5y[27,`i']*100	
+mat dg_5y[28,`i']=dg_5y[28,`i']*100	
 }	
 	
 mat rownames dg_5y= "N" "Age at death" "Total payments, all types" "Total Medicare payments" "Medicare IP" "Medicare SNF" "Medicare HH" ///
@@ -5286,7 +5391,7 @@ mat rownames dg_5y= "N" "Age at death" "Total payments, all types" "Total Medica
 "OOP Total" "OOP Helper" "OOP Hospital" "OOP NH" "OOP Doctor" "OOP Rx" "OOP Other" ///
 "Total NH nights, SR or claims" "Nights paid by Medicare" "Nights not Medicare" ///
 "OOP Nights, imputed" "Medicaid or private payer nights" "Medicaid NH Payments" ///
-"Private payer NH Payments" "Total NH costs, all payers" "Medicaid at death? (percent)"
+"Private payer NH Payments" "Total NH costs, all payers" "Imputed helper costs" "Medicaid at death? (percent)"
 
 mat colnames dg_5y="Prob dem > 50%" "median" "Cancer" "median" "Heart disease" "median" "Other disease" "median" 
 

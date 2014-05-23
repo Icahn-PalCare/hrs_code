@@ -1,0 +1,252 @@
+= V4 Outline MultiLine NoSorting TabWidth=30
+
+H="Check OOP missingness from original dataset"
+
+
+H="Initial oop set up without replacing missing values"
+/*brings oop dataset into sas
+Creates id variable
+Drops variables not needed*/
+
+libname oop_src "H:\OOP\data";
+libname oop_int "C:\data\oop";
+
+proc import datafile="H:\OOP\data\oopme_final_oldv.dta"  
+out=oop_1 replace; 
+run;
+
+/*only keep years 1998 and later since those are the years in our core dataset*/
+data oop_int.oop_2 (keep=id year curr_iw_date prev_iw_date months total_OOP hospital_OOP NH_OOP 
+doctor_OOP dental_OOP patient_OOP hospice_OOP RX_OOP home_OOP special_OOP non_med_OOP helper_OOP 
+insurance_costs sr_nh_nights md_cov numpaidhelpers numhelpers iwtype);
+set oop_1;
+if year>=1998;
+length id $9 hhid $6 pn $3;
+id=hhid||pn;
+rename NH_NIGHTS = sr_nh_nights;
+
+/*array list total_OOP hospital_OOP NH_OOP 
+doctor_OOP dental_OOP patient_OOP hospice_OOP RX_OOP home_OOP special_OOP non_med_OOP helper_OOP 
+insurance_costs sr_nh_nights;
+do over list;
+if list=. then list=0;
+end;*/
+run;
+
+proc freq; table year; run;
+
+/*helper dataset*/
+proc import datafile="H:\OOP\data\helper_hours_oldv.dta"  
+out=helper_1 replace; 
+run;
+
+/*helper dataset 2000-2010*/
+proc freq; table year; run;
+
+data oop_int.helper_2;
+set helper_1;
+length id $9 hhid $6 pn $3;
+id=hhid||pn;
+run;
+
+proc sort data=oop_int.oop_2; by id year; run;
+proc sort data=oop_int.helper_2; by id year; run;
+
+proc sql;
+create table oop_helper_1(drop=id2 year2) as select * from
+oop_int.oop_2 a left join
+oop_int.helper_2(rename=(id=id2) rename=(year=year2) rename=(inx=inx_helper)) b
+on a.id=b.id2 and a.year=b.year2;
+quit;
+
+data oop_int.oop_helper;
+set oop_helper_1;
+
+if hhid='' then do;
+helper_missing_yes=1;
+end;
+else helper_missing_yes=0;
+label helper_missing_yes='Indicator for no entry in helper dataset';
+
+/*replace missing helper info with 0*/
+array list_hlp hlphrs hlphrs_p hlphrs_s hlphrs_e hlphrs_u hlphrs_d hlphrs_m 
+n_hp n_p n_s n_e n_u n_d n_m hh_cost_per_mo hh_p_cost_per_mo hh_s_cost_per_mo 
+hh_u_cost_per_mo hh_dm_cost_per_mo;
+do over list_hlp;
+if list_hlp=. then list_hlp=0;
+end;
+
+run;
+
+proc freq; table helper_missing_yes iwtype; run;
+
+
+H="Get x, n1, n2 ivws"
+/*6809 exit ivws*/
+data exit_only_oop;
+set oop_int.oop_helper;
+if iwtype=1 and year>2000;
+run;
+
+data core_only_oop;
+set oop_int.oop_helper;
+if iwtype=0;
+run;
+
+/*limit core ivws to those with exit ivw*/
+proc sql;
+create table core_deced as select b.* from
+exit_only_oop a inner join
+core_only_oop b
+on a.id=b.id;
+quit;
+
+proc sort data=core_deced; by id year;
+run;
+
+/*n=6677 n1 core ivws*/
+data core_n1;
+set core_deced;
+by id;
+if last.id;
+run;
+
+proc sql;
+create table core_pre_n1 as select b.* from 
+core_n1 a inner join
+core_deced b
+on a.id=b.id and a.year>b.year;
+quit;
+
+proc sort data=core_pre_n1;
+by id year;
+run;
+
+/*n=6379 n2 ivws */
+data core_n2;
+set core_pre_n1;
+by id;
+if last.id;
+run;
+
+proc sql;
+create table core_pre_n2 as select b.* from 
+core_n2 a inner join
+core_deced b
+on a.id=b.id and a.year>b.year;
+quit;
+
+proc sort data=core_pre_n2;
+by id year;
+run;
+
+/*n=4805 n3 ivws */
+data core_n3;
+set core_pre_n2;
+by id;
+if last.id;
+run;
+
+%macro rename2(lib,dsn,pre,first);
+options pageno=1 nodate;
+proc contents data=&lib..&dsn;
+title "Before Renaming All Variables";
+run;
+proc sql noprint;
+select nvar into :num_vars
+from dictionary.tables
+where libname="&LIB" and
+memname="&DSN";
+select distinct(name) into :var1-
+:var%TRIM(%LEFT(&num_vars))
+from dictionary.columns
+where libname="&LIB" and
+memname="&DSN" ;
+quit;
+run;
+proc datasets library=&LIB;
+modify &DSN;
+rename
+%do i=1 %to &num_vars;
+
+&&var&i=&first.&&var&i.&&pre.
+%end;
+;
+quit;
+run;
+options pageno=1 nodate;
+proc contents data=&lib..&dsn;
+title "After Renaming All Variables";
+run;
+%mend ;
+
+
+%rename2(WORK,EXIT_ONLY_OOP,_x,);
+%rename2(WORK,CORE_N1,_n1,);
+%rename2(WORK,CORE_N2,_n2,);
+%rename2(WORK,CORE_N3,_n3,);
+
+data OOP_X_2;
+set EXIT_ONLY_OOP;
+rename id_x=id;
+run;
+
+data OOP_N1_2;
+set CORE_N1;
+rename id_n1=id;
+run;
+
+data OOP_N2_2;
+set CORE_N2;
+rename id_n2=id;
+run;
+
+data OOP_N3_2;
+set CORE_N3;
+rename id_n3=id;
+run;
+
+proc sort data=OOP_X_2 nodupkey;
+by id;
+run;
+
+proc sort data=OOP_N1_2 nodupkey;
+by id;
+run;
+
+proc sort data=OOP_N2_2 nodupkey;
+by id;
+run;
+
+proc sort data=OOP_N3_2 nodupkey;
+by id;
+run;
+
+proc sql;
+create table oop_x_n1(drop=id2) as select * from 
+oop_x_2 a left join
+oop_n1_2(rename=(id=id2)) b
+on a.id=b.id2 ;
+quit;
+
+proc sql;
+create table oop_x_n1_n2(drop=id2) as select * from
+oop_x_n1 a left join
+oop_n2_2(rename=(id=id2)) b
+on a.id=b.id2 ;
+quit;
+
+proc sql;
+create table oop_int.oop_x_n1_n2_n3(drop=id2) as select * from
+oop_x_n1_n2 a left join
+oop_n3_2(rename=(id=id2)) b
+on a.id=b.id2 ;
+quit;
+
+proc freq;
+table year_x year_n1 year_n2 year_n3;
+run;
+
+
+
+H="Get 24m 60m totals"

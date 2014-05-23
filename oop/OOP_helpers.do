@@ -12,13 +12,13 @@ set more off
 //local datapath /Users/rebeccagorges/Documents/data/hrs
 
 //pen drive file path, RG
-//local datapath H:\OOP\data
+local datapath H:\OOP\data
 
 //Amy's PC path
-local logpath "E:\data\hrs_oop_2010\logs"
-local datapath "E:\data\hrs_oop_2010\received_data"
+//local logpath "E:\data\hrs_oop_2010\logs"
+//local datapath "E:\data\hrs_oop_2010\received_data"
 
-log using `logpath'\OOP_helpers_LOG.txt, text replace
+//log using `logpath'\OOP_helpers_LOG.txt, text replace
 
 use `datapath'/oopme_final_oldv.dta
 
@@ -89,5 +89,8 @@ by hhid pn: gen bef1_numhelpers=numhelpers[_n-1]
 
 tab numpaidhelpers bef1_numpaidhelpers if numpaidhelpers>0
 tab numhelpers bef1_numhelpers if numhelpers>0
+
+by hhid pn: gen bef1_n_u=n_u[_n-1]
+tab n_u bef1_n_u
 
 log close

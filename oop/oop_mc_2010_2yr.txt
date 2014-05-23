@@ -945,7 +945,7 @@ run;
 /*only keep years 1998 and later since those are the years in our core dataset*/
 data oop_int.oop_2 (keep=id year curr_iw_date prev_iw_date months total_OOP hospital_OOP NH_OOP 
 doctor_OOP dental_OOP patient_OOP hospice_OOP RX_OOP home_OOP special_OOP non_med_OOP helper_OOP 
-insurance_costs sr_nh_nights md_cov);
+insurance_costs sr_nh_nights md_cov numpaidhelpers numhelpers);
 set oop_1;
 if year>=1998;
 length id $9 hhid $6 pn $3;
@@ -1576,7 +1576,7 @@ quit;
 proc means; var avg_private_rm_rate medicaid_rate avg_hh_aide_rate; run;
 
 /*1 bid is missing prices b/c state of residence = Puerto Rico
-This person will be dropped from the analysis, leave prices as missing*/
+Drop this R in the next step*/
 data zzzmissprice; set oop_add_price; if avg_private_rm_rate=.; run;
 
 /******************************************************/
@@ -1598,6 +1598,7 @@ proc freq data=oop_add_price ; table nh_pmt_imp*md_cov /missprint; run;
 /*first get nights associated with the OOP costs reported in the interviews*/
 data oop_nh_costs_1;
 set oop_add_price;
+if avg_private_rm_rate~=.;
 /*if there are no nursing home nights that aren't paid by medicare, then set oop nights=0
 If missing medicaid coverage, assume medicaid coverage and use the lower medicaid price
 */
@@ -1628,7 +1629,6 @@ label oop_nh_nights_adj="OOP nights set to balance of self report nights-MC paid
 label other_nh_nights="Imputed nh nights not medicare or OOP, ivw pd";
 run;	
 
-/*3 obs (same R, 3 ivws) have no prices (b/c Puerto Rico resident)*/
 proc freq; table oop_nh_nights oop_nh_nights_adj other_nh_nights; run;
 
 /*look at obs that had to have oop nights adjusted down*/
@@ -1637,7 +1637,7 @@ set oop_nh_costs_1;
 if nh_pmt_imp=1;
 run;
 
-/*n=280 of 2341 had OOP nights adjusted down to be balance of non-medicare paid nights
+/*n=280 of 2338 had OOP nights adjusted down to be balance of non-medicare paid nights
  (total nights - snf_medicare=oop)*/
 proc freq; table oop_nh_nights_adj /missprint; run;
 
@@ -1690,18 +1690,37 @@ Also, need to subtract any OOP costs that were reported for helpers,
 need clarification on OOP dataset from Kathleen
 
 helper_OOP includes helpers in the n_p n_d n_m categories
-so when impute informal care, should be for helpers in n_s and n_u only*/
+so when impute informal care, should be for helpers in n_s and n_u only
 
-data oop_int.oop_nh_hh_costs;
-set oop_int.oop_nh_costs_2;
+Preliminary methodology:
+1. Cost/month_s and _u = hours/month * hourly rate
+	Capped at $15,000/month (essentially 24/hr per day care)
+2. Use previous wave helper info to determine length of care
+	If no helper needed the interview prior, then 4 months costs assigned
+	If helper needed prior interview, then full interview
+	time period helper costs are assigned
+		Use 4 months at reported hours/month and then remaining months in
+		ivw period are assigned mean hours/month between current and previous ivw
+3. For cases where full interview costs are assigned, need to 
+	revise the OOP_helper cost as well for consistency
+	since original dataset caps all at 4 months
+*/
+
+proc sort data=oop_int.oop_nh_costs_2 out=hh_costs_1;
+by id year;
+run; 
+
+/*get cost/month using helper hours*/
+data hh_costs_2;
+set hh_costs_1(keep=id months year n_s n_u numpaidhelpers hlphrs_s hlphrs_u helper_OOP avg_hh_aide_rate);
+if avg_hh_aide_rate~=.;
 
 if hlphrs_s~=. then hh_s_capped=0;
 if hlphrs_u~=. then hh_u_capped=0;
+if helper_OOP~=. then ind_helper_OOP_mod=0;
 
 /*imputed costs per month for spouse and other unpaid helpers
 cost/helper capped at $15000 per month, same as it was in the OOP dataset*/
-*hh_cost_per_mo=hlphrs*avg_hh_aide_rate;
-*hh_p_cost_per_mo=hlphrs_p*avg_hh_aide_rate;
 hh_s_cost_per_mo=hlphrs_s*avg_hh_aide_rate;
 if hh_s_cost_per_mo>15000 & hh_s_cost_per_mo~=. then do;
 	hh_s_cost_per_mo=15000;
@@ -1712,45 +1731,132 @@ if hh_u_cost_per_mo>15000 & hh_u_cost_per_mo~=. then do;
 	hh_u_cost_per_mo=15000;
 	hh_u_capped=1;
 	end;
-*hh_dm_cost_per_mo=(hlphrs_d + hlphrs_m)*avg_hh_aide_rate;
 
-*label hh_cost_per_mo="Helpers (all types) cost per month";
-*label hh_p_cost_per_mo="Other paid helpers cost per month";
+if months>=4 then helper_OOP_per_mo=helper_OOP/4;
+else helper_OOP_per_mo=helper_OOP/months;
+
 label hh_s_cost_per_mo="Spouse helpers cost per month";
 label hh_u_cost_per_mo="Other unpaid helpers cost per month";
-*label hh_dm_cost_per_mo="Unknown paid or not helpers cost per month";
+label helper_OOP_per_mo="OOP helpers per month";
 
-/*multiply over number of months covered by interview with a cap at 4 to be
-consistent with the OOP dataset, revisit this!!*/
-if months >=4 then do;
-	hh_s_cost_ivw=hh_s_cost_per_mo*4;
-	hh_u_cost_ivw=hh_u_cost_per_mo*4;
+run;
+
+proc means; var hh_s_capped hh_u_capped hh_s_cost_per_mo hh_u_cost_per_mo helper_OOP_per_mo; run;
+
+/*get helpers, cost/month previous interview period*/
+data hh_costs_3;
+set hh_costs_2;
+
+by id;
+n_s_1bef=lag(n_s);
+n_u_1bef=lag(n_u);
+numpaidhelpers_1bef=lag(numpaidhelpers);
+hh_s_cost_per_mo_1bef=lag(hh_s_cost_per_mo);
+hh_u_cost_per_mo_1bef=lag(hh_u_cost_per_mo);
+helper_OOP_per_mo_1bef=lag(helper_OOP_per_mo);
+
+array list n_s_1bef n_u_1bef numpaidhelpers_1bef hh_s_cost_per_mo_1bef hh_u_cost_per_mo_1bef helper_OOP_per_mo_1bef;
+do over list;
+if first.id then list=.;
 end;
-else do;
-	*hh_cost_ivw=hh_cost_per_mo*months ;
-	*hh_p_cost_ivw=hh_p_cost_per_mo*months;
+run;
+
+proc freq; table n_s*n_s_1bef n_u*n_u_1bef numpaidhelpers*numpaidhelpers_1bef; run;
+
+
+/*Use previous interview to determine months
+1. If No helper that type previous interview, do 4 months at curr ivw hours
+2. If helper that type previous interview, do 4 months at curr ivw hours + 
+		remaining months at mean hours between current and previous interview
+This also adjusts helper_OOP imputation of >4 months is required with same methodology*/
+data hh_costs_4;
+set hh_costs_3;
+
+/*if ivw period is less than 4 months, assign cost for full no. months*/
+if (months<4) then do;
 	hh_s_cost_ivw=hh_s_cost_per_mo*months;
 	hh_u_cost_ivw=hh_u_cost_per_mo*months;
-	*hh_dm_cost_ivw=hh_dm_cost_per_mo*months;
-end;
+	helper_OOP_adj=helper_OOP;
+	s_cost_total_mos = 1;
+	u_cost_total_mos = 1;
+	helper_OOP_mod=0;
+	end;
 
-*label hh_cost_ivw="Helpers (all types) cost ivw time period";
-*label hh_p_cost_ivw="Other paid helpers cost ivw time period";
+/*spouse helpers*/
+	else if n_s_1bef~=0 & n_s_1bef~='' then do; /*if spouse helped period before*/
+		hh_s_cost_ivw=hh_s_cost_per_mo*4 + mean(hh_s_cost_per_mo,hh_s_cost_per_mo_1bef)*(months-4);
+		s_cost_total_mos = 2;
+		end;
+	else do; /*if spouse did not help prev ivw, set to 4 months*/
+		hh_s_cost_ivw=hh_s_cost_per_mo*4;
+		s_cost_total_mos = 3;
+	end;
+
+/*for other unpaid helpers*/
+if months>=4 then do;
+	if n_u_1bef~=0 & n_u_1bef~='' then do; /*if u helped period before*/
+		hh_u_cost_ivw=hh_u_cost_per_mo*4 + mean(hh_u_cost_per_mo,hh_u_cost_per_mo_1bef)*(months-4);
+		u_cost_total_mos = 2;
+		end;
+	else do; /*if no unpaid helpers did not help prev ivw, set to 4 months*/
+		hh_u_cost_ivw=hh_u_cost_per_mo*4;
+		u_cost_total_mos = 3;
+		end;
+	end;
+
+/*for paid helpers, OOP cost adjustment*/
+if months>=4 then do;
+	if numpaidhelpers_1bef~=0 & numpaidhelpers_1bef~='' then do; /*if paid helped period before*/
+		helper_OOP_adj=helper_OOP_per_mo*4 + mean(helper_OOP_per_mo,helper_OOP_per_mo_1bef)*(months-4);
+		helper_OOP_mod = 1;
+		end;
+	else do; /*if paid helpers did not help prev ivw, no adjustment needed, use 4 months OOP cost*/
+		helper_OOP_adj=helper_OOP;
+		helper_OOP_mod = 0;
+		end;
+	end;
+
 label hh_s_cost_ivw="Spouse helpers cost ivw time period";
 label hh_u_cost_ivw="Other unpaid helpers cost ivw time period";
-*label hh_dm_cost_ivw="Unknown paid or not helpers cost ivw time period";
+label s_cost_total_mos="S cost imputed 1=lt 4mo 2=mean pd bef 3=4 mo";
+label u_cost_total_mos="U cost imputed 1=lt 4mo 2=mean pd bef 3=4 mo";
 
+label helper_OOP_adj="Adjusted Helper OOP cost";
+label helper_OOP_mod="Helper OOP cost modified, 1=yes";
+
+run;
+
+proc freq; table s_cost_total_mos u_cost_total_mos helper_OOP_mod; run;
+
+proc means; vars hh_s_cost_ivw hh_u_cost_ivw helper_OOP_adj helper_OOP; run;
+
+/*merge new variables into final dataset*/
+proc sql;
+create table oop_nh_hh_costs_1 as select a.*,b.hh_s_cost_ivw,b.hh_u_cost_ivw,b.helper_OOP_adj
+from
+oop_int.oop_nh_costs_2 a left join
+hh_costs_4(rename=(id=id2) rename=(year=year2)) b
+on a.id=b.id2 and a.year=b.year2;
+quit;
+
+/*recalculate total OOP and other OOP given the new helper OOP adjustement*/
+data oop_int.oop_nh_hh_costs;
+set oop_nh_hh_costs_1(rename=(helper_OOP=helper_OOP_old));
+
+helper_OOP=helper_OOP_adj;
+
+total_old=total_OOP;
+
+total_OOP=total_old-helper_OOP_old+helper_OOP;
+
+other_OOP=total_OOP -insurance_costs- hospital_OOP -doctor_OOP -rx_OOP- nh_OOP -helper_OOP;
+
+drop helper_OOP_adj;
 run;
 
 proc means; 
-var months hlphrs_s hlphrs_u hh_s_capped hh_u_capped hh_s_cost_per_mo hh_u_cost_per_mo hh_s_cost_ivw hh_u_cost_ivw ;
+var months hh_s_cost_ivw hh_u_cost_ivw helper_OOP helper_OOP_old total_OOP total_old other_OOP;
 run;
-
-proc freq; table n_s n_hp n_u;
-run;
-
-
-
 
 H="Get OOP data for exit, n1, n2 and n3 cores"
 /*
@@ -2153,14 +2259,14 @@ add helper variables!*/
 
 %macro all(su=,months=);
 
-%let list=total_OOP helper_OOP hospital_OOP nh_OOP doctor_OOP rx_OOP
+%let list=total_OOP helper_OOP helper_OOP_old hospital_OOP nh_OOP doctor_OOP rx_OOP
  insurance_costs other_oop total_old rx_old sr_nh_nights nh_nights 
 los_snf_paid_by_mc_ivw nh_ni_not_mc
  oop_nh_nights other_nh_nights nh_cost_medicaid nh_cost_private 
  hh_s_cost_ivw hh_u_cost_ivw ;
 
 /*for variables where sum over all interviews*/
-%do i=1 %to 20;
+%do i=1 %to 21;
 %let var=%scan(&list,&i);
 
 data temp_&su._&i;
@@ -2202,8 +2308,8 @@ If missing hours, then the variable is left blank in final dataset*/
 %let list2=hlphrs hlphrs_p hlphrs_s hlphrs_e hlphrs_u hlphrs_d hlphrs_m 
 n_hp n_p n_s n_e n_u n_d n_m;
 
-%do i=21 %to 34;
-%let var=%scan(&list2,(&i-20));
+%do i=22 %to 35;
+%let var=%scan(&list2,(&i-21));
 
 data temp_&su._&i;
 set adjust_rx_n3;
@@ -2249,7 +2355,7 @@ run;
 /*merge the temporary datasets back together*/
 /*so dataset all_2 has variables for OOP spending last 24 months of life*/
 data all_2;
-merge temp_24m_1-temp_24m_34 temp_60m_1-temp_60m_34;
+merge temp_24m_1-temp_24m_35 temp_60m_1-temp_60m_35;
 by id;
 run;
 
@@ -5262,9 +5368,14 @@ replace dem_miss_n2=0 if prob_dementia_n2!=.
 
 tab dem_miss_n1 dem_miss_n2, missing
 
+tab core_year_n1 dem_miss_n1 , missing
+tab core_year_n2 dem_miss_n2 , missing
+
 //if missing, carry forward n2 probability
 gen prob_dem_n1n2 = prob_dementia_n1
 replace prob_dem_n1n2=prob_dementia_n2 if prob_dementia_n1==.
+
+tab exit_year_x if prob_dem_n1n2==.
 
 //histogram prob_dem_n1n2
 
@@ -5336,6 +5447,15 @@ gen inf_care_costs_60m=hh_s_cost_ivw_60m+hh_u_cost_ivw_60m
 gen total_costs_24m = tot_paid_by_mc_2yr_wi+total_oop_24m+nh_cost_medicaid_24m+nh_cost_private_24m+inf_care_costs_24m
 gen total_costs_60m = tot_paid_by_mc_5yr_wi+total_oop_60m+nh_cost_medicaid_60m+nh_cost_private_60m+inf_care_costs_60m
 
+/*save version of dataset excluding restricted variables/xwalks*/
+preserve
+
+drop e_ivw_month_x e_ivw_day_x e_ivw_year_x e_ivw_day_imp_x e_ivw_date_x bid_hrs *_e ///
+ c_ivw_month_* c_ivw_day_* c_ivw_year_* c_ivw_day_imp_* c_ivw_date_*
+
+save oop_mc_sample_public.dta, replace
+
+restore
 ******************************************************************************
 //get tables comparing mean, median spending for different disease groups
 mat dg_2y=J(25,8,.)
@@ -5375,25 +5495,24 @@ mat dg_2y[`r'-1,`i']=dg_2y[`r'-1,`i']*100
 }	
 	
 mat rownames dg_2y= "N" "Age at death" "Total payments, all types" "Total Medicare payments" "Medicare IP" "Medicare SNF" "Medicare HH" ///
-"Medicare hospice" "Medicare Carrier" "Medicare OP" "Medicare DME" ///
+"Medicare Hospice" "Medicare Carrier" "Medicare OP" "Medicare DME" ///
 "OOP Total" "OOP Helper" "OOP Hospital" "OOP NH" "OOP Doctor" "OOP Rx" ///
 "OOP Insurance Costs" "OOP Other" ///
 "Total NH nights, SR or claims" "Medicaid NH Payments" ///
 "Private payer NH Payments" "Total NH costs, all payers" "Imputed informal care costs" "Medicaid at death? (percent)"
 
-mat colnames dg_2y="Prob dem > 50%" "median" "Cancer" "median" "Heart disease" "median" "Other disease" "median" 
-
 mat list dg_2y
 
 frmttable using `logpath'\6-oop_dem_tables, statmat(dg_2y) ///
-title("Dementia, Cancer and Heart Disease Patients" \ ///
-"Medicare and OOP Spending Last 2 years of life") ///
+title("Dementia, Cancer and Heart Disease Patients, Medicare and OOP Spending Last 2 years of life") ///
 note("Medicare spending totals are adjusted for the 2010 CMS wage index" \ ///
 "All $ values adjusted for inflation to 2010$" \ ///
-"Total NH spending = Medicare + OOP + Medicaid or Private Payer")  ///
-ctitles("" "Prob dem > 50%" "" "Cancer" "" "Heart disease" "" "Other disease" "" \ ///
+"Total NH spending = Medicare + OOP + Medicaid or Private Payer" \ ///
+"Informal caregivers are spouses and other unpaid (mainly children), replacemnt wage imputation")  ///
+ctitles("" "Prob dem" " > 50%" "Cancer" "" "Heart disease" "" "Other" "" \ ///
 "" "Mean" "Median" "Mean" "Median" "Mean" "Median" "Mean" "Median" ) ///
 sdec(0) landscape replace 
+
 
 ******************************************************************************
 //Table last 5 years spending
@@ -5438,24 +5557,24 @@ mat dg_5y[`r'-1,`i']=dg_5y[`r'-1,`i']*100
 }	
 	
 mat rownames dg_5y= "N" "Age at death" "Total payments, all types" "Total Medicare payments" "Medicare IP" "Medicare SNF" "Medicare HH" ///
-"Medicare hospice" "Medicare Carrier" "Medicare OP" "Medicare DME" ///
+"Medicare Hospice" "Medicare Carrier" "Medicare OP" "Medicare DME" ///
 "OOP Total" "OOP Helper" "OOP Hospital" "OOP NH" "OOP Doctor" "OOP Rx" ///
 "OOP Insurance Costs" "OOP Other" ///
 "Total NH nights, SR or claims" "Medicaid NH Payments" ///
 "Private payer NH Payments" "Total NH costs, all payers" "Imputed informal care costs" "Medicaid at death? (percent)"
 
-mat colnames dg_5y="Prob dem > 50%" "median" "Cancer" "median" "Heart disease" "median" "Other disease" "median" 
-
 mat list dg_5y
 
 frmttable using `logpath'\6-oop_dem_tables, statmat(dg_5y) ///
-title("Dementia, Cancer and Heart Disease Patients" \ ///
-"Medicare and OOP Spending Last 5 years of life") ///
+title("Dementia, Cancer and Heart Disease Patients, Medicare and OOP Spending Last 5 years of life") ///
 note("Medicare spending totals are adjusted for the 2010 CMS wage index" \ ///
 "All $ values adjusted for inflation to 2010$" \ ///
-"Total NH spending = Medicare + OOP + Medicaid or Private Payer")  ///
-ctitles("" "Prob dem > 50%" "" "Cancer" "" "Heart disease" "" "Other disease" "" \ ///
+"Total NH spending = Medicare + OOP + Medicaid or Private Payer" \ ///
+"Informal caregivers are spouses and other unpaid (mainly children), replacemnt wage imputation")  ///
+ctitles("" "Prob dem" " > 50%" "Cancer" "" "Heart disease" "" "Other" "" \ ///
 "" "Mean" "Median" "Mean" "Median" "Mean" "Median" "Mean" "Median" ) ///
 sdec(0) landscape addtable 
+
+
 
 log close

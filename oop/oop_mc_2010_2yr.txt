@@ -945,7 +945,7 @@ run;
 /*only keep years 1998 and later since those are the years in our core dataset*/
 data oop_int.oop_2 (keep=id year curr_iw_date prev_iw_date months total_OOP hospital_OOP NH_OOP 
 doctor_OOP dental_OOP patient_OOP hospice_OOP RX_OOP home_OOP special_OOP non_med_OOP helper_OOP 
-insurance_costs sr_nh_nights md_cov numpaidhelpers numhelpers);
+insurance_costs sr_nh_nights md_cov iwtype numpaidhelpers numhelpers);
 set oop_1;
 if year>=1998;
 length id $9 hhid $6 pn $3;
@@ -997,15 +997,14 @@ label helper_missing_yes='Indicator for no entry in helper dataset';
 
 /*replace missing helper info with 0*/
 array list_hlp hlphrs hlphrs_p hlphrs_s hlphrs_e hlphrs_u hlphrs_d hlphrs_m 
-n_hp n_p n_s n_e n_u n_d n_m hh_cost_per_mo hh_p_cost_per_mo hh_s_cost_per_mo 
-hh_u_cost_per_mo hh_dm_cost_per_mo;
+n_hp n_p n_s n_e n_u n_d n_m ;
 do over list_hlp;
 if list_hlp=. then list_hlp=0;
 end;
 
 run;
 
-proc freq; table helper_missing_yes; run;
+proc freq; table helper_missing_yes*iwtype; run;
 
 
 H="Accounting for missing nh nights, part 1"
@@ -1712,7 +1711,7 @@ run;
 
 /*get cost/month using helper hours*/
 data hh_costs_2;
-set hh_costs_1(keep=id months year n_s n_u numpaidhelpers hlphrs_s hlphrs_u helper_OOP avg_hh_aide_rate);
+set hh_costs_1(keep=id months year iwtype n_s n_u numpaidhelpers hlphrs_s hlphrs_u helper_OOP avg_hh_aide_rate);
 if avg_hh_aide_rate~=.;
 
 if hlphrs_s~=. then hh_s_capped=0;
@@ -1741,7 +1740,10 @@ label helper_OOP_per_mo="OOP helpers per month";
 
 run;
 
-proc means; var hh_s_capped hh_u_capped hh_s_cost_per_mo hh_u_cost_per_mo helper_OOP_per_mo; run;
+proc means print nway;
+class iwtype;
+var hh_s_capped hh_u_capped hh_s_cost_per_mo hh_u_cost_per_mo helper_OOP_per_mo;
+run;
 
 /*get helpers, cost/month previous interview period*/
 data hh_costs_3;
@@ -1825,6 +1827,11 @@ if months>=4 then do;
 		end;
 	end;
 
+/*reset months used to 0 in cases where 0 costs assigned*/
+	if hh_s_cost_ivw=0 then s_months_used=0;
+	if hh_u_cost_ivw=0 then u_months_used=0;
+	if helper_OOP_adj=0 then OOP_months_used=0;
+
 label hh_s_cost_ivw="Spouse helpers cost ivw time period";
 label hh_u_cost_ivw="Other unpaid helpers cost ivw time period";
 label s_cost_total_mos="S cost imputed 1=lt 4mo 2=mean pd bef 3=4 mo";
@@ -1841,7 +1848,7 @@ run;
 
 proc freq; table s_cost_total_mos u_cost_total_mos helper_OOP_mod; run;
 
-proc freq; table s_months_used u_months_used OOP_months_used; run;
+proc freq; table months s_months_used u_months_used OOP_months_used; run;
 
 proc means; vars hh_s_cost_ivw hh_u_cost_ivw helper_OOP_adj helper_OOP ; run;
 
@@ -2131,6 +2138,24 @@ proc freq;
 table md_cov_x md_cov_n1;
 run;
 
+/*********************************************************/
+/*check missing helper information in OOP dataset
+vs adl / iadl impairment, interview level check    	 */
+/*********************************************************/
+proc sql;
+create table ivws_oop as select * from
+oop_int.r_x_r_n1_n2 a left join
+oop_int.oop_x_n1_n2_n3 b
+on a.id=b.id;
+quit;
+
+proc freq; table ADL_INDEPENDENT_x*helper_missing_yes_x 
+	ADL_INDEPENDENT_CORE_n1*helper_missing_yes_n1
+	ADL_INDEPENDENT_CORE_n2*helper_missing_yes_n2; 
+run;
+
+/*most of missingness in helper files is for those
+that are adl independent per their interview, this makes sense*/
 
 H="OOP spending totals 24,60 months before death"
 /*Start with dataset of OOP data exit, core n1 and n2 and n3
@@ -2325,7 +2350,7 @@ If missing hours, then the variable is left blank in final dataset*/
 n_hp n_p n_s n_e n_u n_d n_m;
 
 %do i=25 %to 38;
-%let var=%scan(&list2,(&i-21));
+%let var=%scan(&list2,(&i-24));
 
 data temp_&su._&i;
 set adjust_rx_n3;
@@ -2449,8 +2474,9 @@ hh_u_cost_ivw_60m='Imputed other unpaid helper replacement cost last 60m'
 
 run;
 
-proc freq; table s_months_used_24m u_months_used_24m OOP_months_used_24m; run;
-proc freq; table s_months_used_60m u_months_used_60m OOP_months_used_60m; run;
+proc means; vars s_months_used_24m u_months_used_24m OOP_months_used_24m; run;
+proc means; vars s_months_used_60m u_months_used_60m OOP_months_used_60m; run;
+
 
 H="Merge interviews with OOP totals"
 
@@ -2464,10 +2490,10 @@ run;
 
 /*merge oop with HRS interviews*/
 proc sql;
-create table oop_int.hrs_oop_ivws as select * from
+create table oop_int.hrs_oop_ivws(drop=id2) as select * from
 ivws a left join
-oop  b
-on a.id=b.id;
+oop(rename=(id=id2))  b
+on a.id=b.id2;
 quit;
 
 
@@ -3400,10 +3426,10 @@ by BID_hrs;
 run;
 
 proc sql;
-create table oop_fnl.hrs_oop_ivws_meet_el_&range2 as select * from 
+create table oop_fnl.hrs_oop_ivws_meet_el_&range2(drop=BID_hrs2) as select * from 
 full_merge a left join
-el_merge_&range2. b
-on trim(left(a.BID_hrs))=trim(left(b.BID_hrs));
+el_merge_&range2.(rename=(BID_hrs=BID_hrs2)) b
+on trim(left(a.BID_hrs))=trim(left(b.BID_hrs2));
 quit;
 %mend;
 
@@ -5349,18 +5375,7 @@ sdec(0) landscape addtable
 
 log close
 
-H="Mutually exclusive comparison groups"
-/*Define the groups as follows:
-1. All obs where prob dementia > 50%
-2. Of remaining obs, where cause of death = cancer
-3. , where cause of death = heart disease
-4. Everyone else
-
-2 and 5 year lookbacks 
-
-Note:Sample limited to those with Age 67+ when die, FFS medicare last 2/5 years of life,
-full OOP spending data last 2/5 years of life and resident of 50 States + DC (drops PR resident)*/
-
+H="Create new variables for disease groups, demo char"
 capture log close
 clear all
 set mem 500m
@@ -5393,6 +5408,10 @@ tab core_year_n2 dem_miss_n2 , missing
 //if missing, carry forward n2 probability
 gen prob_dem_n1n2 = prob_dementia_n1
 replace prob_dem_n1n2=prob_dementia_n2 if prob_dementia_n1==.
+
+gen miss_prob_dem_n1n2=0
+replace miss_prob_dem_n1n2=1 if prob_dem_n1n2==.
+tab miss_prob_dem_n1n2, missing
 
 tab exit_year_x if prob_dem_n1n2==.
 
@@ -5467,15 +5486,155 @@ gen inf_care_costs_60m=hh_s_cost_ivw_60m+hh_u_cost_ivw_60m
 gen total_costs_24m = tot_paid_by_mc_2yr_wi+total_oop_24m+nh_cost_medicaid_24m+nh_cost_private_24m+inf_care_costs_24m
 gen total_costs_60m = tot_paid_by_mc_5yr_wi+total_oop_60m+nh_cost_medicaid_60m+nh_cost_private_60m+inf_care_costs_60m
 
+****************************************************************
+//demo variables set up
+****************************************************************
+gen age_at_death_cat=.
+replace age_at_death_cat=1 if age_at_death_e<75
+replace age_at_death_cat=2 if age_at_death_e>=75 & age_at_death_e<80
+replace age_at_death_cat=3 if age_at_death_e>=80 & age_at_death_e<85
+replace age_at_death_cat=4 if age_at_death_e>=85 & age_at_death_e<90
+replace age_at_death_cat=5 if age_at_death_e>=90 & age_at_death_e!=.
+la var age_at_death_cat "Age at death, categorical"
+la def age_at_death_cat 1"Age 67-74" 2"Age 75-79" 3"Age 80-84" 4"Age 85-89" 5"Age 90+"
+la val age_at_death_cat age_at_death_cat
+tab age_at_death_cat, missing
+
+gen age_lt75=0
+replace age_lt75=1 if age_at_death_cat==1
+la var age_lt75 "Age 67-74" 
+gen age_75_79=0
+replace age_75_79=1 if age_at_death_cat==2
+la var age_75_79 "Age 75-79"
+gen age_80_84=0
+replace age_80_84=1 if age_at_death_cat==3
+la var age_80_84 "Age 80-84"
+gen age_85_89=0
+replace age_85_89=1 if age_at_death_cat==4
+la var age_85_89 "Age 85-89"
+gen age_gt90=0
+replace age_gt90=1 if age_at_death_cat==5
+la var age_gt90 "Age 90+"
+
+la def female 0"Male" 1"Female"
+la val female_x female
+tab female_x, missing
+
+//clean up race/ethnicity variables where can fill in missing, still have 3 miss obs
+replace white_e=0 if hisp_eth_e==1 & white_e==.
+replace black_e=0 if hisp_eth_e==1 & black_e==.
+replace other_na_api_race_e=0 if hisp_eth_e==1 & other_na_api_race_e==.
+
+gen race_eth_cat=.
+replace race_eth_cat=1 if hisp_eth_e==1 & white_e~=.
+replace race_eth_cat=2 if white_e==1
+replace race_eth_cat=3 if black_e==1
+replace race_eth_cat=4 if other_na_api_race_e==1
+la def race_eth_cat 1"Hispanic" 2"White" 3"Black" 4"Other"
+la val race_eth_cat race_eth_cat
+tab race_eth_cat, missing
+
+//create clean indicator vars from categorical variable
+gen byte hisp_eth=0
+replace hisp_eth=1 if race_eth_cat==1
+
+gen byte white=0
+replace white=1 if race_eth_cat==2
+
+gen byte black=0
+replace black=1 if race_eth_cat==3
+
+gen byte other_re=0
+replace other_re=1 if race_eth_cat==4
+
+foreach v in hisp_eth white black other_re{
+replace `v'=. if race_eth_cat==.
+}
+
+la def yn 0"No" 1"Yes", modify
+la val married_x hisp_eth white black other_re yn
+tab married_x, missing
+tab hisp_eth, missing
+tab white, missing
+tab black, missing
+tab other_re, missing
+
+//education variables
+gen educ=educ_n1
+replace educ=educ_n2 if educ_n1==.
+replace educ=educ_n3 if educ_n1==. & educ_n2==.
+label define educ 0 "No Formal Education" 1 "Grades 1-11" 2 "High School" 3 "Some College" 4 "College" ///
+      5 "Post College", modify
+la val educ educ 
+tab educ, missing
+ 
+gen byte educ_lt_hs=.
+replace educ_lt_hs=1 if inlist(educ,0,1)
+replace educ_lt_hs=0 if inlist(educ,2,3,4,5)
+la var educ_lt_hs "Education: Less than high school degree"
+
+gen byte educ_hsdeg=.
+replace educ_hsdeg=1 if educ==2
+replace educ_hsdeg=0 if educ!=2 & educ!=.
+la var educ_hsdeg "Education: High school degree"
+
+gen byte educ_some_coll=.
+replace educ_some_coll=1 if educ==3
+replace educ_some_coll=0 if educ!=3 & educ!=.
+la var educ_some_coll "Education: Some college, not 4 yr degree"
+
+gen byte educ_coll=.
+replace educ_coll=1 if inlist(educ,4,5)
+replace educ_coll=0 if inlist(educ,0,1,2,3)
+la var educ_coll "Education: 4 year College degree+"
+
+tab educ educ_lt_hs , missing
+tab educ educ_hsdeg , missing
+tab educ educ_some_coll , missing
+tab educ educ_coll , missing
+
+//save dataset
+save oop_mc_sample_addedvars.dta, replace
+
 /*save version of dataset excluding restricted variables/xwalks*/
 preserve
 
 drop e_ivw_month_x e_ivw_day_x e_ivw_year_x e_ivw_day_imp_x e_ivw_date_x bid_hrs *_e ///
- c_ivw_month_* c_ivw_day_* c_ivw_year_* c_ivw_day_imp_* c_ivw_date_*
+ c_ivw_month_* c_ivw_day_* c_ivw_year_* c_ivw_day_imp_* c_ivw_date_* hisp_eth white black other_re 
 
 save oop_mc_sample_public.dta, replace
 
 restore
+
+
+H="Mutually exclusive comparison groups"
+/*Define the groups as follows:
+1. All obs where prob dementia > 50%
+2. Of remaining obs, where cause of death = cancer
+3. , where cause of death = heart disease
+4. Everyone else
+
+2 and 5 year lookbacks 
+
+Note:Sample limited to those with Age 67+ when die, FFS medicare last 2/5 years of life,
+full OOP spending data last 2/5 years of life and resident of 50 States + DC (drops PR resident)*/
+
+capture log close
+clear all
+set mem 500m
+set more off
+
+local logpath E:\data\hrs_oop_2010\logs
+local datapath E:\data\hrs_oop_2010\final_data
+
+log using `logpath'\6-mc_oop_dementia-LOG.txt, text replace
+
+cd `datapath'
+
+//use just sample that meet 2 year criteria (full mc and oop data 2 years from death)
+//with new variables added
+use oop_mc_sample_addedvars.dta
+
 ******************************************************************************
 //get tables comparing mean, median spending for different disease groups
 mat dg_2y=J(25,8,.)
@@ -5545,12 +5704,13 @@ gen n_informal_24m=n_s_24m+n_u_24m
 local ivars nh_nights_24m los_snf_paid_by_mc_ivw_24m nh_ni_not_mc_24m ///
 oop_nh_nights_24m other_nh_nights_24m total_nh_costs_24m ///
 snf_paid_by_mc_2yr_wi nh_oop_24m nh_cost_medicaid_24m nh_cost_private_24m ///
-hlphrs_p_24m hlphrs_dm_24m helper_OOP_24m helper_OOP_old_24m ///
-hlphrs_s_24m hlphrs_u_24m hlphrs_informal_24m inf_care_costs_24m ///
-s_months_used_24m u_months_used_24m OOP_months_used_24m
+hlphrs_p_24m hlphrs_dm_24m oop_months_used_24m helper_oop_24m helper_oop_old_24m ///
+hlphrs_s_24m s_months_used_24m hlphrs_u_24m u_months_used_24m hlphrs_informal_24m ///
+inf_care_costs_24m 
+  
 
-//get tables comparing mean, median spending for different disease groups
-mat imp_2y=J(122,8,.)
+//get tables comparing mean, median variables for imputations for different disease groups
+mat imp_2y=J(22,8,.)
 //first row n each group
 tab pr_dem_gt50, missing matcell(r1_50)
 mat imp_2y[1,1]=r1_50[2,1] //with dem prob > 50% col 1
@@ -5577,17 +5737,18 @@ foreach d in pr_dem_gt50 cancer_grp heartdis_grp other_grp{
 mat rownames imp_2y="N" "Total nursing home nights" "NH nights paid by MC" ///
 "Non-medicare nights" "Imputed OOP nights" "Remaining nights" "Total NH Payments" ///
 "SNF Medicare payments" "OOP Payments" "Medicaid payments" "Private payer NH" ///
-"Paid helpers hrs/month" "Unk paid ,imp in OOP, hrs/mo" ///
+"Paid helpers hrs/month" "Unk paid ,imp in OOP, hrs/mo" "OOP helper months" ///
 "Adjusted OOP Helper costs" "Orig OOP Helper costs" "Spouse helper hrs/mo" ///
-"Other unpaid helper hrs/mo" "Informal helpers hours/mo" "Imp replacement cost infor help" ///
-"S helper months attributed" "other unpaid helper months" "OOP helper months"
+"S helper months attributed" "Other unpaid helper hrs/mo" "other unpaid helper months" ///
+"Informal helpers hours/mo" "Imp replacement cost infor help" ///
+
 
 frmttable using `logpath'\6-oop_dem_tables, statmat(imp_2y) ///
 title("Dementia, Cancer and Heart Disease Patients, Imputations Spending Last 2 years of life") ///
 note("Medicare spending totals are adjusted for the 2010 CMS wage index" \ ///
 "All $ values adjusted for inflation to 2010$" \ ///
 "Total NH spending = Medicare + OOP + Medicaid or Private Payer" \ ///
-"Informal caregivers are spouses and other unpaid (mainly children), replacemnt wage imputation")  ///
+"Informal caregivers are spouses and other unpaid (mainly children), replacement wage imputation")  ///
 ctitles("" "Prob dem" " > 50%" "Cancer" "" "Heart disease" "" "Other" "" \ ///
 "" "Mean" "Median" "Mean" "Median" "Mean" "Median" "Mean" "Median" ) ///
 sdec(0) landscape addtable
@@ -5595,6 +5756,69 @@ sdec(0) landscape addtable
 //note, for helper imputation, need to bring months help received in
 //will be 4 for many, but then with continous care, get help accounted for
 //over much longer span of time!
+
+******************************************************************************
+//Demo, missing dementia for subgroups
+******************************************************************************
+mat demo_2y=J(19,5,.)
+//first row n each group
+sum exit_year_x
+mat demo_2y[1,1]=r(N) //overall sample, all groups
+tab pr_dem_gt50, missing matcell(r1_50)
+mat demo_2y[1,2]=r1_50[2,1] //with dem prob > 50% col 1
+tab cancer_grp, missing matcell(r1_c)
+mat demo_2y[1,3]=r1_c[2,1] //with cancer col 2
+tab heartdis_grp , missing matcell(r1_h)
+mat demo_2y[1,4]=r1_h[2,1] //with heart disease col 3
+tab other_grp , missing matcell(r1_o)
+mat demo_2y[1,5]=r1_o[2,1] //with other disease col 4
+
+//mc vars
+local dvars age_lt75 age_75_79 age_80_84 age_85_89 age_gt90 ///
+female_x married_x hisp_eth white black other_re educ_lt_hs educ_hsdeg ///
+educ_some_coll educ_coll miss_prob_dem_n1n2
+
+//2 year look back , full sample
+local c = 1
+local r = 2
+sum age_at_death_e , detail
+		mat demo_2y[`r',`c']=r(mean)
+		mat demo_2y[`r'+1,`c']=r(p50)
+local r = 4		
+	foreach v in `dvars'{
+		sum `v' , detail
+		mat demo_2y[`r',`c']=r(mean)
+		local r = `r'+1
+		}
+
+
+//2 year look back sample, by disease groups
+local c=2
+foreach d in pr_dem_gt50 cancer_grp heartdis_grp other_grp{
+	local r = 2
+	sum age_at_death_e  if `d'==1, detail
+		mat demo_2y[`r',`c']=r(mean)
+		mat demo_2y[`r'+1,`c']=r(p50)
+	local r = 4		
+	foreach v in `dvars'{
+		sum `v' if `d'==1, detail
+		mat demo_2y[`r',`c']=r(mean)
+		local r = `r'+1
+		}
+	local c = `c'+1
+	}
+	
+mat rownames demo_2y= "N" "Age at death, nean" "Median age" "Age 67-74" "Age 75-79" "Age 80-84" "Age 85-89" "Age 90+" ///
+"Female" "Married at time of death" "Hispanic ethnicity" "White" "Black" "Other race/ethnicity" ///
+"Less than HS educ" "HS degree" "Some college, not 4yr deg" "College grad" "Missing dementia probability"
+
+mat list demo_2y
+
+frmttable using `logpath'\6-oop_dem_tables, statmat(demo_2y) ///
+title("Dementia, Cancer and Heart Disease Patients, Demo characteristics, 2 year lookback sample") ///
+note("n=3 obs missing race/ethnicity, n=26 missing education attainment") ///
+ctitles("" "Full Sample" "Prob dem > 50%" "Cancer" "Heart disease" "Other") ///
+sdec(0 \ 1 \ 0 \ 3) landscape addtable
 
 ******************************************************************************
 //Table last 5 years spending
@@ -5653,11 +5877,135 @@ title("Dementia, Cancer and Heart Disease Patients, Medicare and OOP Spending La
 note("Medicare spending totals are adjusted for the 2010 CMS wage index" \ ///
 "All $ values adjusted for inflation to 2010$" \ ///
 "Total NH spending = Medicare + OOP + Medicaid or Private Payer" \ ///
-"Informal caregivers are spouses and other unpaid (mainly children), replacemnt wage imputation")  ///
+"Informal caregivers are spouses and other unpaid (mainly children), replacement wage imputation")  ///
 ctitles("" "Prob dem" " > 50%" "Cancer" "" "Heart disease" "" "Other" "" \ ///
 "" "Mean" "Median" "Mean" "Median" "Mean" "Median" "Mean" "Median" ) ///
 sdec(0) landscape addtable 
 
+******************************************************************************
+//Table looking at imputations, 5 year look back
+******************************************************************************
+gen hlphrs_dm_60m=hlphrs_d_60m+hlphrs_m_60m
+gen n_dm_60m=n_d_24m+n_m_60m
+
+gen hlphrs_informal_60m=hlphrs_s_60m+hlphrs_u_60m
+gen n_informal_60m=n_s_24m+n_u_60m
+
+local ivars nh_nights_60m los_snf_paid_by_mc_ivw_60m nh_ni_not_mc_60m ///
+oop_nh_nights_60m other_nh_nights_60m total_nh_costs_60m ///
+snf_paid_by_mc_5yr_wi nh_oop_60m nh_cost_medicaid_60m nh_cost_private_60m ///
+hlphrs_p_60m hlphrs_dm_60m oop_months_used_60m helper_oop_60m helper_oop_old_60m ///
+hlphrs_s_60m s_months_used_60m hlphrs_u_60m u_months_used_60m hlphrs_informal_60m ///
+inf_care_costs_60m 
+  
+
+//get tables comparing mean, median variables for imputations for different disease groups
+mat imp_5y=J(22,8,.)
+//first row n each group
+tab pr_dem_gt50, missing matcell(r1_50)
+mat imp_5y[1,1]=r1_50[2,1] //with dem prob > 50% col 1
+tab cancer_grp, missing matcell(r1_c)
+mat imp_5y[1,3]=r1_c[2,1] //with cancer col 2
+tab heartdis_grp , missing matcell(r1_h)
+mat imp_5y[1,5]=r1_h[2,1] //with heart disease col 3
+tab other_grp , missing matcell(r1_o)
+mat imp_5y[1,7]=r1_o[2,1] //with other disease col 4
+
+//2 year lookback, variables to get imputed costs
+local c=1
+foreach d in pr_dem_gt50 cancer_grp heartdis_grp other_grp {
+	local r = 2
+	foreach v in `ivars'{
+		sum `v' if `d'==1, detail
+		mat imp_5y[`r',`c']=r(mean)
+		mat imp_5y[`r',`c'+1]=r(p50)
+		local r = `r'+1
+		}
+	local c = `c'+2
+	}
+
+mat rownames imp_5y="N" "Total nursing home nights" "NH nights paid by MC" ///
+"Non-medicare nights" "Imputed OOP nights" "Remaining nights" "Total NH Payments" ///
+"SNF Medicare payments" "OOP Payments" "Medicaid payments" "Private payer NH" ///
+"Paid helpers hrs/month" "Unk paid ,imp in OOP, hrs/mo" "OOP helper months" ///
+"Adjusted OOP Helper costs" "Orig OOP Helper costs" "Spouse helper hrs/mo" ///
+"S helper months attributed" "Other unpaid helper hrs/mo" "other unpaid helper months" ///
+"Informal helpers hours/mo" "Imp replacement cost infor help" ///
 
 
+frmttable using `logpath'\6-oop_dem_tables, statmat(imp_5y) ///
+title("Dementia, Cancer and Heart Disease Patients, Imputations Spending Last 5 years of life") ///
+note("Medicare spending totals are adjusted for the 2010 CMS wage index" \ ///
+"All $ values adjusted for inflation to 2010$" \ ///
+"Total NH spending = Medicare + OOP + Medicaid or Private Payer" \ ///
+"Informal caregivers are spouses and other unpaid (mainly children), replacement wage imputation")  ///
+ctitles("" "Prob dem" " > 50%" "Cancer" "" "Heart disease" "" "Other" "" \ ///
+"" "Mean" "Median" "Mean" "Median" "Mean" "Median" "Mean" "Median" ) ///
+sdec(0) landscape addtable
+
+******************************************************************************
+//Demo, missing dementia for subgroups
+******************************************************************************
+mat demo_5y=J(19,5,.)
+//first row n each group
+sum exit_year_x
+mat demo_5y[1,1]=r(N) //overall sample, all groups
+tab pr_dem_gt50, missing matcell(r1_50)
+mat demo_5y[1,2]=r1_50[2,1] //with dem prob > 50% col 1
+tab cancer_grp, missing matcell(r1_c)
+mat demo_5y[1,3]=r1_c[2,1] //with cancer col 2
+tab heartdis_grp , missing matcell(r1_h)
+mat demo_5y[1,4]=r1_h[2,1] //with heart disease col 3
+tab other_grp , missing matcell(r1_o)
+mat demo_5y[1,5]=r1_o[2,1] //with other disease col 4
+
+//mc vars
+local dvars age_lt75 age_75_79 age_80_84 age_85_89 age_gt90 ///
+female_x married_x hisp_eth white black other_re educ_lt_hs educ_hsdeg ///
+educ_some_coll educ_coll miss_prob_dem_n1n2
+
+//5 year look back , full sample
+local c = 1
+local r = 2
+sum age_at_death_e , detail
+		mat demo_2y[`r',`c']=r(mean)
+		mat demo_2y[`r'+1,`c']=r(p50)
+local r = 4		
+	foreach v in `dvars'{
+		sum `v' , detail
+		mat demo_2y[`r',`c']=r(mean)
+		local r = `r'+1
+		}
+
+
+//2 year look back sample, by disease groups
+local c=2
+foreach d in pr_dem_gt50 cancer_grp heartdis_grp other_grp{
+	local r = 2
+	sum age_at_death_e  if `d'==1, detail
+		mat demo_2y[`r',`c']=r(mean)
+		mat demo_2y[`r'+1,`c']=r(p50)
+	local r = 4		
+	foreach v in `dvars'{
+		sum `v' if `d'==1, detail
+		mat demo_2y[`r',`c']=r(mean)
+		local r = `r'+1
+		}
+	local c = `c'+1
+	}
+	
+mat rownames demo_5y= "N" "Age at death, nean" "Median age" "Age 67-74" "Age 75-79" "Age 80-84" "Age 85-89" "Age 90+" ///
+"Female" "Married at time of death" "Hispanic ethnicity" "White" "Black" "Other race/ethnicity" ///
+"Less than HS educ" "HS degree" "Some college, not 4yr deg" "College grad" "Missing dementia probability"
+
+mat list demo_5y
+
+frmttable using `logpath'\6-oop_dem_tables, statmat(demo_5y) ///
+title("Dementia, Cancer and Heart Disease Patients, Demo characteristics, 5 year lookback sample") ///
+note("n=3 obs missing race/ethnicity, n=26 missing education attainment") ///
+ctitles("" "Full Sample" "Prob dem > 50%" "Cancer" "Heart disease" "Other") ///
+sdec(0 \ 1 \ 0 \ 3) landscape addtable
+
+
+******************************************************************************
 log close

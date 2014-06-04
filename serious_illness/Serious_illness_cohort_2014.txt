@@ -5579,14 +5579,16 @@ title("Comparison of serious medical conditions and ADL Impairement" \ ///
 "Interview when first meet criteria" \ ///
 "Criteria `crit' n=`nsamp'") sdec(0) landscape replace
 
-//is the hiv smi needed? do those meet the smi or adl criteria a otherwise?
+*******************************************************
+//is the hiv smi needed? do those meet the critera otherwise?
+*******************************************************
 //list of all criteria a components without hiv criteria
 local smivars2 smi_dem_ind_n0 smi_cancer_ind_n0 smi_esrd_ind_n0 smi_chf_ind_n0 smi_copd_ind_n0 ///
 smi_diab_compl_ind_n0 smi_liver_ind_n0 smi_als_ind_n0 smi_hip_ind_n0 adl_impair_core_n0
 
 gen crit_`crit'_nohiv=0 if smi_hiv_ind_n0==1
 foreach v in `smivars2'{
-replace crit_`crit'_nohiv=1 if `v'==1 &  smi_hiv_ind_n0==1
+replace crit_`crit'_nohiv=1 if `v'==1 & smi_hiv_ind_n0==1 & `critvar'==1
 }
 tab crit_`crit'_nohiv, missing
 
@@ -5598,8 +5600,56 @@ label var smi_hiv_ind_p2 "HIV p2"
 replace smi_hiv_ind_p1=99 if smi_hiv_ind_p1==.
 replace smi_hiv_ind_p2=99 if smi_hiv_ind_p2==.
 
-
 table smi_hiv_ind_n0 smi_hiv_ind_p1 smi_hiv_ind_p2, missing
+*******************************************************
+//Look at outcomes for those that meet without hiv vs those that do not
+gen hiv_only = 1 if  smi_hiv_ind_n0==1 & crit_`crit'_nohiv==0
+replace hiv_only  = 2 if  smi_hiv_ind_n0==1 & crit_`crit'_nohiv==1
+tab hiv_only , missing
+
+//table of outcomes
+local outcome1 core_to_dod_1yr hs_admit_p12m ind_em_ur_adm_p12m
+
+local outcome2 ip_paid_by_mc_1yr snf_paid_by_mc_1yr hh_paid_by_mc_1yr hs_paid_by_mc_1yr ///
+pb_paid_by_mc_1yr op_paid_by_mc_1yr dm_paid_by_mc_1yr tot_paid_by_mc_1yr n_hospd_p12m
+
+mat hiv=J(34,2,.)
+//first row, n for each category
+tab hiv_only, matcell(c1)
+mat hiv[1,1]=c1[1,1] //those only meeting criteria if hiv dx included
+mat hiv[1,2]=c1[2,1] //those meeting criteria regardless of hiv dx
+
+forvalues i=1/2{
+local r=2
+foreach v in `outcome1'{
+	sum `v' if hiv_only==`i', detail
+	mat hiv[`r',`i']=r(mean)
+	mat hiv[`r'+1,`i']=r(sd)
+	local r=`r'+2 //populates rows 2-7 for indicator variable outcomes
+	}
+
+local r=8
+foreach v in `outcome2'{
+	sum `v' if hiv_only==`i', detail
+	mat hiv[`r',`i']=r(mean)
+	mat hiv[`r'+1,`i']=r(p50)
+	mat hiv[`r'+2,`i']=r(sd)
+	local r=`r'+3 //populates rows 8-34 for continuous variables
+	}
+}
+
+mat rownames table1="N" "Died, mean" "SD" "Hospice enr, mean" "SD" "Emerg or urgent hosp admit, mean" "SD" ///
+"IP Medicare payments, mean" "Median" "SD" "SNF Medicare payments, mean" "Median" "SD" ///
+"HH Medicare payments, mean" "Median" "SD" "Hospice Medicare payments, mean" "Median" "SD" ///
+"Carrier Medicare payments, mean" "Median" "SD" "OP Medicare payments, mean" "Median" "SD" ///
+"DME Medicare payments, mean" "Median" "SD" "Total Medicare payments, mean" "Median" "SD" ///
+"Hospital nights, mean" "Median" "SD"
+
+mat colnames table1="HIV dx required to meet criteria" "HIV dx excluded, still meet criteria"
+
+frmttable using "`logpath'\sic_Table3_outcomes", statmat(hiv) ///
+title("Comparison of outcomes at 1 year, HIV dx only vs HIV dx not required" \ ///
+"Criteria `crit'") sdec(0\2\2\2\2\2\2\0) landscape addtable
 
 *******************************************************
 *** Meet criteria p1 interview?
@@ -5763,6 +5813,175 @@ foreach v in ind_oa_sample ind_died_sample ind_meetp1_sample ind_nomeetp1_sample
 *******************************************************
 log close
 
+
+H="Tables, outcomes, comparing criteria a and b"
+/*Stata
+Create tables comparing outcomes for the criteria
+Code can be run on either criteria a or criteria b datasets*/
+
+capture log close
+
+clear all
+set mem 500m
+set more off
+
+local logpath E:\data\serious_ill\logs
+local datapath E:\data\serious_ill\final_data
+
+log using "`logpath'\5_crit_a_and_b_outcomes.txt", text replace
+
+cd `datapath'
+
+***************************************************************
+
+***************************************************************
+**Check follow up interviews for each of the criteria
+***************************************************************
+mat p1_crit=J(5,2,.)
+
+local col = 1
+foreach crit in a b{
+	use n0_n1_p1_p2_x_criteria_`crit'_v1.dta if core_year_n0<2010
+	rename ser_med_illness_p1 criteria_a_p1
+		
+	sum core_year_n0
+	mat p1_crit[1,`col']=r(N) //overall n meet criteria
+
+	sum core_year_n0 if ind_p1_interview==0 & core_to_dod_2yr_n0==1 & ind_x_interview==1
+	mat p1_crit[2,`col']=r(N) //no p1 interview, died within 2 years, with exit interview
+
+	tab criteria_`crit'_p1 if ind_p1_interview==1 & part_ab_12m_p1==1 & hmo_d_12m_p1==0, matcell(p1)
+	mat p1_crit[3,`col']=p1[2,1] //n that meet criteria p1
+	mat p1_crit[4,`col']=p1[1,1] //n that do not meet criteria p1
+
+	sum core_year_n0 if (ind_p1_interview==0 & ind_x_interview==0) | 
+		(ind_p1_interview==0 & core_to_dod_2yr_n0==0 & ind_x_interview==1) | ///
+		(ind_p1_interview==1 & part_ab_12m_p1==. & hmo_d_12m_p1==.)
+	mat p1_crit[5,`col']=r(N) //no follow up interview
+	
+	local col = `col'+1
+	clear
+}
+	 
+frmttable using "`logpath'\sic_Tables_5_outcomes_crit_a_and_b", statmat(p1_crit) ///
+title("Meet criteria in p1 interview")  ///
+rtitles("Overall n meet criteria n0 interview"\ "Died within 2 years and have exit interview" \ ///
+"Meet criteria in p1 interview" \ "Do not meet criteria in p1 interivew" \ ///
+"Missing follow up interview, see notes") ///
+ctitles("" "Criteria A" "Criteria B") ///
+notes("Criteria A = Any serious medical illness or ADL impairment" \ ///
+"Criteria B = Criteria A and Urgent / Emergent hospitalization or NH resident" \ ///
+"Missing follow up if R has no p1 interview and no exit interview,"  \ ///
+"R did not die within 2 years, has no p1 interview but has exit interview," \ ///
+"or R has p1 interivew but not FFS MC 1 year preceding p1 interview.") ///
+sdec(0) replace
+
+***************************************************************
+**Check outcomes across each part of the various criteria
+***************************************************************
+//use dataset with outcomes, just obs that meet interview sample inclusion criteria
+use ivws_crit_1.dta if inlist(core_year,2000,2002,2004,2006,2008) & /// 
+age_ge_65==1 & xwalk_yes==1 & part_ab_12m==1 & hmo_d_12m==0
+
+gen comp_none=0
+replace comp_none=1 if ser_med_illness==0 & adl_impair_core==0 & smi_nh_ind==0 & ind_em_ur_adm_12m==0
+tab comp_none
+
+gen comp_smi=0
+replace comp_smi=1 if ser_med_illness==1 & adl_impair_core==0 & smi_nh_ind==0 & ind_em_ur_adm_12m==0
+tab comp_smi
+
+gen comp_adl=0
+replace comp_smi=1 if ser_med_illness==0 & adl_impair_core==1 & smi_nh_ind==0 & ind_em_ur_adm_12m==0
+tab comp_adl
+
+gen comp_nh=0
+replace comp_nh=1 if ser_med_illness==0 & adl_impair_core==0 & smi_nh_ind==1 & ind_em_ur_adm_12m==0
+tab comp_nh
+
+gen comp_hos=0
+replace comp_hos=1 if ser_med_illness==0 & adl_impair_core==0 & smi_nh_ind==0 & ind_em_ur_adm_12m==1
+tab comp_hos
+
+gen comp_smi_adl=0
+replace comp_smi_adl=1 if ser_med_illness==1 & adl_impair_core==1 & smi_nh_ind==0 & ind_em_ur_adm_12m==0
+tab comp_smi_adl
+
+gen comp_smi_nh=0
+replace comp_smi_nh=1 if ser_med_illness==1 & adl_impair_core==0 & smi_nh_ind==1 & ind_em_ur_adm_12m==0
+tab comp_smi_nh
+
+gen comp_smi_hosp=0
+replace comp_smi_hosp=1 if ser_med_illness==1 & adl_impair_core==0 & smi_nh_ind==0 & ind_em_ur_adm_12m==1
+tab comp_smi_hosp
+
+gen comp_adl_nh=0
+replace comp_adl_nh=1 if ser_med_illness==0 & adl_impair_core==1 & smi_nh_ind==1 & ind_em_ur_adm_12m==0
+tab comp_adl_nh
+
+gen comp_adl_hosp=0
+replace comp_adl_hosp=1 if ser_med_illness==0 & adl_impair_core==1 & smi_nh_ind==0 & ind_em_ur_adm_12m==1
+tab comp_adl_hosp
+
+gen comp_nh_hosp=0
+replace comp_nh_hosp=1 if  ser_med_illness==0 & adl_impair_core==0 & smi_nh_ind==1 & ind_em_ur_adm_12m==1
+tab comp_nh_hosp
+tab comp_nh_hosp comp_nh
+
+gen comp_smi_adl_nh=0
+replace comp_smi_adl_nh=1 if ser_med_illness==1 & adl_impair_core==1 & smi_nh_ind==1 & ind_em_ur_adm_12m==0
+tab comp_smi_adl_nh
+
+gen comp_smi_adl_hosp=0
+replace comp_smi_adl_hosp=1 if ser_med_illness==1 & adl_impair_core==1 & smi_nh_ind==0 & ind_em_ur_adm_12m==1
+tab comp_smi_adl_hosp
+
+gen comp_adl_nh_hosp=0
+replace comp_adl_nh_hosp=1 if ser_med_illness==0 & adl_impair_core==1 & smi_nh_ind==1 & ind_em_ur_adm_12m==1
+tab comp_adl_nh_hosp
+
+gen comp_all=0
+replace comp_all=1 if ser_med_illness==1 & adl_impair_core==1 & smi_nh_ind==1 & ind_em_ur_adm_12m==1
+tab comp_all
+***************************************************************
+//table of outcomes, interview level (so R may be represented 4x)
+local outcome1 core_to_dod_1yr hs_admit_p12m ind_em_ur_adm_p12m ip_paid_by_mc_1yr ///
+tot_paid_by_mc_1yr
+
+local compvars comp_none comp_smi comp_adl comp_nh comp_hos comp_smi_adl ///
+comp_smi_nh comp_smi_hosp comp_adl_nh comp_adl_hosp comp_nh_hosp ///
+comp_smi_adl_nh comp_smi_adl_hosp comp_adl_nh_hosp comp_all
+
+mat comp=J(15,15,.)
+
+local c=1
+foreach var in `outcome1'{
+	local r=1
+	foreach comp in `compvars{
+		sum `var' if `comp'==1, detail
+		mat comp[`r',`c']=r(mean)
+		mat comp[`r',`c'+1]=r(sd)
+		mat comp[`r',`c'+2]=r(p50)
+		local r=`r'+1
+	}
+local c=`c'+3
+}
+
+mat rownames comp="None" "Serious med illness" "ADL Impairment" "NH resident" "Hospitalization" ///
+ "Illness + ADL Impair" "Illness + NH res" "Illness + Hospital" "ADL + NH Res" "ADL + Hospital" ///
+"NH res + Hospital" "Illness + ADL + NH" "Illness + ADL + Hospital" "ADL + NH + Hospital" ///
+"Illness + ADL + NH + Hosp"
+
+frmttable using "`logpath'\sic_Tables_5_outcomes_crit_a_and_b", statmat(comp)  substat(2) ///
+title("Comparison of serious medical conditions, outcomes at 1 year" \ ///
+"N=`nsamp', interview level") ///
+ctitles("","Died","Hospice admit","Hospital admit","IP Medicare","Total Medicare" \ ///
+"","mean","","","","" \ "","(SD)", "","","","", \ "","[Median]","","","","" ) ///
+sdec(2) addtable
+
+
+***************************************************************
+log close
 
 H="xxxxNotes"
 Helper files - A respondant gets an entry (or many entries) in the helper file

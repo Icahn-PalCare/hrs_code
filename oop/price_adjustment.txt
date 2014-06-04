@@ -35,7 +35,7 @@ value $msc
 '21'='21 Disabled w/ ESRD'
 '31'='31 ESRD only';run; 
 
-/*read in excel xwalks for each year*/
+/*read in excel hrr-zip xwalks for each year*/
 %macro imphrr;
 %do i=0 %to 10;
 	%if &i<10 %then %do;
@@ -103,18 +103,18 @@ run;
 		%let yrxx=20&i.;
 	%end;
 	
-	data denom.dn_&yrxx._1  (keep=BID_HRS_19 Age Age5 Sex Race State Zipcode hsa hrr HMO 
+	data denom.dn_&yrxx._1  (keep=BID_HRS_19 Age Age5 AgeEnd Sex Race State Zipcode hsa hrr HMO 
 		notPartAB Medicare65plusFFS MS_CD);
 		length HRR 3. HSA 5. notPartAB HMO Age Age5 3.;
 	set denom.dn_&yrxx.
 		(keep=BID_HRS_19 BENE_ZIP sex race BENE_DOB DEATH_DT BUYIN HMOIND MS_CD 	 
-		%if 2008>=&SourceYr.>=2009 %then %do;
+		%if 2008>=&yrxx.>=2009 %then %do;
 			flag20 fivepct 
 		%end;
-		%if &SourceYr.=2010 %then %do;
+		%if &yrxx.=2010 %then %do;
 			flag20 STRCTFLG
 		%end;
-		/*%if &SourceYr.=2011 %then %do;   **commented out, no 2011 claims in our dataset**
+		/*%if &yrxx.=2011 %then %do;   **commented out, no 2011 claims in our dataset**
 			flag20 flag5
 		%end;*/
 		);
@@ -141,51 +141,51 @@ run;
 	HMO=0;
 	notPartAB=0;
 
-	if AgeEnd=65 and "1jan&yrxx."D<=DEATH_DT<="31dec&yrxx."D then do;
+/(if age = 65 in denominator year, check status from 65th bday on*/
+if AgeEnd=65 and "1jan&yrxx."D<=DEATH_DT<="31dec&yrxx."D then do;
  	   month_birth=month(BENE_DOB);
- 	   month_dead=month(BENE_DOB);
+ 	   month_dead=month(DEATH_DT);
     	do i=month_birth to month_dead;
       		if h{i} in ('1','2','A','B','C') then HMO=1;
       		if e{i} not in ('3','C') then notPartAB=1;
     		end;
 	   end;
-	else if AgeEnd=65 and (sdod=. or (sdod^=. and year(sdod)>&SourceYr.)) then do;
-    		month_birth=month(sdob);
-    		do i=month_birth to 12;
+	else if AgeEnd=65 and (DEATH_DT=. or (DEATH_DT^=. and year(DEATH_DT)>&yrxx.)) then do;
+    		month_birth=month(BENE_DOB);
+    		do i=BENE_DOB to 12;
       			if h{i} in ('1','2','A','B','C') then hmo=1;
      	 		if e{i} not in ('3','C') then notPartAB=1;
     		end;
-	end;
-else
-if AgeEnd>65 and "1jan&SourceYr."D<=sdod<="31dec&SourceYr."D then do;
-    month_dead=month(sdod);
+	  end;
+/*if age>65 at year end, check year until die*/
+else if AgeEnd>65 and "1jan&yrxx."D<=DEATH_DT<="31dec&yrxx."D then do;
+    month_dead=month(DEATH_DT);
     do i=1 to month_dead;
       if h{i} in ('1','2','A','B','C') then hmo=1;
       if e{i} not in ('3','C') then notPartAB=1;
     end;
 end;
-else
-if AgeEnd>65 and (sdod=. or (sdod^=. and year(sdod)>&SourceYr.)) then do;
+else if AgeEnd>65 and (DEATH_DT=. or (DEATH_DT^=. and year(DEATH_DT)>&yrxx.)) then do;
    do i=1 to 12;
       if h{i} in ('1','2','A','B','C') then hmo=1;
       if e{i} not in ('3','C') then notPartAB=1;
     end;
 end;
-else
-if AgeEnd<65 and "1jan&SourceYr."D<=sdod<="31dec&SourceYr."D then do;
-    month_dead=month(sdod);
+/*if age < 65 */
+else if AgeEnd<65 and "1jan&yrxx."D<=DEATH_DT<="31dec&yrxx."D then do;
+    month_dead=month(DEATH_DT);
     do i=1 to month_dead;
       if h{i} in ('1','2','A','B','C') then hmo=1;
       if e{i} not in ('3','C') then notPartAB=1;
     end;
 end;
-else
-if AgeEnd<65 and (sdod=. or (sdod^=. and year(sdod)>&SourceYr.)) then do;
+else if AgeEnd<65 and (DEATH_DT=. or (DEATH_DT^=. and year(DEATH_DT)>&yrxx.)) then do;
    do i=1 to 12;
       if h{i} in ('1','2','A','B','C') then hmo=1;
       if e{i} not in ('3','C') then notPartAB=1;
     end;
 end;
+
 
 *geography;
 zipnum=(input(zipcode,5.))*1;
@@ -359,7 +359,8 @@ on a.BID_HRS_19=b.BID_HRS_19
 order by a.provider;
 
 *******************************;
-*Add MSA/County to Part A/Denom;
+*Add MSA/County to Part A/Denom (MSA by hospital (provider number));
+***** Note: I don't have this xwalk between privder, msa, county!!!!  ;
 *******************************;
 data pta_&DatasetYr;
 merge
@@ -386,8 +387,73 @@ drop msa&DataSetYr. msa&pyr msa&nyr ssacounty&DataSetYr. ssacounty&pyr ssacounty
 
 id=1;
 
-if loscnt>365 then loscnt=365;run;
+if loscnt>365 then loscnt=365;
+run;
 
+proc sort data=pta_&DataSetYr. out=p1_&DataSetYr. nodupkey;by provider msa Bene_ID;run;
+
+/*look at counts of provider by MSA*/
+proc means data=p1_&DataSetYr. noprint;
+var id;
+by provider msa;
+output out=p2_&DataSetYr. (keep=provider msa n) n=n;run;
+
+proc sort data=p2_&DatasetYr;by provider descending n;run;
+
+data p3_&DataSetYr. (keep=provider msa rename=(msa=tmsa));
+set p2_&DatasetYr;
+by provider descending n;
+if first.provider;run;
+
+data pta_&DatasetYr;
+merge pta_&DataSetYr. (in=a) p3_&DatasetYr;
+by provider;
+
+if a=1;
+
+if msa_prov=. then msa_prov=tmsa;
+drop tmsa;
+State_prov=1*substr(provider,1,2);
+label state_prov='Provider State';run;
+
+*clean up;
+proc sql;
+drop table p1_&DatasetYr;
+drop table p2_&DatasetYr; 
+drop table p3_&DatasetYr;
+
+title2 'After adding county/state by provider, how many are missing?';
+proc freq data=pta_&DatasetYr;
+table prov_type state_prov/missing;
+format state_prov state2c.;
+where ssacounty_prov='';run;
+
+title2 'PTA after MSA/County merge by Provider';
+*proc contents data=pta_&DatasetYr;run;
+
+***************;
+***************;
+*Add Wage Index;
+***************;
+***************;
+*2005 and earlier;
+%if &SourceYr<=2005 %then %do;
+
+data wageindex&DatasetYr._msa (rename=(n_msa=msa_prov));
+set wind&DatasetYr..wageindex_annual (keep=msa wageindex year rename=(msa=msa_prov));
+/*
+*until new file built, use 2003 data;
+%if &SourceYr<=2002 %then %do;
+	if year=2003;
+%end;
+%else %do;
+	if year=&SourceYr;
+*%end;
+*/
+if year=&SourceYr.;
+
+n_msa=1*msa_prov;
+drop msa_prov year;run;
 
 
 H="Notes, questions"
@@ -406,6 +472,13 @@ Not sure about finding the provider, msa, county crosswalk
 wind&DatasetYr..hosp_msa&DataSetYr. 
 	wind&DatasetYr..hosp_msa&pyr
 	wind&DatasetYr..hosp_msa&nyr
+Can I use the 2010, 2007, 2005 hospital to hsa/hrr crosswalks here:
+http://www.dartmouthatlas.org/tools/downloads.aspx?tab=39
+They don't have county but do have hsa
+Is HSA the same as MSA?
+
+Need individual year wage index files?? Looks like I can get 2005 and later from
+cms.gov, not sure about the earlier years...
 
 ************************************************************************
 *** Denominator file questions *************
@@ -413,10 +486,13 @@ wind&DatasetYr..hosp_msa&DataSetYr.
 From denominator file:
 Format needed:
 hsamsaf.
+hsahrrf
+ZHSA&DatasetYr.F. (for years 2000-2010)
+
 Formats referenced in denominator file are:
 xwalks.zip2hsa xwalks.hsahrr xwalks.agefmts
 where xwalks path = '/general_resources/xwalks'
 
 Also, in the denominator file, are hrr, hsa, state the hrr , hsa numbers? What about state?
-
+I have crosswalk from Dartmouth Atlas website of zip, hsa, hrr, can I just use that?
 

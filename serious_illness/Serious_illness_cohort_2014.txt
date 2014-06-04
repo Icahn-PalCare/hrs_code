@@ -3397,6 +3397,11 @@ proc sql;
 select count(distinct id) from age_ge_65_mc  
 where ser_med_illness=1;
 
+title "Number of R's that meet HIV";
+proc sql;
+select count(distinct id) from age_ge_65_mc  
+where smi_hiv_ind=1;
+
 title "Number of R's that meet B)Any ADL help";
 proc sql;
 select count(distinct id) from age_ge_65_mc  
@@ -5229,7 +5234,7 @@ tab srh_n0 srh_n1, missing
 tab married_n0 married_n1, missing
 
 *******************************************************************
-//Indicators death date
+//Indicators death date from the HRS dataset (will check missing against claims dod later)
 gen dod_ind=0
 replace dod_ind=1 if  death_date_n0~=.
 la var dod_ind "Death date present, 1=yes"
@@ -5282,7 +5287,61 @@ tab dod_to_exit_days, missing
 //so bring in claims dod and compare it to see if can get clean dod!
 tab e_ivw_date_x if dod_to_exit_days<0
 tab e_ivw_date_x death_date_n0 if dod_to_exit_days<0
+
+//convert claims death date to a date variable
+rename dod_claims_n0 dod_claims_n0str
+gen dod_claims_n0 = date(dod_claims_n0str,"YMD")
+format dod_claims_n0 %td
 tab death_date_n0 dod_claims_n0 if dod_to_exit_days<0 //check claims dod
+
+//checking core interview dates for each of these observations, if no conflict
+//use the claims dod where they are before the exit interview date
+//for one observation, imputation of exit date causes the problem, so reassign exit date
+gen use_claims_dod = 0
+
+tab c_ivw_date_n0 c_ivw_date_p1 if e_ivw_date_x==date("06-15-2004","MDY") & death_date_n0==date("11-04-2004","MDY"), missing
+tab id if e_ivw_date_x==date("06-15-2004","MDY") & death_date_n0==date("11-04-2004","MDY"), missing
+replace death_date_n0=dod_claims_n0 if id=="201667010"
+replace use_claims_dod=1 if id=="201667010"
+
+tab c_ivw_date_n0 c_ivw_date_p1 if e_ivw_date_x==date("07-15-2004","MDY") & death_date_n0==date("7-17-2004","MDY"), missing
+tab id if e_ivw_date_x==date("07-15-2004","MDY") & death_date_n0==date("7-17-2004","MDY"), missing
+replace death_date_n0=dod_claims_n0 if id=="205022010"
+replace use_claims_dod=1 if id=="205022010"
+
+tab e_ivw_day_imp_x  e_ivw_date_x if e_ivw_date_x==date("06-15-2006","MDY") & death_date_n0==date("6-16-2006","MDY"), missing
+//imputation of exit ivw date is incorrect, assign to last day of month
+tab id if e_ivw_date_x==date("06-15-2006","MDY") & death_date_n0==date("6-16-2006","MDY"), missing
+replace e_ivw_date_x=date("30jun2006","DMY") if id=="200372020" 
+gen e_ivw_date_mod = 0
+replace e_ivw_date_mod=1 if id=="200372020" 
+
+tab c_ivw_date_n0 c_ivw_date_p1 if e_ivw_date_x==date("04-07-2008","MDY") & death_date_n0==date("11-27-2008","MDY"), missing
+tab id if e_ivw_date_x==date("04-07-2008","MDY") & death_date_n0==date("11-27-2008","MDY"), missing
+replace death_date_n0=dod_claims_n0 if id=="210540020"  
+replace use_claims_dod=1 if id=="210540020"
+
+tab c_ivw_date_n0 c_ivw_date_p2 if e_ivw_date_x==date("04-18-2008","MDY") & death_date_n0==date("09-27-2008","MDY"), missing
+tab id if e_ivw_date_x==date("04-18-2008","MDY") & death_date_n0==date("09-27-2008","MDY"), missing
+replace death_date_n0=dod_claims_n0 if id=="201942011"  
+replace use_claims_dod=1 if id=="201942011"
+
+tab c_ivw_date_n0 c_ivw_date_p2 if e_ivw_date_x==date("06-24-2008","MDY") & death_date_n0==date("07-26-2008","MDY"), missing
+tab id if e_ivw_date_x==date("06-24-2008","MDY") & death_date_n0==date("07-26-2008","MDY"), missing
+replace death_date_n0=dod_claims_n0 if id=="206221020"  
+replace use_claims_dod=1 if id=="206221020"
+
+tab use_claims_dod, missing
+
+//now replace the dod variables using the cleaned up dod
+replace core_to_death_n0=(death_date_n0-c_ivw_date_n0)/365.25 if use_claims_dod==1
+tab core_to_death_n0 core_to_dod_1yr_n0 if use_claims_dod==1
+
+replace core_to_dod_1yr_n0=1 if core_to_death_n0<1 & use_claims_dod==1
+replace core_to_dod_2yr_n0=1 if core_to_death_n0<2 & use_claims_dod==1
+
+replace dod_to_exit_days=e_ivw_date_x - death_date_n0 if use_claims_dod==1 | e_ivw_date_mod==1
+tab dod_to_exit_days if use_claims_dod==1 | e_ivw_date_mod==1
 
 *******************************************************************
 //Change in functional status variables
@@ -5520,6 +5579,28 @@ title("Comparison of serious medical conditions and ADL Impairement" \ ///
 "Interview when first meet criteria" \ ///
 "Criteria `crit' n=`nsamp'") sdec(0) landscape replace
 
+//is the hiv smi needed? do those meet the smi or adl criteria a otherwise?
+//list of all criteria a components without hiv criteria
+local smivars2 smi_dem_ind_n0 smi_cancer_ind_n0 smi_esrd_ind_n0 smi_chf_ind_n0 smi_copd_ind_n0 ///
+smi_diab_compl_ind_n0 smi_liver_ind_n0 smi_als_ind_n0 smi_hip_ind_n0 adl_impair_core_n0
+
+gen crit_`crit'_nohiv=0 if smi_hiv_ind_n0==1
+foreach v in `smivars2'{
+replace crit_`crit'_nohiv=1 if `v'==1 &  smi_hiv_ind_n0==1
+}
+tab crit_`crit'_nohiv, missing
+
+//looking at hiv indicator across interview years
+label var smi_hiv_ind_n0 "HIV n0"
+label var smi_hiv_ind_p1 "HIV p1"
+label var smi_hiv_ind_p2 "HIV p2"
+
+replace smi_hiv_ind_p1=99 if smi_hiv_ind_p1==.
+replace smi_hiv_ind_p2=99 if smi_hiv_ind_p2==.
+
+
+table smi_hiv_ind_n0 smi_hiv_ind_p1 smi_hiv_ind_p2, missing
+
 *******************************************************
 *** Meet criteria p1 interview?
 *******************************************************
@@ -5561,7 +5642,8 @@ frmttable using "`logpath'\sic_Tables_4_outcomes_crit_`crit'", statmat(p1_crit) 
 title("Meet criteria `crit' in p1 interview")  ///
 rtitles("Overall n meet criteria n0 interview"\ "Have p1 interview" \ ///
 "Missing p1 ivw, died within 2 years of n0" \ "Missing p1 ivw, did not die within 2 years" \ ///
-"Have ffs mc 1 year prior to p1 ivw" \"N meet p1 interview") ///
+"Have ffs mc 1 year prior to p1 ivw, pct of those with p1 ivw" \ ///
+"N meet p1 interview, pct of those with ffs p1 ivw") ///
 ctitles("" "N" "Percent") ///
 sdec(0,2) addtable
 
@@ -5577,6 +5659,56 @@ sum `critvar'_n0 if ind_p1_interview==0 & died_within_95pctco==1
 
 sum core_to_death_n0 if  ind_p1_interview==0 & died_within_95pctco==0
 tab core_year_n0 if  ind_p1_interview==0 & died_within_95pctco==0
+*******************************************************
+//looking at missing p1 interviews
+mat ivws=J(7,2,.)
+sum `critvar'_n0
+mat ivws[1,1]=r(N) //overall n meet criteria
+mat ivws[1,2]=100
+
+sum `critvar'_n0 if ind_p1_interview==1  //n that have p1 interview 
+mat ivws[2,1]=r(N) //overall n meet criteria w/ p1 ivw
+mat ivws[2,2]=ivws[2,1]/ivws[1,1]*100
+
+sum `critvar'_n0 if ind_p1_interview==0  //n that do not have p1 interview 
+mat ivws[3,1]=r(N) //overall n meet criteria w/o p1 ivw
+mat ivws[3,2]=ivws[3,1]/ivws[1,1]*100
+
+sum `critvar'_n0 if ind_p1_interview==0 & core_to_dod_2yr_n0==1
+mat ivws[4,1]=r(N) //overall n meet criteria no p1 ivw but died within 2 years of n0 ivw
+mat ivws[4,2]=ivws[4,1]/ivws[3,1]*100
+
+sum `critvar'_n0 if ind_p1_interview==0 & core_year_n0==2010
+mat ivws[5,1]=r(N) //overall n meet criteria no p1 ivw bc n0=2010
+mat ivws[5,2]=ivws[5,1]/ivws[3,1]*100
+
+sum `critvar'_n0 if ind_p1_interview==0 & core_year_n0!=2010 & core_to_dod_2yr_n0==0 & ind_x_interview==1
+mat ivws[6,1]=r(N) //overall n meet criteria no p1 ivw but have exit
+mat ivws[6,2]=ivws[6,1]/ivws[3,1]*100
+
+//looking at those with exit interview and no p1 interview
+//n=27 have no dod but have exit interview!
+sum core_to_death_n0 if ind_p1_interview==0 & core_year_n0!=2010 & core_to_dod_2yr_n0==0 & ind_x_interview==1, detail
+tab core_to_death_n0 if ind_p1_interview==0 & core_year_n0!=2010 & core_to_dod_2yr_n0==0 & ind_x_interview==1, missing
+tab dod_ind exit_year_x if ind_p1_interview==0 & core_year_n0!=2010 & core_to_dod_2yr_n0==0 & ind_x_interview==1, missing
+
+sum `critvar'_n0 if ind_p1_interview==0 & core_year_n0!=2010 & core_to_dod_2yr_n0==0 & ind_x_interview==0
+mat ivws[7,1]=r(N) //overall n meet criteria no p1 ivw but have exit
+mat ivws[7,2]=ivws[7,1]/ivws[3,1]*100
+
+tab core_year_n0 if ind_p1_interview==0 & core_year_n0!=2010 & core_to_dod_2yr_n0==0 & ind_x_interview==0
+
+mat list ivws
+
+frmttable using "`logpath'\sic_Tables_4_outcomes_crit_`crit'", statmat(ivws) ///
+title("Looking at missing p1 interviews, criteria `crit'")  ///
+rtitles("Overall n meet criteria n0 interview"\ "Have p1 interview" \ ///
+"Missing p1 ivw" \ "Missing p1 ivw, died within 2 years (pct of missing p1)" \ ///
+"Missing p1 because meet crit in 2010 (pct of missing p1)" \ ///
+"Missing p1, did not die within 2 years but have exit interview (pct of missing p1)" \ ///
+"Missing p1, unknown reason, and no exit interview (pct of missing p1)") ///
+ctitles("" "N" "Percent") ///
+sdec(0,2) addtable
 
 *******************************************************
 //characteristics of group that meets criteria
@@ -5584,15 +5716,15 @@ tab core_year_n0 if  ind_p1_interview==0 & died_within_95pctco==0
 //4 that died, we just have exit, no p1 ivw
 
 //overall sample
-tab core_year_n0 if core_year_no!=2010, missing //can't have follow up if 2010 ivw so drop
+tab core_year_n0 if core_year_n0!=2010, missing //can't have follow up if 2010 ivw so drop
 gen ind_oa_sample=0
-replace ind_oa_sample=1 if  core_year_no!=2010
+replace ind_oa_sample=1 if  core_year_n0!=2010
 tab ind_oa_sample, missing
 
 //with exit interview, no p1 core
 tab ind_p1_interview ind_x_interview if core_year_n0!=2010, missing
 gen ind_died_sample=0
-replace ind_died_sample=1 if core_year_no!=2010 & ind_p1_interview==0  & ind_x_interview==1
+replace ind_died_sample=1 if core_year_n0!=2010 & ind_p1_interview==0  & ind_x_interview==1
 
 //with p1 core, meet criteria or not
 tab `critvar'_p1 if ind_p1_interview==1 & part_ab_12m_p1==1 & hmo_d_12m_p1==0
@@ -5617,7 +5749,7 @@ mat char[1,4]=r(N) //n that do not meet criteria p1
 
 local des_vars female_n0 
 
-tab age_cat_n0=`i' (3 categories)
+tab age_cat_n0, missing //(3 categories)
 
 local c=1
 foreach v in ind_oa_sample ind_died_sample ind_meetp1_sample ind_nomeetp1_sample{
@@ -5630,7 +5762,6 @@ foreach v in ind_oa_sample ind_died_sample ind_meetp1_sample ind_nomeetp1_sample
 
 *******************************************************
 log close
-
 
 
 H="xxxxNotes"

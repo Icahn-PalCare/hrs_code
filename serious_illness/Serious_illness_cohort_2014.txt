@@ -5908,15 +5908,17 @@ tab outcome_ivw_cat, missing
 clear
 
 ***************************************************************
-**Check follow up interviews for each of the criteria
+**Check follow up interviews for each of the criteria (2 tables)
 ***************************************************************
 mat p1_crit=J(5,4,.)
+mat miss=J(4,4,.)
 
 local col = 1
 foreach crit in a b{
 	use n0_n1_p1_p2_x_criteria_`crit'_v1.dta if core_year_n0<2010
 	rename ser_med_illness_p1 criteria_a_p1
 		
+**1st table looking at follow up outcomes
 	sum core_year_n0
 	mat p1_crit[1,`col']=r(N) //overall n meet criteria
 	mat p1_crit[1,`col'+1]=100 //percent of n
@@ -5937,7 +5939,23 @@ foreach crit in a b{
 	mat p1_crit[5,`col']=r(N) //no follow up interview
 	mat p1_crit[5,`col'+1]=p1_crit[5,`col']/p1_crit[1,`col']*100
 	
+**2nd table begins here looking at missing follow up
+	miss[1,`col']=p1_crit[5,'col'] //those that are missing, same as last row in above
+	
+	sum core_year_n0 if (core_to_dod_2yr_n0==1 & ind_x_interview==0)
+	miss[2,`col']=r(N) //died but no exit interview
+	miss[2,`col'+1]=miss[2,`col']/miss[1,`col'] 
+
+	sum core_year_n0 if (core_to_dod_2yr_n0==0 & ind_p1_interview==0)
+	miss[3,`col']=r(N) //didn't die but no p1
+	miss[3,`col'+1]=miss[3,`col']/miss[1,`col'] 
+	
+	sum core_year_n0 if (core_to_dod_2yr_n0==0 & ind_p1_interview==1 & (part_ab_12m_p1!=1 | hmo_d_12m_p1!=0))
+	miss[4,`col']=r(N) //have p1 but not ffs mc 1 year prior
+	miss[4,`col'+1]=miss[4,`col']/miss[1,`col'] 
+
 	local col = `col'+2
+		
 	clear
 }
 	 
@@ -5949,10 +5967,19 @@ rtitles("Overall n meet criteria n0 interview"\""\ "Died within 2 years and have
 ctitles("" "Criteria A" "Criteria B" \ "" "n" "n" \ "" "(percent)" "(percent)" ) ///
 note("Criteria A = Any serious medical illness or ADL impairment" \ ///
 "Criteria B = Criteria A and Urgent / Emergent hospitalization or NH resident" \ ///
-"Missing follow up if R died within 1 years of meet criteria but no exit interview,"  \ ///
+"Missing follow up if R died within 2 years of meet criteria but no exit interview,"  \ ///
 "R did not die within 2 years, has no p1 interview," \ ///
 "or R has p1 interview but not FFS MC 1 year preceding p1 interview.") ///
 substat(1) sdec(0\1) replace
+
+frmttable using "`logpath'\sic_Tables_5_outcomes_crit_a_and_b", statmat(miss) ///
+title("Missing follow up interview")  ///
+rtitles("Missing follow up interview"\""\ "Died within 2 years but no exit interview" \ ///
+""\"Did not die but no p1 ivw" \""\ "Had p1 interview but did not have ffs mc 1 year preceding" \"") ///
+ctitles("" "Criteria A" "Criteria B" \ "" "n" "n" \ "" "(percent)" "(percent)" ) ///
+note("Criteria A = Any serious medical illness or ADL impairment" \ ///
+"Criteria B = Criteria A and Urgent / Emergent hospitalization or NH resident") ///
+substat(1) sdec(0\1) addtable
 
 
 ***************************************************************
@@ -6018,6 +6045,10 @@ gen comp_smi_adl_hosp=0
 replace comp_smi_adl_hosp=1 if ser_med_illness==1 & adl_impair_core==1 & smi_nh_ind==0 & ind_em_ur_adm_12m==1
 tab comp_smi_adl_hosp
 
+gen comp_smi_nh_hosp=0
+replace comp_smi_adl_hosp=1 if ser_med_illness==1 & adl_impair_core==0 & smi_nh_ind==1 & ind_em_ur_adm_12m==1
+tab comp_smi_adl_hosp
+
 gen comp_adl_nh_hosp=0
 replace comp_adl_nh_hosp=1 if ser_med_illness==0 & adl_impair_core==1 & smi_nh_ind==1 & ind_em_ur_adm_12m==1
 tab comp_adl_nh_hosp
@@ -6032,11 +6063,23 @@ tot_paid_by_mc_1yr
 
 local compvars comp_none comp_smi comp_adl comp_nh comp_hos comp_smi_adl ///
 comp_smi_nh comp_smi_hosp comp_adl_nh comp_adl_hosp comp_nh_hosp ///
-comp_smi_adl_nh comp_smi_adl_hosp comp_adl_nh_hosp comp_all
+comp_smi_adl_nh comp_smi_adl_hosp comp_smi_nh_hosp comp_adl_nh_hosp comp_all
 
-mat comp=J(15,15,.)
+//overall sample, n interviews
+sum core_year_n0
+local nsamp=r(N)
 
-local c=1
+mat comp=J(16,16,.)
+
+//first column, get n for each subgroup
+local r=1
+foreach comp in `compvars'{
+	sum `var' if `comp'==1, detail
+	mat comp[`r',1]=r(N)
+	local r=`r'+1
+}
+
+local c=2
 foreach var in `outcome1'{
 	local r=1
 	foreach comp in `compvars'{
@@ -6050,15 +6093,15 @@ local c=`c'+3
 }
 
 mat rownames comp="None" "Serious med illness" "ADL Impairment" "NH resident" "Hospitalization" ///
- "Illness + ADL Impair" "Illness + NH res" "Illness + Hospital" "ADL + NH Res" "ADL + Hospital" ///
-"NH res + Hospital" "Illness + ADL + NH" "Illness + ADL + Hospital" "ADL + NH + Hospital" ///
-"Illness + ADL + NH + Hosp"
+"Illness + ADL Impair" "Illness + NH res" "Illness + Hospital" "ADL + NH Res" "ADL + Hospital" ///
+"NH res + Hospital" "Illness + ADL + NH" "Illness + ADL + Hospital" "Illness + NH + Hospital" ///
+"ADL + NH + Hospital" "Illness + ADL + NH + Hosp"
 
 frmttable using "`logpath'\sic_Tables_5_outcomes_crit_a_and_b", statmat(comp)  substat(2) ///
 title("Comparison of serious medical conditions, outcomes at 1 year" \ ///
 "N=`nsamp', interview level") ///
-ctitles("","Died","Hospice admit","Hospital admit","IP Medicare","Total Medicare" \ ///
-"","mean","","","","" \ "","(SD)", "","","","", \ "","[Median]","","","","" ) ///
+ctitles("","N","Died","Hospice admit","Hospital admit","IP Medicare","Total Medicare" \ ///
+"","","mean","","","","" \ "","","(SD)", "","","","", \ "","","[Median]","","","","" ) ///
 sdec(2) addtable
 
 

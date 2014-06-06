@@ -3775,6 +3775,94 @@ outfile="E:\data\hrs_oop_2010\final_data\hrs_oop_ivws_meet_el_cc_n24m.dta" repla
 run;
 
 
+H="Merge in Dartmouth EOL MC spending by HRR"
+/*This section brings in the regional (HRR) medicare reimbursement in the 
+last 2 years of life from the Dartmouth Atlas
+
+This will serve as a check for our distributiosn of Medicare spending by region*/
+
+/*first get HRR - ZIP crosswalk, 2007 since using the 2007 eol spending data*/
+proc import
+	datafile="H:\OOP\data\HRR_ZIP_xwalk\ziphsahrr07.xls"
+	out=ziphsahrr07 dbms=xls replace;	
+run;
+
+data ziphsahrr07_1;
+set ziphsahrr07(rename=(zipcode07=zip));
+label zip="Zip code for HRR xwalk";
+run;
+
+proc freq; table hrrnum; run;
+
+/*merge in Dartmouth eol spending (2007) by zip code*/
+proc import
+	datafile="H:\OOP\data\EOL_mc_2yrs_HRR\Total Medicare Reimbursements per Decedent, by Interval Before Death.xls"
+	out=EOL_dartmouth dbms=xls replace;
+run;
+
+data EOL_dartmouth_1;
+set EOL_dartmouth;
+rename LocationId = HRR_number; /*note this is not the right HRR number, not sure what it is*/
+rename Data=tot_eol_spending_hrr;
+label Data="EOL MC spend last 2 yr of life HRR level";
+run;
+
+proc freq; table HRR_number; run;
+
+proc import
+	datafile="H:\OOP\data\EOL_mc_2yrs_HRR\States.xls"
+	out=st_code dbms=xls replace;
+run;
+
+proc sql;
+create table EOL_dartmouth_2 as select a.*,b.State_code from
+EOL_dartmouth_1 a left join
+St_code b
+on a.State=b.State;
+quit;
+
+proc freq; table State_code /missprint; run;
+
+/*merge the eol medicare spending by hrr to zip code list
+For some reason, the hrr numbers don't match up between the two sets of lists
+so use the name and state to match instead*/
+
+proc sql;
+create table zip_eol_2 as select a.*,b.tot_eol_spending_hrr
+from ziphsahrr07_1 a left join
+ EOL_dartmouth_2 b
+on a.hrrcity=b.Location and a.hrrstate=b.State_code;
+quit;
+
+proc means; var tot_eol_spending_hrr; run;
+
+/*merge into the overall dataset by zip code*/
+proc sql;
+create table hrs_oop_ivws_meet_el_cc_n24m_hrr_1 as select
+a.*,b.hrrnum,b.tot_eol_spending_hrr from
+oop_fnl.hrs_oop_ivws_meet_el_cc_n24m a left join
+zip_eol_2 b
+on a.zip_exit_e=b.zip;
+quit;
+
+data oop_fnl.hrs_oop_ivws_meet_el_cc_n24m_hrr;
+set hrs_oop_ivws_meet_el_cc_n24m_hrr_1;
+tot_eol_hrr_miss=0;
+if tot_eol_spending_hrr='' then tot_eol_hrr_miss=1; 
+label tot_eol_hrr_miss="Dartmouth total eol for HRR missing";
+run;
+
+proc freq; table tot_eol_hrr_miss; run;
+
+/*save version to Stata*/
+proc export data=oop_fnl.hrs_oop_ivws_meet_el_cc_n24m_hrr 
+outfile="E:\data\hrs_oop_2010\final_data\hrs_oop_ivws_meet_el_cc_n24m.dta" replace;
+run;
+
+
+
+
+
 H="xxxxxGet nights SNF paid for by MC"
 /*this creates the dataset oop_fnl.hrs_oop_with_nh_nights with
 1. HRS interviews (exit, core n1, n2, n3 and restricted data)
@@ -4449,7 +4537,7 @@ proc sort data=costs_all_wi_1; by BID_hrs ; run;
 proc sort data=cost_id_wage_index3; by BID_hrs ; run;
 
 proc sql;
-create table oop_int.costs_all_wi as select a.*,b.wi_missing_yes from
+create table oop_int.costs_all_wi as select a.*,b.zip_exit_e,b.wi_missing_yes,b.wage_index_20102 from
 costs_all_wi_1 a left join
 cost_id_wage_index3 b
 on a.BID_hrs=b.BID_hrs;
@@ -6168,6 +6256,7 @@ cd `datapath'
 use oop_mc_sample_addedvars.dta if part_ab_5y==1 & hmo_5y==0 & ind_60m_oop_yes==1 & age_at_death_e>=70
 
 *********************************************************
+//split data into quintiles by our calculated 5 year medicare spending
 sort tot_paid_by_mc_5yr_wi 
 *sample n=1861 with complete data, broken into quintiles as follows:
 
@@ -6178,23 +6267,92 @@ sca qui_40=r(c_2)
 sca qui_60=r(c_3)
 sca qui_80=r(c_4)
 
-gen quintile_eol=.
-replace quintile_eol=1 if tot_paid_by_mc_5yr_wi <qui_20 & tot_paid_by_mc_5yr_wi <.
-replace quintile_eol=2 if tot_paid_by_mc_5yr_wi >=qui_20 & tot_paid_by_mc_5yr_wi <=qui_40
-replace quintile_eol=3 if tot_paid_by_mc_5yr_wi >qui_40 & tot_paid_by_mc_5yr_wi <qui_60
-replace quintile_eol=4 if tot_paid_by_mc_5yr_wi >=qui_60 & tot_paid_by_mc_5yr_wi <qui_80
-replace quintile_eol=5 if tot_paid_by_mc_5yr_wi >=qui_80 & tot_paid_by_mc_5yr_wi <.
-tab quintile_eol, missing
-la var quintile_eol "Quintiles of 5 year EOL Medicare Spending (within this sample)"
+gen quintile_mc_5yr=.
+replace quintile_mc_5yr=1 if tot_paid_by_mc_5yr_wi <qui_20 & tot_paid_by_mc_5yr_wi <.
+replace quintile_mc_5yr=2 if tot_paid_by_mc_5yr_wi >=qui_20 & tot_paid_by_mc_5yr_wi <=qui_40
+replace quintile_mc_5yr=3 if tot_paid_by_mc_5yr_wi >qui_40 & tot_paid_by_mc_5yr_wi <qui_60
+replace quintile_mc_5yr=4 if tot_paid_by_mc_5yr_wi >=qui_60 & tot_paid_by_mc_5yr_wi <qui_80
+replace quintile_mc_5yr=5 if tot_paid_by_mc_5yr_wi >=qui_80 & tot_paid_by_mc_5yr_wi <.
+tab quintile_mc_5yr, missing
+la var quintile_mc_5yr"Quintiles of 5 year EOL Medicare Spending (within this sample)"
 la def quint 1 "Quintile 1 (Lowest)" 2 "2" 3 "3" 4 "4" 5 "5 (Highest)"
-la val quintile_eol quint
+la val quintile_mc_5yr quint
 
-sum tot_paid_by_mc_5yr_wi if quintile_eol==1, detail
-sum tot_paid_by_mc_5yr_wi if quintile_eol==2, detail
-sum tot_paid_by_mc_5yr_wi if quintile_eol==3, detail
-sum tot_paid_by_mc_5yr_wi if quintile_eol==4, detail
-sum tot_paid_by_mc_5yr_wi if quintile_eol==5, detail
+sum tot_paid_by_mc_5yr_wi if quintile_mc_5yr==1, detail
+sum tot_paid_by_mc_5yr_wi if quintile_mc_5yr==2, detail
+sum tot_paid_by_mc_5yr_wi if quintile_mc_5yr==3, detail
+sum tot_paid_by_mc_5yr_wi if quintile_mc_5yr==4, detail
+sum tot_paid_by_mc_5yr_wi if quintile_mc_5yr==5, detail
+*********************************************************
+//split into quintiles by hrr medicare spending, check overlap
+//get adjusted hrr spending by wage index so comparable
 
+gen ind_hrr_yes = 0
+replace ind_hrr_yes=1 if hrrnum!=.
+tab ind_hrr_yes, missing
+
+sum tot_eol_spending_hrr , detail
+
+gen tot_eol_spending_hrr_wi = tot_eol_spending_hrr * wage_index_20102 
+sum tot_eol_spending_hrr_wi,detail
+
+sort tot_eol_spending_hrr_wi 
+
+//calculate quintiles
+centile tot_eol_spending_hrr_wi , centile(20(20)80)
+sca d_qui_20=r(c_1)
+sca d_qui_40=r(c_2)
+sca d_qui_60=r(c_3)
+sca d_qui_80=r(c_4)
+
+gen quintile_dm_5yr=.
+replace quintile_dm_2yr=1 if tot_eol_spending_hrr_wi <d_qui_20 & tot_eol_spending_hrr_wi <.
+replace quintile_dm_2yr=2 if tot_eol_spending_hrr_wi >=d_qui_20 & tot_eol_spending_hrr_wi <=d_qui_40
+replace quintile_dm_2yr=3 if tot_eol_spending_hrr_wi >d_qui_40 & tot_eol_spending_hrr_wi <d_qui_60
+replace quintile_dm_2yr=4 if tot_eol_spending_hrr_wi >=d_qui_60 & tot_eol_spending_hrr_wi <d_qui_80
+replace quintile_dm_2yr=5 if tot_eol_spending_hrr_wi >=d_qui_80 & tot_eol_spending_hrr_wi <.
+tab quintile_dm_2yr, missing
+la var quintile_dm_2yr"Quintiles of 2 year Dartmouth EOL Medicare Spending, HRR level (within this sample)"
+la val quintile_dm_2yrquint
+
+sum tot_eol_spending_hrr_wi if quintile_dm_2yr==1, detail
+sum tot_eol_spending_hrr_wi if quintile_dm_2yr==2, detail
+sum tot_eol_spending_hrr_wi if quintile_dm_2yr==3, detail
+sum tot_eol_spending_hrr_wi if quintile_dm_2yr==4, detail
+sum tot_eol_spending_hrr_wi if quintile_dm_2yr==5, detail
+*********************************************************
+//get mean 5 year claims spending by hrr to compare with the hrr quintiles ???
+egen mean_5yr_mc_wi_hrr = mean(tot_paid_by_mc_5yr_wi) by(hrrnum)
+la var mean_5yr_mc_wi_hrr "Mean 5 year wi adj medicare spending by hrr"
+
+sort mean_5yr_mc_wi_hrr 
+
+//calculate quintiles
+centile mean_5yr_mc_wi_hrr , centile(20(20)80)
+sca m_qui_20=r(c_1)
+sca m_qui_40=r(c_2)
+sca m_qui_60=r(c_3)
+sca m_qui_80=r(c_4)
+
+gen quintile_mc_5yr=.
+replace quintile_hrr_mean_5yr=1 if mean_5yr_mc_wi_hrr <d_qui_20 & mean_5yr_mc_wi_hrr <.
+replace quintile_hrr_mean_5yr=2 if mean_5yr_mc_wi_hrr >=d_qui_20 & mean_5yr_mc_wi_hrr <=d_qui_40
+replace quintile_hrr_mean_5yr=3 if mean_5yr_mc_wi_hrr >d_qui_40 & mean_5yr_mc_wi_hrr <d_qui_60
+replace quintile_hrr_mean_5yr=4 if mean_5yr_mc_wi_hrr >=d_qui_60 & mean_5yr_mc_wi_hrr <d_qui_80
+replace quintile_hrr_mean_5yr=5 if mean_5yr_mc_wi_hrr >=d_qui_80 & mean_5yr_mc_wi_hrr <.
+tab quintile_hrr_mean_5yr, missing
+la var quintile_hrr_mean_5yr"Quintiles of 5 year EOL Medicare Spending, mean HRR level (within this sample)"
+la val quintile_hrr_mean_5yr
+
+sum mean_5yr_mc_wi_hrr if quintile_hrr_mean_5yr==1, detail
+sum mean_5yr_mc_wi_hrr if quintile_hrr_mean_5yr==2, detail
+sum mean_5yr_mc_wi_hrr if quintile_hrr_mean_5yr==3, detail
+sum mean_5yr_mc_wi_hrr if quintile_hrr_mean_5yr==4, detail
+sum mean_5yr_mc_wi_hrr if quintile_hrr_mean_5yr==5, detail
+
+*********************************************************
+
+scatter quintile_hrr_mean_5yr quintile_dm_2yr hrrnum
 
 *********************************************************
 log close

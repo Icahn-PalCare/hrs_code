@@ -250,6 +250,7 @@ quit;
 /*get zip code at time of death to use for wage index adjustment*/
 data id_zip;
 set restricted_r(rename=(ZIP10_2000=ZIP10));
+length zip_exit $5;
 /*use zip code variable from restricted dataset for year of exit interview*/
 zip_exit=vvaluex("zip"||substr(trim(left(exit_year_x)),3,2) );
 run;
@@ -3769,11 +3770,6 @@ proc freq data=oop_fnl.hrs_oop_ivws_meet_el_cc_n24m;
 table cc_:;
 run;
 
-/*save version to Stata*/
-proc export data=oop_fnl.hrs_oop_ivws_meet_el_cc_n24m 
-outfile="E:\data\hrs_oop_2010\final_data\hrs_oop_ivws_meet_el_cc_n24m.dta" replace;
-run;
-
 
 H="Merge in Dartmouth EOL MC spending by HRR"
 /*This section brings in the regional (HRR) medicare reimbursement in the 
@@ -3783,21 +3779,25 @@ This will serve as a check for our distributiosn of Medicare spending by region*
 
 /*first get HRR - ZIP crosswalk, 2007 since using the 2007 eol spending data*/
 proc import
-	datafile="H:\OOP\data\HRR_ZIP_xwalk\ziphsahrr07.xls"
-	out=ziphsahrr07 dbms=xls replace;	
+	/*datafile="H:\OOP\data\HRR_ZIP_xwalk\ziphsahrr07.xls"*/
+datafile="E:\data\hrs_oop_2010\ref_data\HRR_ZIP_xwalk\ziphsahrr07.xls"
+out=ziphsahrr07 dbms=xls replace;	
 run;
 
 data ziphsahrr07_1;
 set ziphsahrr07(rename=(zipcode07=zip));
-label zip="Zip code for HRR xwalk";
+zip_n = put(zip,z5.);
+label zip_n="Zip code for HRR xwalk";
+drop zip;
 run;
 
 proc freq; table hrrnum; run;
 
 /*merge in Dartmouth eol spending (2007) by zip code*/
 proc import
-	datafile="H:\OOP\data\EOL_mc_2yrs_HRR\Total Medicare Reimbursements per Decedent, by Interval Before Death.xls"
-	out=EOL_dartmouth dbms=xls replace;
+	/*datafile="H:\OOP\data\EOL_mc_2yrs_HRR\Total Medicare Reimbursements per Decedent, by Interval Before Death.xls"*/
+datafile="E:\data\hrs_oop_2010\ref_data\EOL_mc_2yrs_HRR\Total Medicare Reimbursements per Decedent, by Interval Before Death.xls"
+out=EOL_dartmouth dbms=xls replace;
 run;
 
 data EOL_dartmouth_1;
@@ -3810,8 +3810,9 @@ run;
 proc freq; table HRR_number; run;
 
 proc import
-	datafile="H:\OOP\data\EOL_mc_2yrs_HRR\States.xls"
-	out=st_code dbms=xls replace;
+	/*datafile="H:\OOP\data\EOL_mc_2yrs_HRR\States.xls"*/
+datafile="E:\data\hrs_oop_2010\ref_data\EOL_mc_2yrs_HRR\States.xls"
+out=st_code dbms=xls replace;
 run;
 
 proc sql;
@@ -3838,15 +3839,15 @@ proc means; var tot_eol_spending_hrr; run;
 
 /*merge into the overall dataset by zip code*/
 proc sql;
-create table hrs_oop_ivws_meet_el_cc_n24m_hrr_1 as select
+create table hrs_oop_hrr_1 as select
 a.*,b.hrrnum,b.tot_eol_spending_hrr from
 oop_fnl.hrs_oop_ivws_meet_el_cc_n24m a left join
 zip_eol_2 b
-on a.zip_exit_e=b.zip;
+on a.zip_exit_e=b.zip_n;
 quit;
 
 data oop_fnl.hrs_oop_ivws_meet_el_cc_n24m_hrr;
-set hrs_oop_ivws_meet_el_cc_n24m_hrr_1;
+set hrs_oop_hrr_1;
 tot_eol_hrr_miss=0;
 if tot_eol_spending_hrr='' then tot_eol_hrr_miss=1; 
 label tot_eol_hrr_miss="Dartmouth total eol for HRR missing";
@@ -5803,7 +5804,9 @@ H="Mutually exclusive comparison groups"
 2 and 5 year lookbacks 
 
 Note:Sample limited to those with Age 67+ when die, FFS medicare last 2/5 years of life,
-full OOP spending data last 2/5 years of life and resident of 50 States + DC (drops PR resident)*/
+full OOP spending data last 2/5 years of life and resident of 50 States + DC (drops PR resident)
+
+For 5 year lookback, sample also drops those observations with missing dementia probability*/
 
 capture log close
 clear all
@@ -6021,11 +6024,54 @@ ctitles("" "Full Sample" "Prob dem > 50%" "Cancer" "Heart disease" "Other") ///
 sdec(0 \ 1 \ 0 \ 3) landscape addtable
 
 ******************************************************************************
-//Table last 5 years spending
+//Last 5 years spending
 ******************************************************************************
 
 keep if part_ab_5y==1 & hmo_5y==0 & ind_60m_oop_yes==1 & age_at_death_e>=70
 
+******************************************************************************
+//Who is missing probability of dementia in this sample?
+******************************************************************************
+mat md=J(6,2,.)
+sum exit_year_x
+mat md[1,1]=r(N) //overall sample n
+
+tab miss_prob_dem_n1n2, missing matcell(md1)
+mat md[2,1]=md1[2,1] //n missing dementia
+mat md[2,2]=md[2,1]/md[1,1]*100 //percent
+
+tab age_n1_lt70 if miss_prob_dem_n1n2==1, missing matcell(md2)
+mat md[3,1]=md2[2,1] //n age < 70 at n1 interview
+mat md[3,2]=md[3,1]/md[2,1]*100 //percent
+mat md[4,1]=md2[3,1] //n where exit months>60, so no n1 interview pulled (confirmed by next tabs)
+mat md[4,2]=md[4,1]/md[2,1]*100
+
+tab core_year_n1 if miss_prob_dem_n1n2==1, missing
+tab months_x exit_year_x if  core_year_n1==. & miss_prob_dem_n1n2==1, missing
+
+tab core_year_n1 if age_n1_lt70==0 & miss_prob_dem_n1n2==1, missing
+
+tab age_n2_lt70 if age_n1_lt70==0 & miss_prob_dem_n1n2==1 & core_year_n1==2008, missing matcell(md3)
+mat md[5,1]=md3[2,1] //n where 2008 n1 interview, less than 70 at n2 ivw
+mat md[5,2]=md[5,1]/md[2,1]*100
+
+//remaining are just missing, not in the Hurd dataset and don't know why, maybe missing contributing variables?
+mat md[6,1]=md[2,1]-md[3,1]-md[4,1]-md[5,1]
+mat md[6,2]=md[6,1]/md[2,1]*100
+
+frmttable using `logpath'\7-oop_dem_tables, statmat(md) ///
+title("Missing dementia probability - 5 year lookback sample") ///
+ctitles("" "n" "percent" ) ///
+rtitles("Overall sample" \ "Missing dementia" \ "Age < 70 at n1 interview" \ ///
+"No core interview, exit months > 60" \ "2008 n1 interview and age < 70 at n2 ivw" \ ///
+"Missing from Hurd dataset for unknown reasons" ) ///
+sdec(0,2) landscape addtable 
+
+drop if miss_prob_dem_n1n2==1
+
+******************************************************************************
+//Table last 5 years spending
+******************************************************************************
 //get tables comparing mean, median spending for different disease groups
 mat dg_5y=J(25,8,.)
 //first row n each group
@@ -6158,9 +6204,9 @@ ctitles("" "Prob dem" " > 50%" "Cancer" "" "Heart disease" "" "Other" "" \ ///
 sdec(0) landscape addtable
 
 ******************************************************************************
-//Demo, missing dementia for subgroups
+//Demo for subgroups
 ******************************************************************************
-mat demo_5y=J(19,5,.)
+mat demo_5y=J(18,5,.)
 //first row n each group
 sum exit_year_x
 mat demo_5y[1,1]=r(N) //overall sample, all groups
@@ -6176,7 +6222,7 @@ mat demo_5y[1,5]=r1_o[2,1] //with other disease col 4
 //mc vars
 local dvars age_lt75 age_75_79 age_80_84 age_85_89 age_gt90 ///
 female_x married_x hisp_eth white black other_re educ_lt_hs educ_hsdeg ///
-educ_some_coll educ_coll miss_prob_dem_n1n2
+educ_some_coll educ_coll 
 
 //5 year look back , full sample
 local c = 1
@@ -6210,7 +6256,7 @@ foreach d in pr_dem_gt50 cancer_grp heartdis_grp other_grp{
 	
 mat rownames demo_5y= "N" "Age at death, nean" "Median age" "Age 70-74" "Age 75-79" "Age 80-84" "Age 85-89" "Age 90+" ///
 "Female" "Married at time of death" "Hispanic ethnicity" "White" "Black" "Other race/ethnicity" ///
-"Less than HS educ" "HS degree" "Some college, not 4yr deg" "College grad" "Missing dementia probability"
+"Less than HS educ" "HS degree" "Some college, not 4yr deg" "College grad"
 
 mat list demo_5y
 
@@ -6253,7 +6299,7 @@ cd `datapath'
 
 //use just sample that meet 5 year criteria (full mc and oop data 5 years from death)
 //with new variables added
-use oop_mc_sample_addedvars.dta if part_ab_5y==1 & hmo_5y==0 & ind_60m_oop_yes==1 & age_at_death_e>=70
+use oop_mc_sample_addedvars.dta if part_ab_5y==1 & hmo_5y==0 & ind_60m_oop_yes==1 & age_at_death_e>=70 & miss_prob_dem_n1n2==0
 
 *********************************************************
 //split data into quintiles by our calculated 5 year medicare spending
@@ -6305,7 +6351,7 @@ sca d_qui_40=r(c_2)
 sca d_qui_60=r(c_3)
 sca d_qui_80=r(c_4)
 
-gen quintile_dm_5yr=.
+gen quintile_dm_2yr=.
 replace quintile_dm_2yr=1 if tot_eol_spending_hrr_wi <d_qui_20 & tot_eol_spending_hrr_wi <.
 replace quintile_dm_2yr=2 if tot_eol_spending_hrr_wi >=d_qui_20 & tot_eol_spending_hrr_wi <=d_qui_40
 replace quintile_dm_2yr=3 if tot_eol_spending_hrr_wi >d_qui_40 & tot_eol_spending_hrr_wi <d_qui_60
@@ -6313,7 +6359,7 @@ replace quintile_dm_2yr=4 if tot_eol_spending_hrr_wi >=d_qui_60 & tot_eol_spendi
 replace quintile_dm_2yr=5 if tot_eol_spending_hrr_wi >=d_qui_80 & tot_eol_spending_hrr_wi <.
 tab quintile_dm_2yr, missing
 la var quintile_dm_2yr"Quintiles of 2 year Dartmouth EOL Medicare Spending, HRR level (within this sample)"
-la val quintile_dm_2yrquint
+la val quintile_dm_2yr quint
 
 sum tot_eol_spending_hrr_wi if quintile_dm_2yr==1, detail
 sum tot_eol_spending_hrr_wi if quintile_dm_2yr==2, detail
@@ -6321,38 +6367,91 @@ sum tot_eol_spending_hrr_wi if quintile_dm_2yr==3, detail
 sum tot_eol_spending_hrr_wi if quintile_dm_2yr==4, detail
 sum tot_eol_spending_hrr_wi if quintile_dm_2yr==5, detail
 *********************************************************
-//get mean 5 year claims spending by hrr to compare with the hrr quintiles ???
-egen mean_5yr_mc_wi_hrr = mean(tot_paid_by_mc_5yr_wi) by(hrrnum)
-la var mean_5yr_mc_wi_hrr "Mean 5 year wi adj medicare spending by hrr"
 
-sort mean_5yr_mc_wi_hrr 
+scatter quintile_mc_5yr quintile_dm_2yr hrrnum, ///
+legend(label(1 "Q 5 year WI adjusted MC spending") label(2 "Q Dartmouth 2 year MC spending by HRR")) ///
+legend(cols(1))
+
+scatter quintile_mc_5yr quintile_dm_2yr hrrnum if quintile_mc_5yr==1, ///
+legend(label(1 "Q 5 year WI adjusted MC spending") label(2 "Dartmouth 2 year MC spending by HRR")) ///
+legend(cols(1))
+
+scatter quintile_mc_5yr quintile_dm_2yr 
+*********************************************************
+*********************************************************
+*********************************************************
+collapse tot_paid_by_mc_5yr_wi tot_eol_spending_hrr_wi, by(hrrnum)
+
+//assign quintiles at this collapsed level
+sort  tot_paid_by_mc_5yr_wi 
 
 //calculate quintiles
-centile mean_5yr_mc_wi_hrr , centile(20(20)80)
+centile  tot_paid_by_mc_5yr_wi , centile(20(20)80)
 sca m_qui_20=r(c_1)
 sca m_qui_40=r(c_2)
 sca m_qui_60=r(c_3)
 sca m_qui_80=r(c_4)
 
-gen quintile_mc_5yr=.
-replace quintile_hrr_mean_5yr=1 if mean_5yr_mc_wi_hrr <d_qui_20 & mean_5yr_mc_wi_hrr <.
-replace quintile_hrr_mean_5yr=2 if mean_5yr_mc_wi_hrr >=d_qui_20 & mean_5yr_mc_wi_hrr <=d_qui_40
-replace quintile_hrr_mean_5yr=3 if mean_5yr_mc_wi_hrr >d_qui_40 & mean_5yr_mc_wi_hrr <d_qui_60
-replace quintile_hrr_mean_5yr=4 if mean_5yr_mc_wi_hrr >=d_qui_60 & mean_5yr_mc_wi_hrr <d_qui_80
-replace quintile_hrr_mean_5yr=5 if mean_5yr_mc_wi_hrr >=d_qui_80 & mean_5yr_mc_wi_hrr <.
+gen quintile_hrr_mean_5yr=.
+replace quintile_hrr_mean_5yr=1 if  tot_paid_by_mc_5yr_wi <m_qui_20 & tot_paid_by_mc_5yr_wi <.
+replace quintile_hrr_mean_5yr=2 if  tot_paid_by_mc_5yr_wi >=m_qui_20 & tot_paid_by_mc_5yr_wi <=m_qui_40
+replace quintile_hrr_mean_5yr=3 if  tot_paid_by_mc_5yr_wi >m_qui_40 & tot_paid_by_mc_5yr_wi <m_qui_60
+replace quintile_hrr_mean_5yr=4 if  tot_paid_by_mc_5yr_wi >=m_qui_60 & tot_paid_by_mc_5yr_wi <m_qui_80
+replace quintile_hrr_mean_5yr=5 if  tot_paid_by_mc_5yr_wi >=m_qui_80 & tot_paid_by_mc_5yr_wi <.
 tab quintile_hrr_mean_5yr, missing
 la var quintile_hrr_mean_5yr"Quintiles of 5 year EOL Medicare Spending, mean HRR level (within this sample)"
-la val quintile_hrr_mean_5yr
+la val quintile_hrr_mean_5yr quint
 
-sum mean_5yr_mc_wi_hrr if quintile_hrr_mean_5yr==1, detail
-sum mean_5yr_mc_wi_hrr if quintile_hrr_mean_5yr==2, detail
-sum mean_5yr_mc_wi_hrr if quintile_hrr_mean_5yr==3, detail
-sum mean_5yr_mc_wi_hrr if quintile_hrr_mean_5yr==4, detail
-sum mean_5yr_mc_wi_hrr if quintile_hrr_mean_5yr==5, detail
+sum tot_paid_by_mc_5yr_wi if quintile_hrr_mean_5yr==1, detail
+sum tot_paid_by_mc_5yr_wi if quintile_hrr_mean_5yr==2, detail
+sum tot_paid_by_mc_5yr_wi if quintile_hrr_mean_5yr==3, detail
+sum tot_paid_by_mc_5yr_wi if quintile_hrr_mean_5yr==4, detail
+sum tot_paid_by_mc_5yr_wi if quintile_hrr_mean_5yr==5, detail
+*********************************************************
+//re assign quintiles for the dartmouth 2 year claims data
+//assign quintiles at this collapsed level
+sort   tot_eol_spending_hrr_wi 
+
+//calculate quintiles
+centile tot_eol_spending_hrr_wi , centile(20(20)80)
+sca dm_qui_20=r(c_1)
+sca dm_qui_40=r(c_2)
+sca dm_qui_60=r(c_3)
+sca dm_qui_80=r(c_4)
+
+gen quintile_dm_hrr_mean_2yr=.
+replace quintile_dm_hrr_mean_2yr=1 if  tot_eol_spending_hrr_wi <dm_qui_20 & tot_eol_spending_hrr_wi <.
+replace quintile_dm_hrr_mean_2yr=2 if  tot_eol_spending_hrr_wi >=dm_qui_20 & tot_eol_spending_hrr_wi <=dm_qui_40
+replace quintile_dm_hrr_mean_2yr=3 if  tot_eol_spending_hrr_wi >dm_qui_40 & tot_eol_spending_hrr_wi <dm_qui_60
+replace quintile_dm_hrr_mean_2yr=4 if  tot_eol_spending_hrr_wi >=dm_qui_60 & tot_eol_spending_hrr_wi <dm_qui_80
+replace quintile_dm_hrr_mean_2yr=5 if  tot_eol_spending_hrr_wi >=dm_qui_80 & tot_eol_spending_hrr_wi <.
+tab quintile_dm_hrr_mean_2yr, missing
+la var quintile_dm_hrr_mean_2yr"Quintiles of Dartmouth 2 year EOL Medicare Spending, mean HRR level (within this sample)"
+la val quintile_dm_hrr_mean_2yr quint
+
+sum tot_eol_spending_hrr_wi if quintile_dm_hrr_mean_2yr==1, detail
+sum tot_eol_spending_hrr_wi if quintile_dm_hrr_mean_2yr==2, detail
+sum tot_eol_spending_hrr_wi if quintile_dm_hrr_mean_2yr==3, detail
+sum tot_eol_spending_hrr_wi if quintile_dm_hrr_mean_2yr==4, detail
+sum tot_eol_spending_hrr_wi if quintile_dm_hrr_mean_2yr==5, detail
+
+
+//check overlapping quintiles
+//indicator quintiles are the same
+gen ind_quin_same_yes=.
+replace ind_quin_same_yes=1 if quintile_hrr_mean_5yr==quintile_dm_hrr_mean_2yr
+replace ind_quin_same_yes=0 if quintile_hrr_mean_5yr!=quintile_dm_hrr_mean_2yr
+tab ind_quin_same_yes, missing
+*********************************************************
+
+histogram tot_paid_by_mc_5yr_wi 
+
+
+histogram tot_eol_spending_hrr_wi
 
 *********************************************************
 
-scatter quintile_hrr_mean_5yr quintile_dm_2yr hrrnum
+
 
 *********************************************************
 log close

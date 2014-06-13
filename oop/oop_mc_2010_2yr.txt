@@ -3777,7 +3777,7 @@ last 2 years of life from the Dartmouth Atlas
 
 This will serve as a check for our distributiosn of Medicare spending by region*/
 
-/*first get HRR - ZIP crosswalk, 2007 since using the 2007 eol spending data*/
+/*first get HRR - ZIP crosswalk, 2007 since using the 2003-2007 eol spending data*/
 proc import
 	/*datafile="H:\OOP\data\HRR_ZIP_xwalk\ziphsahrr07.xls"*/
 datafile="E:\data\hrs_oop_2010\ref_data\HRR_ZIP_xwalk\ziphsahrr07.xls"
@@ -3793,48 +3793,31 @@ run;
 
 proc freq; table hrrnum; run;
 
-/*merge in Dartmouth eol spending (2007) by zip code*/
+/*merge in Dartmouth eol spending (2003-2007) by zip code*/
 proc import
 	/*datafile="H:\OOP\data\EOL_mc_2yrs_HRR\Total Medicare Reimbursements per Decedent, by Interval Before Death.xls"*/
-datafile="E:\data\hrs_oop_2010\ref_data\EOL_mc_2yrs_HRR\Total Medicare Reimbursements per Decedent, by Interval Before Death.xls"
+datafile="E:\data\hrs_oop_2010\ref_data\EOL_mc_2yrs_HRR\DAP_HRR_03_07_to_merge.xls"
 out=EOL_dartmouth dbms=xls replace;
 run;
 
 data EOL_dartmouth_1;
 set EOL_dartmouth;
-rename LocationId = HRR_number; /*note this is not the right HRR number, not sure what it is*/
-rename Data=tot_eol_spending_hrr;
-label Data="EOL MC spend last 2 yr of life HRR level";
+rename HRR = HRR_number; /*note this is not the right HRR number, not sure what it is*/
+rename TOTAL_MEDICARE_SPENDING=tot_eol_spending_hrr;
+label TOTAL_MEDICARE_SPENDING="EOL MC spend last 2 yr of life HRR level";
 run;
 
 proc freq; table HRR_number; run;
 
-proc import
-	/*datafile="H:\OOP\data\EOL_mc_2yrs_HRR\States.xls"*/
-datafile="E:\data\hrs_oop_2010\ref_data\EOL_mc_2yrs_HRR\States.xls"
-out=st_code dbms=xls replace;
-run;
-
-proc sql;
-create table EOL_dartmouth_2 as select a.*,b.State_code from
-EOL_dartmouth_1 a left join
-St_code b
-on a.State=b.State;
-quit;
-
-proc freq; table State_code /missprint; run;
-
-/*merge the eol medicare spending by hrr to zip code list
-For some reason, the hrr numbers don't match up between the two sets of lists
-so use the name and state to match instead*/
-
+/*merge the eol spending into the zip code/hrr list*/
 proc sql;
 create table zip_eol_2 as select a.*,b.tot_eol_spending_hrr
 from ziphsahrr07_1 a left join
- EOL_dartmouth_2 b
-on a.hrrcity=b.Location and a.hrrstate=b.State_code;
+ EOL_dartmouth_1 b
+on a.hrrnum=b.HRR_number;
 quit;
 
+/*all matched using hrr number to link*/
 proc means; var tot_eol_spending_hrr; run;
 
 /*merge into the overall dataset by zip code*/
@@ -3854,6 +3837,14 @@ label tot_eol_hrr_miss="Dartmouth total eol for HRR missing";
 run;
 
 proc freq; table tot_eol_hrr_miss; run;
+
+/*those that are missing mostly have invalid zip codes*/
+data miss_hrr;
+set oop_fnl.hrs_oop_ivws_meet_el_cc_n24m_hrr;
+if tot_eol_hrr_miss=1;
+run;
+
+proc freq; table zip_exit_e; run;
 
 /*save version to Stata*/
 proc export data=oop_fnl.hrs_oop_ivws_meet_el_cc_n24m_hrr 
@@ -6268,6 +6259,127 @@ sdec(0 \ 1 \ 0 \ 3) landscape addtable
 
 
 ******************************************************************************
+log close
+
+
+H="Quintiles Medicare spending last 2 years"
+/*Divides into quintiles by total Medicare spending last 2 years of life
+
+2 year lookbacks 
+
+Note:Sample limited to those with Age 67+ when die, FFS medicare last 2 years of life,
+ resident of 50 States + DC (drops PR resident)
+
+Check 2 year lookback calculated Medicare spending quintiles in our dataset
+with that using the Dartmouth Atlas 2 year lookback spending at the HRR level
+to see if we have similar distributions
+
+Try to get as close to the same sample as possible so do not
+require full OOP data in order to be includedi in the sample for this
+comparison*/
+
+capture log close
+clear all
+set mem 500m
+set more off
+
+local logpath E:\data\hrs_oop_2010\logs
+local datapath E:\data\hrs_oop_2010\final_data
+
+log using `logpath'\8-mc_oop_dementia_quintiles_2yr-LOG.txt, text replace
+
+cd `datapath'
+
+//use just sample that meet 2 year criteria (full mc 2 years from death)
+//with new variables added
+use oop_mc_sample_addedvars.dta if part_ab_2y==1 & hmo_2y==0 /*& ind_24m_oop_yes==1*/ & age_at_death_e>=67
+*******************************************************
+tab exit_year_x, missing
+
+//dartmouth eol spending hrr level averages
+sum tot_eol_spending_hrr, detail
+
+//calculated eol spending 2 year, individual level
+sum tot_paid_by_mc_2yr_wi, detail
+
+//adjust wage index eol spending for HRR, age, gender, race to be more
+//comparable to the Dartmouth Atlas data
+//note areg, absorb(hrrnum) command runs a linear regressing, treating each
+//value of hrrnum as an indicator variable so this controls for hrr as well 
+//as age, gender and race
+egen mean_mc_2yr=mean(tot_paid_by_mc_2yr_wi)
+areg tot_paid_by_mc_2yr_wi age_at_death_e female_x white, absorb(hrrnum)
+predict resid_mc, d
+//24 missing values generated, sample is 3263 adjusted (3287 before adjustment)
+//3 missing race
+//21 missing HRR number
+gen adj_mc_2yr= mean_mc_2yr +resid_mc
+la var adj_mc_2yr "Medicare spending 2yr, adjusted for HRR, age, sex and race"
+sum adj_mc_2yr, detail
+sum tot_paid_by_mc_2yr_wi, detail
+
+//dartmouth eol spending, for same sample
+sum tot_eol_spending_hrr if white!=., detail
+
+qqplot adj_mc_2yr tot_eol_spending_hrr
+qqplot adj_mc_2yr tot_eol_spending_hrr if adj_mc_2yr>40000 & adj_mc_2yr<85000
+
+*******************************************************
+//generate quintiles of the adjusted medicare 2 year spending from my dataset
+//mean at the hrr level to be comparable to the dartmouth atlas data
+collapse adj_mc_2yr tot_eol_spending_hrr, by(hrrnum)
+
+sort adj_mc_2yr
+
+//calculate quintiles
+centile adj_mc_2yr , centile(20(20)80)
+sca m_qui_20=r(c_1)
+sca m_qui_40=r(c_2)
+sca m_qui_60=r(c_3)
+sca m_qui_80=r(c_4)
+
+gen quintile_adj_mc_mean_2yr=.
+replace quintile_adj_mc_mean_2yr=1 if  adj_mc_2yr <m_qui_20 & adj_mc_2yr <.
+replace quintile_adj_mc_mean_2yr=2 if  adj_mc_2yr >=m_qui_20 & adj_mc_2yr <=m_qui_40
+replace quintile_adj_mc_mean_2yr=3 if  adj_mc_2yr >m_qui_40 & adj_mc_2yr <m_qui_60
+replace quintile_adj_mc_mean_2yr=4 if  adj_mc_2yr >=m_qui_60 & adj_mc_2yr <m_qui_80
+replace quintile_adj_mc_mean_2yr=5 if  adj_mc_2yr >=m_qui_80 & adj_mc_2yr <.
+tab quintile_adj_mc_mean_2yr, missing
+la var quintile_adj_mc_mean_2yr"Quintiles of 2 year EOL Medicare Spending, mean HRR level (within this sample)"
+la val quintile_adj_mc_mean_2yr quint
+*******************************************************
+//quintiles of the dartomouth level spending
+//re assign quintiles for the dartmouth 2 year claims data
+//assign quintiles at this collapsed level
+sort  tot_eol_spending_hrr 
+
+//calculate quintiles
+centile tot_eol_spending_hrr , centile(20(20)80)
+sca dm_qui_20=r(c_1)
+sca dm_qui_40=r(c_2)
+sca dm_qui_60=r(c_3)
+sca dm_qui_80=r(c_4)
+
+gen quintile_dm_hrr_mean_2yr=.
+replace quintile_dm_hrr_mean_2yr=1 if  tot_eol_spending_hrr <dm_qui_20 & tot_eol_spending_hrr <.
+replace quintile_dm_hrr_mean_2yr=2 if  tot_eol_spending_hrr >=dm_qui_20 & tot_eol_spending_hrr <=dm_qui_40
+replace quintile_dm_hrr_mean_2yr=3 if  tot_eol_spending_hrr >dm_qui_40 & tot_eol_spending_hrr <dm_qui_60
+replace quintile_dm_hrr_mean_2yr=4 if  tot_eol_spending_hrr >=dm_qui_60 & tot_eol_spending_hrr <dm_qui_80
+replace quintile_dm_hrr_mean_2yr=5 if  tot_eol_spending_hrr >=dm_qui_80 & tot_eol_spending_hrr <.
+tab quintile_dm_hrr_mean_2yr, missing
+la var quintile_dm_hrr_mean_2yr"Quintiles of Dartmouth 2 year EOL Medicare Spending, mean HRR level (within this sample)"
+la val quintile_dm_hrr_mean_2yr quint
+*******************************************************
+
+//check overlapping quintiles
+//indicator quintiles are the same
+gen ind_quin_same_yes=.
+replace ind_quin_same_yes=1 if quintile_adj_mc_mean_2yr==quintile_dm_hrr_mean_2yr
+replace ind_quin_same_yes=0 if quintile_adj_mc_mean_2yr!=quintile_dm_hrr_mean_2yr
+tab ind_quin_same_yes, missing
+
+
+*******************************************************
 log close
 
 

@@ -213,7 +213,7 @@ frmttable using "C:\projects\oop\report\sumstats2" , statmat(mean_unadj4) ///
 	rtitle("Independent" \ "Partial" \ "Severe")
 
 ***********************************************************
-//Adjust total oop and mc spending by age, sex and race
+//Adjust total oop and mc spending by hrr, age, sex and race
 ***********************************************************
 
 //adjust total oop spending

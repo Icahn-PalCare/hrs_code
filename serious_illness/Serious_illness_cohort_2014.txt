@@ -5616,7 +5616,7 @@ log using "`logpath'\4`crit'-sic_changes_tables_crit_`crit'.txt", text replace
 
 cd `datapath'
 
-use n0_n1_p1_p2_x_criteria_`crit'_v1.dta
+use n0_n1_p1_p2_x_criteria_`crit'_v1.dta if core_year_n0<2010
 
 *******************************************************
 *** Table of serious medical conditions
@@ -5648,7 +5648,7 @@ mat colnames table1="dementia" "cancer" "esrd" "chf" "copd" "diabetes" "liver di
  "ALS" "Hip fracture" "ADL Impairment"
 
 frmttable using "`logpath'\sic_Tables_4_outcomes_crit_`crit'", statmat(table1) ///
-title("Comparison of serious medical conditions and ADL Impairement" \ ///
+title("Comparison of serious medical conditions and ADL Impairment" \ ///
 "Interview when first meet criteria" \ ///
 "Criteria `crit' n=`nsamp'") sdec(0) landscape replace
 
@@ -5838,7 +5838,10 @@ sdec(0,2) addtable
 //characteristics of group that meets criteria
 //4 columns, 1 overall group, 2 group meets both n0 and p1 ivws, 3 group meets only n0, not p1
 //4 that died, we just have exit, no p1 ivw
-
+ ********* ********* ********* ********* ********* *********
+************ This section doesn't do anything right now *********
+************ Update it eventually to show the outcomes  *********
+ ********* ********* ********* ********* ********* *********
 //overall sample
 tab core_year_n0 if core_year_n0!=2010, missing //can't have follow up if 2010 ivw so drop
 gen ind_oa_sample=0
@@ -5883,6 +5886,70 @@ foreach v in ind_oa_sample ind_died_sample ind_meetp1_sample ind_nomeetp1_sample
 		
 	local c=`c'+1
 }
+
+
+***************************************************************
+***************************************************************
+//Look at 1 year n0 outcomes of those that meet 1st ivw and those that don't
+local outcome core_to_dod_1yr_n0 hs_admit_p12m_n0 ind_em_ur_adm_p12m_n0 ///
+ip_paid_by_mc_1yr_n0 snf_paid_by_mc_1yr_n0 hh_paid_by_mc_1yr_n0 hs_paid_by_mc_1yr_n0 ///
+pb_paid_by_mc_1yr_n0 op_paid_by_mc_1yr_n0 dm_paid_by_mc_1yr_n0 tot_paid_by_mc_1yr_n0 n_hospd_p12m_n0
+
+mat meet_1st=J(13,7,.)
+	
+//overall sample outcomes rows
+sum core_year_n0
+mat meet_1st[1,1]=r(N) //overall n
+	
+local r=2
+		foreach v in `outcome'{
+		sum `v', detail
+		mat meet_1st[`r',1]=r(mean)
+		mat meet_1st[`r',2]=r(p50)
+		local r=`r'+1 
+	}
+			
+local col = 3				
+tab meet_crit_first, missing matcell(n0_1)
+mat meet_1st[1,`col']=n0_1[2,1] //n who meet 1st interview
+mat meet_1st[1,`col'+2]=n0_1[1,1] //n who do not meet 1st interview	
+//for those that meet 1st interview and those that don't	
+foreach resp in 1 0{
+	local r=2
+		foreach v in `outcome'{
+		sum `v' if meet_crit_first==`resp', detail
+		mat meet_1st[`r',`col']=r(mean)
+		mat meet_1st[`r',`col'+1]=r(p50)
+		local r=`r'+1
+		}
+	local col = `col'+2		
+}
+
+//column 7 for p-values
+local r=2
+foreach v in `outcome'{
+	logit meet_crit_first `v'
+	test `v'
+	mat meet_1st[`r',7]=r(p) //p value from t-test
+	local r=`r'+1
+	}
+
+mat list meet_1st
+
+frmttable using "`logpath'\sic_Tables_4_outcomes_crit_`crit'", statmat(meet_1st) ///
+title("1 year outcomes by if meet criteria 1st interview")  ///
+rtitles("Overall n"\""\ "Died"\""\ "Hospice admit" \ "" \ "Hospital admit" \ "" \ ///
+"IP Medicare" \""\ "SNF Medicare" \""\ "HH Medicare" \""\ "Hospice Medicare" \ "" \ ///
+"Carrier Medicare" \""\ "OP Medicare" \ "" \ "DME Medicare" \ "" \ "Total Medicare payments" \ ""\ ///
+"Number hospitalizations" \ ""  ) ///
+ctitles("" "Criteria `crit'" "" "" \ ///
+"" "Overall" "Meet 1st ivw" "Do not meet 1st ivw" "p-value" \ ///
+"" "mean" "" "" \ "" "(median)" "" "") ///
+note("Criteria A = Any serious medical illness or ADL impairment" \ ///
+"Criteria B = Criteria A and Urgent / Emergent hospitalization or NH resident" \ ///
+"Outcomes are for 1 year after the initial interview where R meets criteria.") ///
+substat(1) sdec(2\0) addtable
+
 
 *******************************************************
 log close
@@ -6104,100 +6171,6 @@ note("Criteria A = Any serious medical illness or ADL impairment" \ ///
 "Criteria B = Criteria A and Urgent / Emergent hospitalization or NH resident") ///
 substat(1) sdec(0\1) addtable
 
-***************************************************************
-***************************************************************
-//Look at 1 year n0 outcomes of those that meet 1st ivw and those that don't
-cd `datapath'
-
-local outcome1 core_to_dod_1yr_n0 hs_admit_p12m_n0 ind_em_ur_adm_p12m_n0
-
-local outcome2 ip_paid_by_mc_1yr_n0 snf_paid_by_mc_1yr_n0 hh_paid_by_mc_1yr_n0 hs_paid_by_mc_1yr_n0 ///
-pb_paid_by_mc_1yr_n0 op_paid_by_mc_1yr_n0 dm_paid_by_mc_1yr_n0 tot_paid_by_mc_1yr_n0 n_hospd_p12m_n0
-
-mat meet_1st_a=J(13,6,.)
-mat meet_1st_b=J(13,6,.)
-
-
-foreach crit in a b{
-	clear
-	use n0_n1_p1_p2_x_criteria_`crit'_v1.dta if core_year_n0<2010
-	rename ser_med_illness_n0 criteria_a_n0
-	
-	//overall sample outcomes rows
-	sum core_year_n0
-	mat meet_1st_`crit'[1,1]=r(N) //overall n
-	
-	local r=2
-			foreach v in `outcome1'{
-			sum `v', detail
-			mat meet_1st_`crit'[`r',1]=r(mean)
-			mat meet_1st_`crit'[`r',2]=r(sd)
-			local r=`r'+1 //populates rows 2-4 for indicator variable outcomes
-			}
-
-	local r=5
-		foreach v in `outcome2'{
-			sum `v', detail
-			mat meet_1st_`crit'[`r',1]=r(mean)
-			mat meet_1st_`crit'[`r',2]=r(p50)
-			local r=`r'+1 //populates rows 8-13 for continuous variables
-			}
-			
-	local col = 3				
-	tab meet_crit_first, missing matcell(n0_1)
-	mat meet_1st_`crit'[1,`col']=n0_1[2,1] //n who meet 1st interview
-	mat meet_1st_`crit'[1,`col'+2]=n0_1[1,1] //n who do not meet 1st interview	
-//for those that meet 1st interview and those that don't	
-	foreach resp in 1 0{
-		local r=2
-			foreach v in `outcome1'{
-			sum `v' if meet_crit_first==`resp', detail
-			mat meet_1st_`crit'[`r',`col']=r(mean)
-			mat meet_1st_`crit'[`r',`col'+1]=r(sd)
-			local r=`r'+1 //populates rows 2-4 for indicator variable outcomes
-			}
-
-		local r=5
-			foreach v in `outcome2'{
-				sum `v' if meet_crit_first==`resp', detail
-				mat meet_1st_`crit'[`r',`col']=r(mean)
-				mat meet_1st_`crit'[`r',`col'+1]=r(p50)
-				local r=`r'+1 //populates rows 8-13 for continuous variables
-				}
-		local col = `col'+2		
-		}
-			
-}
-
-mat list meet_1st_a
-mat list meet_1st_b
-
-frmttable , statmat(meet_1st_a) ///
-title("1 year outcomes by if meet criteria 1st interview")  ///
-rtitles("Overall n"\""\ "Died"\""\ "Hospice admit" \ "" \ "Hospital admit" \ "" \ ///
-"IP Medicare" \""\ "SNF Medicare" \""\ "HH Medicare" \""\ "Hospice Medicare" \ "" \ ///
-"Carrier Medicare" \""\ "OP Medicare" \ "" \ "DME Medicare" \ "" \ "Total Medicare payments" \ ""\ ///
-"Number hospitalizations" \ ""  ) ///
-ctitles("" "Criteria A" "" "" \ ///
-"" "Overall" "Meet 1st ivw" "Do not meet 1st ivw"  \ ///
-"" "mean" "" "" \ "" "(median)" "") ///
-note("Criteria A = Any serious medical illness or ADL impairment" \ ///
-"Criteria B = Criteria A and Urgent / Emergent hospitalization or NH resident" \ ///
-"Outcomes are for 1 year after the p1 interview.") ///
-substat(1) sdec(2\0)
-
-frmttable using "`logpath'\sic_Tables_5_outcomes_crit_a_and_b", ///
-statmat(meet_1st_b)  ///
-rtitles("Overall n"\""\ "Died"\""\ "Hospice admit" \ "" \ "Hospital admit" \ "" \ ///
-"IP Medicare" \""\ "SNF Medicare" \""\ "HH Medicare" \""\ "Hospice Medicare" \ "" \ ///
-"Carrier Medicare" \""\ "OP Medicare" \ "" \ "DME Medicare" \ "" \ "Total Medicare payments" \ ""\ ///
-"Number hospitalizations" \ ""  ) ///
-ctitles("" "Criteria B" "" "" \ ///
-"" "Overall" "Meet 1st ivw" "Do not meet 1st ivw"  \ ///
-"" "" "" "" \ "" "" "") ///
-substat(1) sdec(2\0) merge addtable
-
-clear	 
 
 ***************************************************************
 **Check outcomes across each part of the various criteria
@@ -6412,9 +6385,8 @@ sdec(0,2) addtable
 //Look at p1 outcomes of those that meet criteria p1 and those that don't
 cd `datapath'
 
-local outcome1 core_to_dod_1yr_p1 hs_admit_p12m_p1 ind_em_ur_adm_p12m_p1
-
-local outcome2 ip_paid_by_mc_1yr_p1 snf_paid_by_mc_1yr_p1 hh_paid_by_mc_1yr_p1 hs_paid_by_mc_1yr_p1 ///
+local outcomes core_to_dod_1yr_p1 hs_admit_p12m_p1 ind_em_ur_adm_p12m_p1 ///
+ip_paid_by_mc_1yr_p1 snf_paid_by_mc_1yr_p1 hh_paid_by_mc_1yr_p1 hs_paid_by_mc_1yr_p1 ///
 pb_paid_by_mc_1yr_p1 op_paid_by_mc_1yr_p1 dm_paid_by_mc_1yr_p1 tot_paid_by_mc_1yr_p1 n_hospd_p12m_p1
 
 mat p1_meet=J(13,8,.)
@@ -6431,20 +6403,12 @@ foreach crit in a b{
 	
 	foreach resp in 1 0{
 		local r=2
-			foreach v in `outcome1'{
+			foreach v in `outcomes'{
 			sum `v' if criteria_`crit'_p1==`resp', detail
 			mat p1_meet[`r',`col']=r(mean)
-			mat p1_meet[`r',`col'+1]=r(sd)
-			local r=`r'+1 //populates rows 2-4 for indicator variable outcomes
+			mat p1_meet[`r',`col'+1]=r(p50)
+			local r=`r'+1
 			}
-
-		local r=5
-			foreach v in `outcome2'{
-				sum `v' if criteria_`crit'_p1==`resp', detail
-				mat p1_meet[`r',`col']=r(mean)
-				mat p1_meet[`r',`col'+1]=r(p50)
-				local r=`r'+1 //populates rows 8-13 for continuous variables
-				}
 		local col = `col'+2		
 		}
 			

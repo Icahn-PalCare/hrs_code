@@ -5165,8 +5165,8 @@ clear all
 set mem 500m
 set more off
 
-local crit a
-//local crit b
+//local crit a
+local crit b
 
 local logpath E:\data\serious_ill\logs
 local datapath E:\data\serious_ill\final_data
@@ -5295,6 +5295,16 @@ tab ind_x_interview core_year_n0 if core_to_dod_1yr_n0==1, missing
 //385 are 2010 n0 interviews, so won't have b/c no 2012 ivws in dataset
 tab core_year_n0 if ind_p1_interview==0 & core_to_dod_2yr_n0==0
 tab core_year_n0 exit_year_x if ind_x_interview==1 & ind_p1_interview==0 & core_to_dod_2yr_n0==0, missing
+
+*******************************************************************
+//indicator that meet criteria at the first interview where we can tell
+gen meet_crit_first = 0
+replace meet_crit_first=1 if ind_n1_interview==0 //no n1 interview
+replace meet_crit_first=1 if ind_n1_interview==1 & (part_ab_12m_n1==0 | hmo_d_12m_n1==1) //have n1 but not ffs mc
+replace meet_crit_first=1 if ind_n1_interview==1 & (part_ab_12m_n1==. | hmo_d_12m_n1==.) //have n1 but no denominator file
+la var meet_crit_first "Meet criteria first interview with full information"
+tab meet_crit_first , missing
+tab meet_crit_first if core_year_n0<2010, missing
 
 *******************************************************************
 //cleaning up date of death variable!
@@ -6002,8 +6012,6 @@ tab c_ivw_year_p1 if (core_to_dod_2yr_n0==0 & ind_p1_interview==1 & (part_ab_12m
 		
 	clear
 }
-
-
 	 
 frmttable using "`logpath'\sic_Tables_5_outcomes_crit_a_and_b", statmat(p1_crit) ///
 title("Meet criteria in p1 interview")  ///
@@ -6095,6 +6103,101 @@ ctitles("" "Criteria A" "Criteria B" \ "" "n" "n" \ "" "(percent)" "(percent)" )
 note("Criteria A = Any serious medical illness or ADL impairment" \ ///
 "Criteria B = Criteria A and Urgent / Emergent hospitalization or NH resident") ///
 substat(1) sdec(0\1) addtable
+
+***************************************************************
+***************************************************************
+//Look at 1 year n0 outcomes of those that meet 1st ivw and those that don't
+cd `datapath'
+
+local outcome1 core_to_dod_1yr_n0 hs_admit_p12m_n0 ind_em_ur_adm_p12m_n0
+
+local outcome2 ip_paid_by_mc_1yr_n0 snf_paid_by_mc_1yr_n0 hh_paid_by_mc_1yr_n0 hs_paid_by_mc_1yr_n0 ///
+pb_paid_by_mc_1yr_n0 op_paid_by_mc_1yr_n0 dm_paid_by_mc_1yr_n0 tot_paid_by_mc_1yr_n0 n_hospd_p12m_n0
+
+mat meet_1st_a=J(13,6,.)
+mat meet_1st_b=J(13,6,.)
+
+
+foreach crit in a b{
+	clear
+	use n0_n1_p1_p2_x_criteria_`crit'_v1.dta if core_year_n0<2010
+	rename ser_med_illness_n0 criteria_a_n0
+	
+	//overall sample outcomes rows
+	sum core_year_n0
+	mat meet_1st_`crit'[1,1]=r(N) //overall n
+	
+	local r=2
+			foreach v in `outcome1'{
+			sum `v', detail
+			mat meet_1st_`crit'[`r',1]=r(mean)
+			mat meet_1st_`crit'[`r',2]=r(sd)
+			local r=`r'+1 //populates rows 2-4 for indicator variable outcomes
+			}
+
+	local r=5
+		foreach v in `outcome2'{
+			sum `v', detail
+			mat meet_1st_`crit'[`r',1]=r(mean)
+			mat meet_1st_`crit'[`r',2]=r(p50)
+			local r=`r'+1 //populates rows 8-13 for continuous variables
+			}
+			
+	local col = 3				
+	tab meet_crit_first, missing matcell(n0_1)
+	mat meet_1st_`crit'[1,`col']=n0_1[2,1] //n who meet 1st interview
+	mat meet_1st_`crit'[1,`col'+2]=n0_1[1,1] //n who do not meet 1st interview	
+//for those that meet 1st interview and those that don't	
+	foreach resp in 1 0{
+		local r=2
+			foreach v in `outcome1'{
+			sum `v' if meet_crit_first==`resp', detail
+			mat meet_1st_`crit'[`r',`col']=r(mean)
+			mat meet_1st_`crit'[`r',`col'+1]=r(sd)
+			local r=`r'+1 //populates rows 2-4 for indicator variable outcomes
+			}
+
+		local r=5
+			foreach v in `outcome2'{
+				sum `v' if meet_crit_first==`resp', detail
+				mat meet_1st_`crit'[`r',`col']=r(mean)
+				mat meet_1st_`crit'[`r',`col'+1]=r(p50)
+				local r=`r'+1 //populates rows 8-13 for continuous variables
+				}
+		local col = `col'+2		
+		}
+			
+}
+
+mat list meet_1st_a
+mat list meet_1st_b
+
+frmttable , statmat(meet_1st_a) ///
+title("1 year outcomes by if meet criteria 1st interview")  ///
+rtitles("Overall n"\""\ "Died"\""\ "Hospice admit" \ "" \ "Hospital admit" \ "" \ ///
+"IP Medicare" \""\ "SNF Medicare" \""\ "HH Medicare" \""\ "Hospice Medicare" \ "" \ ///
+"Carrier Medicare" \""\ "OP Medicare" \ "" \ "DME Medicare" \ "" \ "Total Medicare payments" \ ""\ ///
+"Number hospitalizations" \ ""  ) ///
+ctitles("" "Criteria A" "" "" \ ///
+"" "Overall" "Meet 1st ivw" "Do not meet 1st ivw"  \ ///
+"" "mean" "" "" \ "" "(median)" "") ///
+note("Criteria A = Any serious medical illness or ADL impairment" \ ///
+"Criteria B = Criteria A and Urgent / Emergent hospitalization or NH resident" \ ///
+"Outcomes are for 1 year after the p1 interview.") ///
+substat(1) sdec(2\0)
+
+frmttable using "`logpath'\sic_Tables_5_outcomes_crit_a_and_b", ///
+statmat(meet_1st_b)  ///
+rtitles("Overall n"\""\ "Died"\""\ "Hospice admit" \ "" \ "Hospital admit" \ "" \ ///
+"IP Medicare" \""\ "SNF Medicare" \""\ "HH Medicare" \""\ "Hospice Medicare" \ "" \ ///
+"Carrier Medicare" \""\ "OP Medicare" \ "" \ "DME Medicare" \ "" \ "Total Medicare payments" \ ""\ ///
+"Number hospitalizations" \ ""  ) ///
+ctitles("" "Criteria B" "" "" \ ///
+"" "Overall" "Meet 1st ivw" "Do not meet 1st ivw"  \ ///
+"" "" "" "" \ "" "" "") ///
+substat(1) sdec(2\0) merge addtable
+
+clear	 
 
 ***************************************************************
 **Check outcomes across each part of the various criteria

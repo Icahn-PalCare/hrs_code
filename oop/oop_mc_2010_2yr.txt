@@ -6940,8 +6940,7 @@ foreach v in `toadj'{
 
 	reg `v' i.age_at_death_cat i.black i.hisp_eth i.female_x
 
-	predict xb_`v'
-	gen resid_`v' = `v' - xb_`v'
+	predict resid_`v', residual
 
 	gen adj_`v'=mean_`v'+resid_`v'
 	sum adj_`v', detail
@@ -6972,10 +6971,355 @@ sum adj_total_nh_costs_60m, detail
 sum adj_total_costs_60m, detail
 ********************************************************************
 
-//save the dataset at thise point, create tables by quintile in the next header section
+//save the dataset at this point, create tables by quintile in the next header section
 save oop_mc_sample_adj_age_etc.dta, replace
 ********************************************************************
 log close
 
 
 H="Quintile spending 5yr EOL adjusted"
+/*This section creates tables by DA 2 year EOL HRR quintiles
+of age,sex, race adjusted 5 year EOL spending per the HRS dataset
+
+Also creates pie charts comparing the spending across quintiles*/
+
+capture log close
+clear all
+set mem 500m
+set more off
+
+local logpath E:\data\hrs_oop_2010\logs
+local datapath E:\data\hrs_oop_2010\final_data
+//local logpath H:\OOP\local_logs
+//local datapath C:\Users\gorger01\Desktop\oop
+
+log using `logpath'\11-mc_oop_5yr_adjust_quintiles-LOG.txt, text replace
+
+cd `datapath'
+
+use oop_mc_sample_adj_age_etc.dta
+**************************************************
+//Create tables of spending by quintile, overall sample (unadjusted)
+local spvars age_at_death_e adj_total_costs_60m adj_tot_gov_pay_5yr adj_tot_paid_by_mc_5yr_wi adj_ip_paid_by_mc_5yr_wi adj_snf_paid_by_mc_5yr_wi adj_hh_paid_by_mc_5yr_wi ///
+adj_hs_paid_by_mc_5yr_wi adj_pb_paid_by_mc_5yr_wi adj_op_paid_by_mc_5yr_wi ///
+adj_dm_paid_by_mc_5yr_wi adj_total_oop_60m adj_helper_oop_60m adj_hospital_oop_60m adj_nh_oop_60m ///
+adj_doctor_oop_60m adj_rx_oop_60m adj_insurance_costs_60m adj_other_oop_60m nh_nights_60m ///
+adj_nh_cost_medicaid_60m adj_nh_cost_private_60m adj_total_nh_costs_60m adj_inf_care_costs_60m ///
+medicaid_x
+
+mat mean_adj1 = J(26,10,.)
+
+//first row - get n each quintile
+local c=1
+forvalues i=1/5{
+sum exit_year_x if(quintile_dm_2yr==`i')
+mat mean_adj1[1,`c'] = r(N)
+local c = `c'+2
+}
+
+local r=2
+foreach v in `spvars' {
+	local c=1
+	forvalues i = 1/5 {
+		sum(`v') if(quintile_dm_2yr==`i'), detail
+		mat mean_adj1[`r',`c'] = r(mean)
+		mat mean_adj1[(`r'),`c'+1] = r(p50)
+		local c = `c' + 2
+	}
+	local r=`r'+1
+}
+
+//for medicaid percent, multiply mean by 100
+forvalues c = 1/10{
+mat mean_adj1[`r'-1,`c']=mean_adj1[`r'-1,`c']*100	
+}	
+
+mat rownames mean_adj1= "N" "Age at death" "Total payments, all types" "Total government payments" ///
+"Total Medicare payments" "Medicare IP" "Medicare SNF" "Medicare HH" ///
+"Medicare Hospice" "Medicare Carrier" "Medicare OP" "Medicare DME" ///
+"OOP Total" "OOP Helper" "OOP Hospital" "OOP NH" "OOP Doctor" "OOP Rx" ///
+"OOP Insurance Costs" "OOP Other" ///
+"Total NH nights, SR or claims" "Medicaid NH Payments" ///
+"Private payer NH Payments" "Total NH costs, all payers" "Imputed informal care costs" "Medicaid at death? (percent)"
+
+mat list mean_adj1
+
+frmttable using "`logpath'\11-Adj_5yr_HRR_Quintiles" , statmat(mean_adj1) ///
+	title("Five Year EOL Spending by Quintiles of HRR-level Medicare EOL Spending" \ ///
+	"(within this sample) Adjusted for age, race, gender") ///
+	ctitle("","Quintile 1 (lowest)", "2", "3", "4", "5 (highest)") ///
+	note("Medicare spending totals are adjusted for the 2010 CMS wage index" \ ///
+	"All $ values adjusted for inflation to 2010$" \ ///
+	"Spending amounts are adjusted using linear regression for age (5 year categories)" \ ///
+	"gender and race (black, hispanic, other." \ ///
+	"Total government payments = Medicare + Medicaid nursing home" \ ///
+	"Total NH spending = Medicare + OOP + Medicaid or Private Payer" \ ///
+	"Informal caregivers are spouses and other unpaid (mainly children), replacement wage imputation")  ///
+	sdec(0) substat(1) replace
+************************************************************
+//Now create quintile tables for each of the 4 disease groups
+foreach d in pr_dem_gt50 cancer_grp heartdis_grp other_grp{
+	mat mean_`d' = J(26,10,.)
+
+	//first row - get n each quintile
+	local c=1
+	forvalues i=1/5{
+		sum exit_year_x if(quintile_dm_2yr==`i' & `d'==1)
+		mat mean_`d'[1,`c'] = r(N)
+		local c = `c'+2
+		}
+
+	local r=2
+	foreach v in `spvars' {
+		local c=1
+		forvalues i = 1/5 {
+			sum(`v') if(quintile_dm_2yr==`i'& `d'==1), detail
+			mat mean_`d'[`r',`c'] = r(mean)
+			mat mean_`d'[(`r'),`c'+1] = r(p50)
+			local c = `c' + 2
+		}
+		local r=`r'+1
+	}
+
+	//for medicaid percent, multiply mean by 100
+	forvalues c = 1/10{
+		mat mean_`d'[`r'-1,`c']=mean_`d'[`r'-1,`c']*100	
+	}	
+
+mat rownames mean_`d'= "N" "Age at death" "Total payments, all types" "Total government payments" "Total Medicare payments" ///
+"Medicare IP" "Medicare SNF" "Medicare HH" "Medicare Hospice" "Medicare Carrier" "Medicare OP"  ///
+"Medicare DME" "OOP Total" "OOP Helper" "OOP Hospital" "OOP NH" "OOP Doctor" "OOP Rx" ///
+"OOP Insurance Costs" "OOP Other" ///
+"Total NH nights, SR or claims" "Medicaid NH Payments" "Private payer NH Payments" ///
+"Total NH costs, all payers" "Imputed informal care costs" "Medicaid at death? (percent)"
+
+mat list mean_`d'
+
+frmttable using "`logpath'\911-Adj_5yr_HRR_Quintiles" , statmat(mean_`d') ///
+	title("`d' Five Year EOL Spending by Quintiles of HRR-level Medicare EOL Spending" \ ///
+	"(within this sample) Adjusted for age, race, gender") ///
+	ctitle("","Quintile 1 (lowest)", "2", "3", "4", "5 (highest)") ///
+	note("Medicare spending totals are adjusted for the 2010 CMS wage index" \ ///
+	"All $ values adjusted for inflation to 2010$" \ ///
+	"Spending amounts are adjusted using linear regression for age (5 year categories)" \ ///
+	"gender and race (black, hispanic, other." \ ///
+	"Total government payments = Medicare + Medicaid nursing home" \ ///
+	"Total NH spending = Medicare + OOP + Medicaid or Private Payer" \ ///
+	"Informal caregivers are spouses and other unpaid (mainly children), replacement wage imputation")  ///
+	sdec(0) substat(1) addtable
+
+}
+************************************************************
+//Create single table looking at the high/low quintiles 
+//for each of the disease groups for an easier comparison
+mat mean_hilo = J(26,16,.)
+
+
+//first row - get n each quintile
+local c=1
+foreach d in pr_dem_gt50 cancer_grp heartdis_grp other_grp{	
+	foreach i of numlist 1 5{
+		sum exit_year_x if(quintile_dm_2yr==`i' & `d'==1)
+		mat mean_hilo[1,`c'] = r(N)
+		local c = `c'+2
+		}
+}
+
+local r=2
+
+foreach v in `spvars' {
+		local c=1
+		foreach i of numlist 1 5{
+			sum(`v') if(quintile_dm_2yr==`i'& pr_dem_gt50==1), detail
+			mat mean_hilo[`r',`c'] = r(mean)
+			mat mean_hilo[(`r'),`c'+1] = r(p50)
+		
+			sum(`v') if(quintile_dm_2yr==`i'& cancer_grp==1), detail
+			mat mean_hilo[`r',`c'+4] = r(mean)
+			mat mean_hilo[(`r'),`c'+5] = r(p50)
+		
+			sum(`v') if(quintile_dm_2yr==`i'& heartdis_grp==1), detail
+			mat mean_hilo[`r',`c'+8] = r(mean)
+			mat mean_hilo[(`r'),`c'+9] = r(p50)
+
+			sum(`v') if(quintile_dm_2yr==`i'& other_grp==1), detail
+			mat mean_hilo[`r',`c'+12] = r(mean)
+			mat mean_hilo[(`r'),`c'+13] = r(p50)
+		
+			local c = `c' + 2		
+		}
+		local r=`r'+1
+}
+
+
+	//for medicaid percent, multiply mean by 100
+	forvalues c = 1/16{
+		mat mean_hilo[`r'-1,`c']=mean_hilo[`r'-1,`c']*100		
+}
+mat list mean_hilo
+
+mat rownames mean_hilo= "N" "Age at death" "Total payments, all types" "Total government payments" "Total Medicare payments" ///
+"Medicare IP" "Medicare SNF" "Medicare HH" "Medicare Hospice" "Medicare Carrier" "Medicare OP"  ///
+"Medicare DME" "OOP Total" "OOP Helper" "OOP Hospital" "OOP NH" "OOP Doctor" "OOP Rx" ///
+"OOP Insurance Costs" "OOP Other" ///
+"Total NH nights, SR or claims" "Medicaid NH Payments" "Private payer NH Payments" ///
+"Total NH costs, all payers" "Imputed informal care costs" "Medicaid at death? (percent)"
+
+mat list mean_hilo
+
+frmttable using "`logpath'\11-Adj_5yr_HRR_Quintiles" , statmat(mean_hilo) ///
+	title("1 / 5th Quintile 5yr EOL Spending for the 4 disease groups" \ ///
+	"(Quintiles DA 2y EOL MC spending within this sample) Adjusted for age, race, gender") ///
+	ctitle("","Dementia","","Cancer","","Heart Disease","","Other disease","" \ ///
+	"","Q1","Q5","Q1","Q5","Q1","Q5","Q1","Q5") ///
+	note("Medicare spending totals are adjusted for the 2010 CMS wage index" \ ///
+	"All $ values adjusted for inflation to 2010$" \ ///
+	"Spending amounts are adjusted using linear regression for age (5 year categories)" \ ///
+	"gender and race (black, hispanic, other." \ ///
+	"Total government payments = Medicare + Medicaid nursing home" \ ///
+	"Total NH spending = Medicare + OOP + Medicaid or Private Payer" \ ///
+	"Informal caregivers are spouses and other unpaid (mainly children), replacement wage imputation")  ///
+	sdec(0) substat(1) landscape addtable
+
+
+************************************************************
+//Pie charts of spending by category by quintile and disease group
+//OA sample
+//local logpath H:\OOP\local_logs
+cd "`logpath'\graphs"
+//OA sample - all disease groups included
+sum adj_total_costs_60m
+sca oa_tot=r(mean)
+local oatot = round(oa_tot)
+di `oatot'
+
+local slices adj_tot_paid_by_mc_5yr_wi adj_nh_cost_medicaid_60m adj_nh_cost_private_60m ///
+adj_total_oop_60m adj_inf_care_costs_60m
+
+//relabel spending categories so labels can be used in the legends
+la var adj_tot_paid_by_mc_5yr_wi "Adj Medicare"
+la var adj_nh_cost_medicaid_60m "Adj Medicaid NH"
+la var adj_nh_cost_private_60m "Adj Private Payer NH"
+la var adj_total_oop_60m "Adj OOP"
+la var adj_inf_care_costs_60m "Adj Informal care"
+
+graph pie `slices' ///
+, plabel(_all percent) subtitle("Overall, All Q's",ring(0) position(11)) ///
+	note("Total 5y EOL" "spending=`oatot'",ring(0) position(7)) legend(cols(3))
+graph save adj_oa_spend, replace
+
+forvalues i=1/5{ 
+sum adj_total_costs_60m if quintile_dm_2yr ==`i'
+sca oa_q_`i'=r(mean)
+local oa_q`i' = round(oa_q_`i')
+
+graph pie `slices' ///
+if quintile_dm_2yr ==`i' , plabel(_all percent) subtitle("Overall, Q-`i'",ring(0) position(11)) ///
+	note("Total 5y EOL" "spending=`oa_q`i''",ring(0) position(7))	
+graph save adj_oa_quint_`i', replace
+}
+//Dementia sample
+sum adj_total_costs_60m if pr_dem_gt50==1
+sca d_all=r(mean)
+local d_all = round(d_all)
+	
+graph pie `slices' ///
+if pr_dem_gt50==1, plabel(_all percent) subtitle("Dementia, All Q's",ring(0) position(11)) ///
+note("Total 5y EOL" "spending=`d_all'",ring(0) position(7))
+graph save adj_pr_dem_gt50_spend, replace
+
+forvalues i=1/5{
+	sum adj_total_costs_60m if  pr_dem_gt50==1 & quintile_dm_2yr ==`i'
+	sca d_q_`i'=r(mean)
+	local d_q`i' = round(d_q_`i')
+
+	graph pie `slices' ///
+	if pr_dem_gt50==1 & quintile_dm_2yr ==`i' , plabel(_all percent)  ///
+	subtitle("Dementia, Q-`i'",ring(0) position(11)) ///
+	note("Total 5y EOL" "spending=`d_q`i''",ring(0) position(7))	
+	graph save adj_pr_dem_gt50_quint_`i', replace
+}
+
+//Cancer sample
+sum adj_total_costs_60m if cancer_grp==1
+sca c_all=r(mean)
+local c_all = round(c_all)
+
+graph pie `slices' ///
+if cancer_grp==1, plabel(_all percent) subtitle("Cancer, All Q's",ring(0) position(11)) ///
+note("Total 5y EOL" "spending=`c_all'",ring(0) position(7))
+graph save adj_cancer_grp_spend, replace
+
+forvalues i=1/5{ 
+	sum adj_total_costs_60m if  cancer_grp==1 & quintile_dm_2yr ==`i'
+	sca c_q_`i'=r(mean)
+	local c_q`i' = round(c_q_`i')
+
+	graph pie `slices' ///
+	if cancer_grp==1 & quintile_dm_2yr ==`i' , plabel(_all percent) ///
+	subtitle("Cancer, Q-`i'",ring(0) position(11)) ///
+	note("Total 5y EOL" "spending=`c_q`i''",ring(0) position(7))
+	graph save adj_cancer_grp_quint_`i', replace
+}
+
+//Heart disease sample
+sum adj_total_costs_60m if heartdis_grp==1
+sca h_all=r(mean)
+local h_all = round(c_all)
+
+graph pie `slices' ///
+if heartdis_grp==1, plabel(_all percent) subtitle("Heart Disease, All Q's",ring(0) position(11)) ///
+note("Total 5y EOL" "spending=`h_all'",ring(0) position(7))
+graph save adj_heartdis_grp_spend, replace
+
+forvalues i=1/5{ 
+	sum adj_total_costs_60m if  heartdis_grp==1 & quintile_dm_2yr ==`i'
+	sca h_q_`i'=r(mean)
+	local h_q`i' = round(h_q_`i')
+	
+	graph pie `slices' ///
+	if heartdis_grp==1 & quintile_dm_2yr ==`i' , plabel(_all percent) ///
+	subtitle("Heart Disease, Q-`i'",ring(0) position(11)) ///
+	note("Total 5y EOL" "spending=`h_q`i''",ring(0) position(7))
+	graph save adj_heartdis_grp_quint_`i', replace
+}
+
+//Other diseases sample
+sum adj_total_costs_60m if other_grp==1
+sca o_all=r(mean)
+local o_all = round(o_all)
+
+graph pie `slices' ///
+if other_grp==1, plabel(_all percent) subtitle("Other disease, All Q's",ring(0) position(11)) ///
+note("Total 5y EOL" "spending=`o_all'",ring(0) position(7))
+graph save adj_other_grp_spend, replace
+
+forvalues i=1/5{ 
+	sum adj_total_costs_60m if  other_grp==1 & quintile_dm_2yr ==`i'
+	sca o_q_`i'=r(mean)
+	local o_q`i' = round(o_q_`i')
+	
+	graph pie `slices' ///
+	if other_grp==1 & quintile_dm_2yr ==`i' , plabel(_all percent) ///
+	subtitle("Other disease, Q-`i'",ring(0) position(11)) ///
+	note("Total 5y EOL" "spending=`o_q`i''",ring(0) position(7))	
+	graph save adj_other_grp_quint_`i', replace
+}
+
+cd `logpath'\graphs
+
+grc1leg adj_oa_spend.gph adj_oa_quint_1.gph adj_oa_quint_2.gph adj_oa_quint_3.gph adj_oa_quint_4.gph adj_oa_quint_5.gph ///
+ adj_pr_dem_gt50_spend.gph adj_pr_dem_gt50_quint_1.gph adj_pr_dem_gt50_quint_2.gph adj_pr_dem_gt50_quint_3.gph ///
+ adj_pr_dem_gt50_quint_4.gph adj_pr_dem_gt50_quint_5.gph ///
+ adj_cancer_grp_spend.gph adj_cancer_grp_quint_1.gph adj_cancer_grp_quint_2.gph adj_cancer_grp_quint_3.gph ///
+ adj_cancer_grp_quint_4.gph adj_cancer_grp_quint_5.gph ///
+ adj_heartdis_grp_spend.gph adj_heartdis_grp_quint_1.gph adj_heartdis_grp_quint_2.gph adj_heartdis_grp_quint_3.gph ///
+ adj_heartdis_grp_quint_4.gph adj_heartdis_grp_quint_5.gph ///
+ adj_other_grp_spend.gph adj_other_grp_quint_1.gph adj_other_grp_quint_2.gph adj_other_grp_quint_3.gph ///
+ adj_other_grp_quint_4.gph adj_other_grp_quint_5.gph, ///
+  col(6)
+graph save adj_panel_quint_1leg, replace
+graph export adj_panel_quint_1leg.tif, replace
+
+*********************************************************
+log close

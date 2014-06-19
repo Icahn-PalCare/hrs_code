@@ -3747,6 +3747,154 @@ log close
 
 
 H="Step 8aa - Determine ffs medicare 1 year after interview"
+/*This section checks for ffs medicare the 1 year after each
+core interview or until death if that is within 1 year. 
+This will be a check when looking at the 1 year
+outcomes to make sure we have full claims datasets 
+in the 1 year post-interview
+*/
+
+/*get list of beneficiaries that meet the criteria 1yr pre interview*/
+proc sql;
+create table meet_pre(keep=id bid_hrs c_ivw_year c_ivw_month 
+	c_ivw_date core_year death_date core_to_death) as 
+select * from sic_int.core_ids_1yr_criteria_5
+where age_ge_65=1 and xwalk_yes=1 and part_ab_12m=1 and hmo_d_12m=0 
+and core_year in (2000,2002,2004,2006,2008,2010);
+quit;
+
+/*get months from core until death date where relevant*/
+data meet_pre2;
+set meet_pre;
+*core_to_death is years so convert to months;
+if core_to_death<=(1 + 1/12) then core_to_death_mos = floor((death_date-c_ivw_date) / 30.5);
+run;
+
+proc freq; table core_to_death_mos; run;
+
+proc sort data=medi.dn_2000_2010 out=dn_2000_20102  nodupkey;
+by BID_HRS_19 year;
+run;
+
+/*get medicare and hmo status variables from the dn file
+for the year of the core interview*/
+proc sql;
+create table dn_core_y as select
+a.*,b.buyin12,b.year,b.HMOIND12
+from meet_pre2 a inner join
+dn_2000_20102 b
+on trim(left(a.BID_hrs))=trim(left(b.BID_hrs_19))
+and a.c_ivw_year=b.year;
+quit;
+
+proc freq data=dn_core_y ;
+table c_ivw_year c_ivw_month ;
+run;
+
+/*##### r's have at least 1 interview with a denominator file linked*/
+proc sql;
+select count(distinct BID_hrs) from dn_core_y ;
+quit;
+
+/*trim variables to show status month of interview and later
+these are all interviews with full info 12m before, so don't 
+have to check for missing months in the variable*/
+data dn_core_y2;
+set dn_core_y;
+if length(trim(left(buyin12)))=12 and c_ivw_month>0 then do;
+buyin_dy=substr(trim(left(buyin12)),c_ivw_month,(13-c_ivw_month));
+hmo_dy=substr(trim(left(HMOIND12)),c_ivw_month,(13-c_ivw_month));
+end;
+else do;
+buyin_dy=trim(left(buyin12));
+hmo_dy=trim(left(HMOIND12));
+end;
+format c_ivw_date date9.;
+run;
+proc means n;
+var  c_ivw_month;
+run;
+
+/*Get info for year after interview to fill in remainder of the 12m period*/
+/*n=#### have +1 year dn file*/
+proc sql;
+create table dn_core_y_aft as select
+a.BID_hrs,a.c_ivw_year ,
+b.year as c_ivw_year_aft,
+b.year,b.buyin12,b.HMOIND12
+from dn_core_y a inner join
+dn_2000_20102 b
+on trim(left(a.BID_hrs))=trim(left(b.BID_hrs_19))
+and -1<=a.c_ivw_year-b.year<=0 order by bid_hrs,c_ivw_year;
+quit;
+
+proc sql;
+create table all_insurance as select a.*,b.year as year_aft_civw, 
+b.buyin12 as buyin_aft,b.HMOIND12 as hmo_aft from
+dn_core_y2 a
+left join
+dn_core_y_aft b
+on trim(left(a.BID_hrs))=trim(left(b.BID_hrs)) 
+and a.c_ivw_year=b.c_ivw_year;
+quit;
+
+proc freq data=all_insurance;
+table c_ivw_year*year_aft_civw /missprint;
+run;
+
+/*merge interview year and year after interview buy-in and hmo variables
+Trim so the final variable _12m is 12 months post-interview
+Note: indicator variables for parts a and b and hmo are null if don't
+have information for full 12 months post-interview*/
+data all_insurance2;
+set all_insurance;
+buyin_2y=trim(left(buyin_dy))||trim(left(buyin_aft));
+hmo_2y=trim(left(hmo_dy))||trim(left(hmo_aft));
+
+*************************************************;
+** 12 month variables                          **;
+*************************************************;
+if length(buyin_2y)>12 then buyin_12m=substr(trim(left(buyin_2y)),1,13);
+if length(hmo_2y)>12 then hmo_12m=substr(trim(left(hmo_2y)),1,13);
+
+if length(buyin_2y)<13 & core_to_death_mos>=13 then buyin_12m="";
+if length(hmo_2y)<13 & core_to_death_mos>=13 then hmo_12m="";
+
+if length(buyin_2y)<13 & core_to_death_mos<13 then 
+	buyin_12m=substr(trim(left(buyin_2y)),1,core_to_death_mos);
+if length(hmo_2y)<13 & core_to_death_mos<13 then 
+	hmo_12m=substr(trim(left(hmo_2y)),1,core_to_death_mos);
+
+
+/*create indicator variable for mc coverage 12 mo. 0=no, 1=yes*/
+if length(buyin_12m)!=. then do;
+if indexc(buyin_12m,"0","1","2","A","B") then part_ab_12m_aft=0;
+if indexc(buyin_12m,"0","1","2","A","B")=0 then part_ab_12m_aft=1;
+end;
+if length(hmo_12m)!=. then do;
+if indexc(hmo_12m,"1","2","A","B","C") then hmo_d_12m_aft=1;
+if indexc(hmo_12m,"1","2","A","B","C")=0 then hmo_d_12m_aft=0;
+end;
+
+run;
+
+proc freq;
+table part_ab_12m_aft hmo_d_12m_aft ; 
+run;
+
+/*bring indicators into the main dataset*/
+proc sql;
+create table sic_int.core_ids_1yr_criteria_6 as select a.*,b.part_ab_12m_aft,b.hmo_d_12m_aft
+ from
+sic_int.core_ids_1yr_criteria_5 a left join
+all_insurance2 b
+on a.bid_hrs=b.bid_hrs and a.c_ivw_year=b.c_ivw_year;
+quit;
+
+proc freq data=sic_int.core_ids_1yr_criteria_6 ;
+table part_ab_12m_aft*part_ab_12m hmo_d_12m_aft*hmo_d_12m /missprint;
+run;
+
 
 
 H="Step 8a - Determine outcomes after meet criteria"
@@ -3769,7 +3917,7 @@ run;*/
 /*ids of those interviews with ffs medicare year preceding interview and 65+*/
 proc sql;
 create table age_ge_65_mc as 
-select * from sic_int.core_ids_1yr_criteria_5
+select * from sic_int.core_ids_1yr_criteria_6 
 where age_ge_65=1 and xwalk_yes=1 and part_ab_12m=1 and hmo_d_12m=0 
 and core_year in (2000,2002,2004,2006,2008,2010);
 quit;
@@ -4858,13 +5006,13 @@ zip_0: zip_10: zip_98: first_ivw_year last_ivw_year restr_yes dod_claims cause_d
 run;
 
 data core_all_drop;
-set sic_int.core_ids_1yr_criteria_5(drop=birth_date death_date white black hisp_eth native_amer 
+set sic_int.core_ids_1yr_criteria_6(drop=birth_date death_date white black hisp_eth native_amer 
 asian_pi other_race other_na_api_race  
 zip_0: zip_10: zip_98: first_ivw_year last_ivw_year restr_yes dod_claims cause_death_12_n);
 run;
 
 data core_educ_only;
-set sic_int.core_ids_1yr_criteria_5(keep=id core_year c_ivw_date educ);
+set sic_int.core_ids_1yr_criteria_6(keep=id core_year c_ivw_date educ);
 run;
 
 *note interview counts listed are for criteria a dataset, they are different for criteria b;

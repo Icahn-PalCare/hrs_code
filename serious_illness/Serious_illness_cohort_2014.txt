@@ -3754,7 +3754,7 @@ outcomes to make sure we have full claims datasets
 in the 1 year post-interview
 */
 
-/*get list of beneficiaries that meet the criteria 1yr pre interview*/
+/*get list of beneficiaries that meet the sample criteria 1yr pre interview*/
 proc sql;
 create table meet_pre(keep=id bid_hrs c_ivw_year c_ivw_month 
 	c_ivw_date core_year death_date core_to_death) as 
@@ -3767,7 +3767,14 @@ quit;
 data meet_pre2;
 set meet_pre;
 *core_to_death is years so convert to months;
-if core_to_death<=(1 + 1/12) then core_to_death_mos = floor((death_date-c_ivw_date) / 30.5);
+if death_date~=. then do;
+	death_mo = month(death_date);
+	death_yr = year(death_date);
+	if death_yr=c_ivw_year then core_to_death_mos=death_mo-c_ivw_month+1;
+	if death_yr=1+c_ivw_year then core_to_death_mos=death_mo+(13-c_ivw_month);
+end; 
+*if core_to_death<=(1 + 1/12) & core_to_death~=. then core_to_death_mos = floor((death_date-c_ivw_date) / 30.5);
+*if core_to_death_mos<0 & core_to_death_mos~=. then core_to_death_mos=0;
 run;
 
 proc freq; table core_to_death_mos; run;
@@ -3791,7 +3798,7 @@ proc freq data=dn_core_y ;
 table c_ivw_year c_ivw_month ;
 run;
 
-/*##### r's have at least 1 interview with a denominator file linked*/
+/*10882 r's have at least 1 interview with a denominator file linked*/
 proc sql;
 select count(distinct BID_hrs) from dn_core_y ;
 quit;
@@ -3816,7 +3823,7 @@ var  c_ivw_month;
 run;
 
 /*Get info for year after interview to fill in remainder of the 12m period*/
-/*n=#### have +1 year dn file*/
+/*n=27613 have +1 year dn file*/
 proc sql;
 create table dn_core_y_aft as select
 a.BID_hrs,a.c_ivw_year ,
@@ -3825,7 +3832,7 @@ b.year,b.buyin12,b.HMOIND12
 from dn_core_y a inner join
 dn_2000_20102 b
 on trim(left(a.BID_hrs))=trim(left(b.BID_hrs_19))
-and -1<=a.c_ivw_year-b.year<=0 order by bid_hrs,c_ivw_year;
+and -1<=a.c_ivw_year-b.year<0 order by bid_hrs,c_ivw_year;
 quit;
 
 proc sql;
@@ -3842,12 +3849,21 @@ proc freq data=all_insurance;
 table c_ivw_year*year_aft_civw /missprint;
 run;
 
+/*trim year after if its the death year*/
+data data all_insurance1;
+set all_insurance;
+if year_aft_civw=death_yr & year_aft_civw~=. then do;
+	buyin_aft=substr(trim(left(buyin_aft)),1,death_mo);
+	hmo_aft=substr(trim(left(hmo_aft)),1,death_mo);
+end;
+run;
+
 /*merge interview year and year after interview buy-in and hmo variables
 Trim so the final variable _12m is 12 months post-interview
 Note: indicator variables for parts a and b and hmo are null if don't
 have information for full 12 months post-interview*/
 data all_insurance2;
-set all_insurance;
+set all_insurance1;
 buyin_2y=trim(left(buyin_dy))||trim(left(buyin_aft));
 hmo_2y=trim(left(hmo_dy))||trim(left(hmo_aft));
 
@@ -3857,30 +3873,50 @@ hmo_2y=trim(left(hmo_dy))||trim(left(hmo_aft));
 if length(buyin_2y)>12 then buyin_12m=substr(trim(left(buyin_2y)),1,13);
 if length(hmo_2y)>12 then hmo_12m=substr(trim(left(hmo_2y)),1,13);
 
-if length(buyin_2y)<13 & core_to_death_mos>=13 then buyin_12m="";
-if length(hmo_2y)<13 & core_to_death_mos>=13 then hmo_12m="";
+if length(buyin_2y)<13 & core_to_death_mos>=13 & core_to_death_mos~=. then buyin_12m="";
+if length(hmo_2y)<13 & core_to_death_mos>=13 & core_to_death_mos~=. then hmo_12m="";
 
-if length(buyin_2y)<13 & core_to_death_mos<13 then 
+if length(buyin_2y)<13 & 0<core_to_death_mos<13 & core_to_death_mos~=. & length(buyin_2y)>=core_to_death_mos  then 
 	buyin_12m=substr(trim(left(buyin_2y)),1,core_to_death_mos);
-if length(hmo_2y)<13 & core_to_death_mos<13 then 
+if length(hmo_2y)<13 & 0<core_to_death_mos<13 & core_to_death_mos~=. & length(hmo_2y)>=core_to_death_mos then 
 	hmo_12m=substr(trim(left(hmo_2y)),1,core_to_death_mos);
 
-
 /*create indicator variable for mc coverage 12 mo. 0=no, 1=yes*/
-if length(buyin_12m)!=. then do;
-if indexc(buyin_12m,"0","1","2","A","B") then part_ab_12m_aft=0;
-if indexc(buyin_12m,"0","1","2","A","B")=0 then part_ab_12m_aft=1;
+	/*for obs that dont die within the year*/
+if length(buyin_12m)=13 then do;
+	if indexc(buyin_12m,"0","1","2","A","B") then part_ab_12m_aft=0;
+	if indexc(buyin_12m,"0","1","2","A","B")=0 then part_ab_12m_aft=1;
 end;
-if length(hmo_12m)!=. then do;
-if indexc(hmo_12m,"1","2","A","B","C") then hmo_d_12m_aft=1;
-if indexc(hmo_12m,"1","2","A","B","C")=0 then hmo_d_12m_aft=0;
+	/*for obs that do die within the year*/
+else if 0<length(buyin_12m)<=13 & length(buyin_12m)=core_to_death_mos & core_to_death_mos~=. then do;
+	if indexc(buyin_12m,"0","1","2","A","B") then part_ab_12m_aft=0;
+	if indexc(buyin_12m,"0","1","2","A","B")=0 then part_ab_12m_aft=1;
+end;
+
+
+if length(hmo_12m)=13 then do;
+	if indexc(hmo_12m,"1","2","A","B","C") then hmo_d_12m_aft=1;
+	if indexc(hmo_12m,"1","2","A","B","C")=0 then hmo_d_12m_aft=0;
+end;
+
+else if 0<length(hmo_12m)<=13 & length(hmo_12m)=core_to_death_mos & core_to_death_mos~=. then do;
+	if indexc(hmo_12m,"1","2","A","B","C") then hmo_d_12m_aft=1;
+	if indexc(hmo_12m,"1","2","A","B","C")=0 then hmo_d_12m_aft=0;
 end;
 
 run;
 
-proc freq;
+proc freq data=all_insurance2;
 table part_ab_12m_aft hmo_d_12m_aft ; 
 run;
+
+/*part ab, hmo status, all don't have denominator files the year after the interview*/
+data miss_12maft;
+set all_insurance2;
+if hmo_d_12m_aft=.;
+run;
+
+proc freq; table c_ivw_year year_aft_civw /missprint; run;
 
 /*bring indicators into the main dataset*/
 proc sql;
@@ -3895,6 +3931,21 @@ proc freq data=sic_int.core_ids_1yr_criteria_6 ;
 table part_ab_12m_aft*part_ab_12m hmo_d_12m_aft*hmo_d_12m /missprint;
 run;
 
+/*check of ffs medicare 1 year after interview*/
+data check_aft;
+set sic_int.core_ids_1yr_criteria_6;
+if age_ge_65=1 & xwalk_yes=1 & part_ab_12m=1 and hmo_d_12m=0 
+& core_year in (2000,2002,2004,2006,2008,2010);
+run;
+
+/*of n=32718 that meet sample selection criteria year preceding ivw 
+n= 26627 (81.3%) also meet it 1 year after the interview
+
+Many of these are bc they are 2010 interviews that don't have the 2011 denominator
+file to follow up with, they also won't have a full set of claims 1 year
+after the interview*/
+
+proc freq; table part_ab_12m_aft*hmo_d_12m_aft /missprint; run;
 
 
 H="Step 8a - Determine outcomes after meet criteria"
@@ -4466,6 +4517,13 @@ var ip_paid_by_mc_1yr snf_paid_by_mc_1yr hh_paid_by_mc_1yr hs_paid_by_mc_1yr
 pb_paid_by_mc_1yr op_paid_by_mc_1yr dm_paid_by_mc_1yr tot_paid_by_mc_1yr;
 run;
 
+proc means ; class part_ab_12m_aft; var ip_paid_by_mc_1yr snf_paid_by_mc_1yr hh_paid_by_mc_1yr hs_paid_by_mc_1yr
+pb_paid_by_mc_1yr op_paid_by_mc_1yr dm_paid_by_mc_1yr tot_paid_by_mc_1yr;
+run;
+
+proc means ; class hmo_d_12m_aft; var ip_paid_by_mc_1yr snf_paid_by_mc_1yr hh_paid_by_mc_1yr hs_paid_by_mc_1yr
+pb_paid_by_mc_1yr op_paid_by_mc_1yr dm_paid_by_mc_1yr tot_paid_by_mc_1yr;
+run;
 
 
 
@@ -4599,10 +4657,10 @@ run;
 proc freq; table ivw_meet_crit_smiadl;
 run;
 
-/***********    Serious illness and ADL Impairment and Nursing Home Resident    ************/
+/***********    Serious illness and ADL Impairment and Nursing Home Resident (no hospital)   ************/
 data ivw_meet_smiadlnh;
-set sic_int.core_ids_init_outcomes_2(keep=id adl_impair_core ser_med_illness smi_nh_ind core_year) ;
-if ser_med_illness=1 & adl_impair_core=1 & smi_nh_ind=1;
+set sic_int.core_ids_init_outcomes_2(keep=id adl_impair_core ser_med_illness smi_nh_ind ind_em_ur_adm_12m core_year) ;
+if ser_med_illness=1 & adl_impair_core=1 & smi_nh_ind=1 & ind_em_ur_adm_12m=0;
 run;
 
 proc sort data=ivw_meet_smiadlnh;
@@ -4620,10 +4678,10 @@ run;
 proc freq; table ivw_meet_crit_smiadlnh;
 run;
 
-/***********Serious illness and ADL Impairment and Urgent/Emergent Hospitalization************/
+/***********Serious illness and ADL Impairment and Urgent/Emergent Hospitalization (no NH) ************/
 data ivw_meet_smiadlho;
-set sic_int.core_ids_init_outcomes_2(keep=id adl_impair_core ser_med_illness ind_em_ur_adm_12m core_year) ;
-if ser_med_illness=1 & adl_impair_core=1 & ind_em_ur_adm_12m=1;
+set sic_int.core_ids_init_outcomes_2(keep=id adl_impair_core ser_med_illness ind_em_ur_adm_12m smi_nh_ind core_year) ;
+if ser_med_illness=1 & adl_impair_core=1 & ind_em_ur_adm_12m=1 & smi_nh_ind=0 ;
 run;
 
 proc sort data=ivw_meet_smiadlho;
@@ -4641,10 +4699,53 @@ run;
 proc freq; table ivw_meet_crit_smiadlho;
 run;
 
-/***********Serious illness and/or ADL Impairment and Urgent/Emergent Hospitalization************/
+/***********Serious illness and ADL Impairment and Urgent/Emergent Hospitalization and NH ************/
+data ivw_meet_smiadlhonh;
+set sic_int.core_ids_init_outcomes_2(keep=id adl_impair_core ser_med_illness ind_em_ur_adm_12m smi_nh_ind core_year) ;
+if ser_med_illness=1 & adl_impair_core=1 & ind_em_ur_adm_12m=1 & smi_nh_ind=1 ;
+run;
+
+proc sort data=ivw_meet_smiadlhonh;
+by id core_year;
+run;
+
+data ivw_meet_smiadlhonh_1;
+set ivw_meet_smiadlhonh;
+by id;
+if first.id then ivw_meet_crit_smiadlhonh=1;
+else ivw_meet_crit_smiadlhonh=0;
+label ivw_meet_crit_smiadlhonh="Ind. 1st time meets serious med illness + ADL + Hospital + NH";
+run;
+
+proc freq; table ivw_meet_crit_smiadlhonh;
+run;
+
+/***********Serious illness and ADL Impairment and Urgent/Emergent Hospitalization and/or NH ************/
+data ivw_meet_smiadlhonh_or;
+set sic_int.core_ids_init_outcomes_2(keep=id adl_impair_core ser_med_illness ind_em_ur_adm_12m smi_nh_ind core_year) ;
+if ser_med_illness=1 & adl_impair_core=1 & (ind_em_ur_adm_12m=1 | smi_nh_ind=1) ;
+run;
+
+proc sort data=ivw_meet_smiadlhonh_or;
+by id core_year;
+run;
+
+data ivw_meet_smiadlhonh_or_1;
+set ivw_meet_smiadlhonh_or;
+by id;
+if first.id then ivw_meet_crit_smiadlhonh_or=1;
+else ivw_meet_crit_smiadlhonh_or=0;
+label ivw_meet_crit_smiadlhonh_or="Ind. 1st time meets serious med illness + ADL + Hospital +/or NH";
+run;
+
+proc freq; table ivw_meet_crit_smiadlhonh_or;
+run;
+
+
+/***********Serious illness and/or ADL Impairment and Urgent/Emergent Hospitalization (no NH) ************/
 data ivw_meet_aho;
-set sic_int.core_ids_init_outcomes_2(keep=id criteria_a ind_em_ur_adm_12m core_year) ;
-if criteria_a=1 & ind_em_ur_adm_12m=1;
+set sic_int.core_ids_init_outcomes_2(keep=id criteria_a ind_em_ur_adm_12m smi_nh_ind core_year) ;
+if criteria_a=1 & ind_em_ur_adm_12m=1 & smi_nh_ind=0 ;
 run;
 
 proc sort data=ivw_meet_aho;
@@ -4665,8 +4766,9 @@ run;
 
 /***********    Merge indicators into single dataset    ************/
 data crit_all(keep=id core_year ivw_meet_crit_a ivw_meet_crit_b 
-ivw_meet_crit_smi ivw_meet_crit_adl ivw_meet_crit_smiadl ivw_meet_crit_smiadlnh ivw_meet_crit_smiadlho ivw_meet_crit_aho);
-merge ivw_meet_a_1 ivw_meet_b_1 ivw_meet_smi_1 ivw_meet_adl_1 ivw_meet_smiadl_1 ivw_meet_smiadlnh_1 ivw_meet_smiadlho_1 ivw_meet_aho_1;
+ivw_meet_crit_smi ivw_meet_crit_adl ivw_meet_crit_smiadl ivw_meet_crit_smiadlnh ivw_meet_crit_smiadlho 
+ivw_meet_crit_smiadlhonh ivw_meet_crit_smiadlhonh_or ivw_meet_crit_aho);
+merge ivw_meet_a_1 ivw_meet_b_1 ivw_meet_smi_1 ivw_meet_adl_1 ivw_meet_smiadl_1 ivw_meet_smiadlnh_1 ivw_meet_smiadlho_1 ivw_meet_smiadlhonh_1 ivw_meet_smiadlhonh_or_1  ivw_meet_aho_1;
 by id core_year;
 run;
 
@@ -4684,7 +4786,8 @@ quit;
 data sic_int.ivws_crit_1;
 set ivws_crit;
 array list ivw_meet_crit_a ivw_meet_crit_b ivw_meet_crit_smi ivw_meet_crit_adl 
-	ivw_meet_crit_smiadl ivw_meet_crit_smiadlnh ivw_meet_crit_smiadlho ivw_meet_crit_aho ;
+	ivw_meet_crit_smiadl ivw_meet_crit_smiadlnh ivw_meet_crit_smiadlho 
+	ivw_meet_crit_smiadlhonh ivw_meet_crit_smiadlhonh _or ivw_meet_crit_aho ;
 do over list;
 if list=. & comorb_1_0_1yr~=. then list=0;
 end;
@@ -4864,7 +4967,7 @@ frmttable using "`logpath'\sic_Table3_outcomes_ivw", statmat(table2) ///
 title("Comparison of outcomes at 1 year, criteria a vs b" \ ///
 "First interview when R meets criteria") ///
 ctitle("" "Criteria A" "Criteria B" \ "" "Serious med illness" "SMI or ADL impair and" ///
-\ "" "" "SNF or Hospital use" ) sdec(0\2\2\2\2\2\2\0) replace 
+\ "" "or ADL impairment" "SNF or Hospital use" ) sdec(0\2\2\2\2\2\2\0) replace 
 
 *******************************************************************
 //Select Outcomes for first interview where meet criteria
@@ -4875,14 +4978,15 @@ local outcome1 core_to_dod_1yr hs_admit_p12m ind_em_ur_adm_p12m ip_paid_by_mc_1y
 tot_paid_by_mc_1yr
 
 local compvars ivw_meet_crit_smi ivw_meet_crit_adl ivw_meet_crit_smiadl ivw_meet_crit_a ///
-ivw_meet_crit_smiadlnh ivw_meet_crit_smiadlho ivw_meet_crit_aho ivw_meet_crit_b 
+ivw_meet_crit_smiadlnh ivw_meet_crit_smiadlho ivw_meet_crit_smiadlhonh ///
+ivw_meet_crit_smiadlhonh_or ivw_meet_crit_aho ivw_meet_crit_b 
 
 //overall sample, n interviews
 sum core_year
 local nsamp=r(N)
 
-mat comp_N_c1=J(8,3,.)
-mat comp=J(8,15,.)
+mat comp_N_c1=J(10,3,.)
+mat comp=J(10,15,.)
 
 //first column, get n for each subgroup
 local r=1
@@ -4905,12 +5009,14 @@ foreach var in `outcome1'{
 local c=`c'+3
 }
 mat rownames comp_N_c1="Serious med illness" "ADL Impairment"  ///
-"Illness + ADL Impair" "Criteria A" "Illness + ADL + NH" "Illness + ADL + Hospital" ///
- "Ill and-or ADL + Hospital" "Criteria B"
+ "Illness + ADL Impair" "Criteria A" "Illness + ADL + NH(no hosp)" "Illness + ADL + Hospital(no NH)" ///
+ "Illness + ADL + NH + Hospital" "Ill + ADL + (Hospital and/or NH)" "Ill and-or ADL + Hospital(no NH)" ///
+ "Criteria B"
 
 mat rownames comp="Serious med illness" "ADL Impairment"  ///
-"Illness + ADL Impair" "Criteria A" "Illness + ADL + NH" "Illness + ADL + Hospital" ///
- "Ill and-or ADL + Hospital" "Criteria B"
+"Illness + ADL Impair" "Criteria A" "Illness + ADL + NH(no hosp)" "Illness + ADL + Hospital(no NH)" ///
+ "Illness + ADL + NH + Hospital" "Ill + ADL + (Hospital and/or NH)" "Ill and-or ADL + Hospital(no NH)" ///
+ "Criteria B"
 
 frmttable , statmat(comp_N_c1) substat(2) ///
 title("Comparison of serious medical conditions, outcomes at 1 year" \ ///

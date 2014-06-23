@@ -7020,6 +7020,321 @@ foreach v in
 ********************************************************************
 log close
 
+H="Tables, outcomes, comparing a, b, c criteria"
+/*Stata
+Create tables comparing outcomes for the criteria
+Switches  between criteria a, b, c datasets to create set 
+of outcome tables
+
+1. Breakdown of counts of each of the different criteria (uses
+dataset prior to breaking out by interview timeline meeting criteria)
+2. Looking at interview timing both pre and post meeting criteria
+3. Looking at outcomes after the first interview when meet criteria
+4. Looking at p1 outcomes*/
+
+capture log close
+
+clear all
+set mem 500m
+set more off
+
+local logpath E:\data\serious_ill\logs
+local datapath E:\data\serious_ill\final_data
+
+log using "`logpath'\7_compare_3_criteria.txt", text replace
+
+cd `datapath'
+
+***************************************************************
+***************************************************************
+//Table 1 - Looking at counts of R's meeting each set 
+//of criteria
+***************************************************************
+***************************************************************
+//dataset prior to setting up based on criteria timeline, adding outcomes
+//each R can be represented multiple times
+use core_ids_1yr_criteria_5_sample1.dta
+
+tab criteria_a, missing
+
+gen byte smi_and_adl=.
+replace smi_and_adl=1 if ser_med_illness==1 & adl_impair_core==1
+replace smi_and_adl=0 if ser_med_illness==0 | adl_impair_core==0
+tab smi_and_adl, missing
+
+gen byte smi_or_adl_and_nh=.
+replace smi_or_adl_and_nh=1 if criteria_a==1 & smi_nh_ind==1
+replace smi_or_adl_and_nh=0 if criteria_a==0 | smi_nh_ind==0
+tab smi_or_adl_and_nh, missing
+
+gen byte smi_or_adl_and_hosp=.
+replace smi_or_adl_and_hosp=1 if criteria_a==1 & ind_em_ur_adm_12m==1
+replace smi_or_adl_and_hosp=0 if criteria_a==0 | ind_em_ur_adm_12m==0
+tab smi_or_adl_and_hosp, missing
+
+gen byte smi_and_adl_and_nh=.
+replace smi_and_adl_and_nh=1 if smi_and_adl==1 & smi_nh_ind==1
+replace smi_and_adl_and_nh=0 if smi_and_adl==0 | smi_nh_ind==0
+tab smi_and_adl_and_nh, missing
+
+gen byte smi_and_adl_and_hosp=.
+replace smi_and_adl_and_hosp=1 if smi_and_adl==1 & ind_em_ur_adm_12m==1
+replace smi_and_adl_and_hosp=0 if smi_and_adl==0 | ind_em_ur_adm_12m==0
+tab smi_and_adl_and_hosp, missing
+
+tab criteria_c, missing
+
+local smi_vars ser_med_illness adl_impair_core smi_and_adl criteria_a ///
+smi_or_adl_and_nh smi_or_adl_and_hosp criteria_b ///
+smi_and_adl_and_nh smi_and_adl_and_hosp criteria_c
+
+***************************************************************
+//collapse dataset so get at the R level, not interview level
+collapse core_year `smi_vars' ,by(id)
+
+mat criteria_r=J(11,2,.)
+
+sum core_year
+sca sample_r=r(N)
+mat criteria_r[1,1]=r(N)
+
+local j=2
+foreach v in `smi_vars' {
+replace `v'=1 if `v'>0 & `v'!=.
+tab `v',matcell(x1_`j')
+mat criteria_r[`j',1]=x1_`j'[2,1]
+mat criteria_r[`j',2]=x1_`j'[2,1]/sample_r*100
+local j = `j'+1
+}
+
+mat list criteria_r
+
+frmttable using `logpath'\sic_Tables_7_outcomes_crit_a_b_c, statmat(criteria_r) ///
+title("Serious illness cohort, criteria, respondent level") ///
+ctitle("","N Respondents","% respondents") ///
+rtitle("Overall n R's" \ "Any serious medical illness"\  ///
+"ADL Impairment"\ "Med Ill and ADL Impairment" \"Med Ill and/or ADL Impairment"\ ///
+"Med Ill and/or ADL Imp + NH"\ ///
+"Med Ill and/or ADL Imp + Hosp"\ "Med Ill and/or ADL Imp + NH and/or Hosp"\ ///
+"Med Ill and ADL Imp + NH"\ "Med Ill and ADL Imp + Hosp"\ "Med Ill and ADL Imp + NH and/or Hosp") ///
+sdec(0,2) replace
+
+clear
+***************************************************************
+***************************************************************
+//Table 2
+***************************************************************
+***************************************************************
+mat ivws=J(15,6,.)
+local col = 1
+foreach crit in a b c{
+	use n0_n1_p1_p2_x_criteria_`crit'_v1.dta if core_year_n0<2010
+
+	sum core_year_n0
+	mat ivws[1,`col']=r(N) //overall n meet criteria
+	mat ivws[1,`col'+1]=100 //percent of n
+
+***First section, looking at meeting criteria 1st interview
+
+	sum core_year_n0 if ind_n1_interview==1 & part_ab_12m_n1==1 & hmo_d_12m_n1==0
+	mat ivws[2,`col']=r(N) //have n1 interview with ffs mc 1 year pre
+	mat ivws[2,`col'+1]=ivws[2,`col']/ivws[1,`col']*100
+
+	sum core_year_n0 if ind_n1_interview==1 & part_ab_12m_n1==. & hmo_d_12m_n1==.
+	mat ivws[3,`col']=r(N) //have n1 but don't have denominator file that ivw (pre 2000)
+	mat ivws[3,`col'+1]=ivws[3,`col']/ivws[1,`col']*100
+	
+	//why so many missing denominator files? check interview year, don't have files before Jan 2000
+	tab c_ivw_year_n1 if ind_n1_interview==1 & part_ab_12m_n1==. & hmo_d_12m_n1==., missing
+	
+	sum core_year_n0 if c_ivw_n1_pre2001==1 & ind_n1_interview==1 & part_ab_12m_n1==. & hmo_d_12m_n1==.
+	mat ivws[4,`col']=r(N) //have n1 but missing dn file b/c pre 2001 ivw
+	mat ivws[4,`col'+1]=ivws[4,`col']/ivws[1,`col']*100	
+
+	sum core_year_n0 if c_ivw_n1_pre2001==0 & age_ge_66_n1==0 & ind_n1_interview==1 & part_ab_12m_n1==. & hmo_d_12m_n1==.
+	mat ivws[5,`col']=r(N) //have n1 but missing dn file, later than 2001 but age less than 66 at ivw
+	mat ivws[5,`col'+1]=n1_crit[5,`col']/ivws[1,`col']*100	
+
+	sum core_year_n0 if c_ivw_n1_pre2001==0 & age_ge_66_n1==1 & ind_n1_interview==1 & part_ab_12m_n1==. & hmo_d_12m_n1==.
+	mat ivws[6,`col']=r(N) //have n1 but missing dn file, really missing, can't tell why from age and ivw year
+	mat ivws[6,`col'+1]=ivws[6,`col']/ivws[1,`col']*100		
+		
+	sum core_year_n0 if ind_n1_interview==1 & part_ab_12m_n1==0
+	mat ivws[7,`col']=r(N) //have n1 but not parts a/b medicare 1 year pre
+	mat ivws[7,`col'+1]=ivws[7,`col']/ivws[1,`col']*100
+
+	sum core_year_n0 if ind_n1_interview==1 & part_ab_12m_n1==1 & hmo_d_12m_n1==1
+	mat ivws[8,`col']=r(N) //have n1 but hmo medicare 1 year pre
+	mat ivws[8,`col'+1]=ivws[8,`col']/ivws[1,`col']*100
+
+	sum core_year_n0 if ind_n1_interview==0
+	mat ivws[9,`col']=r(N) //missing n1 interview
+	mat ivws[9,`col'+1]=ivws[9,`col']/n1_crit[1,`col']*100
+
+***Second section, looking at missing p1 interviews
+	sum core_year_n0 if (core_to_dod_2yr_n0==1 & ind_x_interview==0) | ///
+		(core_to_dod_2yr_n0==0 & ind_p1_interview==0) | ///
+		(core_to_dod_2yr_n0==0 & ind_p1_interview==1 & (part_ab_12m_p1!=1 | hmo_d_12m_p1!=0))
+	mat ivws[10,`col']=r(N) //no follow up interview
+	mat ivws[10,`col'+1]=ivws[10,`col']/ivws[1,`col']*100
+
+	sum core_year_n0 if (core_to_dod_2yr_n0==1 & ind_x_interview==0)
+	mat ivws[11,`col']=r(N) //died but no exit interview
+	mat ivws[11,`col'+1]=miss[11,`col']/miss[1,`col']*100  
+
+	sum core_year_n0 if (core_to_dod_2yr_n0==0 & ind_p1_interview==0)
+	mat ivws[12,`col']=r(N) //didn't die but no p1
+	mat ivws[12,`col'+1]=miss[12,`col']/ivws[1,`col']*100  
+	
+	sum core_year_n0 if (core_to_dod_2yr_n0==0 & ind_p1_interview==1 & (part_ab_12m_p1==. | hmo_d_12m_p1==.))
+	mat ivws[13,`col']=r(N) //have p1 but missing denominator info full year preceding p1
+	mat ivws[13,`col'+1]=ivws[13,`col']/ivws[1,`col']*100 
+
+tab c_ivw_year_p1 if (core_to_dod_2yr_n0==0 & ind_p1_interview==1 & (part_ab_12m_p1==. | hmo_d_12m_p1==.)), missing
+	
+	sum core_year_n0 if (core_to_dod_2yr_n0==0 & ind_p1_interview==1 & (part_ab_12m_p1==0))
+	mat ivws[14,`col']=r(N) //have p1 but not parts a b medicare 1 year preceding p1
+	mat ivws[14,`col'+1]=ivws[14,`col']/ivws[1,`col']*100 
+
+	sum core_year_n0 if (core_to_dod_2yr_n0==0 & ind_p1_interview==1 & (hmo_d_12m_p1==1))
+	mat ivws[15,`col']=r(N) //have p1 but hmo medicare 1 year preceding p1
+	mat ivws[15,`col'+1]=ivws[15,`col']/ivws[1,`col']*100 
+
+	local col = `col'+2
+		
+	clear
+}
+
+frmttable using `logpath'\sic_Tables_7_outcomes_crit_a_b_c, statmat(ivws) ///
+title("Accounting for missing interviews")  ///
+rtitles("N meet criteria n0 interview"\""\ ///
+"Have n1 interview with ffs mc 1 year pre" \"" \ ///
+"Have n1 ivw but missing dn file 1y pre" \""\ ///
+"Missing dn file bc ivw before 2001" \ "" \ ///
+"Missing dn because age<66 at ivw (ivw 2001 or later)" \ "" \ ///
+"Missing dn for unknown reason" \ "" \ "Have n1 ivw but not mc parts a&b 1y pre" \"" \ ///
+"Have n1 ivw but HMO 1y pre"\"" \ "No n1 interview in HRS" \ "" 
+"Missing follow up interview"\""\ "Died within 2 years but no exit interview" \ ///
+""\"Did not die but no p1 ivw" \""\ "Had p1 interview but missing dn file 1 year pre" \"" \ ///
+"Had p1 interview, but not Part A, B medicare 1 yr pre" \ ""\"Had p1 ivw, but HMO 1 year pre" \ "") ///
+ctitles("" "Criteria A" "Criteria B" "Criteria C" \ "" "n" "n" "n" \ "" "(percent)" "(percent)" "(percent)" ) ///
+note("Criteria A = Any serious medical illness and/or ADL impairment" \ ///
+"Criteria B = Criteria A and Urgent / Emergent hospitalization and/or NH resident" \ ///
+"Criteria C = Medical illness and ADL Impairment and hospitalization and/or NH resident" \ ///
+"All missing denominator file for p1 ivw are for interviews that took place in 2011.") ///
+substat(1) sdec(0\1) addtable
+
+***************************************************************
+***************************************************************
+//Table 3 - Looking at full set of outcomes, 3 criteria
+***************************************************************
+***************************************************************
+//use dataset with outcomes, just obs that meet interview sample inclusion criteria
+use ivws_crit_1.dta if inlist(core_year,2000,2002,2004,2006,2008) & /// 
+age_ge_65==1 & xwalk_yes==1 & part_ab_12m==1 & hmo_d_12m==0
+
+mat table2=J(34,3,.)
+//first row, n for each category
+tab ivw_meet_crit_a ,matcell(row1a)
+mat table2[1,1]=row1a[2,1]
+tab ivw_meet_crit_b ,matcell(row1b)
+mat table2[1,2]=row1b[2,1]
+tab ivw_meet_crit_c ,matcell(row1c)
+mat table2[1,3]=row1c[2,1]
+
+local c=1
+foreach crit of varlist ivw_meet_crit_a ivw_meet_crit_b ivw_meet_crit_c {
+local r=2
+foreach v in `outcome1'{
+	sum `v' if `crit'==1, detail
+	mat table2[`r',`c']=r(mean)
+	mat table2[`r'+1,`c']=r(sd)
+	local r=`r'+2 //populates rows 2-7 for indicator variable outcomes
+	}
+
+local r=8
+foreach v in `outcome2'{
+	sum `v' if `crit'==1, detail
+	mat table2[`r',`c']=r(mean)
+	mat table2[`r'+1,`c']=r(p50)
+	mat table2[`r'+2,`c']=r(sd)
+	local r=`r'+3 //populates rows 8-34 for continuous variables
+	}
+local c=`c'+1	
+}
+
+mat rownames table2="N" "Died, mean" "SD" "Hospice enr, mean" "SD" "Emerg or urgent hosp admit, mean" "SD" ///
+"IP Medicare payments, mean" "Median" "SD" "SNF Medicare payments, mean" "Median" "SD" ///
+"HH Medicare payments, mean" "Median" "SD" "Hospice Medicare payments, mean" "Median" "SD" ///
+"Carrier Medicare payments, mean" "Median" "SD" "OP Medicare payments, mean" "Median" "SD" ///
+"DME Medicare payments, mean" "Median" "SD" "Total Medicare payments, mean" "Median" "SD" ///
+"Hospital nights, mean" "Median" "SD"
+
+frmttable using `logpath'\sic_Tables_7_outcomes_crit_a_b_c, statmat(table2) ///
+title("Comparison of outcomes at 1 year, criteria a, b, c" \ ///
+"First interview when R meets criteria") ///
+ctitle("" "Criteria A" "Criteria B" "Criteria C" \ "" "Serious med illness and/or" ///
+"SMI and/or ADL impair and" "SMI and ADL impair and" ///
+\ "" "ADL impairment" "SNF and/or Hospital use" "SNF and/or Hospital use") ///
+sdec(0\2\2\2\2\2\2\0) addtable 
+
+***************************************************************
+***************************************************************
+//Table 4 - Looking at 2 year outcomes, using p1 interview
+***************************************************************
+***************************************************************
+mat p1_crit=J(5,6,.)
+
+local col = 1
+foreach crit in a b c{
+	use n0_n1_p1_p2_x_criteria_`crit'_v1.dta if core_year_n0<2010
+		
+**1st table looking at follow up outcomes
+	sum core_year_n0
+	mat p1_crit[1,`col']=r(N) //overall n meet criteria
+	mat p1_crit[1,`col'+1]=100 //percent of n
+
+	sum core_year_n0 if ind_p1_interview==0 & core_to_dod_2yr_n0==1 & ind_x_interview==1
+	mat p1_crit[2,`col']=r(N) //no p1 interview, died within 2 years, with exit interview
+	mat p1_crit[2,`col'+1]=p1_crit[2,`col']/p1_crit[1,`col']*100
+
+	tab criteria_`crit'_p1 if ind_p1_interview==1 & part_ab_12m_p1==1 & hmo_d_12m_p1==0, matcell(p1)
+	mat p1_crit[3,`col']=p1[2,1] //n that meet criteria p1
+	mat p1_crit[3,`col'+1]=p1_crit[3,`col']/p1_crit[1,`col']*100
+	mat p1_crit[4,`col']=p1[1,1] //n that do not meet criteria p1
+	mat p1_crit[4,`col'+1]=p1_crit[4,`col']/p1_crit[1,`col']*100
+	
+	sum core_year_n0 if (core_to_dod_2yr_n0==1 & ind_x_interview==0) | ///
+		(core_to_dod_2yr_n0==0 & ind_p1_interview==0) | ///
+		(core_to_dod_2yr_n0==0 & ind_p1_interview==1 & (part_ab_12m_p1!=1 | hmo_d_12m_p1!=0))
+	mat p1_crit[5,`col']=r(N) //no follow up interview
+	mat p1_crit[5,`col'+1]=p1_crit[5,`col']/p1_crit[1,`col']*100
+
+		local col = `col'+2
+		
+	clear
+}
+	 
+frmttable using `logpath'\sic_Tables_7_outcomes_crit_a_b_c, statmat(p1_crit) ///
+title("Meet criteria in p1 interview")  ///
+rtitles("Overall n meet criteria n0 interview"\""\ "Died within 2 years and have exit interview" \ ///
+""\"Meet criteria in p1 interview" \""\ "Do not meet criteria in p1 interview" \""\ ///
+"Missing follow up interview, see notes"\"") ///
+ctitles("" "Criteria A" "Criteria B" \ "" "n" "n" \ "" "(percent)" "(percent)" ) ///
+note("Criteria A = Any serious medical illness and/or ADL impairment" \ ///
+"Criteria B = Criteria A and Urgent / Emergent hospitalization and/or NH resident" \ ///
+"Criteria C = Medical illness and ADL Impairment and hospitalization and/or NH resident" \ ///
+"Missing follow up if R died within 2 years of meet criteria but no exit interview,"  \ ///
+"R did not die within 2 years, has no p1 interview," \ ///
+"or R has p1 interview but not FFS MC 1 year preceding p1 interview.") ///
+substat(1) sdec(0\1) addtable
+
+***************************************************************
+log close
+
+
+
+
 H="xxxxNotes"
 Helper files - A respondant gets an entry (or many entries) in the helper file
 if they report getting help in the ADLs, IADLs and Money (MG062_1 or _2) questions:

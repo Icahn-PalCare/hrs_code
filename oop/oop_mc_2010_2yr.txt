@@ -6688,6 +6688,69 @@ note("HRS data is adjusted for inflation to 2010 dollars and for the wage index,
 "Dartmouth data in 2003-2007 dollars, wage index adjusted") ///
 sdec(0) addtable
 
+**************************************************************************
+**************************************************************************
+//Table 4 - adding further adjustments for HRS data, quintiles, means
+**************************************************************************
+**************************************************************************
+label define adl_cat_x 0 "Independent" 1 "Partial Dependence" 2 "Severe Dependence" ///
+      3 "Restricted to Bed", modify
+label values adl_cat_x adl_cat_x
+tab adl_cat_x, missing
+
+local adjvars age_at_death_cat black hisp_eth female_x educ_hsdeg smoke_ever_n1 ///
+adl_cat_x comorb_all_0d_n24m
+
+foreach v in `adjvars'{
+tab `v', missing
+}
+
+
+foreach v in `toadj'{
+	areg `v' i.age_at_death_cat i.black i.hisp_eth i.female_x i.educ_hsdeg i.smoke_ever_n1 ///
+		ib0.adl_cat_x, absorb(comorb_all_0d_n24m)
+		
+	predict resid_fa_`v', residual
+
+	gen fadj_`v'=mean_`v'+resid_fa_`v'
+	sum fadj_`v', detail
+	sum `v', detail
+	}
+
+//now calculate totals using the adjusted values
+foreach i in 24 60{
+gen fadj_tot_paid_by_mc_`i'm_wi = fadj_ip_paid_by_mc_`i'm_wi + fadj_snf_paid_by_mc_`i'm_wi ///
++ fadj_hh_paid_by_mc_`i'm_wi + fadj_hs_paid_by_mc_`i'm_wi + fadj_pb_paid_by_mc_`i'm_wi  ///
++ fadj_op_paid_by_mc_`i'm_wi + fadj_dm_paid_by_mc_`i'm_wi 
+}
+
+
+//now look at HRS spending by wage index adjusted DA quintile
+//age,race,sex,educ, smoking,adl,comorbid count wage index adjusted, HRS split by dartmouth quintiles
+mat fadj=J(5,3,.)
+forvalues i = 1/5 {
+sum da_hrr_wi if quintile_dw_2yr==`i', detail //dartmouth data
+mat fadj[`i',1]=r(mean)
+sum fadj_tot_paid_by_mc_24m_wi if quintile_dw_2yr==`i', detail //2 year HRS
+mat  fadj[`i',2]=r(mean)
+sum fadj_tot_paid_by_mc_60m_wi if quintile_dw_2yr==`i', detail //5 year HRS
+mat fadj[`i',3]=r(mean)
+}
+
+frmttable using"`logpath'\8-Quintile_work", statmat( fadj) ///
+title("2 and 5 year EOL spending quintiles" \ ///
+"HRS data split by Dartmouth quintiles" \ ///
+"Dartmouth data vs HRS data for the 5 year lookback sample" \ ///
+"Wage index adjustments made to Dartmouth data prior to splitting into quintiles" \ ///
+"HRS data adjusted for wage index, age,sex,race,ever smoke, ADL status, count elix comor and educ" ) ///
+ctitle("","Dartmouth data","HRS data 2 yr", "HRS data 5 yr") ///
+rtitle("Quintile 1 (low)" \ "Quintile 2" \ "Quintile 3" \ "Quintile 4" \ ///
+"Quintile 5 (high)") ///
+note("HRS data is adjusted for inflation to 2010 dollars and for the wage index, race,sex, " \ ///
+"ever smoke, ADL status(independ=base,partial,severe,bedbound at exit, count elix comorbidities "\ ///
+"and whether or not has hs degree" \ ///
+"Dartmouth data in 2003-2007 dollars, wage index adjusted") ///
+sdec(0) addtable
 
 **************************************************************************
 
@@ -6697,6 +6760,278 @@ sdec(0) addtable
 mat adj=J(5,1,.)
 forvalues i = 1/5 {
 sum wage_index_20102 if quintile_dw_2yr==`i', detail //dartmouth data
+mat adj[`i',1]=r(mean)
+}
+
+log close
+
+
+H="25%, middle, 75% split - check DA vs HRS"
+/*created this section to look at split of spending into 3 groups by region
+to check for internal validity, compare quartiles generated with
+Dartmouth data (last 2 years of life, EOL medicare spending) and 
+HRS data (last 2 years of life, EOL medicare spending, all unadjusted)
+
+Splits are bottom 25%, middle 25-75% and top 75%
+
+Did a few versions:
+1. Raw data, by DA quintiles, HRS 2 and 5 year spending
+2. Wage index adjusted DA quintiles, Wage index adjusted HRS 2 and 5 year spending
+3. Wage index adjusted DA quintiles, Wage index and age,sex, race adjusted HRS 2 and 5 year spending
+*/
+
+capture log close
+clear all
+set mem 500m
+set more off
+
+local logpath E:\data\hrs_oop_2010\logs
+local datapath E:\data\hrs_oop_2010\final_data
+//local logpath H:\OOP\local_logs
+//local datapath C:\Users\gorger01\Desktop\oop
+
+log using `logpath'\8b-mc_25_75split_work-LOG.txt, text replace
+
+cd `datapath'
+
+//use just sample that meet 5 year criteria (full mc 5 years from death)
+//with new variables added
+use oop_mc_sample_addedvars.dta if part_ab_5y==1 & hmo_5y==0 & ind_60m_oop_yes==1 & age_at_death_e>=70 & miss_prob_dem_n1n2==0
+
+//use oop_mc_sample_public if part_ab_5y==1 & hmo_5y==0 & ind_60m_oop_yes==1 & age_at_death_cat>1 & miss_prob_dem_n1n2==0
+
+*************************************************************
+
+gen ind_hrr_yes = 0
+replace ind_hrr_yes=1 if hrrnum!=.
+tab ind_hrr_yes, missing
+
+//drop n=6 obs with no hrr link, cannot be sorted into a quintile
+drop if ind_hrr_yes == 0
+
+sum tot_eol_spending_hrr, detail
+
+***********************************************
+//create dartmouth regional quartiles, no adjustments
+centile tot_eol_spending_hrr, centile(25 75)
+sca d_qui_25=r(c_1)
+sca d_qui_75=r(c_2)
+
+gen quart3_dm_2yr=.
+replace quart3_dm_2yr=1 if tot_eol_spending_hrr<=d_qui_25 & tot_eol_spending_hrr<.
+replace quart3_dm_2yr=2 if tot_eol_spending_hrr>d_qui_25 & tot_eol_spending_hrr<d_qui_75
+replace quart3_dm_2yr=3 if tot_eol_spending_hrr>=d_qui_75 & tot_eol_spending_hrr<.
+
+tab quart3_dm_2yr, missing
+la var quart3_dm_2yr"Quartiles of 2 year Dartmouth EOL Medicare Spending, HRR level (within this sample)"
+la def quart 1 "Bottom 25%" 2 "25-75%" 3 "Top 75%" 
+la val quart3_dm_2yr quart
+
+**************************************************************************
+**************************************************************************
+//Table 1 - unadjusted quartiles, means
+**************************************************************************
+**************************************************************************
+//means unadjusted, hrs sample split by dartmouth quartiles
+mat unadj_1=J(3,3,.)
+forvalues i = 1/3 {
+sum tot_eol_spending_hrr if quart3_dm_2yr==`i', detail
+mat unadj_1[`i',1]=r(mean)
+sum tot_paid_by_mc_24m if quart3_dm_2yr==`i', detail
+mat unadj_1[`i',2]=r(mean)
+sum tot_paid_by_mc_60m if quart3_dm_2yr==`i', detail
+mat unadj_1[`i',3]=r(mean)
+}
+
+frmttable using"`logpath'\8b-Quartile_split_work", statmat(unadj_1) ///
+title("Using means by HRR- 2 and 5 year EOL spending quartiles" \ ///
+"HRS data split by Dartmouth quintiles" \ ///
+"Dartmouth data vs HRS data for the 5 year lookback sample" \ ///
+"No adjustments made to spending except those done by Dartmouth" ) ///
+ctitle("","Dartmouth data","HRS data 2 yr", "HRS data 5 yr") ///
+rtitle("Quartile 1 (low)" \ "Quartiles 2&3" \ "Quartile 4(high)") ///
+note("HRS data is adjusted for inflation to 2010 dollars," \ ///
+"Dartmouth data in 2003-2007 dollars.") ///
+sdec(0) replace
+
+
+**************************************************************************
+//Now with wage index adjustment and run again
+***********************************************
+//create dartmouth regional quintiles using Dartmouth adjusted for wage index
+gen da_hrr_wi = tot_eol_spending_hrr/wage_index_20102
+sum da_hrr_wi, detail
+centile da_hrr_wi, centile(25 75)
+sca dw_qui_25=r(c_1)
+sca dw_qui_75=r(c_2)
+sca list
+
+gen quart3_dw_2yr=.
+replace quart3_dw_2yr=1 if da_hrr_wi<=dw_qui_25 & da_hrr_wi<.
+replace quart3_dw_2yr=2 if da_hrr_wi>dw_qui_25 & da_hrr_wi<dw_qui_75
+replace quart3_dw_2yr=3 if da_hrr_wi>=dw_qui_75 & da_hrr_wi<.
+
+tab quart3_dw_2yr, missing
+la var quart3_dw_2yr "Quintiles of 2 year Wage index adj Dartmouth EOL Medicare Spending, HRR level (within this sample)"
+la val quart3_dw_2yr quart
+
+**************************************************************************
+**************************************************************************
+//Table 2 - adding wage index adjustment, quartiles, means
+**************************************************************************
+**************************************************************************
+//wage index adjusted, HRS split by dartmouth wage index adjusted quartiles
+mat wiadj_2=J(3,3,.)
+forvalues i = 1/3 {
+sum da_hrr_wi if quart3_dw_2yr==`i', detail //dartmouth data
+mat wiadj_2[`i',1]=r(mean)
+sum tot_paid_by_mc_24m_wi if quart3_dw_2yr==`i', detail //2 year HRS
+mat wiadj_2[`i',2]=r(mean)
+sum tot_paid_by_mc_60m_wi if quart3_dw_2yr==`i', detail //5 year HRS
+mat wiadj_2[`i',3]=r(mean)
+}
+frmttable using"`logpath'\8b-Quartile_split_work", statmat(wiadj_2) ///
+title("2 and 5 year EOL spending quartiles" \ ///
+"HRS data split by Dartmouth quartiles" \ ///
+"Dartmouth data vs HRS data for the 5 year lookback sample" \ ///
+"Wage index adjustments made to Dartmouth data prior to splitting into quartiles" ) ///
+ctitle("","Dartmouth data","HRS data 2 yr", "HRS data 5 yr") ///
+rtitle("Quartile 1 (low)" \ "Quartiles 2&3" \ "Quartile 4(high)") ///
+note("HRS data is adjusted for inflation to 2010 dollars and for the wage index," \ ///
+"Dartmouth data in 2003-2007 dollars, wage index adjusted") ///
+sdec(0) addtable
+
+mat wi=J(3,1,.)
+forvalues i = 1/3 {
+sum wage_index_20102 if quart3_dw_2yr==`i', detail
+mat wi[`i',1]=r(mean)
+}
+mat list wi
+
+**************************************************************************
+**************************************************************************
+//Table 3 - adding age,race,sex adjustment for HRS data, quintiles, means
+**************************************************************************
+**************************************************************************
+//use wage index adjusted components of medicare spending, 2 and 5 year
+local toadj ip_paid_by_mc_24m_wi snf_paid_by_mc_24m_wi ///
+hh_paid_by_mc_24m_wi hs_paid_by_mc_24m_wi pb_paid_by_mc_24m_wi op_paid_by_mc_24m_wi ///
+dm_paid_by_mc_24m_wi ip_paid_by_mc_60m_wi snf_paid_by_mc_60m_wi ///
+hh_paid_by_mc_60m_wi hs_paid_by_mc_60m_wi pb_paid_by_mc_60m_wi op_paid_by_mc_60m_wi ///
+dm_paid_by_mc_60m_wi
+
+//gen black = 0
+//replace black = 1 if race_eth_cat==3
+//gen hisp_eth = 0
+//replace hisp_eth = 1 if race_eth_cat==1
+
+foreach v in `toadj'{
+	egen mean_`v'=mean(`v')
+
+	reg `v' i.age_at_death_cat i.black i.hisp_eth i.female_x
+
+	predict resid_`v', residual
+
+	gen adj_`v'=mean_`v'+resid_`v'
+	sum adj_`v', detail
+	sum `v', detail
+	}
+
+//now calculate totals using the adjusted values
+foreach i in 24 60{
+gen adj_tot_paid_by_mc_`i'm_wi = adj_ip_paid_by_mc_`i'm_wi + adj_snf_paid_by_mc_`i'm_wi ///
++ adj_hh_paid_by_mc_`i'm_wi + adj_hs_paid_by_mc_`i'm_wi + adj_pb_paid_by_mc_`i'm_wi  ///
++ adj_op_paid_by_mc_`i'm_wi + adj_dm_paid_by_mc_`i'm_wi 
+}
+
+
+//now look at HRS spending by wage index adjusted DA quintile
+//age,race,sex, wage index adjusted, HRS split by dartmouth quintiles
+mat adj=J(3,3,.)
+forvalues i = 1/3 {
+sum da_hrr_wi if quart3_dw_2yr==`i', detail //dartmouth data
+mat adj[`i',1]=r(mean)
+sum adj_tot_paid_by_mc_24m_wi if quart3_dw_2yr==`i', detail //2 year HRS
+mat  adj[`i',2]=r(mean)
+sum adj_tot_paid_by_mc_60m_wi if quart3_dw_2yr==`i', detail //5 year HRS
+mat adj[`i',3]=r(mean)
+}
+
+frmttable using"`logpath'\8b-Quartile_split_work", statmat( adj) ///
+title("2 and 5 year EOL spending quartiles" \ ///
+"HRS data split by Dartmouth quartiles" \ ///
+"Dartmouth data vs HRS data for the 5 year lookback sample" \ ///
+"Wage index adjustments made to Dartmouth data prior to splitting into quartiles" \ ///
+"HRS data adjusted for wage index, age,sex,race" ) ///
+ctitle("","Dartmouth data","HRS data 2 yr", "HRS data 5 yr") ///
+rtitle("Quartile 1 (low)" \ "Quartiles 2&3" \ "Quartile 4(high)") ///
+note("HRS data is adjusted for inflation to 2010 dollars and for the wage index, race,sex and age" \ ///
+"Dartmouth data in 2003-2007 dollars, wage index adjusted") ///
+sdec(0) addtable
+
+**************************************************************************
+**************************************************************************
+//Table 4 - adding further adjustments for HRS data, quartiles, means
+**************************************************************************
+**************************************************************************
+label define adl_cat_x 0 "Independent" 1 "Partial Dependence" 2 "Severe Dependence" ///
+      3 "Restricted to Bed", modify
+label values adl_cat_x adl_cat_x
+tab adl_cat_x, missing
+
+foreach v in `toadj'{
+	areg `v' i.age_at_death_cat i.black i.hisp_eth i.female_x i.educ_hsdeg i.smoke_ever_n1 ///
+		ib0.adl_cat_x, absorb(comorb_all_0d_n24m)
+		
+	predict resid_fa_`v', residual
+
+	gen fadj_`v'=mean_`v'+resid_fa_`v'
+	sum fadj_`v', detail
+	sum `v', detail
+	}
+
+//now calculate totals using the adjusted values
+foreach i in 24 60{
+gen fadj_tot_paid_by_mc_`i'm_wi = fadj_ip_paid_by_mc_`i'm_wi + fadj_snf_paid_by_mc_`i'm_wi ///
++ fadj_hh_paid_by_mc_`i'm_wi + fadj_hs_paid_by_mc_`i'm_wi + fadj_pb_paid_by_mc_`i'm_wi  ///
++ fadj_op_paid_by_mc_`i'm_wi + fadj_dm_paid_by_mc_`i'm_wi 
+}
+
+
+//now look at HRS spending by wage index adjusted DA quartiles
+//age,race,sex,educ, smoking,adl,comorbid count wage index adjusted, HRS split by dartmouth quartiles
+mat fadj=J(3,3,.)
+forvalues i = 1/3 {
+sum da_hrr_wi if quart3_dw_2yr==`i', detail //dartmouth data
+mat fadj[`i',1]=r(mean)
+sum fadj_tot_paid_by_mc_24m_wi if quart3_dw_2yr==`i', detail //2 year HRS
+mat  fadj[`i',2]=r(mean)
+sum fadj_tot_paid_by_mc_60m_wi if quart3_dw_2yr==`i', detail //5 year HRS
+mat fadj[`i',3]=r(mean)
+}
+
+frmttable using"`logpath'\8b-Quartile_split_work", statmat( fadj) ///
+title("2 and 5 year EOL spending quartiles" \ ///
+"HRS data split by Dartmouth quartiles" \ ///
+"Dartmouth data vs HRS data for the 5 year lookback sample" \ ///
+"Wage index adjustments made to Dartmouth data prior to splitting into quartiles" \ ///
+"HRS data adjusted for wage index, age,sex,race,ever smoke, ADL impairment, count elix comor and educ" ) ///
+ctitle("","Dartmouth data","HRS data 2 yr", "HRS data 5 yr") ///
+rtitle("Quartile 1 (low)" \ "Quartiles 2&3" \ "Quartile 4(high)") ///
+note("HRS data is adjusted for inflation to 2010 dollars and for the wage index, race,sex, " \ ///
+"ever smoke, ADL status(independ=base,partial,severe,bedbound at exit, count elix comorbidities "\ ///
+"and whether or not has hs degree" \ ///
+"Dartmouth data in 2003-2007 dollars, wage index adjusted") ///
+sdec(0) addtable
+
+**************************************************************************
+
+//look at wage index by quartile
+//now look at HRS spending by wage index adjusted DA quartile
+//age,race,sex, wage index adjusted, HRS split by dartmouth quartile
+mat adj=J(3,1,.)
+forvalues i = 1/3 {
+sum wage_index_20102 if quart3_dw_2yr==`i', detail //dartmouth data
 mat adj[`i',1]=r(mean)
 }
 
@@ -7104,7 +7439,8 @@ log close
 
 
 H="Adjust spending categories by age, sex, race"
-/*Divides sample into quintiles by HRR level DA 2 year EOL medicare spending, 2003-2007
+/*Divides sample into quartiles and quintiles by HRR level 
+DA 2 year EOL medicare spending, 2003-2007
 
 5 year lookbacks 
 
@@ -7112,6 +7448,9 @@ Note:Sample limited to those with Age 70+ when die, FFS medicare last 5 years of
 full OOP spending data last 5 years of life and resident of 50 States + DC (drops PR resident)
 
 Adjust all spending categories for age, race, gender
+
+2nd adjustment done adding ever smoke cigarettes?, ADL impairment, count of elixhauser comorbidites,
+	high school degree (education)
 
 For Medicare spending categories, adjusts wage index adjusted spending only
 For other spending categories (OOP, nursing home and informal care imputed) adjusts
@@ -7172,6 +7511,31 @@ sum tot_eol_spending_hrr_2010 if quintile_dm_2yr==2, detail
 sum tot_eol_spending_hrr_2010 if quintile_dm_2yr==3, detail
 sum tot_eol_spending_hrr_2010 if quintile_dm_2yr==4, detail
 sum tot_eol_spending_hrr_2010 if quintile_dm_2yr==5, detail
+
+********************************************************************
+//next assign quartiles (same as in previous header section)
+//split into quartiles by wage index adjusted DA hrr medicare spending
+
+sort tot_eol_spending_hrr_2010  
+
+//calculate quartiles based on the 2010 wage index, inflation adjusted DA 2yr EOL spending
+centile tot_eol_spending_hrr_2010 , centile(25 75)
+sca d_qui_25=r(c_1)
+sca d_qui_75=r(c_2)
+
+gen quart3_dm_2yr=.
+replace quart3_dm_2yr=1 if tot_eol_spending_hrr_2010<=d_qui_25 & tot_eol_spending_hrr_2010<.
+replace quart3_dm_2yr=2 if tot_eol_spending_hrr_2010>d_qui_25 & tot_eol_spending_hrr_2010<d_qui_75
+replace quart3_dm_2yr=3 if tot_eol_spending_hrr_2010>=d_qui_75 & tot_eol_spending_hrr_2010<.
+
+tab quart3_dm_2yr, missing
+la var quart3_dm_2yr"Quartiles of 2 year Dartmouth EOL Medicare Spending, HRR level (within this sample)"
+la def quart 1 "Bottom 25%" 2 "25-75%" 3 "Top 75%" 
+la val quart3_dm_2yr quart
+
+sum tot_eol_spending_hrr_2010 if quart3_dm_2yr==1, detail
+sum tot_eol_spending_hrr_2010 if quart3_dm_2yr==2, detail
+sum tot_eol_spending_hrr_2010 if quart3_dm_2yr==3, detail
 
 ********************************************************************
 //next adjust each of the components by age, gender, race
@@ -7245,6 +7609,82 @@ sum tot_gov_pay_60m_wi, detail
 sum adj_total_nh_costs_60m_wi, detail
 sum total_nh_costs_60m_wi, detail
 sum adj_total_costs_60m_wi, detail
+sum total_costs_60m_wi, detail
+********************************************************************
+
+********************************************************************
+//finally add additional adjustment variables
+// adjust by age, gender, race, ever smoked cigarettes, ADL status from exit, 
+// count of comorbidities, education level
+//adl status partial dependence, severe dependence or bedbound (indpendend=base category)
+//age is 5 year age at death categories
+//race is black, hispanic, base=white+other 
+
+label define adl_cat_x 0 "Independent" 1 "Partial Dependence" 2 "Severe Dependence" ///
+      3 "Restricted to Bed", modify
+label values adl_cat_x adl_cat_x
+tab adl_cat_x, missing
+
+
+foreach v in `toadj'{
+
+	areg `v' i.age_at_death_cat i.black i.hisp_eth i.female_x i.educ_hsdeg i.smoke_ever_n1 ///
+		ib0.adl_cat_x, absorb(comorb_all_0d_n24m)
+
+	predict resid_fa_`v', residual
+
+	gen fadj_`v'=mean_`v'+resid_fa_`v'
+	sum fadj_`v', detail
+	sum `v', detail
+	}
+
+//now calculate totals using the adjusted values
+//just medicare is wage index adjusted
+gen fadj_tot_paid_by_mc_60m_wi = fadj_ip_paid_by_mc_60m_wi + fadj_snf_paid_by_mc_60m_wi ///
++ fadj_hh_paid_by_mc_60m_wi + fadj_hs_paid_by_mc_60m_wi + fadj_pb_paid_by_mc_60m_wi + fadj_op_paid_by_mc_60m_wi ///
++ fadj_dm_paid_by_mc_60m_wi 
+
+gen fadj_total_oop_60m = fadj_helper_oop_60m + fadj_hospital_oop_60m + fadj_nh_oop_60m ///
++ fadj_doctor_oop_60m + fadj_rx_oop_60m + fadj_insurance_costs_60m + fadj_other_oop_60m
+
+gen fadj_tot_gov_pay_60m = fadj_tot_paid_by_mc_60m_wi + fadj_nh_cost_medicaid_60m
+
+gen fadj_total_nh_costs_60m = fadj_nh_cost_medicaid_60m + fadj_nh_cost_private_60m + ///
+fadj_snf_paid_by_mc_60m_wi + fadj_nh_oop_60m
+
+gen fadj_total_costs_60m = fadj_tot_paid_by_mc_60m_wi + fadj_total_oop_60m + fadj_nh_cost_medicaid_60m ///
++ fadj_nh_cost_private_60m + fadj_inf_care_costs_60m
+
+sum fadj_tot_paid_by_mc_60m_wi, detail
+sum tot_paid_by_mc_60m_wi, detail
+sum fadj_total_oop_60m, detail
+sum total_oop_60m, detail
+sum fadj_tot_gov_pay_60m, detail
+sum tot_gov_pay_60m, detail
+sum fadj_total_nh_costs_60m, detail
+sum total_nh_costs_60m, detail
+sum fadj_total_costs_60m, detail
+sum total_costs_60m, detail
+
+//all categories are wage index adjusted
+gen fadj_total_oop_60m_wi = fadj_helper_oop_60m_wi + fadj_hospital_oop_60m_wi + fadj_nh_oop_60m_wi ///
++ fadj_doctor_oop_60m_wi + fadj_rx_oop_60m_wi + fadj_insurance_costs_60m_wi + fadj_other_oop_60m_wi
+
+gen fadj_tot_gov_pay_60m_wi = fadj_tot_paid_by_mc_60m_wi + fadj_nh_cost_medicaid_60m_wi
+
+gen fadj_total_nh_costs_60m_wi = fadj_nh_cost_medicaid_60m_wi + fadj_nh_cost_private_60m_wi + ///
+fadj_snf_paid_by_mc_60m_wi + fadj_nh_oop_60m_wi
+
+gen fadj_total_costs_60m_wi = fadj_tot_paid_by_mc_60m_wi + fadj_total_oop_60m_wi + fadj_nh_cost_medicaid_60m_wi ///
++ fadj_nh_cost_private_60m_wi + fadj_inf_care_costs_60m_wi
+
+sum fadj_total_oop_60m_wi, detail
+sum total_oop_60m_wi, detail
+sum fadj_tot_gov_pay_60m_wi, detail
+sum tot_gov_pay_60m_wi, detail
+sum fadj_total_nh_costs_60m_wi, detail
+sum total_nh_costs_60m_wi, detail
+sum fadj_total_costs_60m_wi, detail
 sum total_costs_60m_wi, detail
 ********************************************************************
 
@@ -7909,6 +8349,345 @@ graph pie `slices' ///
 if quintile_dm_2yr ==`i' , plabel(_all percent) subtitle("Overall, Q-`i'",ring(0) position(11)) ///
 	note("Total 5y EOL" "spending=`oa_q`i''",ring(0) position(7))	
 graph save adj_wi_oa_quint_`i', replace
+}
+//Dementia sample
+sum adj_total_costs_60m_wi if pr_dem_gt50==1
+sca d_all=r(mean)
+local d_all = round(d_all)
+	
+graph pie `slices' ///
+if pr_dem_gt50==1, plabel(_all percent) subtitle("Dementia, All Q's",ring(0) position(11)) ///
+note("Total 5y EOL" "spending=`d_all'",ring(0) position(7))
+graph save adj_wi_pr_dem_gt50_spend, replace
+
+forvalues i=1/5{
+	sum adj_total_costs_60m if  pr_dem_gt50==1 & quintile_dm_2yr ==`i'
+	sca d_q_`i'=r(mean)
+	local d_q`i' = round(d_q_`i')
+
+	graph pie `slices' ///
+	if pr_dem_gt50==1 & quintile_dm_2yr ==`i' , plabel(_all percent)  ///
+	subtitle("Dementia, Q-`i'",ring(0) position(11)) ///
+	note("Total 5y EOL" "spending=`d_q`i''",ring(0) position(7))	
+	graph save adj_wi_pr_dem_gt50_quint_`i', replace
+}
+
+//Cancer sample
+sum adj_total_costs_60m_wi if cancer_grp==1
+sca c_all=r(mean)
+local c_all = round(c_all)
+
+graph pie `slices' ///
+if cancer_grp==1, plabel(_all percent) subtitle("Cancer, All Q's",ring(0) position(11)) ///
+note("Total 5y EOL" "spending=`c_all'",ring(0) position(7))
+graph save adj_wi_cancer_grp_spend, replace
+
+forvalues i=1/5{ 
+	sum adj_total_costs_60m if  cancer_grp==1 & quintile_dm_2yr ==`i'
+	sca c_q_`i'=r(mean)
+	local c_q`i' = round(c_q_`i')
+
+	graph pie `slices' ///
+	if cancer_grp==1 & quintile_dm_2yr ==`i' , plabel(_all percent) ///
+	subtitle("Cancer, Q-`i'",ring(0) position(11)) ///
+	note("Total 5y EOL" "spending=`c_q`i''",ring(0) position(7))
+	graph save adj_wi_cancer_grp_quint_`i', replace
+}
+
+//Heart disease sample
+sum adj_total_costs_60m_wi if heartdis_grp==1
+sca h_all=r(mean)
+local h_all = round(h_all)
+
+graph pie `slices' ///
+if heartdis_grp==1, plabel(_all percent) subtitle("Heart Disease, All Q's",ring(0) position(11)) ///
+note("Total 5y EOL" "spending=`h_all'",ring(0) position(7))
+graph save adj_wi_heartdis_grp_spend, replace
+
+forvalues i=1/5{ 
+	sum adj_total_costs_60m if  heartdis_grp==1 & quintile_dm_2yr ==`i'
+	sca h_q_`i'=r(mean)
+	local h_q`i' = round(h_q_`i')
+	
+	graph pie `slices' ///
+	if heartdis_grp==1 & quintile_dm_2yr ==`i' , plabel(_all percent) ///
+	subtitle("Heart Disease, Q-`i'",ring(0) position(11)) ///
+	note("Total 5y EOL" "spending=`h_q`i''",ring(0) position(7))
+	graph save adj_wi_heartdis_grp_quint_`i', replace
+}
+
+//Other diseases sample
+sum adj_total_costs_60m_wi if other_grp==1
+sca o_all=r(mean)
+local o_all = round(o_all)
+
+graph pie `slices' ///
+if other_grp==1, plabel(_all percent) subtitle("Other disease, All Q's",ring(0) position(11)) ///
+note("Total 5y EOL" "spending=`o_all'",ring(0) position(7))
+graph save adj_wi_other_grp_spend, replace
+
+forvalues i=1/5{ 
+	sum adj_total_costs_60m if  other_grp==1 & quintile_dm_2yr ==`i'
+	sca o_q_`i'=r(mean)
+	local o_q`i' = round(o_q_`i')
+	
+	graph pie `slices' ///
+	if other_grp==1 & quintile_dm_2yr ==`i' , plabel(_all percent) ///
+	subtitle("Other disease, Q-`i'",ring(0) position(11)) ///
+	note("Total 5y EOL" "spending=`o_q`i''",ring(0) position(7))	
+	graph save adj_wi_other_grp_quint_`i', replace
+}
+
+cd `logpath'\graphs
+
+grc1leg adj_wi_oa_spend.gph adj_wi_oa_quint_1.gph adj_wi_oa_quint_2.gph adj_wi_oa_quint_3.gph ///
+ adj_wi_oa_quint_4.gph adj_wi_oa_quint_5.gph ///
+ adj_wi_pr_dem_gt50_spend.gph adj_wi_pr_dem_gt50_quint_1.gph adj_wi_pr_dem_gt50_quint_2.gph adj_wi_pr_dem_gt50_quint_3.gph ///
+ adj_wi_pr_dem_gt50_quint_4.gph adj_wi_pr_dem_gt50_quint_5.gph ///
+ adj_wi_cancer_grp_spend.gph adj_wi_cancer_grp_quint_1.gph adj_wi_cancer_grp_quint_2.gph adj_wi_cancer_grp_quint_3.gph ///
+ adj_wi_cancer_grp_quint_4.gph adj_wi_cancer_grp_quint_5.gph ///
+ adj_wi_heartdis_grp_spend.gph adj_wi_heartdis_grp_quint_1.gph adj_wi_heartdis_grp_quint_2.gph adj_wi_heartdis_grp_quint_3.gph ///
+ adj_wi_heartdis_grp_quint_4.gph adj_wi_heartdis_grp_quint_5.gph ///
+ adj_wi_other_grp_spend.gph adj_wi_other_grp_quint_1.gph adj_wi_other_grp_quint_2.gph adj_wi_other_grp_quint_3.gph ///
+ adj_wi_other_grp_quint_4.gph adj_wi_other_grp_quint_5.gph, ///
+  col(6)
+graph save adj_wi_panel_quint_1leg, replace
+graph export adj_wi_panel_quint_1leg.tif, replace
+
+*********************************************************
+log close
+
+
+H="Quartile spending, 5 year wi, EOL adjusted"
+/*This section creates tables by DA 2 year EOL HRR quintiles
+of age,sex, race adjusted 5 year EOL spending per the HRS dataset
+
+Also creates pie charts comparing the spending across quintiles
+
+Note Spending is wage index adjusted across all categories in this version*/
+
+capture log close
+clear all
+set mem 500m
+set more off
+
+local logpath E:\data\hrs_oop_2010\logs
+local datapath E:\data\hrs_oop_2010\final_data
+//local logpath H:\OOP\local_logs
+//local datapath C:\Users\gorger01\Desktop\oop
+
+log using `logpath'\13-mc_oop_5yr_adjust_wi_quartiles-LOG.txt, text replace
+
+cd `datapath'
+
+use oop_mc_sample_adj_age_etc.dta
+**************************************************
+local spvars age_at_death_e adj_total_costs_60m_wi adj_tot_gov_pay_60m_wi adj_tot_paid_by_mc_60m_wi ///
+adj_ip_paid_by_mc_60m_wi adj_snf_paid_by_mc_60m_wi adj_hh_paid_by_mc_60m_wi ///
+adj_hs_paid_by_mc_60m_wi adj_pb_paid_by_mc_60m_wi adj_op_paid_by_mc_60m_wi ///
+adj_dm_paid_by_mc_60m_wi adj_nh_cost_medicaid_60m_wi adj_total_oop_60m_wi adj_helper_oop_60m_wi ///
+adj_hospital_oop_60m_wi adj_nh_oop_60m_wi ///
+adj_doctor_oop_60m_wi adj_rx_oop_60m_wi adj_insurance_costs_60m_wi adj_other_oop_60m_wi nh_nights_60m ///
+ adj_nh_cost_private_60m_wi adj_total_nh_costs_60m_wi adj_inf_care_costs_60m_wi ///
+medicaid_x
+
+**************************************************
+//create tables of spending categories, by disease group (prior
+//tables by quintiles of spending)
+
+//get tables comparing mean, median spending for different disease groups
+mat dg_5y=J(26,8,.)
+//first row n each group
+tab pr_dem_gt50, missing matcell(r1_50)
+mat dg_5y[1,1]=r1_50[2,1] //with dem prob > 50% col 1
+tab cancer_grp, missing matcell(r1_c)
+mat dg_5y[1,3]=r1_c[2,1] //with cancer col 2
+tab heartdis_grp , missing matcell(r1_h)
+mat dg_5y[1,5]=r1_h[2,1] //with heart disease col 3
+tab other_grp , missing matcell(r1_o)
+mat dg_5y[1,7]=r1_o[2,1] //with other disease col 4
+
+//totals 5 years, wage index adjusted mc payments, oop spend and nh nights
+local c=1
+foreach d in pr_dem_gt50 cancer_grp heartdis_grp other_grp{
+	local r = 2
+	foreach v in `spvars'{
+		sum `v' if `d'==1, detail
+		mat dg_5y[`r',`c']=r(mean)
+		mat dg_5y[`r',`c'+1]=r(p50)
+		local r = `r'+1
+		}
+	local c = `c'+2
+	}
+//convert medicaid rate to percent
+forvalues i = 1/8{
+mat dg_5y[`r'-1,`i']=dg_5y[`r'-1,`i']*100	
+}	
+	
+mat rownames dg_5y= "N" "Age at death" "Total payments, all types" "Total government payments" "Total Medicare payments" ///
+"Medicare IP" "Medicare SNF" "Medicare HH" ///
+"Medicare Hospice" "Medicare Carrier" "Medicare OP" "Medicare DME" ///
+"OOP Total" "OOP Helper" "OOP Hospital" "OOP NH" "OOP Doctor" "OOP Rx" ///
+"OOP Insurance Costs" "OOP Other" ///
+"Total NH nights, SR or claims" "Medicaid NH Payments" ///
+"Private payer NH Payments" "Total NH costs, all payers" "Imputed informal care costs" "Medicaid at death? (percent)"
+
+mat list dg_5y
+
+frmttable using `logpath'\13-Adj_wi_5yr_HRR_Quartiles, statmat(dg_5y) ///
+title("Dementia, Cancer and Heart Disease Patients, Medicare and OOP Spending Last 5 years of life" \ ///
+"Adjusted for wage index, age, race, gender") ///
+note("All spending categories are adjusted for the 2010 CMS wage index" \ ///
+"All $ values adjusted for inflation to 2010$" \ ///
+"Total government payments = Medicare + Medicaid nursing home" \ ///
+"Total NH spending = Medicare + OOP + Medicaid or Private Payer" \ ///
+"Informal caregivers are spouses and other unpaid (mainly children), replacemnt wage imputation")  ///
+ctitles("" "Prob dem"  "Cancer" "Heart disease" "Other" \ ///
+"" " > 50%" "" "" "" \ ///
+"" "Mean"  "Mean" "Mean" "Mean" \ "" "Median"  "Median" "Median" "Median"  ) ///
+sdec(0) substat(1) replace 
+
+**************************************************
+//Create tables of spending by quuartile, overall sample (unadjusted)
+mat mean_adj1 = J(26,6,.)
+
+//first row - get n each quintile
+local c=1
+forvalues i=1/3{
+sum exit_year_x if(quart3_dm_2yr==`i')
+mat mean_adj1[1,`c'] = r(N)
+local c = `c'+2
+}
+
+local r=2
+foreach v in `spvars' {
+	local c=1
+	forvalues i = 1/3 {
+		sum(`v') if(quart3_dm_2yr==`i'), detail
+		mat mean_adj1[`r',`c'] = r(mean)
+		mat mean_adj1[(`r'),`c'+1] = r(p50)
+		local c = `c' + 2
+	}
+	local r=`r'+1
+}
+
+//for medicaid percent, multiply mean by 100
+forvalues c = 1/6{
+mat mean_adj1[`r'-1,`c']=mean_adj1[`r'-1,`c']*100	
+}	
+
+mat rownames mean_adj1= "N" "Age at death" "Total payments, all types" "Total government payments" ///
+"Total Medicare payments" "Medicare IP" "Medicare SNF" "Medicare HH" ///
+"Medicare Hospice" "Medicare Carrier" "Medicare OP" "Medicare DME" "Medicaid NH Payments" ///
+"OOP Total" "OOP Helper" "OOP Hospital" "OOP NH" "OOP Doctor" "OOP Rx" ///
+"OOP Insurance Costs" "OOP Other" ///
+"Total NH nights, SR or claims" ///
+"Private payer NH Payments" "Total NH costs, all payers" "Imputed informal care costs" "Medicaid at death? (percent)"
+
+mat list mean_adj1
+
+frmttable using `logpath'\13-Adj_wi_5yr_HRR_Quartiles , statmat(mean_adj1) ///
+	title("Five Year EOL Spending by Quartiles of HRR-level Medicare EOL Spending" \ ///
+	"(within this sample) Adjusted for wage index, age, race, gender") ///
+	ctitle("","Quartile 1 (lowest)", "2&3", "4 (highest)") ///
+	note("All spending categories are adjusted for the 2010 CMS wage index" \ ///
+	"All $ values adjusted for inflation to 2010$" \ ///
+	"Spending amounts are adjusted using linear regression for age (5 year categories)" \ ///
+	"gender and race (black, Hispanic, other)." \ ///
+	"Total government payments = Medicare + Medicaid nursing home" \ ///
+	"Total NH spending = Medicare + OOP + Medicaid or Private Payer" \ ///
+	"Informal caregivers are spouses and other unpaid (mainly children), replacement wage imputation")  ///
+	sdec(0) substat(1) addtable
+
+************************************************************
+//Now create quartile tables for each of the 4 disease groups
+foreach d in pr_dem_gt50 cancer_grp heartdis_grp other_grp{
+	mat mean_`d' = J(26,6,.)
+
+	//first row - get n each quintile
+	local c=1
+	forvalues i=1/3{
+		sum exit_year_x if(quart3_dm_2yr==`i' & `d'==1)
+		mat mean_`d'[1,`c'] = r(N)
+		local c = `c'+2
+		}
+
+	local r=2
+	foreach v in `spvars' {
+		local c=1
+		forvalues i = 1/3 {
+			sum(`v') if(quart3_dm_2yr==`i'& `d'==1), detail
+			mat mean_`d'[`r',`c'] = r(mean)
+			mat mean_`d'[(`r'),`c'+1] = r(p50)
+			local c = `c' + 2
+		}
+		local r=`r'+1
+	}
+
+	//for medicaid percent, multiply mean by 100
+	forvalues c = 1/6{
+		mat mean_`d'[`r'-1,`c']=mean_`d'[`r'-1,`c']*100	
+	}	
+
+mat rownames mean_`d'= "N" "Age at death" "Total payments, all types" "Total government payments" "Total Medicare payments" ///
+"Medicare IP" "Medicare SNF" "Medicare HH" "Medicare Hospice" "Medicare Carrier" "Medicare OP"  ///
+"Medicare DME" "Medicaid NH Payments" "OOP Total" "OOP Helper" "OOP Hospital" "OOP NH" "OOP Doctor" "OOP Rx" ///
+"OOP Insurance Costs" "OOP Other" ///
+"Total NH nights, SR or claims" "Private payer NH Payments" ///
+"Total NH costs, all payers" "Imputed informal care costs" "Medicaid at death? (percent)"
+
+mat list mean_`d'
+
+frmttable using "`logpath'\13-Adj_wi_5yr_HRR_Quartiles" , statmat(mean_`d') ///
+	title("`d' Five Year EOL Spending by Quartiles of HRR-level Medicare" \ ///
+	"EOL Spending (within this sample) Adjusted for wage index, age, race, gender") ///
+	ctitle("","Quartile 1 (lowest)", "2&3", "4 (highest)") ///
+	note("All spending categories are adjusted for the 2010 CMS wage index" \ ///
+	"All $ values adjusted for inflation to 2010$" \ ///
+	"Spending amounts are adjusted using linear regression for age (5 year categories)" \ ///
+	"gender and race (black, Hispanic, other)." \ ///
+	"Total government payments = Medicare + Medicaid nursing home" \ ///
+	"Total NH spending = Medicare + OOP + Medicaid or Private Payer" \ ///
+	"Informal caregivers are spouses and other unpaid (mainly children), replacement wage imputation")  ///
+	sdec(0) substat(1) addtable
+
+}
+
+************************************************************
+//Pie charts of spending by category by quintile and disease group
+//OA sample
+//local logpath H:\OOP\local_logs
+cd "`logpath'\graphs"
+//OA sample - all disease groups included
+sum adj_total_costs_60m_wi
+sca oa_tot=r(mean)
+local oatot = round(oa_tot)
+di `oatot'
+
+local slices adj_tot_paid_by_mc_60m_wi adj_nh_cost_medicaid_60m_wi adj_nh_cost_private_60m_wi ///
+adj_total_oop_60m_wi adj_inf_care_costs_60m_wi
+
+//relabel spending categories so labels can be used in the legends
+la var adj_tot_paid_by_mc_60m_wi "WI Adj Medicare"
+la var adj_nh_cost_medicaid_60m_wi "WI Adj Medicaid NH"
+la var adj_nh_cost_private_60m_wi "WI Adj Private Payer NH"
+la var adj_total_oop_60m_wi "WI Adj OOP"
+la var adj_inf_care_costs_60m_wi "WI Adj Informal care"
+
+graph pie `slices' ///
+, plabel(_all percent) subtitle("Overall, All Q's",ring(0) position(11)) ///
+	note("Total 5y EOL" "spending=`oatot'",ring(0) position(7)) legend(cols(3))
+graph save adj_wi_oa_spend, replace
+
+forvalues i=1/3{ 
+sum adj_total_costs_60m if quart3_dm_2yr ==`i'
+sca oa_q_`i'=r(mean)
+local oa_q`i' = round(oa_q_`i')
+
+graph pie `slices' ///
+if quart3_dm_2yr ==`i' , plabel(_all percent) subtitle("Overall, Q-`i'",ring(0) position(11)) ///
+	note("Total 5y EOL" "spending=`oa_q`i''",ring(0) position(7))	
+graph save adj_wi_oa_quart_`i', replace
 }
 //Dementia sample
 sum adj_total_costs_60m_wi if pr_dem_gt50==1

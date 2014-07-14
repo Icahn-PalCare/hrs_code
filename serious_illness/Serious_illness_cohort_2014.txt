@@ -275,6 +275,171 @@ or adl_independent_core=0;
 quit;
 ods rtf close;
 
+H="Link in Wage Index by Zip Code or State"
+/*Note that the raw data with the wage index is saved in the out of pocket
+(OOP) spending project folders rather than duplicating it for this project*/
+
+/******************************************************************/
+/* Adjust subtotals for wage index */
+/******************************************************************/
+
+/******************************************************************/
+/* Pull in wage index file and clean up for states that are missing WI*/
+/******************************************************************/
+/*bring in 2010 wage index file*/
+proc import datafile="E:\data\hrs_oop_2010\ref_data\wage_index\wage_index_cbsa_2010.xls"
+out=sic_int.wage_index 
+replace;
+run;
+
+/*get RI average*/
+data wi_ri;
+set sic_int.wage_index;
+if index(trim(left(Area_Title)),", RI")>0;
+run;
+
+proc means;
+var wage_index;
+run;
+
+/*deal with states that were missing wage index values in the 2010 file
+These values are the state averages using the individual cbsa values 
+data in the 2010 excel file came from
+Note in switching from 2008 to 2010, RI is the only missing state*/
+data wage_index2;
+set sic_int.wage_index;
+cbsa_n=cbsa_code+0;
+if trim(left(cbsa_code))~="";
+wage_index_2010=Wage_Index;
+if index(trim(left(Area_Title)),", RI")>0 then RI=1;
+*state 44=RI;
+if state_in_wage_index=44 then wage_index_2010=1.0783000; 
+run;
+
+*Look at observations from Rhode Island;
+proc freq data=wage_index2(where=(ri=1));
+table Area_Title;
+run;
+
+%let var=ri;
+proc means data=wage_index2;
+class &var;
+var wage_index_2010;
+run;
+
+/******************************************************************/
+/* Link CBSA codes and zip codes from the WI file*/
+/******************************************************************/
+/*Bring in xwalk file between CBSA codes and zip codes
+Note only keep variables needed from xwalk file because formats 
+are missing for some of the other text variables*/
+
+libname oop_ref "E:\data\hrs_oop_2010\ref_data";
+
+data zip_cb;
+set oop_ref.xtract(keep=zip5 cbsa state);
+zip_n=zip5+0;
+cbsa_n=cbsa+0;
+/*If zip code is not missing, add state code*/
+if zip_n~=.;
+state_n=state+0;
+run;
+
+*Remove duplicate entries for zip5 and cbsa from xwalk file;
+*Goes from 399045 to 49289 rows;
+proc sort data=zip_cb out=zip_cb2 nodupkey;
+by zip_n cbsa_n;
+run;
+
+*Check to see zip codes in a cbsa code for Rochester, NY;
+proc sql;
+select zip5, cbsa from zip_cb2
+where cbsa_n in (40380);
+quit;
+
+/*note several zip codes have multiple cbsa*/
+/*create dataset with just one entry for each zip code
+8029 zip codes have more than one cbsa code
+Just use the first one when sort*/
+proc sort data=zip_cb2 out=cbsa_zip_final nodupkey;
+by zip_n;
+run;
+
+*Check to see zip codes in a cbsa code for Rochester, NY;
+proc sql;
+select zip_n, cbsa from cbsa_zip_final
+where cbsa_n in (40380);
+quit;
+
+/******************************************************************/
+/* Create dataset with cbsa, state, wage index and zip code */
+/******************************************************************/
+
+/*for zip codes with no cbsa, wage index is left missing
+there are also many cbsas with missing wage index*/
+proc sql;
+create table zip_cbsa_wage_index as
+select a.*,b.wage_index_2010 from
+cbsa_zip_final a
+left join
+wage_index2 b
+on a.cbsa_n=b.cbsa_n;
+quit;
+
+/*Check for and remove duplicates by zip, keep first entry*/
+proc sort data=zip_cbsa_wage_index out=zip_cbsa_wage_index2 nodupkey;
+by zip_n;
+run;
+
+/******************************************************************/
+/* Merge the wage index into the interview dataset by the cleaned zip */
+/******************************************************************/
+
+proc sql;
+create table core_age_zip_wi as select a.*,b.wage_index_2010, b.state_n from
+sic_int.core_age_zip a
+left join
+zip_cbsa_wage_index2 b
+on a.zip_wave=b.zip_n;
+quit;
+
+/*check to see how many ivws are missing the wage index*/
+data miss_wi;
+set core_age_zip_wi;
+if wage_index+2010 =.;
+run;
+
+/******************************************************************/
+/* Bring in  WI by state if missing by zip (b/c not in a metro area) */
+/******************************************************************/
+/*Merges in wage index if there's one for the state but was missing for the zip*/
+proc sql;
+create table sic_int.core_age_zip_wi2
+as select a.*,coalesce(a.wage_index_2010,b.wage_index_2010) as wage_index_20102
+from
+core_age_zip_wi a
+left join
+zip_cbsa_wage_index2 b
+on a.state_n=b.state_in_wage_index;
+quit;
+
+/*check for missing values*/
+proc means;
+var wage_index_2010 wage_index_20102;
+run;
+
+proc sql;
+select distinct state_n ,count(*) from core_age_zip_wi2
+where wage_index_20102=. group by state_n;
+quit;
+
+proc sql;
+select distinct zip_exit_n ,count(*) from core_age_zip_wi2
+where wage_index_20102=. group by zip_exit_n;
+quit;
+
+
+
 H="Create frequency tables of core variables"
 /*creates log file to review with Amy for new variables*/
 
@@ -363,7 +528,7 @@ sic_int.core_xwalk_1 has core interviews, age and claims xwalk id */
 
 /*prepare core dataset to merge*/
 data core_id;
-set sic_int.core_age_zip;
+set sic_int.core_age_zip_wi2;
 run;
 
 proc sort data=core_id nodupkey;
@@ -422,7 +587,7 @@ run;
 So pulls all interviews for r's with the mc linkage
 91386 interviews have linkage*/
 data sic_int.core_lmt_xwalk_2;
-set core_xwalk_1(keep=id core_year c_ivw_date c_ivw_year c_ivw_month age_at_core bid_hrs xwalk_yes);
+set core_xwalk_1(keep=id core_year c_ivw_date c_ivw_year c_ivw_month age_at_core bid_hrs xwalk_yes wage_index_20102);
 if xwalk_yes=1;
 run;
 
@@ -4498,12 +4663,48 @@ left join
      %all_other(source=dm,month_n=_1yr,days_start=0,days_after_core=365);
 
 /******************************************************************/
+/* Adjust for the wage index */
+/******************************************************************/
+data ip_1yr_post ;
+set ip_1yr ;
+run;
+
+data snf_1yr_post ;
+set snf_1yr ;
+run;
+
+%macro wage_ind(source=);
+*add wage index to the costs totals files;
+proc sql;
+create table &source._wi_1 as select a.*, b.wage_index_20102
+from &source._1yr_post a left join
+sic_int.core_lmt_xwalk_2 b
+on a.BID_hrs=b.bid_hrs= and a.core_year=b.core_year;
+quit;
+
+data &source._wi_2;
+set &source._wi_1;
+&source._paid_by_mc_1yr_wi = &source._paid_by_mc_1yr / wage_index_20102;
+run;
+
+%mend;
+
+%wage_ind(source=ip);
+%wage_ind(source=snf);
+ %wage_ind(source=op);
+  %wage_ind(source=pb);
+   %wage_ind(source=hh);
+    %wage_ind(source=hs);
+     %wage_ind(source=dm);
+
+
+/******************************************************************/
 /* Get totals across all claim types */
 /******************************************************************/
 
 *first merge into single dataset;
 data mc_costs_all;
-merge ip_1yr snf_1yr hh_1yr_post hs_1yr_post pb_1yr_post op_1yr_post dm_1yr_post;
+merge ip_wi_2 snf_wi_2 hh_wi_2 hs_wi_2 pb_wi_2 op_wi_2 dm_wi_2;
 by BID_hrs core_year;
 run;
 
@@ -4512,6 +4713,12 @@ set mc_costs_all;
 /*total not adjusted for wage index*/
 tot_paid_by_mc_1yr=sum(of ip_paid_by_mc_1yr snf_paid_by_mc_1yr hh_paid_by_mc_1yr hs_paid_by_mc_1yr
 pb_paid_by_mc_1yr op_paid_by_mc_1yr dm_paid_by_mc_1yr);
+
+/*wage index adjusted*/
+tot_paid_by_mc_1yr_wi=sum(of ip_paid_by_mc_1yr_wi snf_paid_by_mc_1yr_wi hh_paid_by_mc_1yr_wi hs_paid_by_mc_1yr_wi
+pb_paid_by_mc_1yr_wi op_paid_by_mc_1yr_wi dm_paid_by_mc_1yr_wi);
+
+/*total wage index adjusted*/
 label tot_paid_by_mc_1yr="Medicare payment total 1 year following interview"
 ip_paid_by_mc_1yr="IP Medicare payments 1 year following interview" 
 snf_paid_by_mc_1yr="SNF Medicare payments 1 year following interview"
@@ -4520,6 +4727,15 @@ hs_paid_by_mc_1yr="Hospice Medicare payments 1 year following interview"
 pb_paid_by_mc_1yr="Carrier Medicare payments 1 year following interview" 
 op_paid_by_mc_1yr="OP Medicare payments 1 year following interview" 
 dm_paid_by_mc_1yr="DME Medicare payments 1 year following interview"
+
+tot_paid_by_mc_1yr_wi="WI adj Medicare payment total 1 year following interview"
+ip_paid_by_mc_1yr_wi="WI adj IP Medicare payments 1 year following interview" 
+snf_paid_by_mc_1yr_wi="WI adj SNF Medicare payments 1 year following interview"
+hh_paid_by_mc_1yr_wi="WI adj Home health Medicare payments 1 year following interview" 
+hs_paid_by_mc_1yr_wi="WI adj Hospice Medicare payments 1 year following interview"
+pb_paid_by_mc_1yr_wi="WI adj Carrier Medicare payments 1 year following interview" 
+op_paid_by_mc_1yr_wi="WI adj OP Medicare payments 1 year following interview" 
+dm_paid_by_mc_1yr_wi="WI adj DME Medicare payments 1 year following interview"
 ;
 run;
 
@@ -4538,6 +4754,11 @@ quit;
 proc means; 
 var ip_paid_by_mc_1yr snf_paid_by_mc_1yr hh_paid_by_mc_1yr hs_paid_by_mc_1yr
 pb_paid_by_mc_1yr op_paid_by_mc_1yr dm_paid_by_mc_1yr tot_paid_by_mc_1yr;
+run;
+
+proc means; 
+var ip_paid_by_mc_1yr_wi snf_paid_by_mc_1yr_wi hh_paid_by_mc_1yr_wi hs_paid_by_mc_1yr_wi
+pb_paid_by_mc_1yr_wi op_paid_by_mc_1yr_wi dm_paid_by_mc_1yr_wi tot_paid_by_mc_1yr_wi;
 run;
 
 proc means ; class part_ab_12m_aft; var ip_paid_by_mc_1yr snf_paid_by_mc_1yr hh_paid_by_mc_1yr hs_paid_by_mc_1yr
@@ -7450,6 +7671,9 @@ substat(1) sdec(2) addtable
 log close
 
 
+
+
+H="Bar graph - p1 outcomes, critera a,b,c"
 
 
 H="Tables - Hospital use required in CHF, COPD criteria"

@@ -49,7 +49,7 @@ run;
 
 data restr(rename=(ZIP10_2000=ZIP10));
 set hrs_fnl.restricted_v2010(keep=hhid pn id birth_date death_date white black hisp_eth native_amer 
-asian_pi other_race other_na_api_race zip: cause_death_12_n );
+asian_pi other_race other_na_api_race zip: stateusps: cause_death_12_n );
 id_c=trim(hhid)||trim(pn);
 drop id;
 rename id_c=id;
@@ -145,8 +145,6 @@ proc freq; table first_ivw_year last_ivw_year; run;
 2. if still missing, use interview after
 3. if still missing, use interview 2x prior...*/
 
-
-
 data core_age_zip_2 ;
 set core_age_zip_1 ;
 /*1998 updates, use 2000 zip
@@ -207,21 +205,85 @@ if zip10='' & first_ivw_year<=2010<=last_ivw_year then do;
 	end;
 run;
 
-proc sort data=core_age_zip_2; by id core_year; run;
+****************************************************************;
+
+*get clean state code variable by wave;
+data core_age_zip_state;
+set core_age_zip_2;
+/*1998 state - n=1 obs only has one interview with missing zip,state, leave blank*/
+if stateusps98='' & first_ivw_year<=1998<=last_ivw_year then do;
+	st_98_imp_yes=1;
+	stateusps98=stateusps00;
+	end;
+/*2000 state - n=2 obs only single interview so leave missing*/ 
+if stateusps00='' & first_ivw_year<=2000<=last_ivw_year then do;
+	st_00_imp_yes=1;
+	stateusps00=stateusps98;
+	end;
+/*2002 state - n=1 obs only single interview so leave missing*/ 
+if stateusps02='' & first_ivw_year<=2002<=last_ivw_year then do;
+	st_02_imp_yes=1;
+	stateusps02=stateusps00;
+	if stateusps02='' then do;
+		stateusps02=stateusps04;
+		end;
+	end;
+/*2004 updates, use 2002 or 2006 state
+13 obs has only the 2004 interview, leave state missing for those observations*/
+if stateusps04='' & first_ivw_year<=2004<=last_ivw_year then do;
+	st_04_imp_yes=1;
+	stateusps04=stateusps02;
+		if stateusps04='' then do;
+		stateusps04=stateusps06;
+		end; /*1 obs still missing, use 1998 state for this person*/
+				if stateusps04='' then do;
+				stateusps04=stateusps98;
+				end; 
+	end;
+/*2006 updates, use 2004 or 2008 state
+no observations missing*/
+if stateusps06='' & first_ivw_year<=2006<=last_ivw_year then do;
+	st_06_imp_yes=1;
+	stateusps06=stateusps04;
+		if stateusps06='' then do;
+		stateusps06=stateusps08;
+		end; 
+	end;
+/*2008 updates, use 2006 state
+no observations missing*/
+if stateusps08='' & first_ivw_year<=2008<=last_ivw_year then do;
+	st_08_imp_yes=1;
+	stateusps08=stateusps06;
+	end;
+/*2010 updates, use 2008 state
+1 obs has only 2010 interview and missing state that year, so leave missing*/
+if stateusps10='' & first_ivw_year<=2010<=last_ivw_year then do;
+	st_10_imp_yes=1;
+	stateusps10=stateusps08;
+	end;
+run;
+
+proc sort data=core_age_zip_state; by id core_year; run;
 
 *save dataset and drop raw zip code variables;
 data sic_int.core_age_zip;
-set core_age_zip_2;
+set core_age_zip_state;
 zip_wave=vvaluex("zip"||substr(trim(left(core_year)),3,2) );
 zip_imputed=vvaluex("zip_"||substr(trim(left(core_year)),3,2)||"_imp_yes" );
 drop zip9: zip0: zip1: ;
 label zip_wave="ZIP code, residence at time of interview";
 label zip_imputed="ZIP code imputed";
+
+state_wave=vvaluex("stateusps"||substr(trim(left(core_year)),3,2) );
+state_imputed=vvaluex("st_"||substr(trim(left(core_year)),3,2)||"_imp_yes" );
+drop stateusps: ;
+label state_wave="State, residence at time of interview";
+label state_imputed="State imputed";
 run;
 
-proc freq; table zip_wave  /missprint ; run;
+proc freq; table zip_wave state_wave data=sic_int.core_age_zip /missprint ; run;
 
-proc freq; table zip_imputed /missprint ; run;
+proc freq; table zip_imputed state_imputed /missprint ; run;
 
 ****************************************************************;
 
@@ -302,18 +364,31 @@ proc means;
 var wage_index;
 run;
 
+/*get DC average*/
+data wi_dc;
+set sic_int.wage_index;
+if index(trim(left(Area_Title)),", DC")>0;
+run;
+
+proc means;
+var wage_index;
+run;
+
 /*deal with states that were missing wage index values in the 2010 file
 These values are the state averages using the individual cbsa values 
 data in the 2010 excel file came from
-Note in switching from 2008 to 2010, RI is the only missing state*/
+Note in switching from 2008 to 2010, RI, DC are missing
+Manually added in blank DC line to Excel sheet so entry can match rest of other states*/
 data wage_index2;
 set sic_int.wage_index;
 cbsa_n=cbsa_code+0;
 if trim(left(cbsa_code))~="";
 wage_index_2010=Wage_Index;
 if index(trim(left(Area_Title)),", RI")>0 then RI=1;
-*state 44=RI;
+if index(trim(left(Area_Title)),", DC")>0 then DC=1;
+*state 44=RI ,state 11=DC;
 if state_in_wage_index=44 then wage_index_2010=1.0783000; 
+if state_in_wage_index=11 then wage_index_2010=1.0783000; *replace this with the avg!;
 run;
 
 *Look at observations from Rhode Island;
@@ -326,6 +401,18 @@ proc means data=wage_index2;
 class &var;
 var wage_index_2010;
 run;
+
+*Look at observations from DC;
+proc freq data=wage_index2(where=(DC=1));
+table Area_Title;
+run;
+
+%let var=DC;
+proc means data=wage_index2;
+class &var;
+var wage_index_2010;
+run;
+
 
 /******************************************************************/
 /* Link CBSA codes and zip codes from the WI file*/
@@ -395,32 +482,46 @@ run;
 /* Merge the wage index into the interview dataset by the cleaned zip */
 /******************************************************************/
 
+/*change zip in interview dataset to a number*/
+data core_age_zip_1 ;
+set sic_int.core_age_zip;
+zip_wave_n=zip_wave+0;
+run;
+
+proc contents; run;
+
 proc sql;
-create table core_age_zip_wi as select a.*,b.wage_index_2010, b.state_n from
-sic_int.core_age_zip a
+create table core_age_zip_wi as select a.*,b.wage_index_2010 from
+core_age_zip_1 a
 left join
 zip_cbsa_wage_index2 b
-on a.zip_wave=b.zip_n;
+on a.zip_wave_n=b.zip_n;
 quit;
 
-/*check to see how many ivws are missing the wage index*/
+/*n=60886 ivws are missing the wage index when matched just by zip*/
 data miss_wi;
 set core_age_zip_wi;
-if wage_index+2010 =.;
+if wage_index_2010 =.;
 run;
 
 /******************************************************************/
 /* Bring in  WI by state if missing by zip (b/c not in a metro area) */
 /******************************************************************/
+proc sort data=wage_index2 out=wage_index3 nodupkey;
+by state_in_wage_index;
+run;
+
+proc freq data=wage_index3; table State_; run;
+
 /*Merges in wage index if there's one for the state but was missing for the zip*/
 proc sql;
-create table sic_int.core_age_zip_wi2
+create table core_age_zip_wi_2
 as select a.*,coalesce(a.wage_index_2010,b.wage_index_2010) as wage_index_20102
 from
 core_age_zip_wi a
 left join
-zip_cbsa_wage_index2 b
-on a.state_n=b.state_in_wage_index;
+wage_index3 b
+on a.state_wave=b.State_;
 quit;
 
 /*check for missing values*/
@@ -429,16 +530,16 @@ var wage_index_2010 wage_index_20102;
 run;
 
 proc sql;
-select distinct state_n ,count(*) from core_age_zip_wi2
-where wage_index_20102=. group by state_n;
+select distinct state_wave ,count(*) from core_age_zip_wi_2
+where wage_index_20102=. group by state_wave;
 quit;
 
 proc sql;
-select distinct zip_exit_n ,count(*) from core_age_zip_wi2
-where wage_index_20102=. group by zip_exit_n;
+select distinct zip_wave_n ,count(*) from core_age_zip_wi_2
+where wage_index_20102=. group by zip_wave_n;
 quit;
 
-
+proc freq data=sic_int.core_age_zip; table  state_wave  /missprint ; run;
 
 H="Create frequency tables of core variables"
 /*creates log file to review with Amy for new variables*/

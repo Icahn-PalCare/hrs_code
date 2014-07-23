@@ -4516,6 +4516,15 @@ la def tics_cat_miss 1 "Normal >8" 2 "MCI 5-8" 3"Demented 0-4" 4"Unknown"
 la val tics_cat_miss tics_cat_miss
 tab tics_cat_miss
 
+//create tics category variable v2, combining MCI and demented into single category
+gen tics_cat_miss2 = tics_cat
+replace tics_cat_miss2 = 2 if tics_cat==3
+replace tics_cat_miss2 = 3 if tics_cat==.
+la var tics_cat_miss2 "TICS categorical, v2, 3 categories"
+la def tics_cat_miss2 1 "Normal >8" 2 "MCI or Demented 0-8" 3"Unknown"
+la val tics_cat_miss2 tics_cat_miss2
+tab tics_cat_miss2
+
 //create tics indicator variables for the 4 categories
 gen byte tics_ind_normal=0
 replace tics_ind_normal=1 if tics_cat_miss==1
@@ -4529,6 +4538,10 @@ tab tics_ind_normal, missing
 tab tics_ind_mci, missing
 tab tics_ind_dem, missing
 tab tics_ind_unk, missing
+
+gen byte tics_ind_mci_dem = 0
+replace tics_ind_mci_dem = 1 if tics_cat_miss2==2
+tab tics_ind_mci_dem, missing
 
 ***************************************************************************
 ***************************************************************************
@@ -4686,24 +4699,35 @@ la def stay_dstn_cat 1 "Home incl hha" 2"long term care incl snf" 3"IP rehab" //
 la var stay_dstn_cat stay_dstn_cat
 tab stay_dstn_cat stay_dstn_cd, missing
 
-gen dis_home=.
-replace dis_home=0 if inlist(stay_dstn_cat,2,3,4,5,6)
+//discharge location coded into groups - version 2 with more long term care categories
+gen stay_dstn_cat2=.
+replace stay_dstn_cat2=1 if inlist(stay_dstn_cd_n,1,6) //home
+replace stay_dstn_cat2=2 if inlist(stay_dstn_cd_n,3) //long term care - SNF
+replace stay_dstn_cat2=3 if inlist(stay_dstn_cd_n,4) //long term care - ICF
+replace stay_dstn_cat2=4 if inlist(stay_dstn_cd_n,63) //long term care - Hospital
+replace stay_dstn_cat2=5 if inlist(stay_dstn_cd_n,62) //rehab
+replace stay_dstn_cat2=6 if inlist(stay_dstn_cd_n,50,51) //hospice
+replace stay_dstn_cat2=7 if inlist(stay_dstn_cd_n,2,5,61,99,30) //other (includes still patient and unknown)
+replace stay_dstn_cat2=6 if inlist(stay_dstn_cd_n,20) //expired
+la var stay_dstn_cat2 "Discharge location categorical v2"
+la def stay_dstn_cat2 1 "Home incl hha" 2"snf" 3"intermediate care facility" ///
+	4"ltc hospital" 5"IP rehab" 6"Hospice" 7"Other location or missing" 8"Expired"
+la var stay_dstn_cat2 stay_dstn_cat2
+tab stay_dstn_cat2 stay_dstn_cd, missing
+
+gen dis_home=0 if stay_dstn_cat!=1 & stay_dstn_cat!=.
 replace dis_home=1 if stay_dstn_cat==1
-gen dis_ltc=.
-replace dis_ltc=0 if inlist(stay_dstn_cat,1,3,4,5,6)
+gen dis_ltc=0 if stay_dstn_cat!=2 & stay_dstn_cat!=.
 replace dis_ltc=1 if stay_dstn_cat==2
-gen dis_rehab=.
-replace dis_rehab=0 if inlist(stay_dstn_cat,1,2,4,5,6)
+gen dis_rehab=0 if stay_dstn_cat!=3 & stay_dstn_cat!=.
 replace dis_rehab=1 if stay_dstn_cat==3
-gen dis_hs=.
-replace dis_hs=0 if inlist(stay_dstn_cat,1,2,3,5,6)
+gen dis_hs=0 if stay_dstn_cat!=4 & stay_dstn_cat!=.
 replace dis_hs=1 if stay_dstn_cat==4
-gen dis_oth=.
-replace dis_oth=0 if inlist(stay_dstn_cat,1,2,3,4,6)
+gen dis_oth=0 if stay_dstn_cat!=5 & stay_dstn_cat!=.
 replace dis_oth=1 if stay_dstn_cat==5
-gen dis_died=.
-replace dis_died=0 if inlist(stay_dstn_cat,1,2,3,4,5)
+gen dis_died=0 if stay_dstn_cat!=6 & stay_dstn_cat!=.
 replace dis_died=1 if stay_dstn_cat==6
+
 la var dis_home "Discharged to home"
 la var dis_ltc "Discharged to long term care facility"
 la var dis_rehab "Discharged to rehab facility"
@@ -4711,6 +4735,17 @@ la var dis_hs "Discharged to hospice"
 la var dis_oth "Other / Unknown Discharged Location"
 la var dis_died "Expired"
 
+//additional long term care sub-categories
+gen dis_snf=0 if stay_dstn_cat2!=2 & stay_dstn_cat2!=.
+replace dis_snf=1 if stay_dstn_cat2==2
+gen dis_icf=0 if stay_dstn_cat2!=3 & stay_dstn_cat2!=.
+replace dis_icf=1 if stay_dstn_cat2==3
+gen dis_ltch=0 if stay_dstn_cat2!=4 & stay_dstn_cat2!=.
+replace dis_ltch=1 if stay_dstn_cat2==4
+
+la var dis_snf "Discharged to snf"
+la var dis_icf "Discharged to interm care facility"
+la var dis_ltch "Discharged to ltc hospital"
 
 *************************************************************************
 *************************************************************************
@@ -5770,6 +5805,9 @@ Changes per comments are:
 3. Combine age categories to <75, 75-84 and 85+
 4. Add cancer as comorbidity to be consistent
 5. Drop nursing home residence status
+
+These results are what is discussed in the draft of the paper from 
+Zara on 7-14-2014
 */
 
 capture log close
@@ -5897,6 +5935,142 @@ outreg using `logpath'\logit_age_v2, ///
 	stats(e_b e_ci) ctitles("","0-365-Day") ///
 	varlabels merge(table6) starlevels(10 5 1) addtable
 
+
+	
+log close
+
+
+H="Stata - run survival analysis, version 3"
+/*surgery project analysis - version 3
+
+This version runs with the mortality outcome time windows of:
+0-30 days
+0-180 days
+0-365 days 
+
+Changes from version 2 per comments are:
+1. Add control for days from n1 core to index surgery
+
+Updates from comments / questions from Zara and Amy 
+after she sent draft of the paper on 7-14-2014
+*/
+
+capture log close
+
+clear all
+set mem 500m
+set matsize 800
+set more off
+
+local texpath E:\data\surgery\logs\tex\
+local logpath E:\data\surgery\logs
+local datapath E:\data\surgery\final_2010clms\
+
+log using `logpath'\10_Surgery_code_analysis_v3.txt, text replace
+
+use `datapath'surgery_final_n12m_sample_clean_stset.dta
+
+tab died_30d died_180d, missing
+tab died_30d died_365d, missing
+
+stdes
+
+tab censor_1y_ind if _st==1
+tab procedure_date if censor_1y_ind==1 & _st==1, missing
+tab  c_ivw_date_p1 if censor_1y_ind==1 & _st==1, missing
+
+tab procedure_date admit_12m_post if censor_1y_ind==1 & _st==1, missing
+tab procedure_date snf_days_post_12m if censor_1y_ind==1 & _st==1, missing
+
+tab adl_cat_core_n1 if procedure_date==d(20mar2002) & censor_1y_ind==1 & _st==1
+
+sum days_surg_n1core, detail
+
+******************************************************************
+******************************************************************
+//Run regression - effect of age on mortality
+//Exclude complications
+//outcomes are died 0-30d, 0-180d, and 0-365d
+******************************************************************
+******************************************************************
+//base categories are age=65-74, srh=very good/excellent/good 
+//adl = independent
+local xvars_no_disch ib1.age_cat_2 el_cancer i.comorb_1_0_n12m i.comorb_32_0_n12m ///
+	i.comorb_31_0_n12m i.comorb_13_0_n12m i.el_diab ///
+	i.srh_fp_ncore i.adl_cat_ps days_surg_n1core i.admit_ind_6m_pre 
+
+logit died_30d `xvars_no_disch' if _st==1, /*vce(r)*/ or
+estat ic
+outreg, ///
+	stats(e_b e_ci) ctitles("","0-30-Day") ///
+	title("Effect of age on mortality - v3") ///
+	note("Odds ratios, 95% confidence intervals reported" \ ///
+	"Base categories are Age: 65-74, Self-reported health: Excellent, very good or good," \ ///
+	"and ADL: Independent.") ///
+	varlabels store(table4) starlevels(10 5 1)
+
+logit died_180d `xvars_no_disch' if _st==1, /*vce(r)*/ or
+estat ic
+outreg, ///
+	stats(e_b e_ci)  ctitles("","0-180-Day") ///
+	varlabels merge(table4) starlevels(10 5 1)
+
+logit died_365d `xvars_no_disch' if _st==1, /*vce(r)*/ or
+estat ic
+outreg using `logpath'\logit_age_v3, ///
+	stats(e_b e_ci)  ctitles("","0-365-Day") ///
+	varlabels merge(table4) starlevels(10 5 1) replace		
+
+	
+***********************************************************************************
+***********************************************************************************
+//Run complementary log log model, excluding complications
+***********************************************************************************
+***********************************************************************************
+cloglog died_30d `xvars_no_disch' if _st==1, eform
+outreg, ///
+ 	stats(e_b e_ci) ctitles("","0-30-Day") ///
+	title("Table 3: Effect of age on mortality - Complementary log log model, v3") ///
+	note("Hazard ratios, 95% confidence intervals reported" \ ///
+	"Base categories are Age: 65-74, Self-reported health: Excellent, very good or good," \ ///
+	"and ADL: Independent.") ///
+	varlabels store(table6) starlevels(10 5 1)
+
+cloglog died_180d `xvars_no_disch' if _st==1, eform
+outreg, ///
+ 	stats(e_b e_ci) ctitles("","0-180-Day") ///
+	varlabels merge(table6) starlevels(10 5 1)
+
+cloglog died_365d `xvars_no_disch' if _st==1, eform
+outreg using `logpath'\logit_age_v3, ///
+	stats(e_b e_ci) ctitles("","0-365-Day") ///
+	varlabels merge(table6) starlevels(10 5 1) addtable
+	
+***********************************************************************************
+***********************************************************************************
+//Run complementary log log model, including complications
+***********************************************************************************
+***********************************************************************************
+
+cloglog died_30d `xvars_no_disch' i.comp_any if _st==1, eform
+outreg, ///
+ 	stats(e_b e_ci) ctitles("","0-30-Day") ///
+	title("Table 4: Effect of age on mortality - Complementary log log model" \ ///
+	"Including complications during surgery as covariate") ///
+	note("Hazard ratios, 95% confidence intervals reported" \ ///
+	"Base categories are Age: 65-74, Self-reported health: Excellent, very good or good," \ ///
+	"and ADL: Independent.") ///
+	varlabels store(table6) starlevels(10 5 1)
+
+cloglog died_180d `xvars_no_disch' i.comp_any if _st==1, eform
+outreg, ///
+ 	stats(e_b e_ci) ctitles("","0-180-Day") ///
+	varlabels merge(table6) starlevels(10 5 1)
+
+cloglog died_365d `xvars_no_disch' i.comp_any if _st==1, eform
+outreg using `logpath'\logit_age_v3, ///
+	stats(e_b e_ci) ctitles("","0-365-Day") ///
+	varlabels merge(table6) starlevels(10 5 1) addtable
 
 	
 log close
@@ -6298,6 +6472,457 @@ local j = `j' + 3
 }
 
 frmttable using `logpath'table1b_final , statmat(tab_2) ///
+	title("Table 2 - Unadjusted 30-, 180- and 365-Day Mortality") ///
+	ctitle("","N all","0-30-Day %","n","p-val","0-180-Day %","n","p-val", "0-365-Day %","n","p-val") ///
+	rtitle("Overall sample" \ "Age: 65-74" \ "75-84" \ "85+" \ ///
+	"Female" \ "Male"\ "AA" \ "Hispanic" \ "White" \"Other" \ ///
+	"TICS >8 Normal" \"5-8 MCI" \"<5 Demented"\ "TICS Unknown" \"Cancer" \"CHF" \ ///
+	"CAD"\"Dementia"\"ESRD"\"Diabetes"\"Self reported health: Exc / VG / Good" \ ///
+	"Fair/Poor" \ "Baseline ADL: Independent" \ "ADL: Any Dependence" \  ///
+	"Nursing home resident - Yes" \ "No" \ "Hospital admit in prior 6 mos: Yes" \ "No" \ ///
+	"Discharge location: Home" \ "Long term care" \ "Inpatient rehab" \"Hospice" \  ///
+	"Other or Unknown" \ "Expired" \ "Any complication: Yes" \ "No") ///
+	note("P-values are calculating using Fisher's exact test.") ///
+	sdec(0,2,0,3,2,0,3,2,0,3) addtable
+
+	
+	
+log close
+
+
+H="Stata - tables, v2"
+/*surgery project analysis
+
+Created 7/23/2014 to run unadjusted means tables for the final sample
+that was used for the survival analysis
+
+Some variable changes from email discussions with Zara 7/14/14-7/22/14
+1. Table 1a: Combined tics mci + demented
+2. Table 1b: 
+	2a. Added row for time from n1 core interview to index surgery
+	2b. Split up ltc category into snf, etc
+3. Table 2, Univariate analysis:
+	3a. Included time from n1 core interview to index surgery in table 1
+	3b. Combined tics mci + demented in Table 1
+	3c. Split up ltc category into snf, etc in Table 2
+	3d. Changed 1st column to be % instead of n and removed n columns for 
+	    individual mortality categories to match Zara's tables 1,2 in the draft
+4. Added new, short table comparing mean days from interview to surgery
+	for the 3 mortality groups. Wasn't sure how to add it to Table 2 since
+	its a continuous variable. Could split into categories??
+
+Have to manually add in variable labels to word document, varlabels
+not working with categorical variables for some reason
+
+This version runs with the mortality outcome time windows of:
+0-30 days
+0-180 days
+0-365 days*/
+
+capture log close
+
+clear all
+set mem 500m
+set matsize 800
+set more off
+
+local logpath E:\data\surgery\logs\
+local datapath E:\data\surgery\final_2010clms\
+
+log using `logpath'11_Surgery_code_finaltables_v2.txt, text replace
+
+use `datapath'surgery_final_n12m_sample_clean_stset.dta if _st==1
+
+stdes
+
+//numlabel, add
+
+tab died_0_30 died_31_180, missing
+tab died_0_30 died_31_365, missing
+
+stdes
+
+tab _st, missing
+
+***************************************************
+***************************************************
+// Table 1 - Cohort characteristics
+***************************************************
+***************************************************
+//changed tics to 3 category (normal, mci+demented, missing)
+//added variable for days from n1 core to index surgery
+local comorb el_cancer comorb_1_0_n12m comorb_32_0_n12m comorb_31_0_n12m comorb_13_0_n12m el_diab
+
+//First part - Patient Factors
+tabout age_cat_2 female re_cat tics_cat_miss2 `comorb' srh_fp_ncore adl_cat_ps nhres_n1 ///
+	admit_ind_6m_pre days_surg_n1core using `logpath'table1a_final_v2.txt, ///
+	c(freq col) oneway replace ///
+	style(tab) /*ptotal(none)*/ format(0c 2p)
+//Note: this uses tabout, paste tab delimited file from text file into
+//an excel spreadsheet for easy importing into a table
+
+//Second part - hospital episode
+
+local compl comp_any comp_uti comp_pe comp_pne comp_inf comp_rf comp_mi comp_kid comp_del
+
+//Table 1b Hospital Episode:
+//added row for time of interview/surgery
+//changed discharge codes to break out long term care into more categories
+mat tab_1b=J(20,2,.)
+sum index_los , detail
+mat tab_1b[1,1]=r(mean)
+mat tab_1b[1,2]=r(p50)
+
+sum days_surg_n1core , detail
+mat tab_1b[2,1]=r(mean)
+mat tab_1b[2,2]=r(p50)
+mat list tab_1b
+
+local j=3
+foreach v in `compl' {
+	tab `v' , missing  matcell(m_`v')
+	sca s_`v'_n=r(N)
+	mat m_`v'_p=m_`v'/s_`v'_n
+	mat tab_1b[`j',1] = m_`v'[2,1]
+	mat tab_1b[`j',2] = m_`v'_p[2,1]*100 //in percent
+	local j=`j'+1
+}
+
+local disch dis_home dis_snf dis_icf dis_ltch dis_rehab dis_hs dis_oth dis_died
+
+local j=12
+foreach v in `disch' {
+	tab `v' , missing  matcell(m_`v')
+	sca s_`v'_n=r(N)
+	mat m_`v'_p=m_`v'/s_`v'_n
+	mat tab_1b[`j',1] = m_`v'[2,1]
+	mat tab_1b[`j',2] = m_`v'_p[2,1]*100 //in percent
+	local j=`j'+1
+}
+mat list tab_1b 
+
+frmttable using `logpath'table1b_final_v2 , statmat(tab_1b) ///
+	title("Table 1b - Hospital episode") ///
+	ctitle("","n", "%") ///
+	rtitle("LOS - mean, median" \ "Days core pre- to surgery - mean,median" ///
+	\ "Any complication"\"UTI" \ "PE" \ "Pneumonia" \ ///
+	 "Surgical site infection" \ "Respiratory failure" \ "MI" \ "Acute kidney failure" \ /// 
+	"Delirium" \"Home"\"SNF"\"Interm care facil."\"Long term care hospital"\"Rehab"\ ///
+		"Hospice"\"Other or Unknown"\"Expired") ///
+	sdec(1,0 \ 0 , 2) replace
+
+*******************************************************
+*******************************************************
+//Table 1c - timeline by 1 year outcome
+*******************************************************
+*******************************************************
+//get days from core to surgery for overall sample to send to Zara
+sum days_surg_n1core , detail
+
+
+//create matrix for output
+mat tab_1c=J(21,4,.)
+local timevars days_surg_n1core days_surg_p1core surg_to_death_dt days_surg_x
+
+//N for each category of outcome at 1 year
+tab outcome_1yr , missing matcell(samples)
+mat list samples
+sca sample_n4 = samples[4,1]
+sca sample_n5 = samples[5,1]
+sca sample_n1 = samples[1,1]
+sca sample_n2 = (samples[2,1]+samples[3,1]) //died and either exit after 1 year or no exit
+//sca sample_n3 = samples[3,1]
+
+mat tab_1c[1,1] =  sample_n4
+mat tab_1c[6,1] =  sample_n5
+mat tab_1c[11,1] =  sample_n1
+mat tab_1c[16,1] =  sample_n2
+
+local j=2	
+foreach v in `timevars' {
+	sum `v' if outcome_1yr==4 , detail //alive and completed core w/i 1 year
+	mat tab_1c[`j',1]=r(N)
+	mat tab_1c[`j',2]=sample_n4 - r(N)
+	mat tab_1c[`j',3]=r(p50) //median
+	mat tab_1c[`j',4]=r(sd) //standard deviation
+	local j=`j'+1
+}
+mat list tab_1c
+local j=7	
+foreach v in `timevars' {
+	sum `v' if outcome_1yr==5 , detail //alive but no core w/i 1 year
+	mat tab_1c[`j',1]=r(N)
+	mat tab_1c[`j',2]=sample_n5 - r(N)
+	mat tab_1c[`j',3]=r(p50) //median
+	mat tab_1c[`j',4]=r(sd) //standard deviation
+	local j=`j'+1
+}
+mat list tab_1c
+local j=12	
+foreach v in `timevars' {
+	sum `v' if outcome_1yr==1 , detail //died, exit w/i 1 year
+	mat tab_1c[`j',1]=r(N)
+	mat tab_1c[`j',2]=sample_n1 - r(N)
+	mat tab_1c[`j',3]=r(p50) //median
+	mat tab_1c[`j',4]=r(sd) //standard deviation
+	local j=`j'+1
+}
+mat list tab_1c
+local j=17	
+foreach v in `timevars' {
+	sum `v' if (outcome_1yr==2 | outcome_1yr==3) , detail //died, exit after 1 year or no exit
+	mat tab_1c[`j',1]=r(N)
+	mat tab_1c[`j',2]=sample_n2 - r(N)
+	mat tab_1c[`j',3]=r(p50) //median
+	mat tab_1c[`j',4]=r(sd) //standard deviation
+	local j=`j'+1
+}
+mat list tab_1c
+
+local 1clabel "Days from Baseline interview to surgery" \ "Days from Surgery to next core interview" \ ///
+	"Days from Surgery to death" \ "Days from Surgery to exit interview"
+
+frmttable using `logpath'table1b_final_v2 , statmat(tab_1c) ///
+	title("Table 1c - Interview/Procedure Timeline") ///
+	ctitle("Status at 1 year post surgery","N","N - missing", "Median", "SD") ///
+	rtitle("Alive & completed next core" \ "Days from Baseline interview to surgery" \ ///
+	"Days from Surgery to next core interview" \ "Days from Surgery to death" \ ///
+	"Days from Surgery to exit interview" \ ///
+	"Alive, no next core" \ "Days from Baseline interview to surgery" \ ///
+	"Days from Surgery to next core interview" \ "Days from Surgery to death" \ ///
+	"Days from Surgery to exit interview" \ ///
+	"Died, exit complete" \ "Days from Baseline interview to surgery" \ ///
+	"Days from Surgery to next core interview" \ "Days from Surgery to death" \ ///
+	"Days from Surgery to exit interview" \ ///
+	"Died, no exit" \ "Days from Baseline interview to surgery" \ ///
+	"Days from Surgery to next core interview" \ "Days from Surgery to death" \ ///
+	"Days from Surgery to exit interview") ///
+	sdec(0,0,1,1) addtable
+
+*******************************************************
+*******************************************************
+//Table 2 - unadjusted mortality rates - 
+//Have to manually input 100% mortality rates for
+//those with discharge code = expired
+//Categories for mortality - 0-30d, 0-180d, 0-365d
+
+*******************************************************
+*******************************************************
+//creates two matrices
+//1 has n's that are then used to calculate the %'s which are presented 
+//in Tables 1 and 2 of the draft
+
+mat n_tab2=J(37,4,.)
+//first column = n for each category
+//cols 2-4 are n's for each mortality group
+
+mat tab_2=J(37,7,.)
+//first column = percent
+//then percent and p value for each of 30 day mort, 180 mort and 365 mort
+
+//first column - n for each subgroup
+//first row is overall sample
+sum died_30d //overall sample
+local oa_n=r(N)
+mat n_tab2[1,1]=r(N)
+mat tab_2[2,1]=r(N)/`oa_n'*100
+
+local r = 2
+forvalues i=1/3{
+	sum died_30d if age_cat_2==`i' 
+	mat tab_2[`r',1]=r(N)
+	local r = `r'+1
+}
+
+local r=5
+forvalues i=1 0 {
+	sum died_30d if female==`i'
+	mat tab_2[`r',1]=r(N)
+	local r = `r'+1
+}
+
+local r=7
+forvalues i=1/4{
+	sum died_30d if re_cat==`i' //aa
+	mat tab_2[`r',1]=r(N)
+	local r = `r'+1
+}
+
+local r=11
+forvalues i=1/3{
+	sum died_30d if tics_cat_miss2==`i' //tics normal
+	mat tab_2[`r',1]=r(N)
+	local r = `r'+1
+}
+
+local k=14
+	foreach w in `comorb' {  //comorbidities: cancer, chf, cad, dementia, esrd, dm
+		sum died_30d if `w'==1
+		mat tab_2[`k',1]=r(N)
+		local k = `k' + 1  //populates rows 14 through 19
+	}
+
+local r=20
+forvalues i=0 1 {
+	sum died_30d if srh_fp_ncore==`i'  //srhs
+	mat tab_2[`r',1]=r(N)
+	sum died_30d if adl_cat_ps==`i' //adl
+	mat tab_2[`r'+2,1]=r(N)
+	local r = `r'+1
+}
+
+local r=24
+forvalues i=1 0 {
+	sum died_30d if nhres_n1==`i' //nh resident
+	mat tab_2[`r',1]=r(N)
+	sum died_30d if admit_ind_6m_pre==`i' //pre surg admit
+	mat tab_2[`r'+2,1]=r(N)
+	local r = `r'+1
+}
+
+local k=30
+	forvalues i=1/8 {					//discharge locations:
+		sum died_30d if stay_dstn_cat2==`i'	//home, snf, icf, ltc hospital, rehab
+			//hospice, other, expired
+		mat tab_2[`k',1]=r(N)
+		local k = `k'+1 //rows 28-35
+	}
+
+local r=36
+forvalues i=1 0 {
+	sum died_30d if comp_any==`i' // any complication 
+	mat tab_2[`r',1]=r(N)
+	local r = `r'+1
+}
+
+
+//next columns (keeps p columns blank)
+local j=2
+foreach v in died_30d died_180d died_365d {
+tab `v', matcell(`v'_`j') //overall sample
+mat tab_2[1,`j']=`v'_`j'[2,1]/r(N)*100 //percent
+mat tab_2[1,`j'+1]=`v'_`j'[2,1] //n
+tab `v' if age_cat_2==1, matcell(`v'_`j') //age 65-74
+mat tab_2[2,`j']=`v'_`j'[2,1]/r(N)*100 //percent
+mat tab_2[2,`j'+1]=`v'_`j'[2,1] //n
+tab `v' if age_cat_2==2, matcell(`v'_`j') //age 75-84
+mat tab_2[3,`j']=`v'_`j'[2,1]/r(N)*100
+mat tab_2[3,`j'+1]=`v'_`j'[2,1]
+tab `v' if age_cat_2==3, matcell(`v'_`j') //age 85+
+mat tab_2[4,`j']=`v'_`j'[2,1]/r(N)*100
+mat tab_2[4,`j'+1]=`v'_`j'[2,1]
+tab `v' if female==1, matcell(`v'_`j') //female
+mat tab_2[5,`j']=`v'_`j'[2,1]/r(N)*100
+mat tab_2[5,`j'+1]=`v'_`j'[2,1]
+tab `v' if female==0, matcell(`v'_`j') //male
+mat tab_2[6,`j']=`v'_`j'[2,1]/r(N)*100
+mat tab_2[6,`j'+1]=`v'_`j'[2,1]
+tab `v' if re_cat==1, matcell(`v'_`j') //aa
+mat tab_2[7,`j']=`v'_`j'[2,1]/r(N)*100
+mat tab_2[7,`j'+1]=`v'_`j'[2,1]
+tab `v' if re_cat==2, matcell(`v'_`j') //hispanic
+mat tab_2[8,`j']=`v'_`j'[2,1]/r(N)*100
+mat tab_2[8,`j'+1]=`v'_`j'[2,1]
+tab `v' if re_cat==3, matcell(`v'_`j') //white
+mat tab_2[9,`j']=`v'_`j'[2,1]/r(N)*100
+mat tab_2[9,`j'+1]=`v'_`j'[2,1]
+tab `v' if re_cat==4, matcell(`v'_`j') //other
+mat tab_2[10,`j']=`v'_`j'[2,1]/r(N)*100
+mat tab_2[10,`j'+1]=`v'_`j'[2,1]
+tab `v' if tics_cat_miss==1, matcell(`v'_`j') //tics normal
+mat tab_2[11,`j']=`v'_`j'[2,1]/r(N)*100
+mat tab_2[11,`j'+1]=`v'_`j'[2,1]
+tab `v' if tics_cat_miss==2, matcell(`v'_`j') //tics mci
+mat tab_2[12,`j']=`v'_`j'[2,1]/r(N)*100
+mat tab_2[12,`j'+1]=`v'_`j'[2,1]
+tab `v' if tics_cat_miss==3, matcell(`v'_`j') //tics demented
+mat tab_2[13,`j']=`v'_`j'[2,1]/r(N)*100
+mat tab_2[13,`j'+1]=`v'_`j'[2,1]
+tab `v' if tics_cat_miss==4, matcell(`v'_`j') //tics missing
+mat tab_2[14,`j']=`v'_`j'[2,1]/r(N)*100
+mat tab_2[14,`j'+1]=`v'_`j'[2,1]	
+local k=15
+	foreach w in `comorb' {  //comorbidities: cancer, chf, cad, dementia, esrd, dm
+		tab `v' if `w'==1, matcell(`v'_`j')
+		mat tab_2[`k',`j']=`v'_`j'[2,1]/r(N)*100
+		mat tab_2[`k',`j'+1]=`v'_`j'[2,1]
+		local k = `k' + 1  //populates rows 15 through 20
+	}
+tab `v' if srh_fp_ncore==0 , matcell(`v'_`j') //srhs excel/vg/g
+mat tab_2[21,`j']=`v'_`j'[2,1]/r(N)*100
+mat tab_2[21,`j'+1]=`v'_`j'[2,1]
+tab `v' if srh_fp_ncore==1, matcell(`v'_`j') //srhs f/p
+mat tab_2[22,`j']=`v'_`j'[2,1]/r(N)*100
+mat tab_2[22,`j'+1]=`v'_`j'[2,1]
+tab `v' if adl_cat_ps==0, matcell(`v'_`j') //adl ind
+mat tab_2[23,`j']=`v'_`j'[2,1]/r(N)*100
+mat tab_2[23,`j'+1]=`v'_`j'[2,1]
+tab `v' if adl_cat_ps==1 , matcell(`v'_`j') //adl partial, sev dep
+mat tab_2[24,`j']=`v'_`j'[2,1]/r(N)*100
+mat tab_2[24,`j'+1]=`v'_`j'[2,1]
+tab `v' if nhres_n1==1, matcell(`v'_`j') //nh resident - yes
+mat tab_2[25,`j']=`v'_`j'[2,1]/r(N)*100
+mat tab_2[25,`j'+1]=`v'_`j'[2,1]
+tab `v' if nhres_n1==0, matcell(`v'_`j') //nh resident - no
+mat tab_2[26,`j']=`v'_`j'[2,1]/r(N)*100
+mat tab_2[26,`j'+1]=`v'_`j'[2,1]
+tab `v' if admit_ind_6m_pre==1, matcell(`v'_`j') //pre surg admit - yes
+mat tab_2[27,`j']=`v'_`j'[2,1]/r(N)*100
+mat tab_2[27,`j'+1]=`v'_`j'[2,1]
+tab `v' if admit_ind_6m_pre==0, matcell(`v'_`j') //pre surg admit - no
+mat tab_2[28,`j']=`v'_`j'[2,1]/r(N)*100
+mat tab_2[28,`j'+1]=`v'_`j'[2,1]
+	local k=29
+	forvalues i=1/6 {					//discharge locations:
+		tab `v' if stay_dstn_cat==`i', matcell(`v'_`j')	//home, ltc, rehab
+		mat tab_2[`k',`j']=`v'_`j'[2,1]/r(N)*100			//hospice, other, expired
+		mat tab_2[`k',`j'+1]=`v'_`j'[2,1]
+		local k = `k'+1
+	}
+tab `v' if comp_any==1, matcell(`v'_`j') // any complication - yes
+mat tab_2[35,`j']=`v'_`j'[2,1]/r(N)*100
+mat tab_2[35,`j'+1]=`v'_`j'[2,1]
+tab `v' if comp_any==0, matcell(`v'_`j') // any complication - no
+mat tab_2[36,`j']=`v'_`j'[2,1]/r(N)*100
+mat tab_2[36,`j'+1]=`v'_`j'[2,1]
+local j = `j' + 3
+}
+mat list tab_2
+
+//p value columns - using Fisher's exact test
+
+local j=4
+foreach v in died_30d died_180d died_365d {
+tab age_cat_2 `v', exact  //age
+mat tab_2[2,`j']=r(p_exact) //pvalue
+tab female  `v', exact  //gender
+mat tab_2[5,`j']=r(p_exact) 
+tab re_cat  `v', exact  //race
+mat tab_2[7,`j']=r(p_exact) 
+tab tics_cat_miss  `v', exact  //tics
+mat tab_2[11,`j']=r(p_exact) 
+	local k=15
+	foreach w in `comorb' {  //comorbidities: cancer, chf, cad, dementia, esrd, dm
+		tab `w' `v', exact
+		mat tab_2[`k',`j']=r(p_exact)
+		local k = `k' + 1  //populates rows 15 through 20
+	}
+tab srh_fp_ncore `v', exact  //self reported health
+mat tab_2[21,`j']=r(p_exact) 
+tab adl_cat_ps `v', exact  //adl
+mat tab_2[23,`j']=r(p_exact) 
+tab nhres_n1  `v', exact  //nursing home res
+mat tab_2[25,`j']=r(p_exact) 
+tab admit_ind_6m_pre  `v', exact  //admit 6 mos
+mat tab_2[27,`j']=r(p_exact) 
+tab stay_dstn_cat  `v', exact  //discharge loc
+mat tab_2[29,`j']=r(p_exact) 
+tab comp_any  `v', exact  //any complication
+mat tab_2[35,`j']=r(p_exact) 
+local j = `j' + 3
+}
+
+frmttable using `logpath'table1b_final_v2 , statmat(tab_2) ///
 	title("Table 2 - Unadjusted 30-, 180- and 365-Day Mortality") ///
 	ctitle("","N all","0-30-Day %","n","p-val","0-180-Day %","n","p-val", "0-365-Day %","n","p-val") ///
 	rtitle("Overall sample" \ "Age: 65-74" \ "75-84" \ "85+" \ ///

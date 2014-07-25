@@ -515,7 +515,7 @@ proc freq data=wage_index3; table State_; run;
 
 /*Merges in wage index if there's one for the state but was missing for the zip*/
 proc sql;
-create table core_age_zip_wi_2
+create table sic_int.core_age_zip_wi_2
 as select a.*,coalesce(a.wage_index_2010,b.wage_index_2010) as wage_index_20102
 from
 core_age_zip_wi a
@@ -530,16 +530,16 @@ var wage_index_2010 wage_index_20102;
 run;
 
 proc sql;
-select distinct state_wave ,count(*) from core_age_zip_wi_2
+select distinct state_wave ,count(*) from sic_int.core_age_zip_wi_2
 where wage_index_20102=. group by state_wave;
 quit;
 
 proc sql;
-select distinct zip_wave_n ,count(*) from core_age_zip_wi_2
+select distinct zip_wave_n ,count(*) from sic_int.core_age_zip_wi_2
 where wage_index_20102=. group by zip_wave_n;
 quit;
 
-proc freq data=sic_int.core_age_zip; table  state_wave  /missprint ; run;
+proc freq data=sic_int.core_age_zip_wi_2; table  state_wave  /missprint ; run;
 
 H="Create frequency tables of core variables"
 /*creates log file to review with Amy for new variables*/
@@ -628,11 +628,7 @@ run;*/
 sic_int.core_xwalk_1 has core interviews, age and claims xwalk id */
 
 /*prepare core dataset to merge*/
-data core_id;
-set sic_int.core_age_zip_wi2;
-run;
-
-proc sort data=core_id nodupkey;
+proc sort data=sic_int.core_age_zip_wi_2 out=core_id nodupkey;
 by id c_ivw_date;
 run;
 
@@ -3778,7 +3774,7 @@ H="Step 7 - Stata do file to get sample, criteria"
 capture log close
 
 clear all
-set mem 500m
+set mem 800m
 set more off
 
 local logpath E:\data\serious_ill\logs
@@ -3790,7 +3786,7 @@ cd `datapath'
 
 use core_ids_1yr_criteria_5.dta
 *******************************************************************
-mat sample_set=J(6,1,.)
+mat sample_set=J(7,1,.)
 
 tab core_year, missing
 sum core_year
@@ -3814,8 +3810,13 @@ sum core_year if inlist(core_year,2000,2002,2004,2006,2008) & age_ge_65==1 & xwa
 part_ab_6m==1 & hmo_d_6m==0
 mat sample_set[6,1]=r(N)
 
+//check if have wage index merged in (FFS 1 year)
+sum core_year if inlist(core_year,2000,2002,2004,2006,2008) & age_ge_65==1 & xwalk_yes==1 & ///
+part_ab_12m==1 & hmo_d_12m==0 & wage_index_20102!=.
+mat sample_set[7,1]=r(N)
+
 mat rownames sample_set="Core interviews 1998-2010" "Core Interviews 2000-2008" "Age 65+" ///
-"With xwalk id" "With FFS MC 1yr pre-ivw" "With FFS MC 6m pre-ivw"
+"With xwalk id" "With FFS MC 1yr pre-ivw" "With FFS MC 6m pre-ivw" "With 1 year FFS & Wage Index"
 
 mat colnames sample_set="Interviews"
 
@@ -4780,11 +4781,16 @@ proc sql;
 create table &source._wi_1 as select a.*, b.wage_index_20102
 from &source._1yr_post a left join
 sic_int.core_lmt_xwalk_2 b
-on a.BID_hrs=b.bid_hrs= and a.core_year=b.core_year;
+on a.BID_hrs=b.bid_hrs and a.core_year=b.core_year;
 quit;
 
+/*if wage index is missing, set to 1 and identify with an indicator variable*/
 data &source._wi_2;
 set &source._wi_1;
+if wage_index_20102=. then do;
+	wage_index_missing_yes = 1;
+	wage_index_20102 = 1;
+end;
 &source._paid_by_mc_1yr_wi = &source._paid_by_mc_1yr / wage_index_20102;
 run;
 
@@ -4808,6 +4814,9 @@ data mc_costs_all;
 merge ip_wi_2 snf_wi_2 hh_wi_2 hs_wi_2 pb_wi_2 op_wi_2 dm_wi_2;
 by BID_hrs core_year;
 run;
+
+/*48 obs have missing wage index*/
+proc freq; table wage_index_missing_yes; run; 
 
 data sic_int.mc_costs_1yr;
 set mc_costs_all;
@@ -4846,9 +4855,9 @@ proc sort data=sic_int.mc_costs_1yr; by bid_hrs core_year; run;
 
 *merge into overall dataset*;
 proc sql;
-create table sic_int.core_ids_init_outcomes_2(drop=bid_hrs2 id2 core_year2) as select * from
+create table sic_int.core_ids_init_outcomes_2(drop=bid_hrs2 id2 core_year2 wi) as select * from
 sic_int.core_ids_init_outcomes a left join
-sic_int.mc_costs_1yr(rename=(bid_hrs=bid_hrs2) rename=(id=id2) rename=(core_year=core_year2)) b
+sic_int.mc_costs_1yr(rename=(bid_hrs=bid_hrs2) rename=(id=id2) rename=(core_year=core_year2) rename=(wage_index_20102=wi)) b
 on trim(left(a.bid_hrs))=trim(left(b.bid_hrs2)) and a.core_year=b.core_year2;
 quit;
 
@@ -5172,24 +5181,30 @@ proc freq data=criteria_a;
 table core_to_dod_1yr hs_admit_p12m ind_em_ur_adm_p12m;
 run;
 proc means data=criteria_a; 
-vars ip_paid_by_mc_1yr snf_paid_by_mc_1yr hh_paid_by_mc_1yr hs_paid_by_mc_1yr
-pb_paid_by_mc_1yr op_paid_by_mc_1yr dm_paid_by_mc_1yr tot_paid_by_mc_1yr n_hospd_p12m; run;
+vars ip_paid_by_mc_1yr ip_paid_by_mc_1yr_wi snf_paid_by_mc_1yr snf_paid_by_mc_1yr_wi 
+hh_paid_by_mc_1yr hh_paid_by_mc_1yr_wi hs_paid_by_mc_1yr hs_paid_by_mc_1yr_wi
+pb_paid_by_mc_1yr pb_paid_by_mc_1yr_wi op_paid_by_mc_1yr op_paid_by_mc_1yr_wi 
+dm_paid_by_mc_1yr dm_paid_by_mc_1yr_wi tot_paid_by_mc_1yr tot_paid_by_mc_1yr_wi n_hospd_p12m; run;
 
 title "Outcomes 1 year after initially meeting criteria B) Any ser med illness and/or ADL Impair + SNF and/or Hospital.";
 proc freq data=criteria_b;
 table core_to_dod_1yr hs_admit_p12m ind_em_ur_adm_p12m;
 run;
 proc means data=criteria_b; 
-vars ip_paid_by_mc_1yr snf_paid_by_mc_1yr hh_paid_by_mc_1yr hs_paid_by_mc_1yr
-pb_paid_by_mc_1yr op_paid_by_mc_1yr dm_paid_by_mc_1yr tot_paid_by_mc_1yr n_hospd_p12m; run;
+vars ip_paid_by_mc_1yr ip_paid_by_mc_1yr_wi snf_paid_by_mc_1yr snf_paid_by_mc_1yr_wi 
+hh_paid_by_mc_1yr hh_paid_by_mc_1yr_wi hs_paid_by_mc_1yr hs_paid_by_mc_1yr_wi
+pb_paid_by_mc_1yr pb_paid_by_mc_1yr_wi op_paid_by_mc_1yr op_paid_by_mc_1yr_wi 
+dm_paid_by_mc_1yr dm_paid_by_mc_1yr_wi tot_paid_by_mc_1yr tot_paid_by_mc_1yr_wi n_hospd_p12m; run;
 
 title "Outcomes 1 year after initially meeting criteria C) Any ser med illness and ADL Impair + SNF and/or Hospital.";
 proc freq data=criteria_c;
 table core_to_dod_1yr hs_admit_p12m ind_em_ur_adm_p12m;
 run;
 proc means data=criteria_c; 
-vars ip_paid_by_mc_1yr snf_paid_by_mc_1yr hh_paid_by_mc_1yr hs_paid_by_mc_1yr
-pb_paid_by_mc_1yr op_paid_by_mc_1yr dm_paid_by_mc_1yr tot_paid_by_mc_1yr n_hospd_p12m; run;
+vars ip_paid_by_mc_1yr ip_paid_by_mc_1yr_wi snf_paid_by_mc_1yr snf_paid_by_mc_1yr_wi 
+hh_paid_by_mc_1yr hh_paid_by_mc_1yr_wi hs_paid_by_mc_1yr hs_paid_by_mc_1yr_wi
+pb_paid_by_mc_1yr pb_paid_by_mc_1yr_wi op_paid_by_mc_1yr op_paid_by_mc_1yr_wi 
+dm_paid_by_mc_1yr dm_paid_by_mc_1yr_wi tot_paid_by_mc_1yr tot_paid_by_mc_1yr_wi n_hospd_p12m; run;
 
 ods rtf close;
 
@@ -5225,7 +5240,11 @@ age_ge_65==1 & xwalk_yes==1 & part_ab_12m==1 & hmo_d_12m==0
 //Table comparing outcomes for those with serious illness only, 
 //adl impairment only, illness and adl impairment categories
 
+//for n=46 observations where wage index is missing, it has been set to 1
+//for the purposes of adjusting the medicare spending totals
 sum core_year
+sum core_year if wage_index_20102==.
+tab wage_index_missing_yes, missing
 
 //categorical variable for serious illness vs adl impairment
 gen cat_smi_adl=.
@@ -5245,8 +5264,8 @@ tab cat_smi_adl adl_impair_core
 //table of outcomes, interview level (so R may be represented 5x)
 local outcome1 core_to_dod_1yr hs_admit_p12m ind_em_ur_adm_p12m
 
-local outcome2 ip_paid_by_mc_1yr snf_paid_by_mc_1yr hh_paid_by_mc_1yr hs_paid_by_mc_1yr ///
-pb_paid_by_mc_1yr op_paid_by_mc_1yr dm_paid_by_mc_1yr tot_paid_by_mc_1yr n_hospd_p12m
+local outcome2 ip_paid_by_mc_1yr_wi snf_paid_by_mc_1yr_wi hh_paid_by_mc_1yr_wi hs_paid_by_mc_1yr_wi ///
+pb_paid_by_mc_1yr_wi op_paid_by_mc_1yr_wi dm_paid_by_mc_1yr_wi tot_paid_by_mc_1yr_wi n_hospd_p12m
 
 mat table1=J(34,4,.)
 //first row, n for each category
@@ -5286,7 +5305,9 @@ mat colnames table1="No ser med ill or impair" "Ser Med Ill" "ADL Impair" "SMI a
 
 frmttable using "`logpath'\sic_Table3_outcomes", statmat(table1) ///
 title("Comparison of outcomes at 1 year, serious medical illness vs ADL impairment" \ ///
-"Interview level") sdec(0\2\2\2\2\2\2\0) landscape replace
+"Interview level") ///
+note("Medicare spending values are adjusted to 2010$ and for the CMS wage index.") ///
+sdec(0\2\2\2\2\2\2\0) landscape replace
 
 *******************************************************************
 //Outcomes for first interview where meet criteria
@@ -5333,15 +5354,17 @@ title("Comparison of outcomes at 1 year, criteria a vs b" \ ///
 "First interview when R meets criteria") ///
 ctitle("" "Criteria A" "Criteria B" "Criteria C" \ "" "Serious med illness and/or" ///
 "SMI and/or ADL impair and" "SMI and ADL impair and" ///
-\ "" "ADL impairment" "SNF and/or Hospital use" "SNF and/or Hospital use") sdec(0\2\2\2\2\2\2\0) replace 
+\ "" "ADL impairment" "SNF and/or Hospital use" "SNF and/or Hospital use") ///
+note("Medicare spending values are adjusted to 2010$ and for the CMS wage index.") ///
+sdec(0\2\2\2\2\2\2\0) replace 
 
 *******************************************************************
 //Select Outcomes for first interview where meet criteria
 //Criteria comparison
 *******************************************************************
 //table of outcomes, interview where R first meets criteria
-local outcome1 core_to_dod_1yr hs_admit_p12m ind_em_ur_adm_p12m ip_paid_by_mc_1yr ///
-tot_paid_by_mc_1yr
+local outcome1 core_to_dod_1yr hs_admit_p12m ind_em_ur_adm_p12m ip_paid_by_mc_1yr_wi ///
+tot_paid_by_mc_1yr_wi
 
 local compvars ivw_meet_crit_smi ivw_meet_crit_adl ivw_meet_crit_smiadl ivw_meet_crit_a ///
 ivw_meet_crit_smiadlnh ivw_meet_crit_smiadlho ivw_meet_crit_smiadlhonh ///
@@ -5393,6 +5416,7 @@ sdec(0) store(table3)
 frmttable using "`logpath'\sic_Table3_outcomes_ivw", statmat(comp)  substat(2) ///
 ctitles("","Died","Hospice admit","Hospital admit","IP Medicare","Total Medicare" \ ///
 "","mean","","","","" \ "","(SD)", "","","","", \ "","[Median]","","","","" ) ///
+note("Medicare spending values are adjusted to 2010$ and for the CMS wage index.") ///
 sdec(2) merge(table3) addtable
 *************************************************************
 //look at comparison between criteria b with nursing home and/or hospitalization
@@ -6790,8 +6814,8 @@ foreach v in ind_oa_sample ind_died_sample ind_meetp1_sample ind_nomeetp1_sample
 ***************************************************************
 //Look at 1 year n0 outcomes of those that meet 1st ivw and those that don't
 local outcome core_to_dod_1yr_n0 hs_admit_p12m_n0 ind_em_ur_adm_p12m_n0 ///
-ip_paid_by_mc_1yr_n0 snf_paid_by_mc_1yr_n0 hh_paid_by_mc_1yr_n0 hs_paid_by_mc_1yr_n0 ///
-pb_paid_by_mc_1yr_n0 op_paid_by_mc_1yr_n0 dm_paid_by_mc_1yr_n0 tot_paid_by_mc_1yr_n0 n_hospd_p12m_n0
+ip_paid_by_mc_1yr_wi_n0 snf_paid_by_mc_1yr_wi_n0 hh_paid_by_mc_1yr_wi_n0 hs_paid_by_mc_1yr_wi_n0 ///
+pb_paid_by_mc_1yr_wi_n0 op_paid_by_mc_1yr_wi_n0 dm_paid_by_mc_1yr_wi_n0 tot_paid_by_mc_1yr_wi_n0 n_hospd_p12m_n0
 
 mat meet_1st=J(13,8,.)
 	
@@ -6845,7 +6869,8 @@ ctitles("" "Overall" "Meet 1st ivw" "Do not meet 1st ivw" "p-value" \ ///
 note("Criteria A = Any serious medical illness and/or ADL impairment" \ ///
 "Criteria B = Criteria A and Urgent / Emergent hospitalization and/or NH resident" \ ///
 "Criteria C = Illness and ADL impair and Hospitalization and/or NH resident" \ ///
-"Outcomes are for 1 year after the initial interview where R meets criteria.") ///
+"Outcomes are for 1 year after the initial interview where R meets criteria." \ ///
+"Medicare spending is adjusted for inflation and the CMS wage index.") ///
 substat(1) sdec(2\0) addtable
 
 
@@ -7157,8 +7182,8 @@ replace comp_criteria_b =1 if (ser_med_illness==1 | adl_impair_core==1) & (smi_n
 tab comp_criteria_b
 ***************************************************************
 //table of outcomes, interview level (so R may be represented 4x)
-local outcome1 core_to_dod_1yr hs_admit_p12m ind_em_ur_adm_p12m ip_paid_by_mc_1yr ///
-tot_paid_by_mc_1yr
+local outcome1 core_to_dod_1yr hs_admit_p12m ind_em_ur_adm_p12m ip_paid_by_mc_1yr_wi ///
+tot_paid_by_mc_1yr_wi
 
 local compvars comp_none comp_smi comp_adl /*comp_nh comp_hos*/ comp_smi_adl comp_criteria_a ///
 comp_smi_nh comp_smi_hosp comp_adl_nh comp_adl_hosp comp_nh_hosp ///
@@ -7213,7 +7238,8 @@ frmttable using "`logpath'\sic_Tables_5_outcomes_crit_a_and_b", statmat(comp)  s
 title("Comparison of serious medical conditions, outcomes at 1 year" \ ///
 "N=`nsamp', interview level") ///
 ctitles("","Died","Hospice admit","Hospital admit","IP Medicare","Total Medicare" \ ///
-"","mean","","","","" \ "","(SD)", "","","","", \ "","[Median]","","","","" ) ///
+"","mean","","","","" \ "","(SD)", "","","","", \ "","[Median]","","","","" \ ///
+"Medicare spending adjusted for inflation (2010$) and the CMS wage index.") ///
 sdec(2) merge(table3) addtable
 
 ***************************************************************
@@ -7283,8 +7309,8 @@ sdec(0,2) addtable
 cd `datapath'
 
 local outcomes core_to_dod_1yr_p1 hs_admit_p12m_p1 ind_em_ur_adm_p12m_p1 ///
-ip_paid_by_mc_1yr_p1 snf_paid_by_mc_1yr_p1 hh_paid_by_mc_1yr_p1 hs_paid_by_mc_1yr_p1 ///
-pb_paid_by_mc_1yr_p1 op_paid_by_mc_1yr_p1 dm_paid_by_mc_1yr_p1 tot_paid_by_mc_1yr_p1 n_hospd_p12m_p1
+ip_paid_by_mc_1yr_wi_p1 snf_paid_by_mc_1yr_wi_p1 hh_paid_by_mc_1yr_wi_p1 hs_paid_by_mc_1yr_wi_p1 ///
+pb_paid_by_mc_1yr_wi_p1 op_paid_by_mc_1yr_wi_p1 dm_paid_by_mc_1yr_wi_p1 tot_paid_by_mc_1yr_wi_p1 n_hospd_p12m_p1
 
 mat p1_meet=J(13,8,.)
 
@@ -7322,7 +7348,8 @@ ctitles("" "Criteria A" "" "Criteria B" "" \ ///
 "" "mean" "" "" "" \ "" "(median)" "" "" ) ///
 note("Criteria A = Any serious medical illness and/or ADL impairment" \ ///
 "Criteria B = Criteria A and Urgent / Emergent hospitalization and/or NH resident" \ ///
-"Outcomes are for 1 year after the p1 interview.") ///
+"Outcomes are for 1 year after the p1 interview." \ ///
+"Medicare spending adjusted for inflation (2010$) and the CMS wage index.") ///
 substat(1) sdec(2\0) addtable
 
 ***************************************************************
@@ -7369,8 +7396,8 @@ tab ffs_mc_yes_p1 core_year_p1 , missing
 ********************************************************************
 //table of outcomes (12) n0 interview
 local outcome core_to_dod_1yr hs_admit_p12m ind_em_ur_adm_p12m ///
-ip_paid_by_mc_1yr snf_paid_by_mc_1yr hh_paid_by_mc_1yr hs_paid_by_mc_1yr ///
-pb_paid_by_mc_1yr op_paid_by_mc_1yr dm_paid_by_mc_1yr tot_paid_by_mc_1yr n_hospd_p12m
+ip_paid_by_mc_1yr_wi snf_paid_by_mc_1yr_wi hh_paid_by_mc_1yr_wi hs_paid_by_mc_1yr_wi ///
+pb_paid_by_mc_1yr_wi op_paid_by_mc_1yr_wi dm_paid_by_mc_1yr_wi tot_paid_by_mc_1yr_wi n_hospd_p12m
 
 mat comp = J(13,6,.)
 //first row, counts of each group
@@ -7613,8 +7640,8 @@ age_ge_65==1 & xwalk_yes==1 & part_ab_12m==1 & hmo_d_12m==0
 
 local outcome1 core_to_dod_1yr hs_admit_p12m ind_em_ur_adm_p12m
 
-local outcome2 ip_paid_by_mc_1yr snf_paid_by_mc_1yr hh_paid_by_mc_1yr hs_paid_by_mc_1yr ///
-pb_paid_by_mc_1yr op_paid_by_mc_1yr dm_paid_by_mc_1yr tot_paid_by_mc_1yr n_hospd_p12m
+local outcome2 ip_paid_by_mc_1yr_wi snf_paid_by_mc_1yr_wi hh_paid_by_mc_1yr_wi hs_paid_by_mc_1yr_wi ///
+pb_paid_by_mc_1yr_wi op_paid_by_mc_1yr_wi dm_paid_by_mc_1yr_wi tot_paid_by_mc_1yr_wi n_hospd_p12m
 
 
 mat table2=J(34,3,.)
@@ -7660,7 +7687,8 @@ title("Comparison of outcomes at 1 year, criteria a, b, c" \ ///
 ctitle("" "Criteria A" "Criteria B" "Criteria C" ) ///
 note("Criteria A = Any serious medical illness and/or ADL impairment" \ ///
 "Criteria B = Criteria A and Urgent / Emergent hospitalization and/or NH resident" \ ///
-"Criteria C = Medical illness and ADL Impairment and hospitalization and/or NH resident") ///
+"Criteria C = Medical illness and ADL Impairment and hospitalization and/or NH resident" \ ///
+"Medicare spending values are adjusted for inflation (2010$) and the CMS wage index.") ///
 sdec(0\2\2\2\2\2\2\0) addtable 
 
 ***************************************************************
@@ -7802,8 +7830,8 @@ cd `datapath'
 ****************************************************
 local outcome1 core_to_dod_1yr hs_admit_p12m ind_em_ur_adm_p12m
 
-local outcome2 ip_paid_by_mc_1yr snf_paid_by_mc_1yr hh_paid_by_mc_1yr hs_paid_by_mc_1yr ///
-pb_paid_by_mc_1yr op_paid_by_mc_1yr dm_paid_by_mc_1yr tot_paid_by_mc_1yr n_hospd_p12m
+local outcome2 ip_paid_by_mc_1yr_wi snf_paid_by_mc_1yr_wi hh_paid_by_mc_1yr_wi hs_paid_by_mc_1yr_wi ///
+pb_paid_by_mc_1yr_wi op_paid_by_mc_1yr_wi dm_paid_by_mc_1yr_wi tot_paid_by_mc_1yr_wi n_hospd_p12m
 
 foreach crit in a b c{
 	use n0_n1_p1_p2_x_criteria_`crit'_v1.dta if core_year_n0<2010
@@ -7854,7 +7882,9 @@ title("Comparison of outcomes at 1 year, criteria a vs b" \ ///
 "First interview when R meets criteria") ///
 ctitle("" "Criteria A" "Criteria B" "Criteria C" \ "" "Serious med illness and/or" ///
 "SMI and/or ADL impair and" "SMI and ADL impair and" ///
-\ "" "ADL impairment" "SNF and/or Hospital use" "SNF and/or Hospital use") sdec(0\2\2\2\2\2\2\0) replace 
+\ "" "ADL impairment" "SNF and/or Hospital use" "SNF and/or Hospital use") ///
+note("Medicare spending adjusted for inflation and the CMS wage index") ///
+sdec(0\2\2\2\2\2\2\0) replace 
 
 }
 
@@ -7901,7 +7931,9 @@ title("Comparison of outcomes at 1 year, criteria a vs b" \ ///
 "First interview when R meets criteria") ///
 ctitle("" "Criteria A" "Criteria B" "Criteria C" \ "" "Serious med illness and/or" ///
 "SMI and/or ADL impair and" "SMI and ADL impair and" ///
-\ "" "ADL impairment" "SNF and/or Hospital use" "SNF and/or Hospital use") sdec(0\2\2\2\2\2\2\0) replace 
+\ "" "ADL impairment" "SNF and/or Hospital use" "SNF and/or Hospital use") ///
+note("Medicare spending adjusted for inflation and the CMS wage index") ///
+sdec(0\2\2\2\2\2\2\0) replace 
 
 
 H="xxxxNotes"

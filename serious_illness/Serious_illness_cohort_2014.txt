@@ -5139,7 +5139,7 @@ crit_all(rename=(id=id2) rename=(core_year=core_year2)) b
 on a.id=b.id2 and a.core_year=b.core_year2;
 quit;
 
-data sic_int.ivws_crit_1;
+data ivws_crit_1a;
 set ivws_crit;
 array list ivw_meet_crit_a ivw_meet_crit_b ivw_meet_crit_c ivw_meet_crit_smi
 	ivw_meet_crit_adl ivw_meet_crit_smiadl ivw_meet_crit_smiadlnh
@@ -5153,6 +5153,48 @@ run;
 proc freq;
 table ivw_meet_crit_a ivw_meet_crit_b ivw_meet_crit_c;
 run;
+
+/***********************************************************************/
+/***********    Identify R's that never meet criteria       ************/
+/***********************************************************************/
+
+data ever_meet;
+set ivws_crit_1a;
+meet_abc=0;
+if ivw_meet_crit_a=1 or ivw_meet_crit_b=1 or ivw_meet_crit_c=1 then do;
+ meet_abc=1;
+end;
+run;
+
+proc sort data=ever_meet;
+by id core_year;
+run;
+
+proc sql;
+create table ever_meet_2 as select distinct id,
+sum(meet_abc) as total_meet_abc label="n ivws meet a b c"
+from ever_meet group by id;
+quit;
+
+proc freq; table total_meet_abc; run;
+
+data ever_meet_3;
+set ever_meet_2;
+ind_no_crit=0;
+if total_meet_abc=0 then ind_no_crit=1;
+label="Indicator R never meets criteria a,b,or c";
+run;
+
+/*bring into main dataset*/
+proc sql;
+create table sic_int.ivws_crit_1 as select a.*,b.ind_no_crit from
+ivws_crit_1a a left join
+ever_meet_3 b
+on a.id=b.id;
+quit;
+
+proc freq; table ind_no_crit; run;
+proc freq; table ivw_meet_crit_a*ind_no_crit ivw_meet_crit_b*ind_no_crit ivw_meet_crit_c*ind_no_crit; run;
 
 /*initial look at outcomes from claims data*/
 
@@ -5429,6 +5471,43 @@ tab ivw_meet_crit_aho ivw_meet_crit_b, missing
 log close
 
 
+H="Looking at Rs that never meet criteria a b or c"
+data do_not_meet;
+set sic_int.ivws_crit_1;
+if ind_no_crit=0;
+run;
+
+ods rtf body="E:\data\serious_ill\logs\comparison_group.rtf";
+
+title "Core interview years for those R's that never meet Criteria A B or C";
+proc freq; table core_year; run;
+
+/*get number of interviews per R
+n=5158 R's that never meet criteria with at least 1 core interview, ffs mc 1 year before that ivw*/
+proc sql;
+create table do_not_meet_2 as select distinct id,
+count(*) as ivw_count 
+from do_not_meet group by id;
+quit;
+
+/*range from having 1-5 core interviews in the dataset*/
+title"Number of core interviews, n=5158 R's that never meet criteria";
+proc freq; table ivw_count; run;
+
+/*what are the last core years we have represented for this group?*/
+proc sort data=do_not_meet; by id core_year; run;
+
+data last;
+set do_not_meet;
+by id;
+if last.id;
+run;
+
+title "Year of last recorded core interview";
+proc freq; table core_year; run;
+
+ods rtf close;
+
 H="Step 10 - Core interviews - set up from time 0=meet criteria"
 /*From this point on, there are 3 datasets, one for those that
 meet Criteria A) Serious medical illness and one for those that 
@@ -5502,13 +5581,13 @@ interviews after have p1, p2 suffix */
 *these are variables from the restricted dataset;
 data core_to_use;
 set sic_int.ivws_crit_1(drop=birth_date death_date white black hisp_eth native_amer 
-asian_pi other_race other_na_api_race 
+asian_pi other_race other_na_api_race wage_index_2010
 zip_0: zip_10: zip_98: first_ivw_year last_ivw_year restr_yes dod_claims cause_death_12_n);
 run;
 
 data core_all_drop;
 set sic_int.core_ids_1yr_criteria_6(drop=birth_date death_date white black hisp_eth native_amer 
-asian_pi other_race other_na_api_race  
+asian_pi other_race other_na_api_race wage_index_2010 
 zip_0: zip_10: zip_98: first_ivw_year last_ivw_year restr_yes dod_claims cause_death_12_n);
 run;
 

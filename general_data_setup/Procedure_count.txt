@@ -1,0 +1,138 @@
+= V4 Outline MultiLine NoSorting TabWidth=30
+
+H="Identify frequency of procedures from ip and op claims"
+/*refer to emails from Amy from July 24, 2014 for description
+
+-	use claims data from HRS, without restrictions for length of ffs coverage and non-hmo, but presumably reflecting ffs beneficiaries for the most part; 
+-	examine all claims from 1/1/08 - 12/31/10 without regard to timing of interview 
+-	assess total frequency of each code and the number of unique Rs with any occurrence
+-	if possible, distinguish those from inpatient vs outpt claims (I think they will all be found within inpatient, even if it is an "ambulatory" procedure)
+
+*/
+
+
+libname medi 'E:\data\cms_DUA_25000_2010';
+libname pro_cnt 'E:\data\serious_ill\int_data';
+
+
+
+H="First pass through IP claims"
+/*local*/
+libname medi 'C:\Users\gorger01\Desktop\Local_Medicare\cms_DUA_25000';
+
+
+/*get IP claims*/
+data ip_1;
+set medi.mp_2000_2010(where=(trim(left(SSLSSNF))~="N"));
+format admit_date date9. ;
+if '01JAN2008'd<=admit_date<='31DEC2010'd;
+run;
+
+/*drop variables we don't need*/
+data ip_2;
+set ip_1 (keep=BID_hrs_19,
+PRCDR_CD01-PRCDR_CD25
+TYPE_ADM PRCDR_DT01-PRCDR_DT25
+DSCHRGCD LOSCNT DSTNTNCD admit_date disch_date);
+run;
+
+data ip_proc_long(keep=BID_hrs_19 TYPE_ADM procedure procedure_date 
+	DSTNTNCD admit_date disch_date);
+set ip_2;
+array list PRCDRCD1-PRCDRCD25;
+array date PRCDRDT1-PRCDRDT25;
+do over list;
+if list~="" then do;
+procedure=list;
+procedure_date=mdy(substr(trim(left(date)),5,2),substr(trim(left(date)),7,2),substr(trim(left(date)),1,4));
+output;
+end;
+end;
+format procedure_date date10.;
+run;
+
+/*identify procedures in the list of ICD-9 codes from Amy 7/24/14 */
+data ip_meet;
+set ip_proc_long;
+if length(compress(procedure))>3 then do;
+
+if compress(procedure)+0 in (0050, 0051, 0052, 0053, 0054, 3794) then surgery_meet=1;
+
+end;
+/*only keep observations in work.ip_meet that meet criteria*/
+if surgery_meet then output;
+
+run;
+
+proc freq; table procedure; run;
+
+
+H="OP claims"
+/*get OP claims*/
+data op_1;
+set medi.op_2000_2010;
+format admit_date date9. ;
+if '01JAN2008'd<=admit_date<='31DEC2010'd;
+run;
+
+data op_2;
+set op_1(keep=bid_hrs_19 admit_date disch_date
+ RVCNTR01-RVCNTR45 PDGNS_CD PRCDR_CD1-PRCDR_CD25 PRCDR_DT1-PRCDR_DT25 PVRSNCD1-PRVSNCD25 );
+run;
+
+/*check through icd-9 procedure codes*/
+data op_proc_long(keep=bid_hrs_19 procedure procedure_date admit_date disch_date version);
+set ip_2;
+array list PRCDR_CD1-PRCDR_CD25;
+array date PRCDR_DT1-PRCDR_DT25;
+array vers PVRSNCD1-PRVSNCD25;
+do over list;
+if list~="" then do;
+procedure=list;
+procedure_date=mdy(substr(trim(left(date)),5,2),substr(trim(left(date)),7,2),substr(trim(left(date)),1,4));
+version=vers;
+output;
+end;
+end;
+format procedure_date date10.;
+run;
+proc freq; table version; run;
+
+/*identify procedures in the list of ICD-9 codes from Amy 7/24/14 */
+data op_meet;
+set op_proc_long;
+if length(compress(procedure))>3 then do;
+
+if compress(procedure)+0 in (0050, 0051, 0052, 0053, 0054, 3794) then surgery_meet=1;
+
+end;
+/*only keep observations in work.op_meet that meet criteria*/
+if surgery_meet then output;
+
+run;
+proc freq; table procedure; run;
+
+data op_cpt_long;
+set op_2(keep=bid_hrs_19 cpt admit_date disch_date );
+array list RVCNTR01-RVCNTR45;
+do over list;
+if list~="" then do;
+cpt=list;
+output;
+end;
+end;
+run;
+
+data op_cpt_meet;
+set op_cpt_long;
+if length(compress(cpt))>4 then do;
+
+if compress(cpt)+0 in (33216, 33217, 33218, 33220, 33223, 33240, 33241, 33249) then surgery_meet=1;
+
+end;
+/*only keep observations in work.oop_cpt_meet that meet criteria*/
+if surgery_meet then output;
+
+run;
+
+proc freq; table cpt; run;

@@ -7969,17 +7969,25 @@ foreach crit in a b c{
 
 	mat crit_`crit'=J(34,3,.)
 
+	mat cont=J(34,4,.) //matrix of mean, n, and variance for manually calculating p-value
+		//continuous variables
+
+
 //first row, n for each category
 //indicator that copd or chf diagnosis is required is created in Step 12
-	tab meet_`crit'_copd_chf_req_n0, missing matcell(row1)
-	mat crit_`crit'[1,1]=row1[2,1] //copd or chf is required
-	mat crit_`crit'[1,2]=row1[1,1] //copd or chf not required
+	sum core_year_n0
+	mat crit_`crit'[1,1]=r(N) //copd or chf included, full sample
+	mat cont[1,1]=r(N)
 
+	tab meet_`crit'_copd_chf_req_n0, missing matcell(row1)
+	mat crit_`crit'[1,2]=row1[1,1] //copd or chf is not required, limited sample
+	mat cont[1,2]=row1[1,1]
+
+//first column, full sample including copd/chf as criteria
 local c=1
-foreach i in 1 0{
 local r=2
 foreach v in `outcome1'{
-	sum `v' if meet_`crit'_copd_chf_req_n0==`i', detail
+	sum `v' , detail
 	mat crit_`crit'[`r',`c']=r(mean)
 	mat crit_`crit'[`r'+1,`c']=r(sd)
 	local r=`r'+2 //populates rows 2-7 for indicator variable outcomes
@@ -7989,27 +7997,79 @@ local r=8
 foreach v in `outcome2'{
 	sum `v' if meet_`crit'_copd_chf_req_n0==`i', detail
 	mat crit_`crit'[`r',`c']=r(mean)
+	mat cont[`r',`c']=r(mean)
 	mat crit_`crit'[`r'+1,`c']=r(p50)
+	mat cont[`r'+1,`c']=r(sd)
 	mat crit_`crit'[`r'+2,`c']=r(sd)
 	local r=`r'+3 //populates rows 8-34 for continuous variables
 	}
-local c=`c'+1	
-}
 
-//pvalues comparing outcomes
-local c = 3
+//second column, excluding obs where copd / chf is only reason why meet criteria
+local c=2
 local r=2
 foreach v in `outcome1'{
-	tab `v' meet_`crit'_copd_chf_req_n0, chi2
-	mat crit_`crit'[`r',`c']=r(p)
+	sum `v' if meet_`crit'_copd_chf_req_n0==0, detail
+	mat crit_`crit'[`r',`c']=r(mean)
+	mat crit_`crit'[`r'+1,`c']=r(sd)
 	local r=`r'+2 //populates rows 2-7 for indicator variable outcomes
 	}
+
 local r=8
 foreach v in `outcome2'{
-	ttest `v', by(meet_`crit'_copd_chf_req_n0)
-	mat crit_`crit'[`r',`c']=r(p)
+	sum `v' if meet_`crit'_copd_chf_req_n0==0, detail
+	mat crit_`crit'[`r',`c']=r(mean)
+	mat cont[`r',`c']=r(mean)
+	mat crit_`crit'[`r'+1,`c']=r(p50)
+	mat cont[`r'+1,`c']=r(sd)
+	mat crit_`crit'[`r'+2,`c']=r(sd)
 	local r=`r'+3 //populates rows 8-34 for continuous variables
-}
+	}
+
+
+//pvalues comparing outcomes
+//have to manually compute p values
+
+//new matrices for n's of categorical variables
+mat cat_1=J(2,2,.)
+mat cat_2=J(2,2,.)
+mat cat_3=J(2,2,.)
+
+local i = 1
+foreach v in `outcome1'{
+	tab `v' , matcell(xx)
+	mat cat_`i'[1,1]=xx[1,1]
+	mat cat_`i'[2,1]=xx[2,1]
+
+	tab `v' if meet_`crit'_copd_chf_req_n0==0, matcell(xx)
+	mat cat_`i'[1,2]=xx[1,1]
+	mat cat_`i'[2,2]=xx[2,1]
+	local i=`i'+1 
+	}
+
+
+local c = 3
+mat cat=J(7,2,.)
+forvalues r = 2(2)6{
+	local i = `r'/2
+	mat cat[`r',1]=((cat_`i'[1,1]*cat_`i'[2,2]-cat_`i'[1,2]*cat_`i'[2,1])^2*(cat_`i'[1,1]+cat_`i'[1,2]+cat_`i'[2,1]+cat_`i'[2,2])) / ///
+	((cat_`i'[1,1]+cat_`i'[1,2])*(cat_`i'[2,1]+cat_`i'[2,2])*(cat_`i'[1,2]+cat_`i'[2,2])*(cat_`i'[1,1]+cat_`i'[2,1])) //chisq stat
+	mat cat[`r',2]= chi2tail(1,cat[`r',1]) //p-value
+
+	mat crit_`crit'[`r',`c']=cat[`r',2]
+	}
+
+local r=8
+
+forvalues r = 8(3)32{
+	mat cont[`r',3]=sqrt(((cont[1,1]-1)*cont[`r'+1,1]^2+(cont[1,2]-1)*cont[`r'+1,2]^2) / (cont[1,1]+cont[1,2]-2))  //col 3 = pooled sd
+	mat cont[`r',4]=(cont[`r',1]-cont[`r',2])/(cont[`r',3]*sqrt(1/cont[1,1]+1/cont[1,2])) //t-statistic
+	mat cont[`r',5]=cont[1,1]+cont[1,2]-2 //dof
+	mat cont[`r',6]=tprob(cont[`r',5],cont[`r',4]) //p-value
+	}
+
+forvalues r = 8(3)32{
+	mat crit_`crit'[`r',`c']=cont[`r',6]
+	}
 
 mat rownames crit_`crit'="N" "Died, mean" "SD" "Hospice enr, mean" "SD" "Emerg or urgent hosp admit, mean" "SD" ///
 "IP MC, mean" "Median" "SD" "SNF MC, mean" "Median" "SD" ///
@@ -8024,7 +8084,7 @@ frmttable using "`logpath'\sic_Table8_outcomes_copd_chf", statmat(crit_a) ///
 title("Comparison of outcomes at 1 year, criteria A" \ ///
 "First interview when R meets criteria" \ ///
 "Criteria including CHF &COPD definitions vs excluding them") ///
-ctitle("" "CHF and COPD required" "CHF and COPD Not Required" "P-value") ///
+ctitle("" "CHF and COPD included" "CHF and COPD Excluded" "P-value") ///
 note("Medicare spending adjusted for inflation and the CMS wage index." \ ///
 "Criteria A = Serious medical illness and/or ADL impairment.") ///
 sdec(2,2,3) replace
@@ -8033,7 +8093,7 @@ frmttable using "`logpath'\sic_Table8_outcomes_copd_chf", statmat(crit_b) ///
 title("Comparison of outcomes at 1 year, criteria B" \ ///
 "First interview when R meets criteria" \ ///
 "Criteria including CHF &COPD definitions vs excluding them") ///
-ctitle("" "CHF and COPD required" "CHF and COPD Not Required" "P-value") ///
+ctitle("" "CHF and COPD included" "CHF and COPD Excluded" "P-value") ///
 note("Medicare spending adjusted for inflation and the CMS wage index" \ ///
 "Criteria B = Criteria A and Nursing home resident and/or hospitalization") ///
 sdec(2,2,3) addtable
@@ -8042,15 +8102,13 @@ frmttable using "`logpath'\sic_Table8_outcomes_copd_chf", statmat(crit_c) ///
 title("Comparison of outcomes at 1 year, criteria C" \ ///
 "First interview when R meets criteria" \ ///
 "Criteria including CHF &COPD definitions vs excluding them") ///
-ctitle("" "CHF and COPD required" "CHF and COPD Not Required" "P-value") ///
+ctitle("" "CHF and COPD included" "CHF and COPD Excluded" "P-value") ///
 note("Medicare spending adjusted for inflation and the CMS wage index" \ ///
 "Criteria C = Medical illness and ADL impairment and Nursing Home res and/or hospitalization.") ///
 sdec(2,2,3) addtable
 
 ****************************************************
 log close
-
-tab core_year_n0
 
 
 H="Bar graph - p1 outcomes, critera a,b,c"

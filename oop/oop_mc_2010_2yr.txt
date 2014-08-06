@@ -4012,6 +4012,8 @@ H="Medpar mc spending total"
 /*Totals are from merged claims files from 2000-2010
 Initial claims merging, processing done in HRS_2010_MC_claims.txt code
 Filed in general HRS processing code directory
+
+Also gets total number of Inpatient nights from the IP claims to bring in
 */
 
 /**********************************************************/
@@ -4136,6 +4138,10 @@ select * from test25
 where SSLSSNF="N";
 quit;
 
+/*************************************************************************/
+/*Using the ip claims lists above, get total IP nights from LOS */
+/*************************************************************************/
+
 
 H="Other types of mc spending totals"
 /*macro to calculate totals for the claims that are not in medpar files*/
@@ -4252,6 +4258,18 @@ proc means;
 var wage_index;
 run;
 
+
+/*get DC average*/
+data wi_dc;
+set oop_int.wage_index;
+if index(trim(left(Area_Title)),", DC")>0;
+run;
+
+proc means;
+var wage_index;
+run;
+
+
 /*deal with states that were missing wage index values in the 2010 file
 These values are the state averages using the individual cbsa values 
 data in the 2010 excel file came from
@@ -4262,8 +4280,10 @@ cbsa_n=cbsa_code+0;
 if trim(left(cbsa_code))~="";
 wage_index_2010=Wage_Index;
 if index(trim(left(Area_Title)),", RI")>0 then RI=1;
-*state 44=RI;
+if index(trim(left(Area_Title)),", DC")>0 then DC=1;
+*state 44=RI ,state 11=DC;
 if state_in_wage_index=44 then wage_index_2010=1.0783000; 
+if state_in_wage_index=11 then wage_index_2010= 1.0701250; 
 run;
 
 *Look at observations from Rhode Island;
@@ -4276,6 +4296,18 @@ proc means data=wage_index2;
 class &var;
 var wage_index_2010;
 run;
+
+*Look at observations from DC;
+proc freq data=wage_index2(where=(DC=1));
+table Area_Title;
+run;
+
+%let var=DC;
+proc means data=wage_index2;
+class &var;
+var wage_index_2010;
+run;
+
 
 /******************************************************************/
 /* Link CBSA codes and zip codes from the WI file*/
@@ -4407,6 +4439,9 @@ proc sort data=wage_index2 out=wage_index3 nodupkey;
 by state_in_wage_index;
 run;
 
+*Puerto Rico is missing state;
+proc freq; table state_in_wage_index; run;
+
 /*Merges in wage index if there's one for the state but was missing for the zip*/
 proc sql;
 create table cost_id_wage_index2 
@@ -4512,25 +4547,25 @@ run;
 %wageind(ctype=op);
 %wageind(ctype=dm);
 
-/*merge individual adjusted costs into single dataset*/
+/*merge individual adjusted costs and ip los into single dataset*/
 data costs_all_wi_1;
 merge costs_ip_wi costs_snf_wi costs_hh_wi costs_hs_wi costs_pb_wi
  costs_op_wi costs_dm_wi;
 by BID_hrs id;
 run;
 
-/*bring in indicator for having the wage index*/
+/*bring in indicator for having the wage index and ip los*/
 proc sort data=costs_all_wi_1; by BID_hrs ; run;
 proc sort data=cost_id_wage_index3; by BID_hrs ; run;
 
 proc sql;
-create table oop_int.costs_all_wi as select a.*,b.zip_exit_e,b.wi_missing_yes,b.wage_index_20102 from
+create table oop_int.costs_all_wi as select a.*,b.zip_exit_e,b.wi_missing_yes,b.wage_index_20102,b.ip_los_24m,b.ip_los_60m from
 costs_all_wi_1 a left join
 cost_id_wage_index3 b
 on a.BID_hrs=b.BID_hrs;
 quit;
 
-proc freq; table wi_missing_yes ; run;
+proc freq; table wi_missing_yes ip_los_24m ip_los_60m; run;
 
 
 
@@ -4595,7 +4630,7 @@ merge 1:1 id using mc_costs_2and5yr.dta
 sum _merge if(tot_paid_by_mc_24m==.)
 sum _merge if(tot_paid_by_mc_24m~=.)
 
-//Create indicator variable to indciate medicare totals present
+//Create indicator variable to indicate medicare totals present
 gen mc_total_d=0
 replace mc_total_d=1 if(_merge==3)
 drop _merge
@@ -4642,6 +4677,9 @@ la var pb_paid_by_mc_60m_wi "Wage index adj. Carrier mc payments in last 5 years
 la var op_paid_by_mc_60m_wi "Wage index adj. Outpatient mc payments in last 5 years of life"
 la var dm_paid_by_mc_60m_wi "Wage index adj. DME mc payments in last 5 years of life"
 
+la var ip_los_24m "Total Hospital LOS last 2 years of life, from IP claims"
+la var ip_los_60m "Total Hospital LOS last 5 years of life, from IP claims"
+
 //save dataset with costs merged in
 save oop_resp_sp_restri_24mand60m_mc.dta,replace
 
@@ -4652,7 +4690,7 @@ hh_paid_by_mc_24m_wi hs_paid_by_mc_24m_wi pb_paid_by_mc_24m_wi op_paid_by_mc_24m
 local mccost5 tot_paid_by_mc_60m_wi ip_paid_by_mc_60m_wi snf_paid_by_mc_60m_wi ///
 hh_paid_by_mc_60m_wi hs_paid_by_mc_60m_wi pb_paid_by_mc_60m_wi op_paid_by_mc_60m_wi ///
  dm_paid_by_mc_60m_wi  
-tabstat `mccost2' `mccost5' if(mc_total_d==1), stat(mean sd count) col(stat)
+tabstat `mccost2' ip_los_24m `mccost5' ip_los_60m if(mc_total_d==1), stat(mean sd count) col(stat)
 
 tabout death_year_e female_x race_e /*age_at_death_e*/ if(mc_total_d==1) ///
 using `logpath'\sumstats1.csv, ///
@@ -5857,7 +5895,7 @@ use oop_mc_sample_addedvars.dta
 
 ******************************************************************************
 //get tables comparing mean, median spending for different disease groups
-mat dg_2y=J(26,8,.)
+mat dg_2y=J(27,8,.)
 //first row n each group
 tab pr_dem_gt50, missing matcell(r1_50)
 mat dg_2y[1,1]=r1_50[2,1] //with dem prob > 50% col 1
@@ -5875,7 +5913,7 @@ hh_paid_by_mc_24m_wi hs_paid_by_mc_24m_wi pb_paid_by_mc_24m_wi op_paid_by_mc_24m
 dm_paid_by_mc_24m_wi total_oop_24m helper_oop_24m hospital_oop_24m nh_oop_24m ///
 doctor_oop_24m rx_oop_24m insurance_costs_24m other_oop_24m nh_nights_24m ///
 nh_cost_medicaid_24m nh_cost_private_24m total_nh_costs_24m inf_care_costs_24m ///
-medicaid_x
+ip_los_24m medicaid_x 
 
 //totals 2 years, wage index adjusted mc payments, oop spend and nh nights
 local c=1
@@ -5900,7 +5938,8 @@ mat rownames dg_2y= "N" "Age at death" "Total payments, all types" "Total govern
 "OOP Total" "OOP Helper" "OOP Hospital" "OOP NH" "OOP Doctor" "OOP Rx" ///
 "OOP Insurance Costs" "OOP Other" ///
 "Total NH nights, SR or claims" "Medicaid NH Payments" ///
-"Private payer NH Payments" "Total NH costs, all payers" "Imputed informal care costs" "Medicaid at death? (percent)"
+"Private payer NH Payments" "Total NH costs, all payers" "Imputed informal care costs" ///
+"Hospital IP nights" "Medicaid at death? (percent)"
 
 mat list dg_2y
 
@@ -6107,7 +6146,7 @@ drop if miss_prob_dem_n1n2==1
 //Table last 5 years spending
 ******************************************************************************
 //get tables comparing mean, median spending for different disease groups
-mat dg_5y=J(26,8,.)
+mat dg_5y=J(27,8,.)
 //first row n each group
 tab pr_dem_gt50, missing matcell(r1_50)
 mat dg_5y[1,1]=r1_50[2,1] //with dem prob > 50% col 1
@@ -6125,7 +6164,7 @@ hh_paid_by_mc_60m_wi hs_paid_by_mc_60m_wi pb_paid_by_mc_60m_wi op_paid_by_mc_60m
 dm_paid_by_mc_60m_wi total_oop_60m helper_oop_60m hospital_oop_60m nh_oop_60m ///
 doctor_oop_60m rx_oop_60m insurance_costs_60m other_oop_60m nh_nights_60m ///
 nh_cost_medicaid_60m nh_cost_private_60m total_nh_costs_60m ///
-inf_care_costs_60m medicaid_x
+inf_care_costs_60m ip_los_60m medicaid_x
 
 //totals 5 years, wage index adjusted mc payments, oop spend and nh nights
 local c=1
@@ -6150,7 +6189,8 @@ mat rownames dg_5y= "N" "Age at death" "Total payments, all types" "Total govern
 "OOP Total" "OOP Helper" "OOP Hospital" "OOP NH" "OOP Doctor" "OOP Rx" ///
 "OOP Insurance Costs" "OOP Other" ///
 "Total NH nights, SR or claims" "Medicaid NH Payments" ///
-"Private payer NH Payments" "Total NH costs, all payers" "Imputed informal care costs" "Medicaid at death? (percent)"
+"Private payer NH Payments" "Total NH costs, all payers" "Imputed informal care costs" ///
+"Hospital IP nights" "Medicaid at death? (percent)"
 
 mat list dg_5y
 
@@ -6308,8 +6348,11 @@ sdec(0 \ 1 \ 0 \ 3) landscape addtable
 log close
 
 
-H="Quintiles Medicare spending last 2 years"
-/*Divides into quintiles by total Medicare spending last 2 years of life
+H="xxxxxQuintiles Medicare spending last 2 years"
+/*This is the initial code to check quintiles, see next tab for the
+split that was used!
+
+Divides into quintiles by total Medicare spending last 2 years of life
 
 2 year lookbacks 
 
@@ -7114,10 +7157,10 @@ local spvars age_at_death_e total_costs_60m tot_gov_pay_60m tot_paid_by_mc_60m_w
 hh_paid_by_mc_60m_wi hs_paid_by_mc_60m_wi pb_paid_by_mc_60m_wi op_paid_by_mc_60m_wi ///
 dm_paid_by_mc_60m_wi nh_cost_medicaid_60m total_oop_60m helper_oop_60m hospital_oop_60m nh_oop_60m ///
 doctor_oop_60m rx_oop_60m insurance_costs_60m other_oop_60m nh_nights_60m ///
- nh_cost_private_60m total_nh_costs_60m inf_care_costs_60m ///
+ nh_cost_private_60m total_nh_costs_60m inf_care_costs_60m ip_los_60m ///
 medicaid_x
 
-mat mean_unadj1 = J(26,10,.)
+mat mean_unadj1 = J(27,10,.)
 
 //first row - get n each quintile
 local c=1
@@ -7150,7 +7193,8 @@ mat rownames mean_unadj1= "N" "Age at death" "Total payments, all types" "Total 
 "OOP Total" "OOP Helper" "OOP Hospital" "OOP NH" "OOP Doctor" "OOP Rx" ///
 "OOP Insurance Costs" "OOP Other" ///
 "Total NH nights, SR or claims" ///
-"Private payer NH Payments" "Total NH costs, all payers" "Imputed informal care costs" "Medicaid at death? (percent)"
+"Private payer NH Payments" "Total NH costs, all payers" "Imputed informal care costs" ///
+"Hospital IP nights" "Medicaid at death? (percent)"
 
 mat list mean_unadj1
 
@@ -7167,7 +7211,7 @@ frmttable using "`logpath'\9-5yr_HRR_Quintiles" , statmat(mean_unadj1) ///
 ************************************************************
 //Now create quintile tables for each of the 4 disease groups
 foreach d in pr_dem_gt50 cancer_grp heartdis_grp other_grp{
-	mat mean_`d' = J(26,10,.)
+	mat mean_`d' = J(27,10,.)
 
 	//first row - get n each quintile
 	local c=1
@@ -7199,7 +7243,8 @@ mat rownames mean_`d'= "N" "Age at death" "Total payments, all types" "Total gov
 "Medicare DME" "Medicaid NH Payments" "OOP Total" "OOP Helper" "OOP Hospital" "OOP NH" "OOP Doctor" "OOP Rx" ///
 "OOP Insurance Costs" "OOP Other" ///
 "Total NH nights, SR or claims" "Private payer NH Payments" ///
-"Total NH costs, all payers" "Imputed informal care costs" "Medicaid at death? (percent)"
+"Total NH costs, all payers" "Imputed informal care costs" ///
+"Hospital IP nights" "Medicaid at death? (percent)"
 
 mat list mean_unadj1
 
@@ -7218,7 +7263,7 @@ frmttable using "`logpath'\9-5yr_HRR_Quintiles" , statmat(mean_`d') ///
 ************************************************************
 //Create single table looking at the high/low quintiles 
 //for each of the disease groups for an easier comparison
-mat mean_hilo = J(26,16,.)
+mat mean_hilo = J(27,16,.)
 
 
 //first row - get n each quintile
@@ -7269,7 +7314,8 @@ mat rownames mean_hilo= "N" "Age at death" "Total payments, all types" "Total go
 "Medicare DME" "Medicaid NH Payments" "OOP Total" "OOP Helper" "OOP Hospital" "OOP NH" "OOP Doctor" "OOP Rx" ///
 "OOP Insurance Costs" "OOP Other" ///
 "Total NH nights, SR or claims" "Private payer NH Payments" ///
-"Total NH costs, all payers" "Imputed informal care costs" "Medicaid at death? (percent)"
+"Total NH costs, all payers" "Imputed informal care costs" ///
+"Hospital IP nights" "Medicaid at death? (percent)"
 
 mat list mean_hilo
 
@@ -7426,14 +7472,14 @@ graph export panel_quint_1leg.tif, replace
 
 ************************************************************
 //Look at how our sample is distributed among the HRRs
-generate order = _n
+/*generate order = _n
 by hrrnum (order) , sort: generate hrrcount = _n ==1
 
 egen total_hrr_cnt = sum(hrrcount)
 
 sum total_hrr_cnt
 
-tab hrrnum, missing
+tab hrrnum, missing*/
 *********************************************************
 log close
 
@@ -7727,9 +7773,9 @@ adj_dm_paid_by_mc_60m_wi adj_nh_cost_medicaid_60m adj_total_oop_60m adj_helper_o
 adj_hospital_oop_60m adj_nh_oop_60m ///
 adj_doctor_oop_60m adj_rx_oop_60m adj_insurance_costs_60m adj_other_oop_60m nh_nights_60m ///
  adj_nh_cost_private_60m adj_total_nh_costs_60m adj_inf_care_costs_60m ///
-medicaid_x
+ip_los_60m medicaid_x
 
-mat mean_adj1 = J(26,10,.)
+mat mean_adj1 = J(27,10,.)
 
 //first row - get n each quintile
 local c=1
@@ -7762,7 +7808,8 @@ mat rownames mean_adj1= "N" "Age at death" "Total payments, all types" "Total go
 "OOP Total" "OOP Helper" "OOP Hospital" "OOP NH" "OOP Doctor" "OOP Rx" ///
 "OOP Insurance Costs" "OOP Other" ///
 "Total NH nights, SR or claims" ///
-"Private payer NH Payments" "Total NH costs, all payers" "Imputed informal care costs" "Medicaid at death? (percent)"
+"Private payer NH Payments" "Total NH costs, all payers" "Imputed informal care costs" ///
+"Hospital IP nights" "Medicaid at death? (percent)"
 
 mat list mean_adj1
 
@@ -7781,7 +7828,7 @@ frmttable using "`logpath'\11-Adj_5yr_HRR_Quintiles" , statmat(mean_adj1) ///
 ************************************************************
 //Now create quintile tables for each of the 4 disease groups
 foreach d in pr_dem_gt50 cancer_grp heartdis_grp other_grp{
-	mat mean_`d' = J(26,10,.)
+	mat mean_`d' = J(27,10,.)
 
 	//first row - get n each quintile
 	local c=1
@@ -7813,7 +7860,8 @@ mat rownames mean_`d'= "N" "Age at death" "Total payments, all types" "Total gov
 "Medicare DME" "Medicaid NH Payments" "OOP Total" "OOP Helper" "OOP Hospital" "OOP NH" "OOP Doctor" "OOP Rx" ///
 "OOP Insurance Costs" "OOP Other" ///
 "Total NH nights, SR or claims" "Private payer NH Payments" ///
-"Total NH costs, all payers" "Imputed informal care costs" "Medicaid at death? (percent)"
+"Total NH costs, all payers" "Imputed informal care costs" ///
+"Hospital IP nights" "Medicaid at death? (percent)"
 
 mat list mean_`d'
 
@@ -7834,7 +7882,7 @@ frmttable using "`logpath'\11-Adj_5yr_HRR_Quintiles" , statmat(mean_`d') ///
 ************************************************************
 //Create single table looking at the high/low quintiles 
 //for each of the disease groups for an easier comparison
-mat mean_hilo = J(26,16,.)
+mat mean_hilo = J(27,16,.)
 
 
 //first row - get n each quintile
@@ -7885,7 +7933,8 @@ mat rownames mean_hilo= "N" "Age at death" "Total payments, all types" "Total go
 "Medicare DME" "Medicaid NH Payments" "OOP Total" "OOP Helper" "OOP Hospital" "OOP NH" "OOP Doctor" "OOP Rx" ///
 "OOP Insurance Costs" "OOP Other" ///
 "Total NH nights, SR or claims" "Private payer NH Payments" ///
-"Total NH costs, all payers" "Imputed informal care costs" "Medicaid at death? (percent)"
+"Total NH costs, all payers" "Imputed informal care costs" ///
+"Hospital IP nights" "Medicaid at death? (percent)"
 
 mat list mean_hilo
 
@@ -8078,14 +8127,14 @@ adj_dm_paid_by_mc_60m_wi adj_nh_cost_medicaid_60m_wi adj_total_oop_60m_wi adj_he
 adj_hospital_oop_60m_wi adj_nh_oop_60m_wi ///
 adj_doctor_oop_60m_wi adj_rx_oop_60m_wi adj_insurance_costs_60m_wi adj_other_oop_60m_wi nh_nights_60m ///
  adj_nh_cost_private_60m_wi adj_total_nh_costs_60m_wi adj_inf_care_costs_60m_wi ///
-medicaid_x
+ip_los_60m medicaid_x
 
 **************************************************
 //create tables of spending categories, by disease group (prior
 //tables by quintiles of spending)
 
 //get tables comparing mean, median spending for different disease groups
-mat dg_5y=J(26,8,.)
+mat dg_5y=J(27,8,.)
 //first row n each group
 tab pr_dem_gt50, missing matcell(r1_50)
 mat dg_5y[1,1]=r1_50[2,1] //with dem prob > 50% col 1
@@ -8119,7 +8168,8 @@ mat rownames dg_5y= "N" "Age at death" "Total payments, all types" "Total govern
 "OOP Total" "OOP Helper" "OOP Hospital" "OOP NH" "OOP Doctor" "OOP Rx" ///
 "OOP Insurance Costs" "OOP Other" ///
 "Total NH nights, SR or claims" "Medicaid NH Payments" ///
-"Private payer NH Payments" "Total NH costs, all payers" "Imputed informal care costs" "Medicaid at death? (percent)"
+"Private payer NH Payments" "Total NH costs, all payers" "Imputed informal care costs" ///
+ "Hospital IP nights" "Medicaid at death? (percent)"
 
 mat list dg_5y
 
@@ -8138,7 +8188,7 @@ sdec(0) substat(1) replace
 
 **************************************************
 //Create tables of spending by quintile, overall sample (unadjusted)
-mat mean_adj1 = J(26,10,.)
+mat mean_adj1 = J(27,10,.)
 
 //first row - get n each quintile
 local c=1
@@ -8171,7 +8221,8 @@ mat rownames mean_adj1= "N" "Age at death" "Total payments, all types" "Total go
 "OOP Total" "OOP Helper" "OOP Hospital" "OOP NH" "OOP Doctor" "OOP Rx" ///
 "OOP Insurance Costs" "OOP Other" ///
 "Total NH nights, SR or claims" ///
-"Private payer NH Payments" "Total NH costs, all payers" "Imputed informal care costs" "Medicaid at death? (percent)"
+"Private payer NH Payments" "Total NH costs, all payers" "Imputed informal care costs" ///
+ "Hospital IP nights" "Medicaid at death? (percent)"
 
 mat list mean_adj1
 
@@ -8191,7 +8242,7 @@ frmttable using "`logpath'\12-Adj_wi_5yr_HRR_Quintiles" , statmat(mean_adj1) ///
 ************************************************************
 //Now create quintile tables for each of the 4 disease groups
 foreach d in pr_dem_gt50 cancer_grp heartdis_grp other_grp{
-	mat mean_`d' = J(26,10,.)
+	mat mean_`d' = J(27,10,.)
 
 	//first row - get n each quintile
 	local c=1
@@ -8223,7 +8274,7 @@ mat rownames mean_`d'= "N" "Age at death" "Total payments, all types" "Total gov
 "Medicare DME" "Medicaid NH Payments" "OOP Total" "OOP Helper" "OOP Hospital" "OOP NH" "OOP Doctor" "OOP Rx" ///
 "OOP Insurance Costs" "OOP Other" ///
 "Total NH nights, SR or claims" "Private payer NH Payments" ///
-"Total NH costs, all payers" "Imputed informal care costs" "Medicaid at death? (percent)"
+"Total NH costs, all payers" "Imputed informal care costs"  "Hospital IP nights" "Medicaid at death? (percent)"
 
 mat list mean_`d'
 
@@ -8244,7 +8295,7 @@ frmttable using "`logpath'\12-Adj_wi_5yr_HRR_Quintiles" , statmat(mean_`d') ///
 ************************************************************
 //Create single table looking at the high/low quintiles 
 //for each of the disease groups for an easier comparison
-mat mean_hilo = J(26,16,.)
+mat mean_hilo = J(27,16,.)
 
 
 //first row - get n each quintile
@@ -8295,7 +8346,7 @@ mat rownames mean_hilo= "N" "Age at death" "Total payments, all types" "Total go
 "Medicare DME" "Medicaid NH Payments" "OOP Total" "OOP Helper" "OOP Hospital" "OOP NH" "OOP Doctor" "OOP Rx" ///
 "OOP Insurance Costs" "OOP Other" ///
 "Total NH nights, SR or claims" "Private payer NH Payments" ///
-"Total NH costs, all payers" "Imputed informal care costs" "Medicaid at death? (percent)"
+"Total NH costs, all payers" "Imputed informal care costs" "Hospital IP nights" "Medicaid at death? (percent)"
 
 mat list mean_hilo
 
@@ -8313,7 +8364,7 @@ frmttable using "`logpath'\12-Adj_wi_5yr_HRR_Quintiles" , statmat(mean_hilo) ///
 	"Informal caregivers are spouses and other unpaid (mainly children), replacement wage imputation")  ///
 	sdec(0) substat(1) landscape addtable
 
-
+/*
 ************************************************************
 //Pie charts of spending by category by quintile and disease group
 //OA sample
@@ -8453,7 +8504,7 @@ grc1leg adj_wi_oa_spend.gph adj_wi_oa_quint_1.gph adj_wi_oa_quint_2.gph adj_wi_o
   col(6)
 graph save adj_wi_panel_quint_1leg, replace
 graph export adj_wi_panel_quint_1leg.tif, replace
-
+*/
 *********************************************************
 log close
 

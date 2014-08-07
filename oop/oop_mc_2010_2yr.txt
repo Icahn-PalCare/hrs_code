@@ -4234,9 +4234,9 @@ H="Merge mc spending subtotals into single data file"
 
 
 
-H="Adjust for wage index by patient zip code"
+H="Link in wage index by patient zip code"
 /******************************************************************/
-/* Adjust subtotals for wage index */
+/* Link in wage index using exit zip code / state*/
 /******************************************************************/
 
 /******************************************************************/
@@ -4444,7 +4444,7 @@ proc freq; table state_in_wage_index; run;
 
 /*Merges in wage index if there's one for the state but was missing for the zip*/
 proc sql;
-create table cost_id_wage_index2 
+create table oop_fnl.mc_costs_2and5yr 
 as select a.*,coalesce(a.wage_index_2010,b.wage_index_2010) as wage_index_20102
 from
 cost_id_wage_index a
@@ -4460,7 +4460,7 @@ run;
 
 /*23 obs have missing state so can't backfill using state wage index*/
 proc sql;
-select distinct state_n ,count(*) from cost_id_wage_index2
+select distinct state_n ,count(*) from oop_fnl.mc_costs_2and5yr 
 where wage_index_20102=. group by state_n;
 quit;
 
@@ -4502,101 +4502,92 @@ quit;
 /*********************************************************/
 
 
-/******************************************************************/
-/* Scale individual costs by wage index*/
-/******************************************************************/
-
-/*if missing wage index, set to 1 and create indicator to note no
-wage index present b/c bad zip code and missing state
-23 observations with wage index assigned = 1*/
-data cost_id_wage_index3; 
-set cost_id_wage_index2;
-wi_missing_yes=0;
-if wage_index_20102=. then wi_missing_yes=1;
-if wage_index_20102=. then wage_index_20102=1;
-label wi_missing_yes="Indicator missing wage index, set to 1";
-run;
-
-proc freq data=cost_id_wage_index3; table wi_missing_yes; run;
-
-proc sort data=cost_id_wage_index3 ;
-by BID_hrs;
-run;
-
-/*macro to adjust prices by wage index
-Have two subtotals now - one without wage index adjustment and one with _wi is adjusted*/
-%macro wageind(ctype=);
-data costs_&ctype._wi (keep=BID_HRS id &ctype._paid_by_mc_24m &ctype._paid_by_mc_24m_wi
-	&ctype._paid_by_mc_60m &ctype._paid_by_mc_60m_wi);
-set cost_id_wage_index3;
-&ctype._paid_by_mc_24m_wi=&ctype._paid_by_mc_24m/wage_index_20102;
-&ctype._paid_by_mc_60m_wi=&ctype._paid_by_mc_60m/wage_index_20102;
-run;
-
-proc sort data=costs_&ctype._wi ;
-by BID_hrs id;
-run;
-
-%mend;
-
-%wageind(ctype=ip);
-%wageind(ctype=snf);
-%wageind(ctype=hh);
-%wageind(ctype=hs);
-%wageind(ctype=pb);
-%wageind(ctype=op);
-%wageind(ctype=dm);
-
-/*merge individual adjusted costs and ip los into single dataset*/
-data costs_all_wi_1;
-merge costs_ip_wi costs_snf_wi costs_hh_wi costs_hs_wi costs_pb_wi
- costs_op_wi costs_dm_wi;
-by BID_hrs id;
-run;
-
-/*bring in indicator for having the wage index and ip los*/
-proc sort data=costs_all_wi_1; by BID_hrs ; run;
-proc sort data=cost_id_wage_index3; by BID_hrs ; run;
-
-proc sql;
-create table oop_int.costs_all_wi as select a.*,b.zip_exit_e,b.wi_missing_yes,b.wage_index_20102,b.ip_los_24m,b.ip_los_60m from
-costs_all_wi_1 a left join
-cost_id_wage_index3 b
-on a.BID_hrs=b.BID_hrs;
-quit;
-
-proc freq; table wi_missing_yes ip_los_24m ip_los_60m; run;
-
-
-
-
-
-
-H="Calculate total spending "
-/******************************************************************/
-/* Create new variable for total mc spending of all types */
-/******************************************************************/
-
-/*note this final dataset drops observations with missing wage index*/
-
-data oop_fnl.mc_costs_2and5yr;
-set oop_int.costs_all_wi;
-/*total not adjusted for wage index*/
-tot_paid_by_mc_24m=sum(of ip_paid_by_mc_24m snf_paid_by_mc_24m hh_paid_by_mc_24m hs_paid_by_mc_24m
-pb_paid_by_mc_24m op_paid_by_mc_24m dm_paid_by_mc_24m);
-tot_paid_by_mc_60m=sum(of ip_paid_by_mc_60m snf_paid_by_mc_60m hh_paid_by_mc_60m hs_paid_by_mc_60m
-pb_paid_by_mc_60m op_paid_by_mc_60m dm_paid_by_mc_60m);
-/*total adjusted for wage index*/
-tot_paid_by_mc_24m_wi=sum(of ip_paid_by_mc_24m_wi snf_paid_by_mc_24m_wi hh_paid_by_mc_24m_wi hs_paid_by_mc_24m_wi
-pb_paid_by_mc_24m_wi op_paid_by_mc_24m_wi dm_paid_by_mc_24m_wi);
-tot_paid_by_mc_60m_wi=sum(of ip_paid_by_mc_60m_wi snf_paid_by_mc_60m_wi hh_paid_by_mc_60m_wi hs_paid_by_mc_60m_wi
-pb_paid_by_mc_60m_wi op_paid_by_mc_60m_wi dm_paid_by_mc_60m_wi);
-run;
-
 /*save version to Stata*/
 proc export data=oop_fnl.mc_costs_2and5yr
 outfile="E:\data\hrs_oop_2010\final_data\mc_costs_2and5yr.dta" replace;
 run;
+
+
+
+H="Adjust for wage index and calculate total Medicare spending"
+/* 
+Adjusts spending categories for the wage index, normalizing to maintain the mean
+
+Calculates totals of 2 ,5 year medicare spending
+
+Note: This step is done in Stata
+*/
+
+capture log close
+clear all
+set mem 500m
+set more off
+
+local logpath E:\data\hrs_oop_2010\logs
+local datapath E:\data\hrs_oop_2010\final_data
+
+log using `logpath'\01-mc_oop_wi_adjust.txt, text replace
+
+cd `datapath'
+use mc_costs_2and5yr.dta
+
+******************************************************************
+// Scale individual costs by wage index*/
+******************************************************************
+
+//if missing wage index, set to 1 and create indicator to note no
+//wage index present b/c bad zip code and missing state
+//23 observations with wage index assigned = 1
+gen wi_missing_yes=0
+replace wi_missing_yes=1 if wage_index_20102==.
+replace wage_index_20102=1 if wage_index_20102==.
+label var wi_missing_yes "Indicator missing wage index, set to 1"
+
+tab wi_missing_yes, missing
+
+local var ip_paid_by_mc_24m snf_paid_by_mc_24m hh_paid_by_mc_24m ///
+hs_paid_by_mc_24m pb_paid_by_mc_24m op_paid_by_mc_24m dm_paid_by_mc_24m ///
+ip_paid_by_mc_60m snf_paid_by_mc_60m hh_paid_by_mc_60m ///
+hs_paid_by_mc_60m pb_paid_by_mc_60m op_paid_by_mc_60m dm_paid_by_mc_60m
+
+foreach v in `var'{
+	egen mean_`v'=mean(`v')
+	reg `v' c.wage_index_20102
+
+	predict resid_`v', residual
+
+	gen `v'_wi=mean_`v'+resid_`v'
+	sum `v'_wi, detail
+	sum `v', detail
+
+	drop mean_`v' resid_`v'
+	}
+	
+drop  wage_index_2010 state_n
+
+******************************************************************
+// Calculate spending totals*/
+******************************************************************
+foreach i in 24 60{
+	//total without adjusting for wage index
+	gen tot_paid_by_mc_`i'm=ip_paid_by_mc_`i'm + snf_paid_by_mc_`i'm + hh_paid_by_mc_`i'm +  ///
+	hs_paid_by_mc_`i'm + pb_paid_by_mc_`i'm + op_paid_by_mc_`i'm + dm_paid_by_mc_`i'm
+ 
+	//total adjusted for wage index
+	gen tot_paid_by_mc_`i'm_wi=ip_paid_by_mc_`i'm_wi + snf_paid_by_mc_`i'm_wi + hh_paid_by_mc_`i'm_wi + ///
+	hs_paid_by_mc_`i'm_wi + pb_paid_by_mc_`i'm_wi + op_paid_by_mc_`i'm_wi + dm_paid_by_mc_`i'm_wi
+
+	sum tot_paid_by_mc_`i'm, detail
+	sum tot_paid_by_mc_`i'm_wi, detail
+	}
+
+******************************************************************
+//save dataset
+save mc_costs_2and5yr_wi.dta, replace
+
+******************************************************************
+log close
+
 
 H="Merge mc spending into oop file"
 /* 
@@ -4625,7 +4616,7 @@ log using `logpath'\1-mc_oop_2and5yr_merge-LOG.txt, text replace
 cd `datapath'
 use hrs_oop_ivws_meet_el_cc_n24m.dta
 
-merge 1:1 id using mc_costs_2and5yr.dta
+merge 1:1 id using mc_costs_2and5yr_wi.dta
 //check merge to see that observations with costs were merged
 sum _merge if(tot_paid_by_mc_24m==.)
 sum _merge if(tot_paid_by_mc_24m~=.)
@@ -4715,9 +4706,7 @@ log close
 
 
 H="Table with sample size 2 and 5yr lookbacks"
-/*there are likely observations that had nursing home costs that
-don't appear in the Medicare paid costs or OOP reported spending
-Try to account for that here*/
+/*Creates table of sample size for 2 and 5 year lookbacks*/
 
 
 capture log close
@@ -4800,7 +4789,7 @@ save oop_mc_sample.dta, replace
 *****************************************************
 
 mat rownames samp="All decedents, 2002-2010" "Age at death 67+, 70+" "With Medicare link" ///
-"Will full insurance info" "With Medicare Parts A&B" "With No HMO" "With full OOP data"
+"With full insurance info" "With Medicare Parts A&B" "With No HMO" "With full OOP data"
 
 mat colnames samp="2 years" "5 years"
 
@@ -4810,7 +4799,7 @@ title("Sample size determination" \ ///
 sdec(0) replace
 
 tab part_ab_2y hmo_2y, missing
-
+*****************************************************
 log close
 
 
@@ -5066,7 +5055,7 @@ sdec(0) addtable
 log close
 
 
-H="Compare dementia to cancer and heart disease groups"
+H="xxxxxxCompare dementia to cancer and heart disease groups"
 /*Compares spending for dementia patients (defined as probability of dementia = 50%)
 with that of cancer, heart disease, infectious disease and sudden death (accidents, etc.)
 
@@ -5541,7 +5530,7 @@ gen byte age_n1_lt70 = .
 replace age_n1_lt70 = 1 if age_at_n1_ivw < 70
 replace age_n1_lt70 = 0 if age_at_n1_ivw >=70 & age_at_n1_ivw!=.
 
-// n=318 of 402 missing dementia were younger than 70 at the n1 ivw
+// n=319 of 402 missing dementia were younger than 70 at the n1 ivw
 // n=23 had no n1 or n2 interview
 // n=61 are left
 tab age_n1_lt70 miss_prob_dem_n1n2, missing
@@ -5665,9 +5654,6 @@ la var dis_group_cat "Disease group, categorical"
 la def dis_group_cat 1 "Dementia" 2 "Cancer" 3 "Heart disease" 4 "Other"
 la val dis_group_cat dis_group_cat
 tab dis_group_cat, missing
-
-// 1 obs has no price assigned because Puerto Rico resident, therefore, drop from sample
-drop if nh_cost_medicaid_24m==.
 
 //total nursing home payments
 //11 obs don't have full oop data 5 year so that's why missing obs
@@ -5803,7 +5789,18 @@ la var tot_gov_pay_60m "Government spending 5yr EOL, Medicare+Medicaid NH"
 ***************************************************************************
 //inflation adjust dartmouth data to 2010 prices from 2007
 //also adjust for the 2010 wage index
-gen tot_eol_spending_hrr_2010 = tot_eol_spending_hrr*1.11347/wage_index_20102
+gen infl_tot_eol_spending_hrr_2010 = tot_eol_spending_hrr*1.11347
+
+egen mean_hrr_eol=mean(infl_tot_eol_spending_hrr_2010)
+reg infl_tot_eol_spending_hrr_2010 c.wage_index_20102
+predict resid_hrr_eol, residual
+
+gen tot_eol_spending_hrr_2010=mean_hrr_eol+resid_hrr_eol
+sum tot_eol_spending_hrr_2010, detail
+sum infl_tot_eol_spending_hrr_2010, detail
+
+drop mean_hrr_eol resid_hrr_eol
+
 la var tot_eol_spending_hrr_2010 "Wage index and inflation adj DA EOL spending 2yr"
 sum tot_eol_spending_hrr_2010, detail
 
@@ -5818,8 +5815,15 @@ nh_cost_medicaid_60m nh_cost_private_60m inf_care_costs_60m
 
 //note 11 missing values are those without full 5 year data, but have full 2 year data
 foreach v in `adj_wi'{
-gen `v'_wi = `v'/wage_index_20102
-sum `v'_wi
+	egen mean_`v'=mean(`v')
+	reg `v' c.wage_index_20102
+	predict resid_`v', residual
+	
+	gen `v'_wi = mean_`v'+resid_`v'
+	sum `v'_wi, detail
+	sum `v', detail
+	
+	drop mean_`v' resid_`v'
 }
 
 foreach i in 24 60{
@@ -5875,7 +5879,9 @@ H="Mutually exclusive comparison groups"
 Note:Sample limited to those with Age 67+ when die, FFS medicare last 2/5 years of life,
 full OOP spending data last 2/5 years of life and resident of 50 States + DC (drops PR resident)
 
-For 5 year lookback, sample also drops those observations with missing dementia probability*/
+For 5 year lookback, sample also drops those observations with missing dementia probability
+
+All spending categories are adjusted for the CMS wage index*/
 
 capture log close
 clear all
@@ -5907,12 +5913,12 @@ tab other_grp , missing matcell(r1_o)
 mat dg_2y[1,7]=r1_o[2,1] //with other disease col 4
 
 //mc vars
-local spvars age_at_death_e total_costs_24m tot_gov_pay_24m tot_paid_by_mc_24m_wi ///
+local spvars age_at_death_e total_costs_24m_wi tot_gov_pay_24m_wi tot_paid_by_mc_24m_wi ///
 ip_paid_by_mc_24m_wi snf_paid_by_mc_24m_wi ///
 hh_paid_by_mc_24m_wi hs_paid_by_mc_24m_wi pb_paid_by_mc_24m_wi op_paid_by_mc_24m_wi ///
-dm_paid_by_mc_24m_wi total_oop_24m helper_oop_24m hospital_oop_24m nh_oop_24m ///
-doctor_oop_24m rx_oop_24m insurance_costs_24m other_oop_24m nh_nights_24m ///
-nh_cost_medicaid_24m nh_cost_private_24m total_nh_costs_24m inf_care_costs_24m ///
+dm_paid_by_mc_24m_wi total_oop_24m_wi helper_oop_24m_wi hospital_oop_24m_wi nh_oop_24m_wi ///
+doctor_oop_24m_wi rx_oop_24m_wi insurance_costs_24m_wi other_oop_24m_wi nh_nights_24m ///
+nh_cost_medicaid_24m_wi nh_cost_private_24m_wi total_nh_costs_24m_wi inf_care_costs_24m_wi ///
 ip_los_24m medicaid_x 
 
 //totals 2 years, wage index adjusted mc payments, oop spend and nh nights
@@ -5945,7 +5951,7 @@ mat list dg_2y
 
 frmttable using `logpath'\7-oop_dem_tables, statmat(dg_2y) ///
 title("Dementia, Cancer and Heart Disease Patients, Medicare and OOP Spending Last 2 years of life") ///
-note("Medicare spending totals are adjusted for the 2010 CMS wage index" \ ///
+note("All spending totals are adjusted for the 2010 CMS wage index" \ ///
 "All $ values adjusted for inflation to 2010$" \ ///
 "Total government payments = Medicare + Medicaid nursing home" \ ///
 "Total NH spending = Medicare + OOP + Medicaid or Private Payer" \ ///
@@ -5977,11 +5983,11 @@ gen n_informal_24m=n_s_24m+n_u_24m
 gen hlpmonths_inf_24m=s_months_used_24m+u_months_used_24m
 
 local ivars nh_nights_24m los_snf_paid_by_mc_ivw_24m nh_ni_not_mc_24m ///
-oop_nh_nights_24m other_nh_nights_24m total_nh_costs_24m ///
-snf_paid_by_mc_24m_wi nh_oop_24m nh_cost_medicaid_24m nh_cost_private_24m ///
-hlphrs_p_24m hlphrs_dm_24m oop_months_used_24m helper_oop_24m helper_oop_old_24m ///
+oop_nh_nights_24m other_nh_nights_24m total_nh_costs_24m_wi ///
+snf_paid_by_mc_24m_wi nh_oop_24m_wi nh_cost_medicaid_24m_wi nh_cost_private_24m_wi ///
+hlphrs_p_24m hlphrs_dm_24m oop_months_used_24m helper_oop_24m_wi helper_oop_old_24m ///
 hlphrs_s_24m s_months_used_24m hlphrs_u_24m u_months_used_24m hlphrs_informal_24m ///
-hlpmonths_inf_24m inf_care_costs_24m 
+hlpmonths_inf_24m inf_care_costs_24m_wi 
 
 
 
@@ -6021,7 +6027,7 @@ mat rownames imp_2y="N" "Total nursing home nights" "NH nights paid by MC" ///
 
 frmttable using `logpath'\7-oop_dem_tables, statmat(imp_2y) ///
 title("Dementia, Cancer and Heart Disease Patients, Imputations Spending Last 2 years of life") ///
-note("Medicare spending totals are adjusted for the 2010 CMS wage index" \ ///
+note("All spending totals are adjusted for the 2010 CMS wage index" \ ///
 "All $ values adjusted for inflation to 2010$" \ ///
 "Total NH spending = Medicare + OOP + Medicaid or Private Payer" \ ///
 "Informal caregivers are spouses and other unpaid (mainly children), replacement wage imputation")  ///
@@ -6158,13 +6164,13 @@ tab other_grp , missing matcell(r1_o)
 mat dg_5y[1,7]=r1_o[2,1] //with other disease col 4
 
 //mc vars
-local spvars_5y age_at_death_e total_costs_60m tot_gov_pay_60m tot_paid_by_mc_60m_wi ///
+local spvars_5y age_at_death_e total_costs_60m_wi tot_gov_pay_60m_wi tot_paid_by_mc_60m_wi ///
 ip_paid_by_mc_60m_wi snf_paid_by_mc_60m_wi ///
 hh_paid_by_mc_60m_wi hs_paid_by_mc_60m_wi pb_paid_by_mc_60m_wi op_paid_by_mc_60m_wi ///
-dm_paid_by_mc_60m_wi total_oop_60m helper_oop_60m hospital_oop_60m nh_oop_60m ///
-doctor_oop_60m rx_oop_60m insurance_costs_60m other_oop_60m nh_nights_60m ///
-nh_cost_medicaid_60m nh_cost_private_60m total_nh_costs_60m ///
-inf_care_costs_60m ip_los_60m medicaid_x
+dm_paid_by_mc_60m_wi total_oop_60m_wi helper_oop_60m_wi hospital_oop_60m_wi nh_oop_60m_wi ///
+doctor_oop_60m_wi rx_oop_60m_wi insurance_costs_60m_wi other_oop_60m_wi nh_nights_60m ///
+nh_cost_medicaid_60m_wi nh_cost_private_60m_wi total_nh_costs_60m_wi ///
+inf_care_costs_60m_wi ip_los_60m medicaid_x
 
 //totals 5 years, wage index adjusted mc payments, oop spend and nh nights
 local c=1
@@ -6196,7 +6202,7 @@ mat list dg_5y
 
 frmttable using `logpath'\7-oop_dem_tables, statmat(dg_5y) ///
 title("Dementia, Cancer and Heart Disease Patients, Medicare and OOP Spending Last 5 years of life") ///
-note("Medicare spending totals are adjusted for the 2010 CMS wage index" \ ///
+note("All spending totals are adjusted for the 2010 CMS wage index" \ ///
 "All $ values adjusted for inflation to 2010$" \ ///
 "Total government payments = Medicare + Medicaid nursing home" \ ///
 "Total NH spending = Medicare + OOP + Medicaid or Private Payer" \ ///
@@ -6229,11 +6235,11 @@ gen n_informal_60m=n_s_24m+n_u_60m
 gen hlpmonths_inf_60m=s_months_used_60m+u_months_used_60m
 
 local ivars nh_nights_60m los_snf_paid_by_mc_ivw_60m nh_ni_not_mc_60m ///
-oop_nh_nights_60m other_nh_nights_60m total_nh_costs_60m ///
-snf_paid_by_mc_60m_wi nh_oop_60m nh_cost_medicaid_60m nh_cost_private_60m ///
-hlphrs_p_60m hlphrs_dm_60m oop_months_used_60m helper_oop_60m helper_oop_old_60m ///
+oop_nh_nights_60m other_nh_nights_60m total_nh_costs_60m_wi ///
+snf_paid_by_mc_60m_wi nh_oop_60m_wi nh_cost_medicaid_60m_wi nh_cost_private_60m_wi ///
+hlphrs_p_60m hlphrs_dm_60m oop_months_used_60m helper_oop_60m_wi helper_oop_old_60m ///
 hlphrs_s_60m s_months_used_60m hlphrs_u_60m u_months_used_60m hlphrs_informal_60m ///
-hlpmonths_inf_60m inf_care_costs_60m 
+hlpmonths_inf_60m inf_care_costs_60m_wi 
   
 
 //get tables comparing mean, median variables for imputations for different disease groups
@@ -6272,7 +6278,7 @@ mat rownames imp_5y="N" "Total nursing home nights" "NH nights paid by MC" ///
 
 frmttable using `logpath'\7-oop_dem_tables, statmat(imp_5y) ///
 title("Dementia, Cancer and Heart Disease Patients, Imputations Spending Last 5 years of life") ///
-note("Medicare spending totals are adjusted for the 2010 CMS wage index" \ ///
+note("All spending totals are adjusted for the 2010 CMS wage index" \ ///
 "All $ values adjusted for inflation to 2010$" \ ///
 "Total NH spending = Medicare + OOP + Medicaid or Private Payer" \ ///
 "Informal caregivers are spouses and other unpaid (mainly children), replacement wage imputation")  ///
@@ -6613,11 +6619,19 @@ note("HRS data is adjusted for inflation to 2010 dollars," \ ///
 sdec(0) replace
 
 **************************************************************************
-//Now with wage index adjustment and run again
+//Now with DA wage index adjustment and run again
 ***********************************************
 //create dartmouth regional quintiles using Dartmouth adjusted for wage index
-gen da_hrr_wi = tot_eol_spending_hrr/wage_index_20102
+egen mean_da = mean(tot_eol_spending_hrr)
+reg tot_eol_spending_hrr c.wage_index_20102
+predict resid_da, residuals
+
+gen da_hrr_wi = mean_da + resid_da
 sum da_hrr_wi, detail
+sum tot_eol_spending_hrr, detail
+
+drop mean_da resid_da
+
 centile da_hrr_wi, centile(20(20)80)
 sca dw_qui_20=r(c_1)
 sca dw_qui_40=r(c_2)
@@ -6899,11 +6913,19 @@ sdec(0) replace
 
 
 **************************************************************************
-//Now with wage index adjustment and run again
+//Now with DA wage index adjustment and run again
 ***********************************************
 //create dartmouth regional quintiles using Dartmouth adjusted for wage index
-gen da_hrr_wi = tot_eol_spending_hrr/wage_index_20102
+egen mean_da = mean(tot_eol_spending_hrr)
+reg tot_eol_spending_hrr c.wage_index_20102
+predict resid_da, residuals
+
+gen da_hrr_wi = mean_da + resid_da
 sum da_hrr_wi, detail
+sum tot_eol_spending_hrr, detail
+
+drop mean_da resid_da
+
 centile da_hrr_wi, centile(25 75)
 sca dw_qui_25=r(c_1)
 sca dw_qui_75=r(c_2)
@@ -6920,7 +6942,7 @@ la val quart3_dw_2yr quart
 
 **************************************************************************
 **************************************************************************
-//Table 2 - adding wage index adjustment, quartiles, means
+//Table 2 - adding both HRS and DA wage index adjustment, quartiles, means
 **************************************************************************
 **************************************************************************
 //wage index adjusted, HRS split by dartmouth wage index adjusted quartiles
@@ -6935,7 +6957,7 @@ mat wiadj_2[`i',3]=r(mean)
 }
 frmttable using"`logpath'\8b-Quartile_split_work", statmat(wiadj_2) ///
 title("2 and 5 year EOL spending quartiles" \ ///
-"HRS data split by Dartmouth quartiles" \ ///
+"WI adjusted HRS data split by Dartmouth quartiles" \ ///
 "Dartmouth data vs HRS data for the 5 year lookback sample" \ ///
 "Wage index adjustments made to Dartmouth data prior to splitting into quartiles" ) ///
 ctitle("","Dartmouth data","HRS data 2 yr", "HRS data 5 yr") ///
@@ -7014,12 +7036,13 @@ sdec(0) addtable
 
 **************************************************************************
 **************************************************************************
-//Table 4 - Add adjustment for HRR 2year spending, quartiles, means
+//Table 4 - Add adjustment for HRR 2 year spending, quartiles, means
 **************************************************************************
 **************************************************************************
 
 foreach v in `toadj'{
-	areg `v' i.age_at_death_cat i.black i.hisp_eth i.female_x c.da_hrr_wi 
+//	reg `v' i.age_at_death_cat i.black i.hisp_eth i.female_x c.tot_eol_spending_hrr 
+	reg `v' i.age_at_death_cat i.black i.hisp_eth i.female_x c.da_hrr_wi 
 		
 	predict resid_rs_`v', residual
 
@@ -7037,7 +7060,7 @@ gen rsadj_tot_paid_by_mc_`i'm_wi = rsadj_ip_paid_by_mc_`i'm_wi + rsadj_snf_paid_
 
 
 //now look at HRS spending by wage index adjusted DA quartiles
-//age,race,sex,educ, smoking,adl,comorbid count wage index adjusted, HRS split by dartmouth quartiles
+//age,race,sex,educ, hrr level eol spending, HRS split by dartmouth quartiles
 mat rsadj=J(3,3,.)
 forvalues i = 1/3 {
 sum da_hrr_wi if quart3_dw_2yr==`i', detail //dartmouth data
@@ -7053,13 +7076,14 @@ title("2 and 5 year EOL spending quartiles" \ ///
 "HRS data split by Dartmouth quartiles" \ ///
 "Dartmouth data vs HRS data for the 5 year lookback sample" \ ///
 "Wage index adjustments made to Dartmouth data prior to splitting into quartiles" \ ///
-"HRS data adjusted for wage index, age,sex,race,HRR 2 year EOL Medicare spending" ) ///
+"HRS data adjusted for wage index, age,sex,race, WI adj HRR 2 year EOL Medicare spending" ) ///
 ctitle("","Dartmouth data","HRS data 2 yr", "HRS data 5 yr") ///
 rtitle("Quartile 1 (low)" \ "Quartiles 2&3" \ "Quartile 4(high)") ///
 note("HRS data is adjusted for inflation to 2010 dollars and for the wage index, race,sex, " \ ///
 "and HRR level 2 year EOL Medicare spending (from Dartmouth Atlas)" \ ///
 "Dartmouth data in 2003-2007 dollars, wage index adjusted") ///
 sdec(0) addtable
+
 **************************************************************************
 **************************************************************************
 //Table 5 - adding further adjustments for HRS data, quartiles, means

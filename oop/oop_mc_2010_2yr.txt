@@ -398,15 +398,16 @@ run;
 
 /*******************************************************************/
 /*******************************************************************/
-/*  get the negative 3 core education variable for the respondent   */
+/*  get the negative 3 core education and insurance status variables for the respondent   */
 /*******************************************************************/
 /*******************************************************************/
 /*need to do this since education is only asked during r's
 first core interview and only backfilled for an overall education
-level through 2004*/
+level through 2004
+Also get insurance self reports so can look at 5 year lookback where needed*/
 proc sql;
 create table r_n3_core_before_death
-as select b.educ,b.c_ivw_date,b.core_year,b.id
+as select b.educ,b.medicaid, b.champus,b.medigap,b.married,b.c_ivw_date,b.core_year,b.id
  from resp_core_n2 a 
  inner join
 hrs_cln.core_00_to_10 b
@@ -3770,7 +3771,7 @@ H="Merge in Dartmouth EOL MC spending by HRR"
 /*This section brings in the regional (HRR) medicare reimbursement in the 
 last 2 years of life from the Dartmouth Atlas
 
-This will serve as a check for our distributiosn of Medicare spending by region*/
+Use this to split the sample by Medicare spending by region*/
 
 /*first get HRR - ZIP crosswalk, 2007 since using the 2003-2007 eol spending data*/
 proc import
@@ -7691,7 +7692,7 @@ foreach v in `toadj'{
 //now calculate totals using the adjusted values
 //2 versions, all categories are wage index adjused
 //then version with just medicare is wage index adjusted
-forvalues i = 24 60{
+foreach i in 24 60{
 gen adj_tot_paid_by_mc_`i'm_wi = adj_ip_paid_by_mc_`i'm_wi + adj_snf_paid_by_mc_`i'm_wi ///
 + adj_hh_paid_by_mc_`i'm_wi + adj_hs_paid_by_mc_`i'm_wi + adj_pb_paid_by_mc_`i'm_wi + adj_op_paid_by_mc_`i'm_wi ///
 + adj_dm_paid_by_mc_`i'm_wi 
@@ -7769,7 +7770,7 @@ foreach v in `toadj'{
 
 //now calculate totals using the adjusted values
 //just medicare is wage index adjusted
-forvalues i = 24 60{
+foreach i in 24 60 {
 gen fadj_tot_paid_by_mc_`i'm_wi = fadj_ip_paid_by_mc_`i'm_wi + fadj_snf_paid_by_mc_`i'm_wi ///
 + fadj_hh_paid_by_mc_`i'm_wi + fadj_hs_paid_by_mc_`i'm_wi + fadj_pb_paid_by_mc_`i'm_wi + fadj_op_paid_by_mc_`i'm_wi ///
 + fadj_dm_paid_by_mc_`i'm_wi 
@@ -7818,6 +7819,42 @@ sum fadj_total_costs_`i'm_wi, detail
 sum total_costs_`i'm_wi, detail
 }
 ********************************************************************
+//additional variables to look at ~5 years prior to death vs at death
+local var medicaid champus medigap married
+
+foreach v in `var'{
+tab `v'_n3, missing
+tab `v'_n2 if `v'_n3==., missing
+tab `v'_x, missing
+}
+
+//basic algorithm for assigning survey responses at 60m before death
+//if months_x > 60 use n1 ivw
+//if months_x + months_n1 > 60 use n2 ivw
+//if still missing use n3 response
+
+gen months_xn1 = months_x+months_n1
+gen months_xn2 = months_x+months_n1+months_n2
+
+foreach v in `var'{
+gen `v'_60m = `v'_n1 if months_x>60 & months_x!=.
+replace `v'_60m = `v'_n2 if `v'_60m==. & (months_xn1)>60 & months_xn1!=.
+replace `v'_60m = `v'_n3 if `v'_60m==. 
+tab `v'_60m, missing
+
+//if still missing, assign n2 or n1 response, does this help?
+replace `v'_60m = `v'_n2 if `v'_60m==. 
+replace `v'_60m = `v'_n1 if `v'_60m==. 
+tab `v'_60m, missing
+}
+
+la var medicaid_60m "Medicaid at 5yr before death"
+la var champus_60m "VA ins coverage at 5yr before death"
+la var medigap_60m "Medigap (private ins) at 5yr before death"
+la var married_60m "Married at 5yr before death"
+
+**************************************************
+
 
 //save the dataset at this point, create tables by quintile in the next header section
 save oop_mc_sample_adj_age_etc.dta, replace
@@ -7825,7 +7862,7 @@ save oop_mc_sample_adj_age_etc.dta, replace
 log close
 
 
-H="Quintile spending 5yr EOL adjusted"
+H="Quintile spending 5yr EOL adjusted - not WI adjusted"
 /*This section creates tables by DA 2 year EOL HRR quintiles
 of age,sex, race adjusted 5 year EOL spending per the HRS dataset
 
@@ -8626,14 +8663,14 @@ adj_dm_paid_by_mc_60m_wi adj_nh_cost_medicaid_60m_wi adj_total_oop_60m_wi adj_he
 adj_hospital_oop_60m_wi adj_nh_oop_60m_wi ///
 adj_doctor_oop_60m_wi adj_rx_oop_60m_wi adj_insurance_costs_60m_wi adj_other_oop_60m_wi nh_nights_60m ///
  adj_nh_cost_private_60m_wi adj_total_nh_costs_60m_wi adj_inf_care_costs_60m_wi ///
-medicaid_x
+medicaid_60m medicaid_x champus_60m champus_x medigap_60m medigap_x married_60m married_x
 
 **************************************************
 //create tables of spending categories, by disease group (prior
 //tables by quartiles of HRR spending)
 
 //get tables comparing mean, median spending for different disease groups
-mat dg_5y=J(26,8,.)
+mat dg_5y=J(33,8,.)
 //first row n each group
 tab pr_dem_gt50, missing matcell(r1_50)
 mat dg_5y[1,1]=r1_50[2,1] //with dem prob > 50% col 1
@@ -8657,17 +8694,21 @@ foreach d in pr_dem_gt50 cancer_grp heartdis_grp other_grp{
 	local c = `c'+2
 	}
 //convert medicaid rate to percent
-forvalues i = 1/8{
-mat dg_5y[`r'-1,`i']=dg_5y[`r'-1,`i']*100	
+forvalues r = 26(1)33{
+	forvalues i = 1(2)8{
+	mat dg_5y[`r',`i']=dg_5y[`r',`i']*100	
+	}	
 }	
-	
 mat rownames dg_5y= "N" "Age at death" "Total payments, all types" "Total government payments" ///
 "Total Medicare payments" "Medicare IP" "Medicare SNF" "Medicare HH" ///
 "Medicare Hospice" "Medicare Carrier" "Medicare OP" "Medicare DME" ///
 "Medicaid NH payments" "OOP Total" "OOP Helper" "OOP Hospital" "OOP NH" ///
 "OOP Doctor" "OOP Rx" "OOP Insurance Costs" "OOP Other" ///
 "Total NH nights, SR or claims" "Private payer NH Payments"  ///
-"Total NH costs, all payers" "Imputed informal care costs" "Medicaid at death? (percent)"
+"Total NH costs, all payers" "Imputed informal care costs" ///
+"Medicaid 5y pre-death (%)" "Medicaid at death? (%)" "VA ins 5y pre-death (%)" ///
+"VA ins at death (%)" "Medigap 5y pre-death (%)" "Medigap at death (%)" "Married 5y pre-death (%)" ///
+"Married at death (%)"
 
 mat list dg_5y
 
@@ -8686,7 +8727,7 @@ sdec(0) substat(1) replace
 
 **************************************************
 //Create tables of spending by quartile, overall sample (unadjusted)
-mat mean_adj1 = J(26,6,.)
+mat mean_adj1 = J(33,6,.)
 
 //first row - get n each quartile
 local c=1
@@ -8709,8 +8750,10 @@ foreach v in `spvars' {
 }
 
 //for medicaid percent, multiply mean by 100
-forvalues c = 1/6{
-mat mean_adj1[`r'-1,`c']=mean_adj1[`r'-1,`c']*100	
+forvalues r = 26(1)33{
+	forvalues i = 1(2)6{
+mat mean_adj1[`r',`i']=mean_adj1[`r',`i']*100	
+}	
 }	
 
 mat rownames mean_adj1= "N" "Age at death" "Total payments, all types" "Total government payments" ///
@@ -8719,7 +8762,11 @@ mat rownames mean_adj1= "N" "Age at death" "Total payments, all types" "Total go
 "OOP Total" "OOP Helper" "OOP Hospital" "OOP NH" "OOP Doctor" "OOP Rx" ///
 "OOP Insurance Costs" "OOP Other" ///
 "Total NH nights, SR or claims" "Private payer NH Payments" ///
-"Total NH costs, all payers" "Imputed informal care costs" "Medicaid at death? (percent)"
+"Total NH costs, all payers" "Imputed informal care costs" ///
+"Medicaid 5y pre-death (%)" "Medicaid at death? (%)" "VA ins 5y pre-death (%)" ///
+"VA ins at death (%)" "Medigap 5y pre-death (%)" "Medigap at death (%)" "Married 5y pre-death (%)" ///
+"Married at death (%)"
+
 
 mat list mean_adj1
 
@@ -8739,7 +8786,7 @@ frmttable using `logpath'\13-Adj_wi_5yr_HRR_Quartiles , statmat(mean_adj1) ///
 ************************************************************
 //Now create quartile tables for each of the 4 disease groups
 foreach d in pr_dem_gt50 cancer_grp heartdis_grp other_grp{
-	mat mean_`d' = J(26,6,.)
+	mat mean_`d' = J(33,6,.)
 
 	//first row - get n each quintile
 	local c=1
@@ -8762,8 +8809,10 @@ foreach d in pr_dem_gt50 cancer_grp heartdis_grp other_grp{
 	}
 
 	//for medicaid percent, multiply mean by 100
-	forvalues c = 1/6{
-		mat mean_`d'[`r'-1,`c']=mean_`d'[`r'-1,`c']*100	
+forvalues r = 26(1)33{
+	forvalues i = 1(2)6{
+		mat mean_`d'[`r',`i']=mean_`d'[`r',`i']*100	
+		}	
 	}	
 
 mat rownames mean_`d'= "N" "Age at death" "Total payments, all types" "Total government payments" ///
@@ -8772,7 +8821,11 @@ mat rownames mean_`d'= "N" "Age at death" "Total payments, all types" "Total gov
 "OOP Total" "OOP Helper" "OOP Hospital" "OOP NH" "OOP Doctor" "OOP Rx" ///
 "OOP Insurance Costs" "OOP Other" ///
 "Total NH nights, SR or claims" "Private payer NH Payments" ///
-"Total NH costs, all payers" "Imputed informal care costs" "Medicaid at death? (percent)"
+"Total NH costs, all payers" "Imputed informal care costs" ///
+"Medicaid 5y pre-death (%)" "Medicaid at death? (%)" "VA ins 5y pre-death (%)" ///
+"VA ins at death (%)" "Medigap 5y pre-death (%)" "Medigap at death (%)" "Married 5y pre-death (%)" ///
+"Married at death (%)"
+
 
 mat list mean_`d'
 
@@ -9042,6 +9095,210 @@ time period is we look at
 
 All spending is Wage index and age,race,sex adjusted*/
 
+capture log close
+clear all
+set mem 500m
+set more off
+
+local logpath E:\data\hrs_oop_2010\logs
+local datapath E:\data\hrs_oop_2010\final_data
+
+log using `logpath'\13a-mc_oop_5yr_adjust_wi_quartiles-LOG.txt, text replace
+
+cd `datapath'
+
+use oop_mc_sample_adj_age_etc.dta
+**************************************************
+local spvars age_at_death_e adj_total_costs_24m_wi adj_tot_gov_pay_24m_wi adj_tot_paid_by_mc_24m_wi ///
+adj_ip_paid_by_mc_24m_wi adj_snf_paid_by_mc_24m_wi adj_hh_paid_by_mc_24m_wi ///
+adj_hs_paid_by_mc_24m_wi adj_pb_paid_by_mc_24m_wi adj_op_paid_by_mc_24m_wi ///
+adj_dm_paid_by_mc_24m_wi adj_nh_cost_medicaid_24m_wi adj_total_oop_24m_wi adj_helper_oop_24m_wi ///
+adj_hospital_oop_24m_wi adj_nh_oop_24m_wi ///
+adj_doctor_oop_24m_wi adj_rx_oop_24m_wi adj_insurance_costs_24m_wi adj_other_oop_24m_wi nh_nights_24m ///
+ adj_nh_cost_private_24m_wi adj_total_nh_costs_24m_wi adj_inf_care_costs_24m_wi ///
+ medicaid_60m medicaid_x champus_60m champus_x medigap_60m medigap_x married_60m married_x
+
+
+**************************************************
+//create tables of spending categories, by disease group (prior
+//tables by quartiles of HRR spending)
+
+//get tables comparing mean, median spending for different disease groups
+mat dg_2y=J(33,8,.)
+//first row n each group
+tab pr_dem_gt50, missing matcell(r1_50)
+mat dg_2y[1,1]=r1_50[2,1] //with dem prob > 50% col 1
+tab cancer_grp, missing matcell(r1_c)
+mat dg_2y[1,3]=r1_c[2,1] //with cancer col 2
+tab heartdis_grp , missing matcell(r1_h)
+mat dg_2y[1,5]=r1_h[2,1] //with heart disease col 3
+tab other_grp , missing matcell(r1_o)
+mat dg_2y[1,7]=r1_o[2,1] //with other disease col 4
+
+//totals 2 years, wage index adjusted mc payments, oop spend and nh nights
+local c=1
+foreach d in pr_dem_gt50 cancer_grp heartdis_grp other_grp{
+	local r = 2
+	foreach v in `spvars'{
+		sum `v' if `d'==1, detail
+		mat dg_2y[`r',`c']=r(mean)
+		mat dg_2y[`r',`c'+1]=r(p50)
+		local r = `r'+1
+		}
+	local c = `c'+2
+	}
+//convert medicaid rate to percent
+forvalues r = 26(1)33{
+	forvalues i = 1(2)8{
+	mat dg_2y[`r',`i']=dg_2y[`r',`i']*100	
+	}	
+}	
+	
+mat rownames dg_2y= "N" "Age at death" "Total payments, all types" "Total government payments" ///
+"Total Medicare payments" "Medicare IP" "Medicare SNF" "Medicare HH" ///
+"Medicare Hospice" "Medicare Carrier" "Medicare OP" "Medicare DME" ///
+"Medicaid NH payments" "OOP Total" "OOP Helper" "OOP Hospital" "OOP NH" ///
+"OOP Doctor" "OOP Rx" "OOP Insurance Costs" "OOP Other" ///
+"Total NH nights, SR or claims" "Private payer NH Payments"  ///
+"Total NH costs, all payers" "Imputed informal care costs" ///
+"Medicaid 5y pre-death (%)" "Medicaid at death? (%)" "VA ins 5y pre-death (%)" ///
+"VA ins at death (%)" "Medigap 5y pre-death (%)" "Medigap at death (%)" "Married 5y pre-death (%)" ///
+"Married at death (%)"
+
+mat list dg_2y
+
+frmttable using `logpath'\13a-Adj_wi_2yr_HRR_Quartiles, statmat(dg_2y) ///
+title("Dementia, Cancer and Heart Disease Patients, Medicare and OOP Spending Last 2 years of life" \ ///
+"Adjusted for wage index, age, race, gender") ///
+note("All spending categories are adjusted for the 2010 CMS wage index" \ ///
+"All $ values adjusted for inflation to 2010$" \ ///
+"Total government payments = Medicare + Medicaid nursing home" \ ///
+"Total NH spending = Medicare + OOP + Medicaid or Private Payer" \ ///
+"Informal caregivers are spouses and other unpaid (mainly children), replacement wage imputation")  ///
+ctitles("" "Prob dem"  "Cancer" "Heart disease" "Other" \ ///
+"" " > 50%" "" "" "" \ ///
+"" "Mean"  "Mean" "Mean" "Mean" \ "" "Median"  "Median" "Median" "Median"  ) ///
+sdec(0) substat(1) replace 
+
+**************************************************
+//Create tables of spending by quartile, overall sample
+mat mean_adj1 = J(33,6,.)
+
+//first row - get n each quartile
+local c=1
+forvalues i=1/3{
+sum exit_year_x if(quart3_dm_2yr==`i')
+mat mean_adj1[1,`c'] = r(N)
+local c = `c'+2
+}
+
+local r=2
+foreach v in `spvars' {
+	local c=1
+	forvalues i = 1/3 {
+		sum(`v') if(quart3_dm_2yr==`i'), detail
+		mat mean_adj1[`r',`c'] = r(mean)
+		mat mean_adj1[(`r'),`c'+1] = r(p50)
+		local c = `c' + 2
+	}
+	local r=`r'+1
+}
+
+//for medicaid percent, multiply mean by 100
+forvalues r = 26(1)33{
+	forvalues i = 1(2)6{
+	mat mean_adj1[`r',`i']=mean_adj1[`r',`i']*100	
+	}	
+}	
+
+
+mat rownames mean_adj1= "N" "Age at death" "Total payments, all types" "Total government payments" ///
+"Total Medicare payments" "Medicare IP" "Medicare SNF" "Medicare HH" ///
+"Medicare Hospice" "Medicare Carrier" "Medicare OP" "Medicare DME" "Medicaid NH Payments" ///
+"OOP Total" "OOP Helper" "OOP Hospital" "OOP NH" "OOP Doctor" "OOP Rx" ///
+"OOP Insurance Costs" "OOP Other" ///
+"Total NH nights, SR or claims" "Private payer NH Payments" ///
+"Total NH costs, all payers" "Imputed informal care costs" ///
+"Medicaid 5y pre-death (%)" "Medicaid at death? (%)" "VA ins 5y pre-death (%)" ///
+"VA ins at death (%)" "Medigap 5y pre-death (%)" "Medigap at death (%)" "Married 5y pre-death (%)" ///
+"Married at death (%)"
+
+mat list mean_adj1
+
+frmttable using `logpath'\13a-Adj_wi_2yr_HRR_Quartiles , statmat(mean_adj1) ///
+	title("Five Year EOL Spending by Quartiles of HRR-level Medicare EOL Spending" \ ///
+	"(within this sample) Adjusted for wage index, age, race, gender") ///
+	ctitle("","Quartile 1 (lowest)", "2&3", "4 (highest)") ///
+	note("All spending categories are adjusted for the 2010 CMS wage index" \ ///
+	"All $ values adjusted for inflation to 2010$" \ ///
+	"Spending amounts are adjusted using linear regression for age (5 year categories)" \ ///
+	"gender and race (black, Hispanic, other)." \ ///
+	"Total government payments = Medicare + Medicaid nursing home" \ ///
+	"Total NH spending = Medicare + OOP + Medicaid or Private Payer" \ ///
+	"Informal caregivers are spouses and other unpaid (mainly children), replacement wage imputation")  ///
+	sdec(0) substat(1) addtable
+
+************************************************************
+//Now create quartile tables for each of the 4 disease groups
+foreach d in pr_dem_gt50 cancer_grp heartdis_grp other_grp{
+	mat mean_`d' = J(33,6,.)
+
+	//first row - get n each quintile
+	local c=1
+	forvalues i=1/3{
+		sum exit_year_x if(quart3_dm_2yr==`i' & `d'==1)
+		mat mean_`d'[1,`c'] = r(N)
+		local c = `c'+2
+		}
+
+	local r=2
+	foreach v in `spvars' {
+		local c=1
+		forvalues i = 1/3 {
+			sum(`v') if(quart3_dm_2yr==`i'& `d'==1), detail
+			mat mean_`d'[`r',`c'] = r(mean)
+			mat mean_`d'[(`r'),`c'+1] = r(p50)
+			local c = `c' + 2
+		}
+		local r=`r'+1
+	}
+
+	//for medicaid percent, multiply mean by 100
+forvalues r = 26(1)33{
+	forvalues i = 1(2)6{
+	mat mean_`d'[`r',`i']=mean_`d'[`r',`i']*100	
+	}	
+}	
+
+mat rownames mean_`d'= "N" "Age at death" "Total payments, all types" "Total government payments" ///
+"Total Medicare payments" "Medicare IP" "Medicare SNF" "Medicare HH" ///
+"Medicare Hospice" "Medicare Carrier" "Medicare OP" "Medicare DME" "Medicaid NH Payments" ///
+"OOP Total" "OOP Helper" "OOP Hospital" "OOP NH" "OOP Doctor" "OOP Rx" ///
+"OOP Insurance Costs" "OOP Other" ///
+"Total NH nights, SR or claims" "Private payer NH Payments" ///
+"Total NH costs, all payers" "Imputed informal care costs" ///
+"Medicaid 5y pre-death (%)" "Medicaid at death? (%)" "VA ins 5y pre-death (%)" ///
+"VA ins at death (%)" "Medigap 5y pre-death (%)" "Medigap at death (%)" "Married 5y pre-death (%)" ///
+"Married at death (%)"
+
+mat list mean_`d'
+
+frmttable using "`logpath'\13a-Adj_wi_2yr_HRR_Quartiles" , statmat(mean_`d') ///
+	title("`d' 2 Year EOL Spending by Quartiles of HRR-level Medicare" \ ///
+	"EOL Spending (within this sample) Adjusted for wage index, age, race, gender") ///
+	ctitle("","Quartile 1 (lowest)", "2&3", "4 (highest)") ///
+	note("All spending categories are adjusted for the 2010 CMS wage index" \ ///
+	"All $ values adjusted for inflation to 2010$" \ ///
+	"Spending amounts are adjusted using linear regression for age (5 year categories)" \ ///
+	"gender and race (black, Hispanic, other)." \ ///
+	"Total government payments = Medicare + Medicaid nursing home" \ ///
+	"Total NH spending = Medicare + OOP + Medicaid or Private Payer" \ ///
+	"Informal caregivers are spouses and other unpaid (mainly children), replacement wage imputation")  ///
+	sdec(0) substat(1) addtable
+
+}
+*********************************************************
+log close
 
 
 H="Full adjustment, quintiles"
@@ -9840,7 +10097,7 @@ H="Bar graph"
 /*Try bar chart to show magnitude differences as an alternative to the pie charts
 
 Split by Quartiles
-5 year wage index, age,sex,race adjusted EOL spending
+2 and 5 year wage index, age,sex,race adjusted EOL spending
 By the mutually exclusive disease groups
 */
 
@@ -9880,6 +10137,9 @@ la def dgquar 1 "Dementia 1Q" 2 "Dementia 2&3Q" 3 "Dementia 4Q" ///
 10 "Other Dis. 1Q" 11 "Other Dis. 2&3Q" 12 "Other Dis. 4Q" 
 la val dg_quar_cat dgquar
 
+preserve
+************************************************************
+//5 year spending 
 collapse (mean) adj_tot_paid_by_mc_60m_wi adj_nh_cost_medicaid_60m ///
  adj_nh_cost_private_60m adj_total_oop_60m adj_inf_care_costs_60m , by(dg_quar_cat)
  
@@ -9893,7 +10153,28 @@ subtitle("Adjusted for wage index, age, race and gender")
 
 cd `logpath'\graphs
 
-graph save bar_quart, replace
-graph export bar_quart.tif, replace
+graph save bar_quart_5y, replace
+graph export bar_quart_5y.tif, replace
+
+restore
+
+************************************************************
+//2 year spending as comparison
+collapse (mean) adj_tot_paid_by_mc_24m_wi adj_nh_cost_medicaid_24m ///
+ adj_nh_cost_private_24m adj_total_oop_24m adj_inf_care_costs_24m , by(dg_quar_cat)
+ 
+ graph hbar adj_tot_paid_by_mc_24m_wi adj_nh_cost_medicaid_24m ///
+ adj_nh_cost_private_24m adj_total_oop_24m adj_inf_care_costs_24m , ///
+ over(dg_quar_cat) stack ///
+ legend(label(1 "Medicare") label(2 "Medicaid NH") label(3 "Private Payer NH") ///
+label(4 "OOP") label(5 "Informal Care") cols(3)) ///
+title("2 year EOL spending by disease group") ///
+subtitle("Adjusted for wage index, age, race and gender")
+
+cd `logpath'\graphs
+
+graph save bar_quart_2y, replace
+graph export bar_quart_2y.tif, replace
+
 ***********************************************************
 log close

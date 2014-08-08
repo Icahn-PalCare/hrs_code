@@ -146,28 +146,118 @@ run;
 proc freq; table cpt; run;
 
 /*merge the procedure and cpt code lists for the op claims*/
-proc sql;
-create table op_combined as select * from
-op_meet a outer join
-op_cpt_meet b
-on a.BID_hrs_19=b.bid_hrs_19;
-quit;
-
-data op_comb_2;
-set op_combined;
+data op_combined;
+set op_meet op_cpt_meet;
 op_ind=1;
 run;
 
 proc freq; table procedure cpt; run;
 
 proc sql;
-select count(distinct BID_hrs_19) from op_comb_2;
+select count(distinct bid_hrs_19) from op_combined;
 quit;
 
 H="Merge OP and IP counts"
 data count_1;
-set ip_meet op_comb_2;
+set ip_meet_2 op_combined;
+drop DSTNTNCD TYPE_ADM admit_date disch_date procedure_date surgery_meet version;
 run;
+
+proc sort by BID_HRS_19; run;
+
+data pro_cnt.count_2;
+set count_1;
+if op_ind=. then op_ind=0;
+if ip_ind=. then ip_ind=0;
+if op_ind=1 then clm_type = 1;
+if ip_ind=1 then clm_type = 2;
+label clm_type="Claim type 1=OP 2=IP";
+run;
+
+proc freq; table clm_type; run;
+
+proc freq; table procedure*clm_type cpt*clm_type; run;
+
+/*export to Stata to get counts in tables*/
+proc export data=pro_cnt.count_2
+outfile="E:\data\procedure_counts_icd\count_2.dta" replace;
+run;
+
+
+H="Stata - get counts into tables"
+capture log close
+clear all
+set more off
+
+local datapath E:\data\procedure_counts_icd
+cd `datapath'
+
+log using counts_procedures_log.txt, text replace
+
+use count_2.dta
+********************************************************
+//first get counts of each code
+destring procedure, gen(procedure2)
+destring cpt, gen(cpt2)
+tab procedure2 clm_type, missing matcell(pro)
+return list
+local rows=r(r)-1
+
+mat list pro
+
+mat freq=J(12,2,.)
+
+forvalues i=1(1)`rows'{
+mat freq[`i',1]=pro[`i',1]
+mat freq[`i',2]=pro[`i',2]
+}
+
+tab cpt2 clm_type, missing matcell(cpt)
+local rows2=r(r)-1 + `rows'
+mat list cpt
+
+forvalues i=6(1)`rows2'{
+mat freq[`i',1]=cpt[`i'-5,1]
+mat freq[`i',2]=cpt[`i'-5,2]
+}
+
+mat colnames freq="Outpatient" "Inpatient"
+mat rownames freq="0050" "0051" "0053" "0054" "3794" "33216" ///
+"33217" "33220" "33223" "33240" "33241" "33249"
+
+mat list freq
+
+frmttable using `datapath'\pro_counts_tables, statmat(freq) ///
+title("Frequencies of individual CPT and Procedure Codes") ///
+sdec(0) replace
+********************************************************
+//get count of unique R's with any procedure
+sort bid_hrs_19
+
+by bid_hrs_19: gen n1=_n
+by bid_hrs_19: gen n2=_N
+
+keep if n1==n2
+tab n1, missing matcell(cnt)
+
+mat r=J(4,1,.)
+
+mat r[1,1]=r(N) //unique r's any count of codes
+forvalues i=2(1)4{
+mat r[`i',1]=cnt[`i'-1,1]
+}
+
+mat rownames r="Total unique R's" "With 1 procedure" "2 procedures" "3 procedures"
+
+mat list r
+
+frmttable using `datapath'\pro_counts_tables, statmat(r) ///
+title("Count of unique R's with procedures identified") ///
+ctitle("","n") sdec(0) addtable
+
+********************************************************
+log close
+
 
 H="notes"
 Ok, great. Let's do it in the simplest way (so correct me if this is not it):

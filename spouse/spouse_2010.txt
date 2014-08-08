@@ -841,18 +841,32 @@ run;
 /*******************************************************************/
 /*******************************************************************/
 
+data restricted;
+set hrs_cln.restricted_v2010;
+run;
+
+proc sort data=restricted nodupkey; by id ; run;
+
 proc sql;
 create table s_restr
 as select * from restricted  
 where id in (select sp_id from spo_int.exit_restricted_02_to_10_sp) ;
 quit;
 
+/*get spouse id list from exit/restr dataset*/
+data spid;
+set spo_int.exit_restricted_02_to_10_sp(keep=sp_id sp_bid s_xwalk_yes);
+if sp_id~='' & sp_id~=0;
+run;
+
+proc sort data=spid out=spid_2 nodupkey; by sp_id; run;
+
 /*bring in spouse xwalk id and indicator*/
 proc sql;
 create table s_restr_a as select a.*,b.sp_bid,b.s_xwalk_yes from
 s_restr a left join
-spo_int.exit_restricted_02_to_10_sp b
-where a.id=b.sp_id;
+spid_2 b
+on a.id=b.sp_id;
 quit;
 
 data s_restr_1;
@@ -870,7 +884,7 @@ proc freq; table s_xwalk_yes; run;
 
 /*get id in exit-xwalk dataset to number format*/
 data exit_xwalk_1a;
-set exit_xwalk_1;
+set exit;
 id_num = input(id,9.);
 run;
 
@@ -887,15 +901,11 @@ quit;
 data s_exit_1;
 set s_exit;
 rename id_num=sp_id;
-drop bid_hrs;
-drop xwalk_yes;
 drop id;
 run;
 
 
 H="Merge r+s interviews into single dataset"
-/*dataset saved is: spo_int.r_s_core_x_e*/
-
 /*First rename variables*/
 
 %rename2(WORK,RESP_CORE_N1,_n1,r_);
@@ -1001,7 +1011,6 @@ run;
 data s_exit_1_a;
 set S_EXIT_1;
 rename s_sp_id_x = s_id; 
-rename s_sp_bid_hrs_x = s_bid_hrs; 
 run;
 
 proc sort data=s_exit_1_a nodupkey;
@@ -1014,6 +1023,8 @@ run;
 proc sort data=spo_int.exit_restricted_02_to_10_sp out=r_ex_restr;
 by r_id;
 run;
+
+proc contents; run;
 
 data r_x_r_n1_n2;
 merge r_ex_restr resp_core_n1_a resp_core_n2_a resp_core_n3_a;
@@ -1041,20 +1052,21 @@ by s_id;
 run;
 
 proc sql;
-create table r_s_core_x_e as select a.*, b.* from 
+create table r_s_core_x_e(drop=s_id2) as select a.*, b.* from 
 r_all_s_n1_n2_p1 a
 left join
-spouse_x_e b
-on a.s_id=b.s_id;
+spouse_x_e(rename=(s_id=s_id2)) b
+on a.s_id=b.s_id2;
 quit;
+
+proc contents; run;
 
 /*drop extra id variables*/
 data r_s_core_x_e_1;
 set r_s_core_x_e;
-drop sp_bid;
+rename sp_bid=s_bid_hrs;
 drop sp_id;
 label r_BID_hrs = "R's claims ID";
-label s_bid_hrs = "S's claims ID";
 run;
 
 proc freq data=r_s_core_x_e_1;
@@ -1075,15 +1087,6 @@ run;
 
 proc contents;
 run;
-
-
-
-
-
-
-
-
-
 
 H="Medicare FFS determination"
 /*Create indicator variables for Respondant

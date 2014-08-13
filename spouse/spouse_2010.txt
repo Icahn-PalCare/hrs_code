@@ -1181,8 +1181,8 @@ buyin_2y_r=reverse(trim(buyin_2y));
 hmo_2y_r=reverse(trim(hmo_2y));
 
 /*create 6 month variable*/
-if length(buyin_2y_r)>5 then buyin_6m_r=substr(trim(left(buyin_2y)),1,6);
-if length(hmo_2y_r)>5 then hmo_6m_r=substr(trim(left(hmo_2y)),1,6);
+if length(buyin_2y_r)>5 then buyin_6m_r=substr(trim(left(buyin_2y_r)),1,6);
+if length(hmo_2y_r)>5 then hmo_6m_r=substr(trim(left(hmo_2y_r)),1,6);
 
 if length(buyin_2y_r)<6 then buyin_6m_r="";
 if length(hmo_2y_r)<6 then hmo_6m_r="";
@@ -1198,6 +1198,27 @@ end;
 if length(hmo_6m)=6 then do;
 if index(hmo_6m,"00000") then hmo_d_6m=0;
 if index(hmo_6m,"00000")=0 then hmo_d_6m=1;
+end;
+
+/*create 6 month variable - old, incorrect version, just for comparison
+delete this after sending it off to KO*/
+if length(buyin_2y_r)>5 then buyin_6m_r_old=substr(trim(left(buyin_2y)),1,6);
+if length(hmo_2y_r)>5 then hmo_6m_r_old=substr(trim(left(hmo_2y)),1,6);
+
+if length(buyin_2y_r)<6 then buyin_6m_r_old="";
+if length(hmo_2y_r)<6 then hmo_6m_r_old="";
+
+buyin_6m_old=reverse(trim(buyin_6m_r_old));
+hmo_6m_old=reverse(trim(hmo_6m_r_old));
+
+/*create indicator variable for mc coverage 6 mo. 0=no, 1=yes*/
+if length(buyin_6m_old)=6 then do;
+if indexc(buyin_6m_old,"0","1","2","A","B") then part_ab_6m_old=0;
+if indexc(buyin_6m_old,"0","1","2","A","B")=0 then part_ab_6m_old=1;
+end;
+if length(hmo_6m_old)=6 then do;
+if index(hmo_6m_old,"00000") then hmo_d_6m_old=0;
+if index(hmo_6m_old,"00000")=0 then hmo_d_6m_old=1;
 end;
 
 run;
@@ -1216,7 +1237,8 @@ run;
 /*bring in insurance indicators to full decedent dataset*/
 proc sql;
 create table spo_int.r_sp_core_n1_p1_n2_ins as select
-a.*, b.part_ab_6m as r_part_ab_6m , b.hmo_d_6m as r_hmo_d_6m 
+a.*, b.part_ab_6m as r_part_ab_6m , b.hmo_d_6m as r_hmo_d_6m , 
+	b.part_ab_6m_old as r_part_ab_6m_old , b.hmo_d_6m_old as r_hmo_d_6m_old
 from spo_int.r_s_core_x_e a
 left join all_insurance2 b
 on trim(left(a.r_BID_hrs))=trim(left(b.r_BID_hrs));
@@ -3328,11 +3350,12 @@ cd `datapath'
 use spouse_data_full.dta
 
 //set matrix for sample size determination table
-mat deced_core=J(11,3,.)
+mat deced_core=J(11,4,.)
 
 //all decedents from 2002-2010 exit interviews
 sum r_exit_year_x, detail
 mat deced_core[1,1]=r(N)
+mat deced_core[1,4]=r(N)
 
 //check of married decedents
 tab r_married_x, missing
@@ -3348,10 +3371,12 @@ tab r_core_year_n1 r_exit_year_x , missing
 //decedents with n1 core interview
 sum r_exit_year_x if n1core_ind==1, detail
 mat deced_core[2,1]=r(N)
+mat deced_core[2,4]=r(N)
 
 //decedents with n1 core + xwalk
 sum r_exit_year_x if n1core_ind==1 & r_xwalk_yes==1, detail
 mat deced_core[3,1]=r(N)
+mat deced_core[3,4]=r(N)
 
 //with ffs mc last 6 months of life
 //have parst a and b coverage and no hmo
@@ -3359,14 +3384,26 @@ gen byte ins_ind=.
 replace ins_ind=1 if r_part_ab_6m==1 & r_hmo_d_6m==0
 replace ins_ind=0 if r_part_ab_6m!=1 | r_hmo_d_6m!=0
 tab ins_ind, missing
+***************************************
+gen byte ins_ind_old=.
+replace ins_ind_old=1 if r_part_ab_6m_old==1 & r_hmo_d_6m_old==0
+replace ins_ind_old=0 if r_part_ab_6m_old!=1 | r_hmo_d_6m_old!=0
+tab ins_ind_old, missing
+****************************************
 
 //decedents with n1 core + xwalk + ffs mc last 6 months of life
 sum r_exit_year_x if n1core_ind==1 & r_xwalk_yes==1 & ins_ind==1, detail
 mat deced_core[4,1]=r(N)
+sum r_exit_year_x if n1core_ind==1 & r_xwalk_yes==1 & ins_ind_old==1, detail
+mat deced_core[4,4]=r(N)
+
 
 //decedents with n1 core + xwalk + married
 sum r_exit_year_x if n1core_ind==1 & r_xwalk_yes==1 & ins_ind==1 &  r_married_x==1, detail
 mat deced_core[5,1]=r(N)
+sum r_exit_year_x if n1core_ind==1 & r_xwalk_yes==1 & ins_ind_old==1 &  r_married_x==1, detail
+mat deced_core[5,4]=r(N)
+
 
 //have spouse p1 interview
 gen byte sp1core_ind=.
@@ -3379,6 +3416,9 @@ tab s_core_year_p1 r_exit_year_x , missing
 //decedents with n1 core + xwalk + married + spouse p1 interview
 sum r_exit_year_x if n1core_ind==1 & r_xwalk_yes==1 & ins_ind==1 &  r_married_x==1 & sp1core_ind==1, detail
 mat deced_core[6,1]=r(N)
+sum r_exit_year_x if n1core_ind==1 & r_xwalk_yes==1 & ins_ind_old==1 &  r_married_x==1 & sp1core_ind==1, detail
+mat deced_core[6,4]=r(N)
+
 
 //have spouse n1 interview
 gen byte sn1core_ind=.
@@ -3391,6 +3431,8 @@ tab s_core_year_n1 r_exit_year_x , missing
 //decedents with n1 core + xwalk + married + spouse p1 and n1 interview
 sum r_exit_year_x if n1core_ind==1 & r_xwalk_yes==1 & ins_ind==1 &  r_married_x==1 & sp1core_ind==1 & sn1core_ind==1, detail
 mat deced_core[7,1]=r(N)
+sum r_exit_year_x if n1core_ind==1 & r_xwalk_yes==1 & ins_ind_old==1 &  r_married_x==1 & sp1core_ind==1 & sn1core_ind==1, detail
+mat deced_core[7,4]=r(N)
 
 
 //p1 interview within 30, 90 days of r's death
@@ -3411,6 +3453,10 @@ tab p1_wi_30d, missing
 sum r_exit_year_x if n1core_ind==1 & r_xwalk_yes==1 & ins_ind==1 &  r_married_x==1 & /// 
 sp1core_ind==1 & sn1core_ind==1 & p1_wi_90d==0, detail
 mat deced_core[8,1]=r(N)
+
+sum r_exit_year_x if n1core_ind==1 & r_xwalk_yes==1 & ins_ind_old==1 &  r_married_x==1 & /// 
+sp1core_ind==1 & sn1core_ind==1 & p1_wi_90d==0, detail
+mat deced_core[8,4]=r(N)
 
 //no comorbidities
 gen byte no_el_comorb_12m = .
@@ -3474,6 +3520,9 @@ mat deced_core[9,2]=r(N)
 sum r_exit_year_x if n1core_ind==1 & r_xwalk_yes==1 & ins_ind==1 &  r_married_x==1 & /// 
 sp1core_ind==1 & sn1core_ind==1 & p1_wi_90d==0 & no_cc_12m_excl_cataract==0, detail
 mat deced_core[9,3]=r(N)
+sum r_exit_year_x if n1core_ind==1 & r_xwalk_yes==1 & ins_ind_old==1 &  r_married_x==1 & /// 
+sp1core_ind==1 & sn1core_ind==1 & p1_wi_90d==0 & no_cc_12m_excl_cataract==0, detail
+mat deced_core[9,4]=r(N)
 
 
 //cause of death = Accidents, Suicide, Homicide (var = 12)
@@ -3502,6 +3551,9 @@ mat deced_core[10,2]=r(N)
 sum r_exit_year_x if n1core_ind==1 & r_xwalk_yes==1 & ins_ind==1 &  r_married_x==1 & /// 
 sp1core_ind==1 & sn1core_ind==1 & p1_wi_90d==0 & no_cc_12m_excl_cataract==0 & sudden_cause_death==0, detail
 mat deced_core[10,3]=r(N)
+sum r_exit_year_x if n1core_ind==1 & r_xwalk_yes==1 & ins_ind_old==1 &  r_married_x==1 & /// 
+sp1core_ind==1 & sn1core_ind==1 & p1_wi_90d==0 & no_cc_12m_excl_cataract==0 & sudden_cause_death==0, detail
+mat deced_core[10,4]=r(N)
 
 
 //full n1 p1 cesd interview?
@@ -3532,13 +3584,17 @@ mat deced_core[11,2]=r(N)
 sum r_exit_year_x if n1core_ind==1 & r_xwalk_yes==1 & ins_ind==1 &  r_married_x==1 & /// 
 sp1core_ind==1 & sn1core_ind==1 & p1_wi_90d==0 & no_cc_12m_excl_cataract==0 & sudden_cause_death==0 & cesd_miss_n1_p1==0, detail
 mat deced_core[11,3]=r(N)
+sum r_exit_year_x if n1core_ind==1 & r_xwalk_yes==1 & ins_ind_old==1 &  r_married_x==1 & /// 
+sp1core_ind==1 & sn1core_ind==1 & p1_wi_90d==0 & no_cc_12m_excl_cataract==0 & sudden_cause_death==0 & cesd_miss_n1_p1==0, detail
+mat deced_core[11,4]=r(N)
 
 
 mat list deced_core
 	
 frmttable using `logpath'\2010_sample_est , statmat(deced_core) ///
 	title("2010 sample size estimate - requiring an n1 core interview") ///
-	ctitle("","Elix - n","CCs - n", "CC, no cataract, glaucoma") rtitle("All decedents from exit interviews" \ "With n1 core interview" \ ///
+	ctitle("","Elix - n","CCs - n", "CC, no cataract, glaucoma", "Old, wrong FFS") ///
+	rtitle("All decedents from exit interviews" \ "With n1 core interview" \ ///
 	"With mc xwalk id" \ "With FFS mc last 6 months of life" \ "Married at time of death" \ ///
 	"Spouse p1 core interview" \"Spouse n1 core interview" \ "p1 ivw 90+ days from r's death" \ ///
 	"No comorb 12m before death" \ "Accidents, Suicide, Homicide = cause of death" \ ///
@@ -3597,6 +3653,8 @@ drop if ins_ind==0
 drop if r_married_x==0 
 drop if sp1core_ind==0
 drop if sn1core_ind==0
+
+drop r_part_ab_6m_old r_hmo_d_6m_old
 
 tab r_exit_year_x r_core_year_n1
 

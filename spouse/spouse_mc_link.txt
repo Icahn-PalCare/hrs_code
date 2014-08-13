@@ -5,7 +5,7 @@ Starts with dataset created for the spousal depression outcomes project
 created in the file spouse_2010.txt
 This ds is created in the "Create additional variables" tab of spouse_2010.txt
 
-This has the Spouse Medicare xwalk id already linked in (sp_bid and s_xwalk_yes)
+This has the Spouse Medicare xwalk id already linked in (s_bid_hrs and s_xwalk_yes)
 
 But now this code adds variables derived from the spouse claims
 
@@ -31,11 +31,14 @@ run;
 drop variables not needed for finding insurance status
 just keep in those observations where s has a medicare xwalk id*/
 data r_sp;
-set spo_fnl.spouse_data(keep=r_death_date_e r_id r_bid_hrs s_id sp_BID s_xwalk_yes);
+set spo_fnl.spouse_data(keep=r_death_date_e r_id r_bid_hrs r_xwalk_yes s_id s_bid_hrs s_xwalk_yes);
 if s_xwalk_yes=1;
 r_death_year=year(r_death_date_e);
 r_death_month=month(r_death_date_e);
 run;
+
+proc sort data=r_sp nodupkey; by r_id; run;
+proc freq; table s_xwalk_yes; run;
 
 /*get denominator file for just death year for those with xwalk id only*/
 proc sql;
@@ -43,7 +46,7 @@ create table s_dn_death_y as select
 a.*,b.buyin12,b.year,b.HMOIND12
 from r_sp a inner join
 dn_2000_20102 b
-on trim(left(a.sp_BID))=trim(left(b.BID_hrs_19))
+on trim(left(a.s_bid_hrs))=trim(left(b.BID_hrs_19))
 and a.r_death_year=b.year;
 quit;
 
@@ -51,9 +54,10 @@ proc freq data=s_dn_death_y;
 table r_death_year;
 run;
 
-/*xxx spouses have denominator file linked year of R's death*/
+/*1915 spouses have denominator file linked year of R's death
+cases where spouse remarried after first r's death, and then in sample when 2nd r dies*/
 proc sql;
-select count(distinct sp_BID) from s_dn_death_y;
+select count(distinct s_bid_hrs) from s_dn_death_y;
 quit;
 
 /*note death month is from restricted file*/
@@ -75,16 +79,16 @@ run;
 
 /*Check year prior to death to backfill for death dates
 in the first half of the year (since doing 6 mo look back)*/
-/* xxx have the -1 year dn file*/
+/* 1756 have the -1 year dn file*/
 proc sql;
 create table s_dn_death_y_bef as select
-a.sp_BID,a.year as death_year,
+a.r_bid_hrs,a.s_bid_hrs,a.year as death_year,
 b.year as death_year_bef,
 b.year,b.buyin12,b.HMOIND12
 from s_dn_death_y a inner join
 dn_2000_20102 b
-on trim(left(a.sp_BID))=trim(left(b.BID_hrs_19))
-and 0<a.year-b.year<=1 order by sp_BID,year;
+on trim(left(a.s_bid_hrs))=trim(left(b.BID_hrs_19))
+and 0<a.year-b.year<=1 order by s_bid_hrs,year;
 quit;
 
 proc sql;
@@ -92,7 +96,7 @@ create table s_all_insurance as select a.*,b.buyin12 as buyin_bef,b.HMOIND12 as 
 s_dn_death_y2 a
 left join
 s_dn_death_y_bef b
-on trim(left(a.sp_BID))=trim(left(b.sp_BID));
+on trim(left(a.s_bid_hrs))=trim(left(b.s_bid_hrs)) and trim(left(a.r_bid_hrs))=trim(left(b.r_bid_hrs));
 quit;
 
 /*merge death year and year before death buy-in and hmo variables
@@ -108,8 +112,8 @@ buyin_2y_r=reverse(trim(buyin_2y));
 hmo_2y_r=reverse(trim(hmo_2y));
 
 /*create 6 month variable*/
-if length(buyin_2y_r)>5 then buyin_6m_r=substr(trim(left(buyin_2y)),1,6);
-if length(hmo_2y_r)>5 then hmo_6m_r=substr(trim(left(hmo_2y)),1,6);
+if length(buyin_2y_r)>5 then buyin_6m_r=substr(trim(left(buyin_2y_r)),1,6);
+if length(hmo_2y_r)>5 then hmo_6m_r=substr(trim(left(hmo_2y_r)),1,6);
 
 if length(buyin_2y_r)<6 then buyin_6m_r="";
 if length(hmo_2y_r)<6 then hmo_6m_r="";
@@ -129,7 +133,7 @@ end;
 
 run;
 
-/*xxx observations don't have full denominator data re insurance status
+/*36 observations don't have full denominator data re insurance status
 either died Before July 2000 or are missing year -1 dn file*/
 proc freq;
 table part_ab_6m hmo_d_6m;

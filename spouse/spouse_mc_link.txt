@@ -30,8 +30,11 @@ run;
 /*assign death year using merged dataset with all r and s info
 drop variables not needed for finding insurance status
 just keep in those observations where s has a medicare xwalk id*/
+proc contents data=spo_fnl.spouse_data; run;
+proc freq data=spo_fnl.spouse_data; table s_xwalk_yes; run;
+
 data r_sp;
-set spo_fnl.spouse_data(keep=r_death_date_e r_id r_bid_hrs r_xwalk_yes s_id s_bid_hrs s_xwalk_yes);
+set spo_fnl.spouse_data(keep=r_death_date_e r_id r_bid_hrs r_xwalk_yes s_id s_bid_hrs s_xwalk_yes s_age);
 if s_xwalk_yes=1;
 r_death_year=year(r_death_date_e);
 r_death_month=month(r_death_date_e);
@@ -53,6 +56,37 @@ quit;
 proc freq data=s_dn_death_y;
 table r_death_year;
 run;
+
+/*who is missing denominator file??*/
+proc sql;
+create table s_missing_dn as select * from r_sp where s_bid_hrs
+not in (select BID_hrs_19 from dn_2000_20102); 
+quit;
+
+proc sql;
+create table s_missing_dn_2 as select
+a.*,b.buyin12,b.year,b.HMOIND12
+from r_sp a left join
+dn_2000_20102 b
+on trim(left(a.s_bid_hrs))=trim(left(b.BID_hrs_19))
+and a.r_death_year=b.year;
+quit;
+
+data s_missing_dn_3;
+set s_missing_dn_2;
+dn_missing=0;
+if year=. then dn_missing=1;
+run;
+
+proc freq; table dn_missing; run;
+
+data s_missing_dn_4;
+set s_missing_dn_3;
+if dn_missing=1;
+run;
+
+/*144 of the 269 missing denominator file are <65 when R dies*/
+proc freq; table s_age; run;
 
 /*1915 spouses have denominator file linked year of R's death
 cases where spouse remarried after first r's death, and then in sample when 2nd r dies*/
@@ -148,9 +182,10 @@ run;
 proc sql;
 create table spo_mc.r_sp_ins as select
 a.*, b.part_ab_6m as s_part_ab_6m , b.hmo_d_6m as s_hmo_d_6m 
-from spo_fnl.spouse_data a
-left join s_all_insurance2 b
-on trim(left(a.r_BID_hrs))=trim(left(b.r_BID_hrs));
+from 
+spo_fnl.spouse_data a left join 
+s_all_insurance2 b
+on a.r_id=b.r_id;
 quit;
 
 proc freq;
@@ -159,7 +194,6 @@ run;
 
 
 /*export to stata to get sample size estimate table*/
-option fmterr=no;
 proc export data=spo_mc.r_sp_ins
 outfile="E:\data\spouse_claims\data\r_sp_ins.dta" replace;
 run;

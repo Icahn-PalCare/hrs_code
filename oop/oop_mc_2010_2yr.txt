@@ -4803,7 +4803,7 @@ tab exit_year_x
 sum exit_year_x if inlist(exit_year_x,2002, 2004, 2006, 2008, 2010) //total number of decedents
 mat samp[1,1]=r(N) //2002-2010 exit waves
 
-local ivw2y inlist(exit_year_x,2002, 2004, 2006, 2008, 2010) & ///
+local ivw2y if inlist(exit_year_x,2002, 2004, 2006, 2008, 2010) & ///
 	missing_core_ivw_2y==0
 sum exit_year_x if `ivw2y' //no missing core interviews
 mat samp[2,1]=r(N)
@@ -5059,7 +5059,7 @@ log using `logpath'\4-mc_oop_dementia_initial-LOG.txt, text replace
 cd `datapath'
 
 //this dataset is already limited to ffs, full info last 2 years of life
-use oop_mc_sample.dta
+use oop_mc_sample.dta if ind_sample_2yr==1
 
 //get tables comparing mean spending at different dementia probability cutoffs
 mat p50=J(17,2,.)
@@ -5554,6 +5554,12 @@ log close
 
 
 H="Create new variables for disease groups, demo char"
+/*adds new variables
+
+output tables of missing dementia probability by disease group - missing_dementia_prob.doc
+
+saves a version of the dataset limited to the 2 year lookback sample*/
+
 capture log close
 clear all
 set mem 500m
@@ -5567,28 +5573,23 @@ log using `logpath'\6-mc_oop_dementia_cleanvars-LOG.txt, text replace
 cd `datapath'
 
 //use just sample that meet 2 year criteria (full mc and oop data 2 years from death)
-use oop_mc_sample.dta if (age_at_death_e>=67 & part_ab_2y==1 & hmo_2y==0 & ind_24m_oop_yes==1) 
+//this doesn't include all sample restrictions because want to look at who is missing
+//the dementia probability below
+use oop_mc_sample.dta if (inlist(exit_year_x,2002, 2004, 2006, 2008, 2010) & ///
+	missing_core_ivw_2y==0 & age_at_death_e>=67 & part_ab_2y==1 & ///
+	hmo_2y==0 & ind_24m_oop_yes==1 & ind_hrr_yes=1) 
 
+*****************************************************
 //look at dementia probability sample sizes
-gen byte dem_miss_n1 = .
-replace dem_miss_n1=1 if prob_dementia_n1==.
-replace dem_miss_n1=0 if prob_dementia_n1!=.
-
-gen byte dem_miss_n2 = .
-replace dem_miss_n2=1 if prob_dementia_n2==.
-replace dem_miss_n2=0 if prob_dementia_n2!=.
-
 tab dem_miss_n1 dem_miss_n2, missing
 
 tab core_year_n1 dem_miss_n1 , missing
 tab core_year_n2 dem_miss_n2 , missing
 
 //if missing, carry forward n2 probability
-gen prob_dem_n1n2 = prob_dementia_n1
-replace prob_dem_n1n2=prob_dementia_n2 if prob_dementia_n1==.
+sum prob_dem_n1n2, detail
 
 //histogram prob_dem_n1n2
-
 gen miss_prob_dem_n1n2=0
 replace miss_prob_dem_n1n2=1 if prob_dem_n1n2==.
 tab miss_prob_dem_n1n2, missing
@@ -5693,10 +5694,7 @@ tab memory_hrs_x memory_hrs_n1 if miss_prob_dem_n1n2==1, missing
 **************************************************************
 //Disease group categories
 **************************************************************
-gen byte pr_dem_gt50 = .
-replace pr_dem_gt50 = 0 if prob_dem_n1n2<=.5 & prob_dem_n1n2!=.
-replace pr_dem_gt50 = 1 if prob_dem_n1n2>.5 & prob_dem_n1n2!=.
-la var pr_dem_gt50 "Indicator dementia prob gt 0.5"
+//dementia group - based on probability dementia > 50%
 tab pr_dem_gt50, missing
 tab cause_death_12_n_e pr_dem_gt50 , missing
 
@@ -5729,6 +5727,78 @@ la def dis_group_cat 1 "Dementia" 2 "Cancer" 3 "Heart disease" 4 "Other"
 la val dis_group_cat dis_group_cat
 tab dis_group_cat, missing
 
+***************************************************************************
+//quick tabulation where dementia is missing across other disease groups
+//before dropping those with missing dementia when saving dataset
+mat dem_miss = J(4,2,.)
+forvalues i = 1/4{
+	sum exit_year_x if dis_group_cat==`i' //n
+	mat dem_miss[1,`i']=r(N)
+}
+
+forvalues i = 2/4{
+	sum exit_year_x if  dis_group_cat==`i' & pr_dem_gt50==. //n missing dementia
+	mat dem_miss[2,`i']=r(N)
+}
+
+mat dem_miss[2,1]=0 //no observations with p>.5 have missing dementia probabilities
+
+frmttable using `logpath'\missing_dementia_prob, ///
+	statmat(dem_miss) sdec(0) ///
+	title("2 year lookback sample, count of R's missing dementia probability" \ ///
+	"By disease group") ///
+	ctitles("","Dementia","Cancer","Heart disease","Other disease") ///
+	rtitles("n for disease group" \ "n missing dementia prob") ///
+	note("Dementia probability missing from both n1 and n2 core interviews") ///
+	replace
+
+******************************************************************************
+//Who is missing probability of dementia in 5 year lookback sample?
+******************************************************************************
+preserve
+
+//keep the 5 year lookback sample, but with those obs with missing dementia probability
+keep if inlist(exit_year_x,2006, 2008, 2010) & ///
+	missing_core_ivw_5y==0 & age_at_death_e>=70 & age!=. & part_ab_5y==1 & ///
+	hmo_5y==0 & ind_60m_oop_yes==1 & ind_hrr_yes=1
+
+mat md=J(6,2,.)
+sum exit_year_x
+mat md[1,1]=r(N) //overall sample n
+
+tab miss_prob_dem_n1n2, missing matcell(md1)
+mat md[2,1]=md1[2,1] //n missing dementia
+mat md[2,2]=md[2,1]/md[1,1]*100 //percent
+
+tab age_n1_lt70 if miss_prob_dem_n1n2==1, missing matcell(md2)
+mat md[3,1]=md2[2,1] //n age < 70 at n1 interview
+mat md[3,2]=md[3,1]/md[2,1]*100 //percent
+mat md[4,1]=md2[3,1] //n where exit months>60, so no n1 interview pulled (confirmed by next tabs)
+mat md[4,2]=md[4,1]/md[2,1]*100
+
+tab core_year_n1 if miss_prob_dem_n1n2==1, missing
+tab months_x exit_year_x if  core_year_n1==. & miss_prob_dem_n1n2==1, missing
+
+tab core_year_n1 if age_n1_lt70==0 & miss_prob_dem_n1n2==1, missing
+
+tab age_n2_lt70 if age_n1_lt70==0 & miss_prob_dem_n1n2==1 & core_year_n1==2008, missing matcell(md3)
+mat md[5,1]=md3[2,1] //n where 2008 n1 interview, less than 70 at n2 ivw
+mat md[5,2]=md[5,1]/md[2,1]*100
+
+//remaining are just missing, not in the Hurd dataset and don't know why, maybe missing contributing variables?
+mat md[6,1]=md[2,1]-md[3,1]-md[4,1]-md[5,1]
+mat md[6,2]=md[6,1]/md[2,1]*100
+
+frmttable using `logpath'\7-missing_dementia_prob, statmat(md) ///
+title("Missing dementia probability - 5 year lookback sample") ///
+ctitles("" "n" "percent" ) ///
+rtitles("Overall sample" \ "Missing dementia" \ "Age < 70 at n1 interview" \ ///
+"No core interview, exit months > 60" \ "2008 n1 interview and age < 70 at n2 ivw" \ ///
+"Missing from Hurd dataset for unknown reasons" ) ///
+sdec(0,2) landscape addtable 
+
+restore
+***************************************************************************
 //total nursing home payments
 //11 obs don't have full oop data 5 year so that's why missing obs
 gen total_nh_costs_24m=snf_paid_by_mc_24m_wi+nh_oop_24m+nh_cost_medicaid_24m+nh_cost_private_24m
@@ -5921,9 +5991,14 @@ gen tot_gov_pay_60m_wi = tot_paid_by_mc_60m_wi + nh_cost_medicaid_60m_wi
 la var tot_gov_pay_24m_wi "WI adj Government spending 2yr EOL, Medicare+Medicaid NH"
 la var tot_gov_pay_60m_wi "WI adj Government spending 5yr EOL, Medicare+Medicaid NH"
 
-
 ***************************************************************************
+//drop those where dementia is missing
+drop if prob_dem_n1n2==.
+
+tab ind_sample_2yr, missing
+
 //save dataset
+//this is the 2 year sample
 save oop_mc_sample_addedvars.dta, replace
 
 ***************************************************************************
@@ -5950,12 +6025,11 @@ H="Mutually exclusive comparison groups"
 
 2 and 5 year lookbacks 
 
-Note:Sample limited to those with Age 67+ when die, FFS medicare last 2/5 years of life,
-full OOP spending data last 2/5 years of life and resident of 50 States + DC (drops PR resident)
+Note:Sample limited to those with full set of interviews, Age 67+ when die, 
+FFS medicare last 2/5 years of life, full OOP spending data last 2/5 years 
+of life, resident of 50 States + DC so has HRR, and has dementia probability
 
-For 5 year lookback, sample also drops those observations with missing dementia probability
-
-All spending categories are adjusted for the CMS wage index*/
+All spending categories are adjusted for the CMS wage index and inflation*/
 
 capture log close
 clear all
@@ -5969,8 +6043,7 @@ log using `logpath'\7-mc_oop_dementia-LOG.txt, text replace
 
 cd `datapath'
 
-//use just sample that meet 2 year criteria (full mc and oop data 2 years from death)
-//with new variables added
+//use sample that meet 2 year criteria
 use oop_mc_sample_addedvars.dta
 
 ******************************************************************************
@@ -6114,9 +6187,9 @@ sdec(0) landscape addtable
 //over much longer span of time!
 
 ******************************************************************************
-//Demo, missing dementia for subgroups
+//Demo for disease subgroups
 ******************************************************************************
-mat demo_2y=J(19,5,.)
+mat demo_2y=J(18,5,.)
 //first row n each group
 sum exit_year_x
 mat demo_2y[1,1]=r(N) //overall sample, all groups
@@ -6132,7 +6205,7 @@ mat demo_2y[1,5]=r1_o[2,1] //with other disease col 4
 //mc vars
 local dvars age_lt75 age_75_79 age_80_84 age_85_89 age_gt90 ///
 female_x married_x hisp_eth white black other_re educ_lt_hs educ_hsdeg ///
-educ_some_coll educ_coll miss_prob_dem_n1n2
+educ_some_coll educ_coll 
 
 //2 year look back , full sample
 local c = 1
@@ -6166,7 +6239,7 @@ foreach d in pr_dem_gt50 cancer_grp heartdis_grp other_grp{
 	
 mat rownames demo_2y= "N" "Age at death, mean" "Median age" "Age 67-74" "Age 75-79" "Age 80-84" "Age 85-89" "Age 90+" ///
 "Female" "Married at time of death" "Hispanic ethnicity" "White" "Black" "Other race/ethnicity" ///
-"Less than HS educ" "HS degree" "Some college, not 4yr deg" "College grad" "Missing dementia probability"
+"Less than HS educ" "HS degree" "Some college, not 4yr deg" "College grad"
 
 mat list demo_2y
 
@@ -6179,48 +6252,7 @@ sdec(0 \ 1 \ 0 \ 3) landscape addtable
 ******************************************************************************
 //Last 5 years spending
 ******************************************************************************
-
-keep if part_ab_5y==1 & hmo_5y==0 & ind_60m_oop_yes==1 & age_at_death_e>=70
-
-******************************************************************************
-//Who is missing probability of dementia in this sample?
-******************************************************************************
-mat md=J(6,2,.)
-sum exit_year_x
-mat md[1,1]=r(N) //overall sample n
-
-tab miss_prob_dem_n1n2, missing matcell(md1)
-mat md[2,1]=md1[2,1] //n missing dementia
-mat md[2,2]=md[2,1]/md[1,1]*100 //percent
-
-tab age_n1_lt70 if miss_prob_dem_n1n2==1, missing matcell(md2)
-mat md[3,1]=md2[2,1] //n age < 70 at n1 interview
-mat md[3,2]=md[3,1]/md[2,1]*100 //percent
-mat md[4,1]=md2[3,1] //n where exit months>60, so no n1 interview pulled (confirmed by next tabs)
-mat md[4,2]=md[4,1]/md[2,1]*100
-
-tab core_year_n1 if miss_prob_dem_n1n2==1, missing
-tab months_x exit_year_x if  core_year_n1==. & miss_prob_dem_n1n2==1, missing
-
-tab core_year_n1 if age_n1_lt70==0 & miss_prob_dem_n1n2==1, missing
-
-tab age_n2_lt70 if age_n1_lt70==0 & miss_prob_dem_n1n2==1 & core_year_n1==2008, missing matcell(md3)
-mat md[5,1]=md3[2,1] //n where 2008 n1 interview, less than 70 at n2 ivw
-mat md[5,2]=md[5,1]/md[2,1]*100
-
-//remaining are just missing, not in the Hurd dataset and don't know why, maybe missing contributing variables?
-mat md[6,1]=md[2,1]-md[3,1]-md[4,1]-md[5,1]
-mat md[6,2]=md[6,1]/md[2,1]*100
-
-frmttable using `logpath'\7-oop_dem_tables, statmat(md) ///
-title("Missing dementia probability - 5 year lookback sample") ///
-ctitles("" "n" "percent" ) ///
-rtitles("Overall sample" \ "Missing dementia" \ "Age < 70 at n1 interview" \ ///
-"No core interview, exit months > 60" \ "2008 n1 interview and age < 70 at n2 ivw" \ ///
-"Missing from Hurd dataset for unknown reasons" ) ///
-sdec(0,2) landscape addtable 
-
-drop if miss_prob_dem_n1n2==1
+keep if ind_sample_5yr==1
 
 ******************************************************************************
 //Table last 5 years spending

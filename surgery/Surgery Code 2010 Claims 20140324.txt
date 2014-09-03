@@ -1401,6 +1401,12 @@ format claims_dob2 date10. claims_dod2 date10.;
 label claims_dob2="Beneficiary dob from claims" claims_dod2="Beneficiary dod from claims";
 run;
 
+proc freq data=sur_fin.surgery_ids_last;
+table TYPE_ADM surgery_meet part_ab_6m hmo_d_6m /missprint;
+run;
+
+
+
 H="Identify number of hospital admissions 6 months before surgery"
 /*Start with list of all hospital stays for bid's with an index surgery:
 sur_int.hospital_stays_2
@@ -4313,6 +4319,9 @@ mat rownames sample="N Surgeries" "Age > 65" "With MC A+B FFS 6mos" ///
  "With pre-surg core ivw" "Urgent/emergent admission"
 
 mat list sample
+
+//save a version prior to dropping those obs that don't meet sample criteria
+save surgery_final_n12m_v2.dta, replace
 
 // drop observations to get to final sample
 drop if age_at_surg_lt65==1 //drop if age less than 65
@@ -7789,12 +7798,39 @@ set more off
 
 local logpath E:\data\surgery\logs
 local datapath E:\data\serious_ill\int_data
+local datapath2 E:\data\surgery\final_2010clms
 
 log using "`logpath'\surgery_full_hrs_sample.txt", text replace
 
 cd `datapath'
 
+//surgery dataset, just keep variables I want to check against the overall
+//hrs interview list
+use `datapath2'\surgery_final_n12m_v2.dta
+
+keep bid_hrs_19 type_adm procedure_date surgery_meet part_ab_6m hmo_d_6m ///
+	age_at_surg_lt65 ind_n1core days_surg_n1core
+
+rename bid_hrs_19 bid_hrs
+rename part_ab_6m surg_part_ab_6m
+rename hmo_d_6m surg_hmo_d_6m
+rename ind_n1core surg_ind_n1core
+
+save `datapath2'\surgery_final_n12m_v_to_merge.dta, replace
+
+***************************************************
 use core_ids_1yr_criteria_5.dta
+
+merge m:1 bid_hrs using `datapath2'\surgery_final_n12m_v_to_merge.dta
+
+//look at which interviews have a surgery within the 3 years
+gen ivw_to_surg = c_ivw_date - procedure_date
+gen ivw_wi_3yrs_surg = 1 if 0<ivw_to_surg & ivw_to_surg<3*365.25
+replace ivw_wi_3yrs_surg = 0 if ivw_to_surg>=3*365.25 | ivw_to_surg==. | 0>=ivw_to_surg
+tab ivw_wi_3yrs_surg, missing
+sum ivw_to_surg if ivw_wi_3yrs_surg==1 
+sum ivw_to_surg if ivw_wi_3yrs_surg==0
+
 *******************************************************************
 //variable for age >=65.5 at interview
 
@@ -7833,7 +7869,7 @@ ctitle("","N Interviews") ///
 sdec(0) replace
 
 *******************************************************************
-drop if core_year==1998
+//drop if core_year==1998
 
 tab core_year, missing
 
@@ -7848,10 +7884,10 @@ by id: gen n2=_N
 keep if n1==n2
 tab n1, missing matcell(cnt)
 
-mat sample_r=J(4,1,.)
+mat sample_r=J(7,1,.)
 mat sample_r[1,1]=r(N)
 restore
-
+/*
 //unique R's age 65+
 drop if age_ge_65!=1
 preserve
@@ -7866,7 +7902,7 @@ tab n1, missing matcell(cnt)
 
 mat sample_r[2,1]=r(N)
 restore
-
+*/
 
 //unique R's with xwalk id
 drop if xwalk_yes!=1
@@ -7880,9 +7916,10 @@ by id: gen n2=_N
 keep if n1==n2
 tab n1, missing matcell(cnt)
 
-mat sample_r[3,1]=r(N)
+mat sample_r[2,1]=r(N)
 restore
 
+/*
 //unique R's with ffs mc 6 months
 drop if part_ab_6m!=1 | hmo_d_6m!=0
 preserve
@@ -7897,9 +7934,99 @@ tab n1, missing matcell(cnt)
 
 mat sample_r[4,1]=r(N)
 restore
+*/
+//with surgery 
+drop if surgery_meet!=1
+preserve
 
-mat rownames sample_r="Core Interviews 2000-2010" "Age 65+" ///
-"With xwalk id" "With FFS MC 6m pre-ivw"
+sort id core_year
+
+by id: gen n1=_n
+by id: gen n2=_N
+
+keep if n1==n2
+tab n1, missing matcell(cnt)
+
+mat sample_r[3,1]=r(N)
+restore
+
+//with urgent / emergent surgery
+destring type_adm, gen(type_adm_2)
+tab type_adm_2, missing
+
+drop if type_adm_2==1 | type_adm_2==9 //2,3=urgent or emergent admission
+preserve
+
+sort id core_year
+
+by id: gen n1=_n
+by id: gen n2=_N
+
+keep if n1==n2
+tab n1, missing matcell(cnt)
+
+mat sample_r[4,1]=r(N)
+restore
+
+//65+ at surgery
+drop if age_at_surg_lt65==1
+preserve
+
+sort id core_year
+
+by id: gen n1=_n
+by id: gen n2=_N
+
+keep if n1==n2
+tab n1, missing matcell(cnt)
+
+mat sample_r[5,1]=r(N)
+restore
+
+//with ffs medicare 6 m prior to surgery
+drop if surg_part_ab_6m!=1 | surg_hmo_d_6m!=0
+preserve
+
+sort id core_year
+
+by id: gen n1=_n
+by id: gen n2=_N
+
+keep if n1==n2
+tab n1, missing matcell(cnt)
+
+mat sample_r[6,1]=r(N)
+restore
+
+
+//with surgery within 3 years of an interview
+drop if days_surg_n1core>3*365.25 
+preserve
+
+sort id core_year
+
+by id: gen n1=_n
+by id: gen n2=_N
+
+keep if n1==n2
+tab n1, missing matcell(cnt)
+
+mat sample_r[7,1]=r(N)
+restore
+
+tab surg_ind_n1core, missing
+sum days_surg_n1core, detail
+tab core_year, missing
+tab surg_part_ab_6m, missing
+tab surg_hmo_d_6m, missing
+tab age_at_surg_lt65, missing
+tab type_adm_2, missing
+
+mat rownames sample_r="Core Interviews 1998-2010"  ///
+"With xwalk id"  "Abdominal Surgery" "Urgent/Emergent Surgery" ///
+"Age 65+ at surgery" "With FFS MC 6m pre-surg" ///
+"Surgery wi 3 years of core ivw"
+
 mat list sample_r
 
 frmttable using `logpath'\surgery_HRS_sample, statmat(sample_r) ///

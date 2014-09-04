@@ -935,7 +935,9 @@ ods rtf close;
 H="Initial set up of OOP dataset (create id, drop unneeded vars)"
 /*brings oop dataset into sas
 Creates id variable
-Drops variables not needed*/
+Drops variables not needed
+Carries through Medicaid response from earlier interviews beginning witn n3
+if response yes, the assume yes for remaining time*/
 
 libname oop_src "E:\data\hrs_oop_2010\received_data";
 libname oop_int "E:\data\hrs_oop_2010\int_data";
@@ -964,6 +966,76 @@ end;
 run;
 
 proc freq; table year; run;
+
+
+/*only keep exit, n1, n2, n3 interviews*/
+data oop_exit;
+set oop_2;
+if iwtype=1;
+run;
+
+data oop_core;
+set oop_2;
+if iwtype=0;
+run;
+
+proc sort data=oop_core out=oop_core2;
+by id decending year ;
+run;
+
+data oop_core3;
+set oop_core2;
+by id;
+if first.id then n = 0;
+n +1;
+run;
+
+*keeps only n1-n3 interviews;
+data oop_core4;
+set oop_core3;
+if n<=3;
+run;
+
+proc freq; table n*year; run;
+
+*merge core and exit datasets;
+data oop_all;
+set oop_core4 oop_exit;
+run;
+
+proc sort data=oop_all; 
+by id year ;
+run;
+
+*if report having medicaid in an interview, then set medicaid=yes
+for all subsequent interviews;
+data oop_all2;
+set oop_all;
+by id;
+lag_md_cov = ifn(first.id=0,lag(md_cov),.); *1 ivw back;
+lag2_md_cov=ifn(lag2(id)=id,lag2(md_cov),.); *2 ivws back;
+lag3_md_cov=ifn(lag3(id)=id,lag3(md_cov),.); *3 ivws back;
+run;
+
+data oop_all3;
+set oop_all2;
+md_cov2=md_cov;
+if lag3_md_cov=1 then md_cov2=1;
+if lag2_md_cov=1 then md_cov2=1;
+if lag_md_cov=1 then md_cov2=1;
+if md_cov~=md_cov2 then mdcov_diff=1 ;
+run;
+
+proc freq; table md_cov2 mdcov_diff /missprint; run;
+
+proc freq; table mdcov_diff*iwtype; run;
+
+*now drop unneeded variables, just keep md_cov2 and save to directory;
+data oop_int.oop_2;
+set oop_all3 (drop=lag_md_cov lag2_md_cov lag3_md_cov md_cov);
+rename md_cov2=md_cov;
+label mdcof_diff="Indicator Medicaid status modified";
+run;
 
 /*helper dataset*/
 proc import datafile="E:\data\hrs_oop_2010\received_data\helper_hours_oldv.dta"  

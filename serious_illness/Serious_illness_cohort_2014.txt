@@ -6167,6 +6167,439 @@ run;
 
 
 
+H="Step 10a - Get 2008 interview dataset set up"
+/*Creates additional dataset that is 2008 core interviews, with
+
+Dataset saved as:
+sic_fin.n0_n1_p1_p2_criteria_2008
+
+Contain the following interviews as denoted by variable suffix:
+_n0 - 2008
+_n1 - interview prior to 2008
+_p1 - 2010 interview
+*/
+
+*****************************************************;
+*rename macro *;
+*****************************************************;
+%macro rename(lib,dsn,pre);
+options pageno=1 nodate;
+proc contents data=&lib..&dsn;
+title "Before Renaming All Variables";
+run;
+
+proc sql noprint;
+select nvar into :num_vars
+from dictionary.tables
+where libname="&LIB" and
+memname="&DSN";
+select distinct(name) into :var1-
+:var%TRIM(%LEFT(&num_vars))
+from dictionary.columns
+where libname="&LIB" and
+memname="&DSN";
+quit;
+run;
+
+proc datasets library=&LIB;
+modify &DSN;
+rename
+%do i=1 %to &num_vars;
+&&var&i=&&var&i.._&pre 
+%end;
+;
+quit;
+run;
+options pageno=1 nodate;
+proc contents data=&lib..&dsn;
+title "After Renaming All Variables";
+run;
+%mend rename;
+
+
+****************************************************************;
+/*set up dataset with reference time 0 = 2008 core
+time =0 has n0 suffix
+interviews before have n1, n2, etc suffix
+interviews after have p1, p2 suffix */
+****************************************************************;
+
+*drop variables from interview dataset that we don't need for the n1, p1, etc datasets;
+*these are variables from the restricted dataset;
+data core_to_use;
+set sic_int.ivws_crit_1(drop=birth_date death_date white black hisp_eth native_amer 
+asian_pi other_race other_na_api_race wage_index_2010
+zip_0: zip_10: zip_98: first_ivw_year last_ivw_year restr_yes dod_claims cause_death_12_n);
+run;
+
+data core_all_drop;
+set sic_int.core_ids_1yr_criteria_6(drop=birth_date death_date white black hisp_eth native_amer 
+asian_pi other_race other_na_api_race wage_index_2010 
+zip_0: zip_10: zip_98: first_ivw_year last_ivw_year restr_yes dod_claims cause_death_12_n);
+run;
+
+data core_educ_only;
+set sic_int.core_ids_1yr_criteria_6(keep=id core_year c_ivw_date educ);
+run;
+
+*get ids, 2008 core interviews;
+data n0_2008_1;
+set sic_int.ivws_crit_1;
+if core_year=2008;
+run;
+
+%macro ds_restr(crit=);
+
+data TEST;
+set n0_&crit._1(drop=zip_0: zip_10: zip_98:);
+run;
+
+*add _n0 suffix for interview variables for year that first meets criteria;
+%rename(WORK,TEST,n0);
+
+data n0_&crit._3;
+set TEST;
+rename id_n0=id;
+rename bid_hrs_n0=bid_hrs;
+run;
+
+****************************************************************;
+*get n1 interview, interiew prior to meeting criteria*;
+*list of 4579 core interviews with ffs medicare 1 year prior before meeting the criteria*;
+proc sql;
+create table all_ivw_bef_meet_&crit.
+as select b.*
+ from n0_&crit._3 a 
+ inner join
+core_to_use b
+  on a.id=b.id and a.c_ivw_date_n0>b.c_ivw_date;
+  quit;
+
+proc sort data=all_ivw_bef_meet_&crit. ;
+by id c_ivw_date;
+run;
+
+*keep only the n1 core interview;
+*2374 interviews identified that have ffs medicare 1 year prior to n1 interview;
+data core_n1_&crit.;
+set all_ivw_bef_meet_&crit.;
+by id c_ivw_date;
+if last.id;
+run;
+
+proc freq;
+table core_year;
+run;
+
+*supplement the list with interviews with no or unknown ffs medicare 1 year;
+*prior to interview in order to fill in for those with interviews in 2000;
+proc sql;
+create table noffsreq_ivw_bef_meet_&crit.
+as select b.*
+ from n0_&crit._3 a 
+ inner join
+core_all_drop b
+  on a.id=b.id and a.c_ivw_date_n0>b.c_ivw_date;
+  quit;
+
+*6539 of the ivws are not in the list that already have the n1 ivw;
+proc sql;
+create table noffsreq_ivw_bef_meet_&crit._1 as select * from
+noffsreq_ivw_bef_meet_&crit.
+where id not in (select id from core_n1_&crit.);
+quit;
+
+proc sort data=noffsreq_ivw_bef_meet_&crit._1 ;
+by id c_ivw_date;
+run;
+
+*keep only the n1 core interview;
+*2675 interviews identified;
+data noffsreq_core_n1_&crit.;
+set noffsreq_ivw_bef_meet_&crit._1;
+by id c_ivw_date;
+if last.id;
+run;
+
+*append to get full list of 5049 n1 interviews;
+data core_n1_&crit._1;
+set core_n1_&crit. noffsreq_core_n1_&crit.;
+run;
+
+proc sort data=core_n1_&crit._1 nodupkey;
+by id;
+run;
+
+*check on number of pre interviews present in the dataset;
+*for those that meet the criteria;
+proc sql;
+create table ivw_count_before_&crit. as select distinct id,
+count(*) as n_ivws_bef_&crit. label="n ivws before meet criteria &crit."
+from 
+all_ivw_bef_meet_&crit.  group by id;
+quit;
+
+proc freq; table n_ivws_bef_&crit.;
+run;
+****************************************************************;
+*get n2 and n3 interviews to backfill education variable;
+proc sql;
+create table before_n1_&crit. 
+as select b.*
+ from core_n1_&crit._1 a
+ inner join
+core_educ_only b
+  on a.id=b.id and a.c_ivw_date>b.c_ivw_date;
+  quit;
+
+proc sort data= before_n1_&crit. ;
+by id c_ivw_date;
+run;
+
+*keep n2 core;
+data core_n2_&crit.;
+set before_n1_&crit.;
+by id c_ivw_date;
+if last.id;
+run;
+
+proc sql;
+create table before_n2_&crit. 
+as select b.*
+ from core_n2_&crit. a
+ inner join
+before_n1_&crit. b
+  on a.id=b.id and a.c_ivw_date>b.c_ivw_date;
+  quit;
+
+proc sort data= before_n2_&crit. ;
+by id c_ivw_date;
+run;
+
+*keep n3 core;
+data core_n3_&crit.;
+set before_n2_&crit.;
+by id c_ivw_date;
+if last.id;
+run;
+
+
+****************************************************************;
+*get p1 interview, interview after meeting criteria*;
+*list of all core interviews after meeting the criteria*;
+proc sql;
+create table all_ivw_aft_meet_&crit.
+as select b.*
+ from n0_&crit._3 a 
+ inner join
+core_to_use b
+  on a.id=b.id and a.c_ivw_date_n0<b.c_ivw_date;
+  quit;
+
+proc sort data=all_ivw_aft_meet_&crit. ;
+by id c_ivw_date;
+run;
+
+*keep only the p1 core interview;
+*3143 interviews identified;
+data core_p1_&crit.;
+set all_ivw_aft_meet_&crit.;
+by id c_ivw_date;
+if first.id;
+run;
+
+proc freq;
+table core_year;
+run;
+
+*supplement the list with interviews with no or unknown ffs medicare 1 year;
+*prior to interview in order to fill in missing p1 ivws;
+proc sql;
+create table noffsreq_ivw_aft_meet_&crit.
+as select b.*
+ from n0_&crit._3 a 
+ inner join
+core_all_drop b
+  on a.id=b.id and a.c_ivw_date_n0<b.c_ivw_date;
+  quit;
+
+*499 of the ivws are not in the list that already have the p1 ivw;
+proc sql;
+create table noffsreq_ivw_aft_meet_&crit._1 as select * from
+noffsreq_ivw_aft_meet_&crit.
+where id not in (select id from core_p1_&crit.);
+quit;
+
+proc sort data=noffsreq_ivw_aft_meet_&crit._1 ;
+by id c_ivw_date;
+run;
+
+*keep only the p1 core interview;
+*346 interviews identified;
+data noffsreq_core_p1_&crit.;
+set noffsreq_ivw_aft_meet_&crit._1;
+by id c_ivw_date;
+if first.id;
+run;
+
+*append to get full list of 3489 p1 interviews;
+data core_p1_&crit._1;
+set core_p1_&crit. noffsreq_core_p1_&crit.;
+run;
+
+proc sort data=core_p1_&crit._1 nodupkey;
+by id;
+run;
+
+*check on number of post-interviews present in the dataset;
+*for those that meet the criteria;
+proc sql;
+create table ivw_count_after_&crit. as select distinct id,
+count(*) as n_ivws_after_&crit. label="n ivws after meet criteria &crit."
+from 
+all_ivw_aft_meet_&crit.  group by id;
+quit;
+
+proc freq; table n_ivws_after_&crit.;
+run;
+
+
+*rename the n1, p1 interviews*;
+
+*n1 interview;
+data TEST;
+set core_n1_&crit._1 ;
+run;
+
+%rename(WORK,TEST,n1);
+data core_n1_&crit._1;
+set TEST;
+rename id_n1=id;
+rename bid_hrs_n1=bid_hrs;
+run;
+
+*n2 interview;
+data TEST;
+set core_n2_&crit. ;
+run;
+
+%rename(WORK,TEST,n2);
+data core_n2_&crit._1;
+set TEST;
+rename id_n2=id;
+run;
+
+*n3 interview;
+data TEST;
+set core_n3_&crit. ;
+run;
+
+%rename(WORK,TEST,n3);
+data core_n3_&crit._1;
+set TEST;
+rename id_n3=id;
+run;
+
+*p1 interview;
+data TEST;
+set CORE_P1_&crit._1;
+run;
+%rename(WORK,TEST,p1);
+data core_p1_&crit._1;
+set TEST;
+rename id_p1=id;
+rename bid_hrs_p1=bid_hrs;
+run;
+
+
+*merge the datasets together*;
+proc sort data=n0_&crit._3 nodupkey;
+by id;
+run;
+
+proc sort data=core_n1_&crit._1 nodupkey;
+by id;
+run;
+
+proc sort data=core_n2_&crit._1 nodupkey;
+by id;
+run;
+
+proc sort data=core_n3_&crit._1 nodupkey;
+by id;
+run;
+
+proc sort data=core_p1_&crit._1 nodupkey;
+by id;
+run;
+
+data sic_fin.n0_n1_p1_p2_criteria_&crit.;
+merge n0_&crit._3 core_n1_&crit._1 core_n2_&crit._1 core_n3_&crit._1 core_p1_&crit._1 ;
+by id;
+run;
+
+%mend ds_restr;
+
+%ds_restr(crit=2008);
+
+proc freq data=sic_fin.n0_n1_p1_p2_criteria_2008;
+table core_year_n3 core_year_n2 core_year_n1 core_year_n0 core_year_p1 ;
+run;
+
+*************************************************************;
+** Looking at who has missing n1 core interviews  ***********;
+*************************************************************;
+proc freq data=sic_fin.n0_n1_p1_p2_criteria_2008;
+table part_ab_12m_n1*hmo_d_12m_n1 part_ab_6m_n1*hmo_d_6m_n1 /missprint;
+run;
+
+data no_n1_core_1;
+set sic_fin.n0_n1_p1_p2_criteria_2008;
+if core_year_n1=.;
+run;
+
+proc freq;
+table core_year_n0 first_ivw_year_n0;
+run;
+
+*************************************************************;
+** Looking at who has missing p1 core interviews  ***********;
+*************************************************************;
+data no_p1_core_1;
+set sic_fin.n0_n1_p1_p2_criteria_2008;
+if core_year_p1=. & core_year_n0<2010;
+if core_to_death_n0<=2 then core_to_dod_2yr_n0=1;
+else core_to_dod_2yr_n0=0;
+run;
+
+/*43% died within 1 year of meeting criteria interview*/
+proc freq;
+table core_year_n0 first_ivw_year_n0 core_to_dod_1yr_n0 core_to_dod_2yr_n0;
+run;
+
+/*look at those that didn't die within 2 years n=103*/
+data no_p1_core_2;
+set no_p1_core_1;
+if core_to_dod_2yr_n0=0;
+run;
+
+/*n=70 died within 2.5 years, can't be sure about remaining
+next thing to do is to check exit interviews*/
+proc freq; table core_to_death_n0 core_to_death_n0*core_year_n0 ; run;
+
+/*why missing insurance status of 164 obs in p1 interview for criteria a dataset?
+All interviewed in 2011 for p1, we don't have denominator file that year*/
+data miss_ins_a_1;
+set noffsreq_core_p1_a;
+if part_ab_12m=.;
+run;
+
+proc freq;
+table  core_year;
+run;
+
+
+
 H="Step 11 - Add exit interviews to dataset"
 /*adds exit interview variables (with _x suffix) to the dataset that
 is formatted with the n0 as time0 interview, etc.
@@ -6240,6 +6673,7 @@ run;
 %exit(crit=a);
 %exit(crit=b);
 %exit(crit=c);
+%exit(crit=2008);
 
 /*export to Stata for remaining processing*/
 proc export data=sic_fin.n0_n1_p1_p2_x_criteria_a
@@ -6252,6 +6686,10 @@ run;
 
 proc export data=sic_fin.n0_n1_p1_p2_x_criteria_c
 outfile="E:\data\serious_ill\final_data\n0_n1_p1_p2_x_criteria_c.dta" replace;
+run;
+
+proc export data=sic_fin.n0_n1_p1_p2_x_criteria_2008
+outfile="E:\data\serious_ill\final_data\n0_n1_p1_p2_x_criteria_2008.dta" replace;
 run;
 
 
@@ -6270,6 +6708,7 @@ set more off
 local crit a
 //local crit b
 //local crit c
+//local crit 2008
 
 local logpath E:\data\serious_ill\logs
 local datapath E:\data\serious_ill\final_data
@@ -7833,10 +8272,118 @@ outreg using `logpath'\sic_Tables_7_outcomes_crit_a_b_c, ///
 	title("Table 1: Sample characteristics - Interview first meet criteria A, B, C")  ///
 	note("Criteria A = Any serious medical illness and/or ADL impairment" \ ///
 	"Criteria B = Criteria A and Urgent / Emergent hospitalization and/or NH resident" \ ///
-	"Criteria C = Medical illness and ADL Impairment and hospitalization and/or NH resident") ///
-	replace
+	"Criteria C = Medical illness and ADL Impairment and hospitalization and/or NH resident" \ ///
+	"Comparison Group= Subjects in the 2008 interview wave who met none of the 3 criteria.") ///
+	store(table1) replace
 
 //prior to sending this table, need to remove extra decimal place for all n's
+***************************************************************
+//repeat for 2008 r's that don't meet any criteria, add on as 4th column
+
+use n0_n1_p1_p2_x_criteria_2008_v1.dta
+
+//meet criteria variables
+tab criteria_a, missing
+tab criteria_b, missing
+tab criteria_c, missing
+
+gen no_crit = 0
+replace no_crit=1 if criteria_a==0 & criteria_b==0 & criteria_c==0 
+la var no_crit "Criteria not met, 1=yes"
+tab no_crit, missing
+
+keep if no_crit=1
+
+mat tab1_2008=J(36,2,.)
+mat tab1n_2008 = J(1,1,.)
+
+//assign variable names for use in the tables
+label var age_at_core_n0 "Age, mean (SD)"
+label var networth_adj2010_n0 "Net worth, mean (SD)"
+label var female_n0 "Female, n (%)"
+label var re_black "Black, n (%)"
+label var re_white "non-Hispanic White, n (%)"
+label var re_hisp "Hispanic, n (%)"
+label var re_other_unk "Other or Unknown, n (%)"
+label var educ_level_lt_hs "Less than HS Deg., n (%)"
+
+label var educ_level_hs "High school degree, n (%)"
+label var educ_level_somcol "Some college, n (%)"
+label var educ_level_col "Four year college deg., n (%)"
+label var srh_pf_n0 "Poor/Fair, n (%)"
+label var srh_g_n0 "Good, n (%)"
+label var srh_ve_n0 "Very good/Excellent, n (%)"
+
+label var married_n0 "Married, n (%)"
+label var smi_dem_ind_n0 "Dementia, n (%)"
+label var smi_cancer_ind_n0 "Cancer, n (%)"
+label var smi_esrd_ind_n0 "ESRD, n (%)"
+label var smi_chf_ind_n0 "CHF, n (%)"
+label var smi_copd_ind_n0 "COPD, n (%)"
+
+label var smi_diab_compl_ind_n0 "Diabetes, n (%)"
+label var smi_liver_ind_n0 "Liver disease, n (%)"
+label var smi_als_ind_n0 "ALS, n (%)"
+label var smi_hip_ind_n0 "Hip Fracture, n (%)"
+label var ser_med_illness_n0 "Any serious medical illness, n (%)"
+label var adl_impair_core_n0 "ADL Impairment, n (%)"
+
+label var smi_and_adl_n0 "Medical illness & ADL Impair., n (%)"
+label var smi_nh_ind_n0 "Nursing home resident, n (%)"
+label var ind_em_ur_adm_12m_n0 "Hospital admission, n (%)"
+label var adl_stable_ind_n0n1 "ADL Stable, independent, n (%)"
+label var adl_stable_partial_n0n1 "ADL Stable, partial dep., n (%)"
+
+label var adl_stable_severe_n0n1 "ADL Stable, severe dep., n (%)"
+label var adl_change_i_m_n0n1 "ADL Indep to Partial Dep, n (%)"
+label var adl_change_i_s_n0n1 "ADL Indep to Severe Dep, n (%)"
+label var adl_change_m_s_n0n1 "ADL Partial to Severe Dep, n (%)"
+label var adl_improved_n0n1 "ADL Improved, n (%)"
+
+local c = 1	
+local r = 1
+foreach v in `cvars'{
+	sum `v', detail
+	mat tab1_2008[`r',`c']=r(mean)
+	mat tab1_2008[`r',`c'+1]=r(sd)
+	local r = `r'+1
+}
+
+foreach v in `ivars'{
+	sum `v'
+	mat tab1_2008[`r',`c']=r(mean)*r(N) //n
+	mat tab1_2008[`r',`c'+1]=r(mean)*100 //percent
+	local r = `r'+1
+}
+
+//n for last row
+sum core_year_n0
+mat tab1n_2008[1,`c']=r(N)
+	
+mat rownames tab1_2008=`cvars' `ivars'
+
+mat list tab1_2008
+mat list tab1n_2008
+
+//save the table in frmttable	
+mat dmat=(0,1)
+mat ann=J(36,1,1)
+
+frmttable, statmat(tab1_2008) varlabels ///
+	sdec(1\0\1) doubles(dmat) ///
+	dbldiv(" (") annotate(ann) asymbol(")") ///
+	store(tab12008_1) 	
+
+frmttable, statmat(tab1n_2008) ///
+	sdec(0)	store(tab12008_2) ///
+	rtitles("N")
+
+outreg, replay(tab12008_1) merge(tab12008_2) store(tab12008_ab)
+
+outreg using `logpath'\sic_Tables_7_outcomes_crit_a_b_c, ///
+	replay(table1) merge(tab1_2) ///
+	ctitles("","2008, none") ///
+	addtable
 
 ***************************************************************
 ***************************************************************

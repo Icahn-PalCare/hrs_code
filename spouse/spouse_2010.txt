@@ -15335,3 +15335,2692 @@ outreg using `logpath'\ivw_time_groups_spouse_analysis, append(tableall) ///
 	
 *********************************************
 log close
+
+
+H="xxxxxxxxxxxxxxxxxxxxx"
+
+
+H="Exclude 1-2 days hospice use, included 0-3m ivws"
+/*
+*******Run with new sample definition, allows for p1 interview *****
+******* within 90 days of R's death                    *************
+******* and hospice use 1-2 days excluded from control group *******
+
+Outcome variables are: CESD improvement indicator, ie any improvement 
+in CESD score from n1 to p1
+And CESD clinical improvement 3+ to <3 n1 to p1
+
+This Stata code runs following analyses:
+1. Determines propensity scores
+2. Runs summary tables for r and s characteristics using px weighting
+3. Px matched logit regression on reduced spouse depressive symptoms 
+
+Runs 3 versions
+1. Hospice users: 1+ days / non users: 0 days
+2. Hospice users: 3+ days / non users: 0 days
+3. Hospice users: 7+ days / non users: 0 days*/
+
+capture log close
+
+clear all
+set mem 500m
+set more off
+set scheme s1color
+
+//Amy's PC
+local logpath E:\data\spouse\logs\sept2014
+local datapath E:\data\spouse\final_data
+
+//RG PC
+//local logpath C:\data\Spouse\logs
+//local datapath C:\data\Spouse
+
+log using "`logpath'\5-HRS_Spouse_analysis_sept2014.txt", text replace
+
+cd `datapath'
+
+use spouse_data_sample_v1.dta if (/*p1_wi_90d==0 &*/ no_cc_12m_excl_cataract==0 & sudden_cause_death==0 & cesd_miss_n1_p1==0 )
+
+*****************************************************************************
+*****************************************************************************
+//Set up variables and dataset
+*****************************************************************************
+*****************************************************************************
+
+//See tab "Sum stats, unmatched" for variable list used in matching
+global matchvars cc_all_count_12m_2 cc_3_alzhdmta_n12mn0 cc_ami_isch_n12mn0 ///
+cc_8_chf_n12mn0 cc_9_diabetes_n12mn0 cc_6_chrnkidn_n12mn0 cc_7_copd_n12mn0 ///
+cc_16_strketia_n12mn0 cc_cncr_chronic_n12mn0 cc_4_atrialfb_n12mn0 ///
+cc_11_hipfrac_n12mn0 cc_13_depressn_n12mn0 cc_14_osteoprs_n12mn0 ///
+cc_15_ra_oa_n12mn0 ///
+ r_nw_lowest_n1 r_nw_midlow_n1 r_nw_midhigh_n1 ///
+r_nhres_n1 r_adl_stable_partial_n1n2 r_adl_stable_severe_n1n2 ///
+r_adl_change_i_m_n1n2 r_adl_change_m_s_n1n2 r_adl_change_i_s_n1n2 r_adl_change_n1n2_miss ///
+ r_medicaid_n1 r_champus_n1 r_medigap_n1 r_advdir_y r_advdir_miss r_discuss_x r_srh_pf_n1 ///
+s_age s_female s_white_e  s_hseduc_n1_n3 ///
+s_imprelig_vimp_n1 s_srh_pf_p1 ///
+ s_hrs_comorb_mild_n1 s_hrs_comorb_mod_n1 s_psych_overall_hrs_n1	
+
+//drop observations with missing covariates (24 obs)
+//n=1025
+foreach v of varlist $matchvars {
+tab `v', missing
+drop if `v'==.
+}
+
+tab hs_los_12m r_hs_12m , missing
+tab hs_los_12m r_hs_12m_gt3d, missing
+tab hs_los_12m r_hs_12m_gt7d, missing
+
+la var r_hs_12m "1+ day hospice use, vs 0 days" 
+la var r_hs_12m_gt3d "3+ days hospice use, vs 0 days"
+la var r_hs_12m_gt7d "7+ days hospice use, vs 0 days"
+
+//rename the hospice use variables so can use them in outreg later
+rename r_hs_12m rhs12m
+rename r_hs_12m_gt3d rhs3d 
+rename r_hs_12m_gt7d rhs7d 
+
+tab s_comor_c_hrs_n1 s_cesdbetter, chi2
+tab s_comor_c_hrs_n1 rhs12m, chi2
+
+//1 obs has s_comor_c_hrs_n1 = severe, set to moderate so controlled for
+replace s_hrs_comorb_mod_n1=1 if s_comor_c_hrs_n1==3
+
+********************************************************
+//save this n=1025 dataset, this is the starting point the remainder analysis steps
+save spouse_data_sample_v4.dta, replace
+  
+//first sort data randomly
+set seed 2000
+gen x=uniform()
+sort x
+
+*****************************************************************************
+*****************************************************************************
+//Using Stata's pscore to generate px scores - 1 day definition
+*****************************************************************************
+*****************************************************************************
+
+//generate pscore variable hs_pscore
+pscore rhs12m $matchvars, pscore(hs_pscore) blockid(hs_block) logit detail
+
+//graph without dropping any observations in the matching process
+psgraph, treated(rhs12m) pscore(hs_pscore)
+graph save `logpath'/psgraph_1 ,replace
+
+//implement radius matching
+gen logitpscore=ln(hs_pscore/(1-hs_pscore))
+sum logitpscore
+
+sca cal_ps1=r(sd)*0.02
+sca list cal_ps1
+
+//rule of thumb 0.2*sd
+//psmatch2  rhs12m,outcome(s_cesdbetter) pscore(hs_pscore) caliper(.1596179) logit
+//try 0.02* sd
+psmatch2  rhs12m,outcome(s_cesdbetter) pscore(hs_pscore) radius caliper(.01596179) logit
+//note this creates varaible _weight
+
+//graph including off common support information
+psgraph, treated(rhs12m) pscore(hs_pscore)
+graph save `logpath'/psgraph_2 ,replace
+
+histogram hs_pscore if _support==1, by(rhs12m) 
+
+//look at balance of matched vs unmatched samples
+pstest $matchvars ,treated(rhs12m) both hist
+graph save `logpath'/psmatch_1 ,replace
+
+//look at quantile-quantile plots for continuous variables
+foreach v in cc_all_count_12m_2 s_age{
+gen `v'_treated = `v' if rhs12m==1 & _support==1
+gen `v'_comparison = `v' if rhs12m==0 & _support==1
+qqplot `v'_treated `v'_comparison
+graph save `logpath'/qqplot_`v', replace
+}
+
+mat vr=J(40,6,.)
+//compare variance of covariates before and after matching
+local i=1
+foreach v in $matchvars  {
+sum `v' if rhs12m==1 //get variance treated before matching
+mat vr[`i',1]=r(Var)
+sum `v' if rhs12m==0 //get variance comparison before matching
+mat vr[`i',2]=r(Var)
+mat vr[`i',3]= vr[`i',1]/vr[`i',2] //ratio
+sum `v' if rhs12m==1 & _support==1 //get variance treated after matching
+mat vr[`i',4]=r(Var)
+sum `v' if rhs12m==0 [iweight=_weight] //get variance comparison after matching
+mat vr[`i',5]=r(Var)
+mat vr[`i',6]= (vr[`i',4]) / (vr[`i',5]) //ratio
+local i=`i'+1
+}
+
+mat rownames vr="Count of comorbidities" "Alzheimers/Dementia" "AMI / ISCH" ///
+"CHF" "Diabetes" "Chronic kidney disease" "COPD" "Stroke/TIA" "Cancer" "Atrial fibrilation" ///
+"Hip fracture" "Depression" "Osteoporosis" "Arthritis"  ///
+"R Net worth - lowest quart" "NW - med-low quart" "NW - med-high quart" "Nursing home res" ///
+ "ADL stable partial" "ADL stable severe" "ADL Ind to mod" ///
+"ADL mod to severe" "ADL ind to severe" "ADL n2 to n1 missing" "Medicaid" "Champus" "Medigap" ///
+"Advance directive Y" "Advance directive missing" "R Discuss EOL plans" "R SRH Fair/Poor"  ///
+"S age" "S Female" "S White" "S HS Degree" "S Religion very important" "S SRH Fair/Poor" ///
+"S HRS Comorb Mild 1-3" "S HRS Comorb Mod 4-6" "S Psych Problem HRS n1"
+
+mat list vr
+
+//look at standardized differences to assess balance
+//continuous variables
+mat std_diff=J(40,5,.)
+local i=1
+foreach v in cc_all_count_12m_2 s_age {
+sum `v' if rhs12m==1 & _support==1 //get mean,variance treated after matching
+mat std_diff[`i',1]=r(mean)
+mat std_diff[`i',2]=r(sd)
+
+sum `v' if rhs12m==0 [iweight=_weight] //get mean,variance contl after matching
+mat std_diff[`i',3]=r(mean)
+mat std_diff[`i',4]=r(sd)
+
+mat std_diff[`i',5]=(std_diff[`i',1]-std_diff[`i',3])/sqrt((std_diff[`i',2]^2+std_diff[`i',4]^2)/2) 
+	
+local i = `i'+1	
+}
+//indicator variables
+local indvars cc_3_alzhdmta_n12mn0 cc_ami_isch_n12mn0 ///
+cc_8_chf_n12mn0 cc_9_diabetes_n12mn0 cc_6_chrnkidn_n12mn0 cc_7_copd_n12mn0 ///
+cc_16_strketia_n12mn0 cc_cncr_chronic_n12mn0 cc_4_atrialfb_n12mn0 ///
+cc_11_hipfrac_n12mn0 cc_13_depressn_n12mn0 cc_14_osteoprs_n12mn0 ///
+cc_15_ra_oa_n12mn0 ///
+ r_nw_lowest_n1 r_nw_midlow_n1 r_nw_midhigh_n1 ///
+r_nhres_n1 r_adl_stable_partial_n1n2 r_adl_stable_severe_n1n2 ///
+r_adl_change_i_m_n1n2 r_adl_change_m_s_n1n2 r_adl_change_i_s_n1n2 r_adl_change_n1n2_miss ///
+ r_medicaid_n1 r_champus_n1 r_medigap_n1 r_advdir_y r_advdir_miss r_discuss_x r_srh_pf_n1 ///
+ s_female s_white_e  s_hseduc_n1_n3 ///
+s_imprelig_vimp_n1 s_srh_pf_p1 ///
+ s_hrs_comorb_mild_n1 s_hrs_comorb_mod_n1 s_psych_overall_hrs_n1 
+
+foreach v in `indvars' {
+sum `v' if rhs12m==1 & _support==1 //get mean treated after matching
+mat std_diff[`i',1]=r(mean)
+
+sum `v' if rhs12m==0 [iweight=_weight] //get mean contl after matching
+mat std_diff[`i',3]=r(mean)
+
+mat std_diff[`i',5]=(std_diff[`i',1]-std_diff[`i',3])/sqrt((std_diff[`i',1]*(1-std_diff[`i',1])+std_diff[`i',3]*(1-std_diff[`i',3]))/2)
+	
+local i = `i'+1	
+}
+
+mat rownames std_diff="Count of comorbidities" "S age" "Alzheimers/Dementia" "AMI / ISCH" ///
+"CHF" "Diabetes" "Chronic kidney disease" "COPD" "Stroke/TIA" "Cancer" "Atrial fibrilation" ///
+"Hip fracture" "Depression" "Osteoporosis" "Arthritis"  ///
+"R Net worth - lowest quart" "NW - med-low quart" "NW - med-high quart" "Nursing home res" ///
+ "ADL stable partial" "ADL stable severe" "ADL Ind to mod" ///
+"ADL mod to severe" "ADL ind to severe" "ADL n2 to n1 missing" "Medicaid" "Champus" "Medigap" ///
+"Advance directive Y" "Advance directive missing" "R Discuss EOL plans" "R SRH Fair/Poor"  ///
+ "S Female" "S White" "S HS Degree" "S Religion very important" "S SRH Fair/Poor" ///
+"S HRS Comorb Mild 1-3" "S HRS Comorb Mod 4-6" "S Psych Problem HRS n1" 
+
+mat list std_diff
+//standardized difference should be less than 10-25%
+
+//using this matching, 4 obs from the treatment group are dropped b/c they are off support
+//1 dropped b/c not matched (weight=.)
+//_support ==1 if matched
+tab _support, missing
+tab _support if rhs12m==1, missing
+tab _support if rhs12m==0, missing
+tab _weight if rhs12m==1, missing
+sum _weight if rhs12m==0
+
+//rename ps variables and save dataset so can call them up later
+rename _support support_1
+rename _weight weight_1
+
+*************************************************************************************
+//now run using weighting , outcome = improved CESD score p1
+//need to include the variables used in the propensity score
+
+local yearvars ib2000.r_death_year 
+ 
+logit s_cesdbetter rhs12m `yearvars' $matchvars [iw=weight_1] , or 
+
+outreg using `logpath'\spouse_analysis_sept2014, ///
+	stats(e_b e_ci p) nosubstat ///
+	title("Reduced spousal depressive symptoms and hospice enrollment" \ ///
+	"Propensity Score Matched, Frequency Weighted Sample" \ ///	
+	"Outcome = CESD Score Decreased (by any amount) n1 to p1") ///	
+	ctitles("" "OR" "95% CI" "P-value") ///
+	note("Base categories are year=2000 and spouse has" \ ///
+	"no comorbidities per HRS survey questions." \ ///
+	"P1 interviews 0-3m after r's death are included.") ///
+	varlabels starlevels(10 5 1)  summstat( N) replace
+
+tab s_cesdbetter s_cesd_ge3better, missing
+
+//Run logit with outcome=depressed n1, not depressed p1
+logit s_cesd_ge3better rhs12m `yearvars' $matchvars [iw=weight_1] , or 
+
+outreg using `logpath'\spouse_analysis_sept2014, ///
+	stats(e_b e_ci p) nosubstat ///
+	title("Reduced spousal depressive symptoms and hospice enrollment" \ ///
+	"Propensity Score Matched, Frequency Weighted Sample" \ ///	
+	"Outcome = CESD Score 3+ n1 to less than 3 p1") ///	
+	ctitles("" "OR" "95% CI" "P-value") ///
+	note("Base categories are year=2000 and spouse has" \ ///
+	"no comorbidities per HRS survey questions." \ ///
+	"P1 interviews 0-3m after r's death are included.") ///
+	varlabels starlevels(10 5 1)  summstat( N) addtable
+
+*****************************************************************************
+
+*****************************************************************************
+
+//End of 1 day definition , start 3 day definition section
+
+*****************************************************************************
+
+*****************************************************************************
+	
+	
+*****************************************************************************
+*****************************************************************************
+//Using Stata's pscore to generate px scores - 3 day definition
+*****************************************************************************
+*****************************************************************************
+//first sort data randomly
+set seed 2000
+gen x3=uniform()
+sort x3
+//generate pscore variable hs_pscore
+pscore rhs3d $matchvars, pscore(hs_pscore3) blockid(hs_block3) logit detail
+
+//graph without dropping any observations in the matching process
+psgraph, treated(rhs3d) pscore(hs_pscore3)
+graph save `logpath'/psgraph_1_3 ,replace
+
+//implement radius matching
+gen logitpscore3=ln(hs_pscore3/(1-hs_pscore3))
+sum logitpscore3
+
+sca cal_ps3=r(sd)*0.02
+sca list cal_ps3
+
+//try 0.02* sd
+psmatch2  rhs3d,outcome(s_cesdbetter) pscore(hs_pscore3) radius caliper(.01593829) logit
+//note this creates varaible _weight
+
+//graph including off common support information
+psgraph, treated(rhs3d) pscore(hs_pscore3)
+graph save `logpath'/psgraph_2_3 ,replace
+
+histogram hs_pscore3 if _support==1, by(rhs3d) 
+
+//look at balance of matched vs unmatched samples
+pstest $matchvars ,treated(rhs3d) both hist
+graph save `logpath'/psmatch_1_3 ,replace
+
+//look at quantile-quantile plots for continuous variables
+foreach v in cc_all_count_12m_2 s_age{
+gen `v'_treated3 = `v' if rhs3d==1 & _support==1
+gen `v'_comparison3 = `v' if rhs3d==0 & _support==1
+qqplot `v'_treated3 `v'_comparison3
+graph save `logpath'/qqplot_`v'_3, replace
+}
+
+mat vr=J(40,6,.)
+//compare variance of covariates before and after matching
+local i=1
+foreach v in $matchvars  {
+sum `v' if rhs3d==1 //get variance treated before matching
+mat vr[`i',1]=r(Var)
+sum `v' if rhs3d==0 //get variance comparison before matching
+mat vr[`i',2]=r(Var)
+mat vr[`i',3]= vr[`i',1]/vr[`i',2] //ratio
+sum `v' if rhs3d==1 & _support==1 //get variance treated after matching
+mat vr[`i',4]=r(Var)
+sum `v' if rhs3d==0 [iweight=_weight] //get variance comparison after matching
+mat vr[`i',5]=r(Var)
+mat vr[`i',6]= (vr[`i',4]) / (vr[`i',5]) //ratio
+local i=`i'+1
+}
+
+mat rownames vr="Count of comorbidities" "Alzheimers/Dementia" "AMI / ISCH" ///
+"CHF" "Diabetes" "Chronic kidney disease" "COPD" "Stroke/TIA" "Cancer" "Atrial fibrilation" ///
+"Hip fracture" "Depression" "Osteoporosis" "Arthritis"  ///
+"R Net worth - lowest quart" "NW - med-low quart" "NW - med-high quart" "Nursing home res" ///
+ "ADL stable partial" "ADL stable severe" "ADL Ind to mod" ///
+"ADL mod to severe" "ADL ind to severe" "ADL n2 to n1 missing" "Medicaid" "Champus" "Medigap" ///
+"Advance directive Y" "Advance directive missing" "R Discuss EOL plans" "R SRH Fair/Poor"  ///
+"S age" "S Female" "S White" "S HS Degree" "S Religion very important" "S SRH Fair/Poor" ///
+"S HRS Comorb Mild 1-3" "S HRS Comorb Mod 4-6" "S Psych Problem HRS n1" 
+
+mat list vr
+
+//look at standardized differences to assess balance
+//continuous variables
+mat std_diff=J(40,5,.)
+local i=1
+foreach v in cc_all_count_12m_2 s_age {
+sum `v' if rhs3d==1 & _support==1 //get mean,variance treated after matching
+mat std_diff[`i',1]=r(mean)
+mat std_diff[`i',2]=r(sd)
+
+sum `v' if rhs3d==0 [iweight=_weight] //get mean,variance contl after matching
+mat std_diff[`i',3]=r(mean)
+mat std_diff[`i',4]=r(sd)
+
+mat std_diff[`i',5]=(std_diff[`i',1]-std_diff[`i',3])/sqrt((std_diff[`i',2]^2+std_diff[`i',4]^2)/2) 
+	
+local i = `i'+1	
+}
+//indicator variables
+local indvars cc_3_alzhdmta_n12mn0 cc_ami_isch_n12mn0 ///
+cc_8_chf_n12mn0 cc_9_diabetes_n12mn0 cc_6_chrnkidn_n12mn0 cc_7_copd_n12mn0 ///
+cc_16_strketia_n12mn0 cc_cncr_chronic_n12mn0 cc_4_atrialfb_n12mn0 ///
+cc_11_hipfrac_n12mn0 cc_13_depressn_n12mn0 cc_14_osteoprs_n12mn0 ///
+cc_15_ra_oa_n12mn0 ///
+ r_nw_lowest_n1 r_nw_midlow_n1 r_nw_midhigh_n1 ///
+r_nhres_n1 r_adl_stable_partial_n1n2 r_adl_stable_severe_n1n2 ///
+r_adl_change_i_m_n1n2 r_adl_change_m_s_n1n2 r_adl_change_i_s_n1n2 r_adl_change_n1n2_miss ///
+ r_medicaid_n1 r_champus_n1 r_medigap_n1 r_advdir_y r_advdir_miss r_discuss_x r_srh_pf_n1 ///
+ s_female s_white_e  s_hseduc_n1_n3 ///
+s_imprelig_vimp_n1 s_srh_pf_p1 ///
+ s_hrs_comorb_mild_n1 s_hrs_comorb_mod_n1 s_psych_overall_hrs_n1 
+
+foreach v in `indvars' {
+sum `v' if rhs3d==1 & _support==1 //get mean treated after matching
+mat std_diff[`i',1]=r(mean)
+
+sum `v' if rhs3d==0 [iweight=_weight] //get mean contl after matching
+mat std_diff[`i',3]=r(mean)
+
+mat std_diff[`i',5]=(std_diff[`i',1]-std_diff[`i',3])/sqrt((std_diff[`i',1]*(1-std_diff[`i',1])+std_diff[`i',3]*(1-std_diff[`i',3]))/2)
+	
+local i = `i'+1	
+}
+
+mat rownames std_diff="Count of comorbidities" "S age" "Alzheimers/Dementia" "AMI / ISCH" ///
+"CHF" "Diabetes" "Chronic kidney disease" "COPD" "Stroke/TIA" "Cancer" "Atrial fibrilation" ///
+"Hip fracture" "Depression" "Osteoporosis" "Arthritis"  ///
+"R Net worth - lowest quart" "NW - med-low quart" "NW - med-high quart" "Nursing home res" ///
+ "ADL stable partial" "ADL stable severe" "ADL Ind to mod" ///
+"ADL mod to severe" "ADL ind to severe" "ADL n2 to n1 missing" "Medicaid" "Champus" "Medigap" ///
+"Advance directive Y" "Advance directive missing" "R Discuss EOL plans" "R SRH Fair/Poor"  ///
+ "S Female" "S White" "S HS Degree" "S Religion very important" "S SRH Fair/Poor" ///
+"S HRS Comorb Mild 1-3" "S HRS Comorb Mod 4-6" "S Psych Problem HRS n1" 
+
+mat list std_diff
+//standardized difference should be less than 10-25%
+
+
+//using this matching, 7 obs from the treatment group are dropped b/c they are off support
+//2 dropped b/c not matched (weight=.)
+//_support ==1 if matched
+tab _support, missing
+tab _support if rhs3d==1, missing
+tab _support if rhs3d==0, missing
+tab _weight if rhs3d==1, missing
+sum _weight if rhs3d==0
+
+//rename ps variables and save dataset so can call them up later
+rename _support support_3
+rename _weight weight_3
+
+//now run using weighting , outcome = improved CESD score p1
+//need to include the variables used in the propensity score
+//we probably can't keep both spouse and r gender variables in
+ 
+logit s_cesdbetter rhs3d `yearvars' $matchvars [iw=weight_3] , or 
+
+outreg using `logpath'\spouse_analysis_sept2014, ///
+	stats(e_b e_ci p) nosubstat ///
+	title("Reduced spousal depressive symptoms and hospice enrollment" \ ///
+	"Propensity Score Matched, Frequency Weighted Sample" \ ///	
+	"Outcome = CESD Score Decreased (by any amount) n1 to p1" \ ///
+	"3+ days of hospice use = treatment, 0 days = control") ///	
+	ctitles("" "OR" "95% CI" "P-value") ///
+	note("Base categories are year=2000 and spouse has" \ ///
+	"no comorbidities per HRS survey questions." \ ///
+	"P1 interviews 0-3m after r's death are included.") ///
+	varlabels starlevels(10 5 1)  summstat( N) addtable
+
+
+tab s_cesdbetter s_cesd_ge3better, missing
+
+//Run logit with outcome=depressed n1, not depressed p1
+logit s_cesd_ge3better rhs3d `yearvars' $matchvars [iw=weight_3] , or 
+
+outreg using `logpath'\spouse_analysis_sept2014, ///
+	stats(e_b e_ci p) nosubstat ///
+	title("Reduced spousal depressive symptoms and hospice enrollment" \ ///
+	"Propensity Score Matched, Frequency Weighted Sample" \ ///	
+	"Outcome = CESD Score 3+ n1 to less than 3 p1" \ ///
+	"3+ days of hospice use = treatment, 0 days = control")  ///	
+	ctitles("" "OR" "95% CI" "P-value") ///
+	note("Base categories are year=2000 and spouse has" \ ///
+	"no comorbidities per HRS survey questions." \ ///
+	"P1 interviews 0-3m after r's death are included.") ///
+	varlabels starlevels(10 5 1)  summstat( N) addtable
+
+*****************************************************************************
+
+*****************************************************************************
+
+//End of 3 day definition , start 7 day definition section
+
+*****************************************************************************
+
+*****************************************************************************
+	
+	
+*****************************************************************************
+*****************************************************************************
+//Using Stata's pscore to generate px scores - 7 day definition
+*****************************************************************************
+*****************************************************************************
+//first sort data randomly
+set seed 2000
+gen x7=uniform()
+sort x7
+//generate pscore variable hs_pscore
+pscore rhs7d $matchvars, pscore(hs_pscore7) blockid(hs_block7) logit detail
+
+//graph without dropping any observations in the matching process
+psgraph, treated(rhs7d) pscore(hs_pscore7)
+graph save `logpath'/psgraph_1_7 ,replace
+
+//implement radius matching
+gen logitpscore7=ln(hs_pscore7/(1-hs_pscore7))
+sum logitpscore7
+
+sca cal_ps7=r(sd)*0.02
+sca list cal_ps7
+
+//try 0.02* sd
+psmatch2  rhs7d,outcome(s_cesdbetter) pscore(hs_pscore7) radius caliper(.01605468) logit
+//note this creates varaible _weight
+
+//graph including off common support information
+psgraph, treated(rhs7d) pscore(hs_pscore7)
+graph save `logpath'/psgraph_2_7 ,replace
+
+histogram hs_pscore7 if _support==1, by(rhs7d) 
+
+//look at balance of matched vs unmatched samples
+pstest $matchvars ,treated(rhs7d) both hist
+graph save `logpath'/psmatch_1_7 ,replace
+
+//look at quantile-quantile plots for continuous variables
+foreach v in cc_all_count_12m_2 s_age{
+gen `v'_treated7 = `v' if rhs7d==1 & _support==1
+gen `v'_comparison7 = `v' if rhs7d==0 & _support==1
+qqplot `v'_treated7 `v'_comparison7
+graph save `logpath'/qqplot_`v'_7, replace
+}
+
+mat vr=J(40,6,.)
+//compare variance of covariates before and after matching
+local i=1
+foreach v in $matchvars  {
+sum `v' if rhs7d==1 //get variance treated before matching
+mat vr[`i',1]=r(Var)
+sum `v' if rhs7d==0 //get variance comparison before matching
+mat vr[`i',2]=r(Var)
+mat vr[`i',3]= vr[`i',1]/vr[`i',2] //ratio
+sum `v' if rhs7d==1 & _support==1 //get variance treated after matching
+mat vr[`i',4]=r(Var)
+sum `v' if rhs7d==0 [iweight=_weight] //get variance comparison after matching
+mat vr[`i',5]=r(Var)
+mat vr[`i',6]= (vr[`i',4]) / (vr[`i',5]) //ratio
+local i=`i'+1
+}
+
+mat rownames vr="Count of comorbidities" "Alzheimers/Dementia" "AMI / ISCH" ///
+"CHF" "Diabetes" "Chronic kidney disease" "COPD" "Stroke/TIA" "Cancer" "Atrial fibrilation" ///
+"Hip fracture" "Depression" "Osteoporosis" "Arthritis"  ///
+"R Net worth - lowest quart" "NW - med-low quart" "NW - med-high quart" "Nursing home res" ///
+ "ADL stable partial" "ADL stable severe" "ADL Ind to mod" ///
+"ADL mod to severe" "ADL ind to severe" "ADL n2 to n1 missing" "Medicaid" "Champus" "Medigap" ///
+"Advance directive Y" "Advance directive missing" "R Discuss EOL plans" "R SRH Fair/Poor"  ///
+"S age" "S Female" "S White" "S HS Degree" "S Religion very important" "S SRH Fair/Poor" ///
+"S HRS Comorb Mild 1-3" "S HRS Comorb Mod 4-6" "S Psych Problem HRS n1"
+
+mat list vr
+
+//look at standardized differences to assess balance
+//continuous variables
+mat std_diff=J(40,5,.)
+local i=1
+foreach v in cc_all_count_12m_2 s_age {
+sum `v' if rhs7d==1 & _support==1 //get mean,variance treated after matching
+mat std_diff[`i',1]=r(mean)
+mat std_diff[`i',2]=r(sd)
+
+sum `v' if rhs7d==0 [iweight=_weight] //get mean,variance contl after matching
+mat std_diff[`i',3]=r(mean)
+mat std_diff[`i',4]=r(sd)
+
+mat std_diff[`i',5]=(std_diff[`i',1]-std_diff[`i',3])/sqrt((std_diff[`i',2]^2+std_diff[`i',4]^2)/2) 
+	
+local i = `i'+1	
+}
+//indicator variables
+local indvars cc_3_alzhdmta_n12mn0 cc_ami_isch_n12mn0 ///
+cc_8_chf_n12mn0 cc_9_diabetes_n12mn0 cc_6_chrnkidn_n12mn0 cc_7_copd_n12mn0 ///
+cc_16_strketia_n12mn0 cc_cncr_chronic_n12mn0 cc_4_atrialfb_n12mn0 ///
+cc_11_hipfrac_n12mn0 cc_13_depressn_n12mn0 cc_14_osteoprs_n12mn0 ///
+cc_15_ra_oa_n12mn0 ///
+ r_nw_lowest_n1 r_nw_midlow_n1 r_nw_midhigh_n1 ///
+r_nhres_n1 r_adl_stable_partial_n1n2 r_adl_stable_severe_n1n2 ///
+r_adl_change_i_m_n1n2 r_adl_change_m_s_n1n2 r_adl_change_i_s_n1n2 r_adl_change_n1n2_miss ///
+ r_medicaid_n1 r_champus_n1 r_medigap_n1 r_advdir_y r_advdir_miss r_discuss_x r_srh_pf_n1 ///
+ s_female s_white_e  s_hseduc_n1_n3 ///
+s_imprelig_vimp_n1 s_srh_pf_p1 ///
+ s_hrs_comorb_mild_n1 s_hrs_comorb_mod_n1 s_psych_overall_hrs_n1 
+
+foreach v in `indvars' {
+sum `v' if rhs7d==1 & _support==1 //get mean treated after matching
+mat std_diff[`i',1]=r(mean)
+
+sum `v' if rhs7d==0 [iweight=_weight] //get mean contl after matching
+mat std_diff[`i',3]=r(mean)
+
+mat std_diff[`i',5]=(std_diff[`i',1]-std_diff[`i',3])/sqrt((std_diff[`i',1]*(1-std_diff[`i',1])+std_diff[`i',3]*(1-std_diff[`i',3]))/2)
+	
+local i = `i'+1	
+}
+
+mat rownames std_diff="Count of comorbidities" "S age" "Alzheimers/Dementia" "AMI / ISCH" ///
+"CHF" "Diabetes" "Chronic kidney disease" "COPD" "Stroke/TIA" "Cancer" "Atrial fibrilation" ///
+"Hip fracture" "Depression" "Osteoporosis" "Arthritis"  ///
+"R Net worth - lowest quart" "NW - med-low quart" "NW - med-high quart" "Nursing home res" ///
+ "ADL stable partial" "ADL stable severe" "ADL Ind to mod" ///
+"ADL mod to severe" "ADL ind to severe" "ADL n2 to n1 missing" "Medicaid" "Champus" "Medigap" ///
+"Advance directive Y" "Advance directive missing" "R Discuss EOL plans" "R SRH Fair/Poor"  ///
+ "S Female" "S White" "S HS Degree" "S Religion very important" "S SRH Fair/Poor" ///
+"S HRS Comorb Mild 1-3" "S HRS Comorb Mod 4-6" "S Psych Problem HRS n1" 
+
+mat list std_diff
+//standardized difference should be less than 10-25%
+
+
+//using this matching, 13 obs from the treatment group are dropped b/c they are off support
+//2 dropped b/c not matched (weight=.)
+//_support ==1 if matched
+tab _support, missing
+tab _support if rhs7d==1, missing
+tab _support if rhs7d==0, missing
+tab _weight if rhs7d==1, missing
+sum _weight if rhs7d==0
+
+//rename ps variables 
+rename _support support_7
+rename _weight weight_7
+
+//save this dataset for making the tables in the next section
+//this retains the weight variables
+save `datapath'\spouse_data_sample_v4_sept2014.dta, replace
+
+//now run using weighting , outcome = improved CESD score p1
+//need to include the variables used in the propensity score
+//we probably can't keep both spouse and r gender variables in
+ 
+logit s_cesdbetter rhs7d `yearvars' $matchvars [iw=weight_7] , or 
+
+outreg using `logpath'\spouse_analysis_sept2014, ///
+	stats(e_b e_ci p) nosubstat ///
+	title("Reduced spousal depressive symptoms and hospice enrollment" \ ///
+	"Propensity Score Matched, Frequency Weighted Sample" \ ///	
+	"Outcome = CESD Score Decreased (by any amount) n1 to p1" \ ///
+	"7+ days of hospice use = treatment, 0 days = control") ///	
+	ctitles("" "OR" "95% CI" "P-value") ///
+	note("Base categories are year=2000 and spouse has" \ ///
+	"no comorbidities per HRS survey questions." \ ///
+	"P1 interviews 0-3m after r's death are included.") ///
+	varlabels starlevels(10 5 1)  summstat( N) addtable
+
+
+tab s_cesdbetter s_cesd_ge3better, missing
+
+//Run logit with outcome=depressed n1, not depressed p1
+logit s_cesd_ge3better rhs7d `yearvars' $matchvars [iw=weight_7] , or 
+
+outreg using `logpath'\spouse_analysis_sept2014, ///
+	stats(e_b e_ci p) nosubstat ///
+	title("Reduced spousal depressive symptoms and hospice enrollment" \ ///
+	"Propensity Score Matched, Frequency Weighted Sample" \ ///	
+	"Outcome = CESD Score 3+ n1 to less than 3 p1" \ ///
+	"7+ days of hospice use = treatment, 0 days = control")  ///	
+	ctitles("" "OR" "95% CI" "P-value") ///
+	note("Base categories are year=2000 and spouse has" \ ///
+	"no comorbidities per HRS survey questions." \ ///
+	"P1 interviews 0-3m after r's death are included.") ///
+	varlabels starlevels(10 5 1)  summstat( N) addtable
+****************************************************************
+	
+****************************************************************
+//run each dr regression in a row to get a single table with all of the results
+****************************************************************
+
+****************************************************************
+
+//1+day definition, any cesd improvement
+qui logit s_cesdbetter rhs12m `yearvars' $matchvars [iw=weight_1] , or 
+outreg , store(tableall) ///
+	stats(e_b e_ci p) nosubstat keep(rhs12m) ///
+	title("Reduced spousal depressive symptoms and hospice enrollment" \ ///
+	"Propensity Score Matched, Frequency Weighted Sample" \ ///	
+	"Outcome = S Depressive symptom improvement n1 to p1" \ ///
+	"Control group = 0 days hospice use.") ///	
+	ctitles("" "OR" "95% CI" "P-value") ///
+	rtitles("Any improvement 1+day" ) ///
+	note("Base categories are year=2000 and spouse has" \ ///
+	"no comorbidities per HRS survey questions.") ///
+	varlabels starlevels(10 5 1)  summstat(N)
+
+//1+day definition, clinical cesd improvement
+qui logit s_cesd_ge3better rhs12m `yearvars' $matchvars [iw=weight_1] , or 
+outreg , append(tableall) ///
+	stats(e_b e_ci p) nosubstat keep(rhs12m) ///
+	rtitles("Clinical improvement 1+day") ///
+	varlabels starlevels(10 5 1)  summstat(N) 
+	
+//3+day definition, any cesd improvement
+qui logit s_cesdbetter rhs3d `yearvars' $matchvars [iw=weight_3] , or 
+outreg , append(tableall) ///
+	stats(e_b e_ci p) nosubstat keep(rhs3d) ///
+	rtitles("Any improvement 3+days" ) ///
+	varlabels starlevels(10 5 1)  summstat(N) 
+	
+//3+day definition, clinical cesd improvement
+qui logit s_cesd_ge3better rhs3d `yearvars' $matchvars [iw=weight_3] , or 
+outreg , append(tableall) ///
+	stats(e_b e_ci p) nosubstat keep(rhs3d) ///
+	rtitles("Clinical improvement 3+days" ) ///
+	varlabels starlevels(10 5 1)  summstat(N) 
+
+//7+day definition, any cesd improvement
+qui logit s_cesdbetter rhs7d `yearvars' $matchvars [iw=weight_7] , or 
+outreg , append(tableall) ///
+	stats(e_b e_ci p) nosubstat keep(rhs7d) ///
+	rtitles("Any improvement 7+days" ) ///
+	varlabels starlevels(10 5 1)  summstat(N) 
+	
+//7+day definition, clinical cesd improvement
+qui logit s_cesd_ge3better rhs7d `yearvars' $matchvars [iw=weight_7] , or 
+outreg using `logpath'\spouse_analysis_sept2014, append(tableall) ///
+	stats(e_b e_ci p) nosubstat keep(rhs7d) ///
+	rtitles("Clinical improvement 7+days" ) ///
+	varlabels starlevels(10 5 1)  summstat(N) addtable	
+
+****************************************************************
+log close
+
+
+
+H="Tables 1 & 2"
+/* *******Run with new sample definition, allows for p1 interview *****
+******* within 90 days of R's death                    *************
+******* and hospice use 1-2 days excluded from control group *******
+
+Creates decedent and spouse characteristic tables
+
+Hospice users definition: 3+ days / non users: 0 days
+
+Runs in 2 sections, first are unmatched samples, then matched samples
+*/
+
+capture log close
+
+clear all
+set mem 500m
+set more off
+set scheme s1color
+
+//Amy's PC
+local logpath E:\data\spouse\logs\august2014
+local datapath E:\data\spouse\final_data
+
+log using "`logpath'\5a-HRS_Spouse_char_tables_sept2014.txt", text replace
+
+cd `datapath'
+
+use spouse_data_sample_v4_sept2014.dta
+
+*******************************************************
+tab rhs3d , missing
+
+gen non_hosp3=1 if rhs3d==0
+replace non_hosp3=0 if rhs3d==1
+tab non_hosp3 rhs3d, missing
+ 
+*************************************************************************************
+*************************************************************************************
+//Create Table 1, Decedent Descriptive Statistics
+//Col 1-3: Unweighted, unmatched sample
+//Col 4-6: Weighted and matched sample
+*************************************************************************************
+*************************************************************************************
+gen r_adl_improv_stab_i_n1n2 = 0
+replace r_adl_improv_stab_i_n1n2  = 1 if r_adl_stable_ind_n1n2 ==1 | r_adl_improved_n1n2 
+tab r_adl_improv_stab_i_n1n2 , missing
+
+local t1vars r_medicaid_n1 r_nhres_n1 r_advdir_y r_advdir_n ///
+r_advdir_miss r_adl_improv_stab_i_n1n2 ///
+r_adl_stable_partial_n1n2 r_adl_stable_severe_n1n2 r_adl_change_i_m_n1n2 ///
+r_adl_change_m_s_n1n2 r_adl_change_i_s_n1n2 r_adl_change_n1n2_miss cc_3_alzhdmta_n12mn0 ///
+cc_6_chrnkidn_n12mn0 cc_12_ischmcht_n12mn0 cc_8_chf_n12mn0 ///
+cc_9_diabetes_n12mn0 cc_7_copd_n12mn0 cc_16_strketia_n12mn0 ///
+cc_cncr_chronic_n12mn0 cc_4_atrialfb_n12mn0 cc_11_hipfrac_n12mn0 ///
+cc_13_depressn_n12mn0 cc_14_osteoprs_n12mn0 cc_15_ra_oa_n12mn0 
+
+sum r_age, detail
+
+mat demo=J(35,6,.)
+
+//first row, n of hospice users and non-users
+tab rhs3d , missing matcell(d1)
+mat demo[1,1]=d1[2,1] //non-hospice n
+mat demo[1,2]=d1[1,1] //hospice users n
+
+local j=1
+foreach h in rhs3d non_hosp3 {
+sum r_age if `h'==1, detail //age
+mat demo[2,`j']=r(mean)
+mat demo[3,`j']=r(sd)
+sum r_female if `h'==1, detail //female
+mat demo[4,`j']=r(mean)*100
+sum r_white_e if `h'==1, detail //non-hispanic, white
+mat demo[5,`j']=r(mean)*100
+sum r_hseduc_n1_n3 if `h'==1, detail //hs education+
+mat demo[6,`j']=r(mean)*100
+sum r_networth_adj2010_n1 if `h'==1, detail //net worth
+mat demo[7,`j']=r(mean)
+mat demo[8,`j']=r(sd)
+local i=9
+foreach v in `t1vars' {
+	sum `v' if `h'==1, detail 
+	mat demo[`i',`j']=r(mean)*100
+	local i=`i'+1 //populates rows 9-34
+	}
+sum cc_all_count_12m_2 if `h'==1, detail //count of chronic conditions
+mat demo[34,`j']=r(mean)
+mat demo[35,`j']=r(sd)
+local j=`j'+1
+}
+
+//standardized difference for unmatched sample
+//creates new matrix with means then puts the standardized difference into
+//the main demo matrix
+
+mat std_diff_b=J(36,4,.)
+
+local r=2
+sum r_age if rhs3d==1 //get mean,variance treated before matching
+mat std_diff_b[`r',1]=r(mean)
+mat std_diff_b[`r',2]=r(sd)
+
+sum r_age if rhs3d==0 //get mean,variance contl before matching
+mat std_diff_b[`r',3]=r(mean)
+mat std_diff_b[`r',4]=r(sd)
+
+mat demo[`r',3]=(std_diff_b[`r',1]-std_diff_b[`r',3])/sqrt((std_diff_b[`r',2]^2+std_diff_b[`r',4]^2)/2) 
+	
+local r = 4
+foreach v in r_female r_white_e r_hseduc_n1_n3 {
+	sum `v' if rhs3d==1 //get mean,variance treated before matching
+	mat std_diff_b[`r',1]=r(mean)
+
+	sum `v' if rhs3d==0 //get mean,variance contl before matching
+	mat std_diff_b[`r',3]=r(mean)
+
+	mat demo[`r',3]=(std_diff_b[`r',1]-std_diff_b[`r',3])/sqrt((std_diff_b[`r',1]*(1-std_diff_b[`r',1])+std_diff_b[`r',3]*(1-std_diff_b[`r',3]))/2)
+
+	local r = `r'+1
+}
+
+sum r_networth_adj2010_n1 if rhs3d==1 //get mean,variance treated before matching
+mat std_diff_b[`r',1]=r(mean)
+mat std_diff_b[`r',2]=r(sd)
+
+sum r_networth_adj2010_n1 if rhs3d==0 //get mean,variance contl before matching
+mat std_diff_b[`r',3]=r(mean)
+mat std_diff_b[`r',4]=r(sd)
+
+mat demo[`r',3]=(std_diff_b[`r',1]-std_diff_b[`r',3])/sqrt((std_diff_b[`r',2]^2+std_diff_b[`r',4]^2)/2) 
+
+local r = 9
+foreach v in `t1vars' {
+	sum `v' if rhs3d==1 //get mean,variance treated before matching
+	mat std_diff_b[`r',1]=r(mean)
+
+	sum `v' if rhs3d==0 //get mean,variance contl before matching
+	mat std_diff_b[`r',3]=r(mean)
+
+	mat demo[`r',3]=(std_diff_b[`r',1]-std_diff_b[`r',3])/sqrt((std_diff_b[`r',1]*(1-std_diff_b[`r',1])+std_diff_b[`r',3]*(1-std_diff_b[`r',3]))/2)
+
+	local r = `r'+1
+}
+
+local r = 34
+sum cc_all_count_12m_2 if rhs3d==1 //get mean,variance treated before matching
+mat std_diff_b[`r',1]=r(mean)
+mat std_diff_b[`r',2]=r(sd)
+
+sum cc_all_count_12m_2 if rhs3d==0 //get mean,variance contl before matching
+mat std_diff_b[`r',3]=r(mean)
+mat std_diff_b[`r',4]=r(sd)
+
+mat demo[`r',3]=(std_diff_b[`r',1]-std_diff_b[`r',3])/sqrt((std_diff_b[`r',2]^2+std_diff_b[`r',4]^2)/2) 
+
+
+//just look at it to check means against the pstest output to make sure they are right
+mat rownames std_diff_b= "R age" "" "Female" "White" "HS Degree" "Net worth" "" ///
+"Medicaid" "Nursing home res before death"  ///
+"Advance directive Y" "Advance directive N" "Advance directive missing" ///
+"ADL improved or stable ind" "ADL stable partial" "ADL stable severe" ///
+"ADL Ind to mod" "ADL mod to severe" "ADL ind to severe" "ADL n2 to n1 missing" ///
+"Alzheimers/Dementia" "Chronic kidney disease" "AMI / ISCH" ///
+"CHF" "Diabetes" "COPD" "Stroke/TIA" "Cancer" "Atrial fibrilation" ///
+"Hip fracture" "Depression" "Osteoporosis" "Arthritis" "Count of comorbidities" ""
+
+mat list std_diff_b
+
+*************************************************************************************
+//Table 1 - cols 4-6: Respondent characteristics, matched and weighted
+*************************************************************************************
+
+//first row, n of hospice users and non-users
+tab rhs3d if weight_3!=. , missing matcell(dm)
+mat demo[1,5]=dm[1,1] //non-hospice n
+mat demo[1,4]=dm[2,1] //hospice users n
+
+local j=4
+foreach h in rhs3d non_hosp3 {
+sum r_age if `h'==1 [iweight=weight_3] //age
+mat demo[2,`j']=r(mean)
+mat demo[3,`j']=r(sd)
+sum r_female if `h'==1 [iweight=weight_3] //female
+mat demo[4,`j']=r(mean)*100
+sum r_white_e if `h'==1 [iweight=weight_3] //non-hispanic, white
+mat demo[5,`j']=r(mean)*100
+sum r_hseduc_n1_n3 if `h'==1 [iweight=weight_3] //hs education+
+mat demo[6,`j']=r(mean)*100
+sum r_networth_adj2010_n1 if `h'==1 [iweight=weight_3] //net worth
+mat demo[7,`j']=r(mean)
+mat demo[8,`j']=r(sd)
+local i=9
+foreach v in `t1vars' {
+	sum `v' if `h'==1 [iweight=weight_3] 
+	mat demo[`i',`j']=r(mean)*100
+	local i=`i'+1 //populates rows 9-34
+	}
+sum cc_all_count_12m_2 if `h'==1 [iweight=weight_3] //count of chronic conditions
+mat demo[34,`j']=r(mean)
+mat demo[35,`j']=r(sd)
+local j=`j'+1
+}
+
+//standardized difference for matched sample
+//creates new matrix with means then puts the standardized difference into
+//the main demo matrix
+
+mat std_diff_a=J(35,4,.)
+
+local r=2
+sum r_age if rhs3d==1 [iweight=weight_3] //get mean,variance treated after matching
+mat std_diff_a[`r',1]=r(mean)
+mat std_diff_a[`r',2]=r(sd)
+
+sum r_age if rhs3d==0 [iweight=weight_3] //get mean,variance contl after matching
+mat std_diff_a[`r',3]=r(mean)
+mat std_diff_a[`r',4]=r(sd)
+
+mat demo[`r',6]=(std_diff_a[`r',1]-std_diff_a[`r',3])/sqrt((std_diff_a[`r',2]^2+std_diff_a[`r',4]^2)/2) 
+	
+local r = 4
+foreach v in r_female r_white_e r_hseduc_n1_n3 {
+	sum `v' if rhs3d==1 [iweight=weight_3] //get mean,variance treated after matching
+	mat std_diff_a[`r',1]=r(mean)
+
+	sum `v' if rhs3d==0 [iweight=weight_3] //get mean,variance contl after matching
+	mat std_diff_a[`r',3]=r(mean)
+
+	mat demo[`r',6]=(std_diff_a[`r',1]-std_diff_a[`r',3])/sqrt((std_diff_a[`r',1]*(1-std_diff_a[`r',1])+std_diff_a[`r',3]*(1-std_diff_a[`r',3]))/2)
+
+	local r = `r'+1
+}
+
+sum r_networth_adj2010_n1 if rhs3d==1 [iweight=weight_3] //get mean,variance treated after matching
+mat std_diff_a[`r',1]=r(mean)
+mat std_diff_a[`r',2]=r(sd)
+
+sum r_networth_adj2010_n1 if rhs3d==0 [iweight=weight_3] //get mean,variance contl after matching
+mat std_diff_a[`r',3]=r(mean)
+mat std_diff_a[`r',4]=r(sd)
+
+mat demo[`r',6]=(std_diff_a[`r',1]-std_diff_a[`r',3])/sqrt((std_diff_a[`r',2]^2+std_diff_a[`r',4]^2)/2) 
+
+local r = 9
+foreach v in `t1vars' {
+	sum `v' if rhs3d==1 [iweight=weight_3] //get mean,variance treated after matching
+	mat std_diff_a[`r',1]=r(mean)
+
+	sum `v' if rhs3d==0 [iweight=weight_3] //get mean,variance contl after matching
+	mat std_diff_a[`r',3]=r(mean)
+
+	mat demo[`r',6]=(std_diff_a[`r',1]-std_diff_a[`r',3])/sqrt((std_diff_a[`r',1]*(1-std_diff_a[`r',1])+std_diff_a[`r',3]*(1-std_diff_a[`r',3]))/2)
+
+	local r = `r'+1
+}
+
+local r = 34
+sum cc_all_count_12m_2 if rhs3d==1 [iweight=weight_3] //get mean,variance treated after matching
+mat std_diff_a[`r',1]=r(mean)
+mat std_diff_a[`r',2]=r(sd)
+
+sum cc_all_count_12m_2 if rhs3d==0 [iweight=weight_3] //get mean,variance contl after matching
+mat std_diff_a[`r',3]=r(mean)
+mat std_diff_a[`r',4]=r(sd)
+
+mat demo[`r',6]=(std_diff_a[`r',1]-std_diff_a[`r',3])/sqrt((std_diff_a[`r',2]^2+std_diff_a[`r',4]^2)/2) 
+
+
+//just look at it to check means against the pstest output to make sure they are right
+mat rownames std_diff_a= "R age" "" "Female" "White" "HS Degree" "Net worth" "" ///
+"Medicaid" "Nursing home res before death"  ///
+"Advance directive Y" "Advance directive N" "Advance directive missing" ///
+"ADL improved or stable ind" "ADL stable partial" "ADL stable severe"  ///
+"ADL Ind to mod" "ADL mod to severe" "ADL ind to severe" "ADL n2 to n1 missing" ///
+"Alzheimers/Dementia" "Chronic kidney disease" "AMI / ISCH" ///
+"CHF" "Diabetes" "COPD" "Stroke/TIA" "Cancer" "Atrial fibrilation" ///
+"Hip fracture" "Depression" "Osteoporosis" "Arthritis" "Count of comorbidities" ""
+
+mat list std_diff_a
+
+
+mat rownames demo ="Sample n" "Age at death, years, mean" "SD" "Female, %" "Race, Non-Hispanic White, %" ///
+"Education, High School Grad" "Net worth, 2010US$, mean" "SD" "Medicaid, %" ///
+"Nursing home resident n1, %" "Had advance directive" ///
+"Did not have advance directive" "Advance directive status unknown" ///
+"Impr or Indep in ADLs n2 to n1" ///
+"Stable, Moderate 1-3 ADL" "Stable, Severe 4-6 ADL" ///
+"Declined, Indep to Moderate" "Declined, Moderate to Severe" ///
+"Declined, Independent to Severe" "Unknown" "Alzheimers/Dementia" "Chronic Kidney Disease" ///
+"Ischemic Heart Disease" "Congestive Heart Failure" "Diabetes" "COPD" ///
+"Stroke or TIA" "Cancer" "Atrial Fibrillation" "Hip Fracture" "Depression" "Osteoporosis" ///
+"Arthritis" "Count of chronic conditions" "SD"
+
+mat list demo
+
+frmttable using `logpath'\spo_Table1_deced_char, statmat(demo) ///
+title("Decedent descriptive characteristics, 3+ hospice days") ///
+ctitle("","Unmatched Sample","","","Matched Sample","","" \ "", "Hospice users","Non-hospice users","Std. Diff.", ///
+  "Hospice users" ,"Non-hospice users" ,"Std. Diff.") ///
+sdec(2,2,3,2,2,3) replace
+
+******************************************************************
+******************************************************************
+//Table 2 spouse characteristics (2nd table with CESD variables)
+//Col 1-3: unmatched, unweighted
+//Col 4-6: matched and weighted
+******************************************************************
+******************************************************************
+local sdemovar1 s_female s_white_e s_hseduc_n1_n3 ///
+s_medicaid_n1 s_srh_pf_n1 s_imprelig_vimp_n1 s_smoke_curr_n1 ///
+s_vig_phy_act_n1 s_hrs_comorb_none_n1 s_hrs_comorb_mild_n1 ///
+s_hrs_comorb_mod_n1 s_cancer_hrs_n1 ///
+s_lung_hrs_n1 s_heart_hrs_n1 s_chf_hrs_n1 s_stroke_hrs_n1 ///
+s_memory_hrs_n1 s_htn_hrs_n1 s_dm_hrs_n1 s_psych_hrs_n1 
+
+local sdemovar2 s_cesd_tot_ge3_n1 ///
+s_cesd_tot_ge3_p1 s_cesdbetter s_cesdsame s_cesdworse 
+
+mat sdemo=J(23,6,.)
+mat sdemo2=J(8,6,.)
+
+//first row, n of hospice and non-hospice
+tab rhs3d, missing matcell(sd1)
+mat sdemo[1,1]=sd1[2,1] //non-hospice n
+mat sdemo[1,2]=sd1[1,1] //hospice users n
+mat sdemo2[1,1]=sd1[2,1] //non-hospice n
+mat sdemo2[1,2]=sd1[1,1] //hospice users n
+
+local j=1
+foreach h in rhs3d non_hosp3 {
+sum s_age if `h'==1, detail //age
+mat sdemo[2,`j']=r(mean)
+mat sdemo[3,`j']=r(sd)
+local i=4
+foreach v in `sdemovar1' {
+	sum `v' if `h'==1, detail 
+	mat sdemo[`i',`j']=r(mean)*100
+	local i=`i'+1 //populates rows 4-23
+	}
+
+sum s_cesd_tot_n1 if `h'==1, detail //cesd score n1
+mat sdemo2[2,`j']=r(mean)
+sum s_cesd_tot_p1 if `h'==1, detail //cesd score p1
+mat sdemo2[3,`j']=r(mean)
+sum s_cesdchange if `h'==1, detail //cesd score change n1 to p1
+mat sdemo2[4,`j']=r(mean)
+
+local i=5
+foreach v in `sdemovar2' {
+	sum `v' if `h'==1, detail 
+	mat sdemo2[`i',`j']=r(mean)*100
+	local i=`i'+1 //populates rows 5-8
+	}
+local j=`j'+1
+}
+
+//standardized difference for unmatched sample
+//creates new matrix with means then puts the standardized difference into
+//the main demo matrix
+
+mat std_diff_b=J(23,4,.)
+mat std_diff_b2=J(9,4,.)
+
+local r=2
+sum s_age if rhs3d==1 //get mean,variance treated before matching
+mat std_diff_b[`r',1]=r(mean)
+mat std_diff_b[`r',2]=r(sd)
+
+sum s_age if rhs3d==0 //get mean,variance contl before matching
+mat std_diff_b[`r',3]=r(mean)
+mat std_diff_b[`r',4]=r(sd)
+
+mat sdemo[`r',3]=(std_diff_b[`r',1]-std_diff_b[`r',3])/sqrt((std_diff_b[`r',2]^2+std_diff_b[`r',4]^2)/2)
+
+local r = 4
+foreach v in `sdemovar1'  {
+	sum `v' if rhs3d==1 //get mean,variance treated before matching
+	mat std_diff_b[`r',1]=r(mean)
+
+	sum `v' if rhs3d==0 //get mean,variance contl before matching
+	mat std_diff_b[`r',3]=r(mean)
+
+	mat sdemo[`r',3]=(std_diff_b[`r',1]-std_diff_b[`r',3])/sqrt((std_diff_b[`r',1]*(1-std_diff_b[`r',1])+std_diff_b[`r',3]*(1-std_diff_b[`r',3]))/2)
+
+	local r = `r'+1
+}
+
+local r = 2
+foreach v in s_cesd_tot_n1  s_cesd_tot_p1  s_cesdchange {
+        sum `v' if rhs3d==1 //get mean,variance treated before matching
+    mat std_diff_b2[`r',1]=r(mean)
+    mat std_diff_b2[`r',2]=r(sd)
+
+    sum `v' if rhs3d==0 //get mean,variance contl before matching
+    mat std_diff_b2[`r',3]=r(mean)
+    mat std_diff_b2[`r',4]=r(sd)
+
+    mat sdemo2[`r',3]=(std_diff_b2[`r',1]-std_diff_b2[`r',3])/sqrt((std_diff_b2[`r',2]^2+std_diff_b2[`r',4]^2)/2)
+
+    local r = `r'+1
+}
+
+local r = 5
+foreach v in `sdemovar2' {
+	sum `v' if rhs3d==1 //get mean,variance treated before matching
+	mat std_diff_b2[`r',1]=r(mean)
+
+	sum `v' if rhs3d==0 //get mean,variance contl before matching
+	mat std_diff_b2[`r',3]=r(mean)
+
+	mat sdemo2[`r',3]=(std_diff_b2[`r',1]-std_diff_b2[`r',3])/sqrt((std_diff_b2[`r',1]*(1-std_diff_b2[`r',1])+std_diff_b2[`r',3]*(1-std_diff_b2[`r',3]))/2)
+
+	local r = `r'+1
+}
+
+//just look at it to check means against the pstest output to make sure they are right
+mat rownames std_diff_b= "S age" "" "Female" "White" "HS Degree" ///
+"Medicaid" "SRH poor/fair" "Religion very imp" "Smoker" "Vigorous phys act" ///
+"Comorb - none" "Mild" "Moderate" "Cancer" "Lung disease" "Heart disease" "CHF" "Stroke" ///
+"Memory disease" "Hypertension" "Diabetes" "Psych problems" 
+
+mat rownames std_diff_b2="CESD raw n1" "CESD raw p1" "CESD change" ///
+"Clin depr n1" "Clin depr p1" "CESD improved" "CESD same" "CESD declined"
+
+mat list std_diff_b
+mat list std_diff_b2
+
+**********************************************************************
+//Matched weighted columns 4-6
+**********************************************************************
+
+//first row, n of hospice and non-hospice
+tab rhs3d if weight_3!=., missing matcell(sd1)
+mat sdemo[1,4]=sd1[2,1] //hospice n
+mat sdemo[1,5]=sd1[1,1] //non-hospice users n
+mat sdemo2[1,4]=sd1[2,1] //hospice n
+mat sdemo2[1,5]=sd1[1,1] //non-hospice users n
+
+local j=4
+foreach h in rhs3d non_hosp3 {
+sum s_age if `h'==1 [iweight=weight_3] //age
+mat sdemo[2,`j']=r(mean)
+mat sdemo[3,`j']=r(sd)
+local i=4
+foreach v in `sdemovar1' {
+	sum `v' if `h'==1 [iweight=weight_3] 
+	mat sdemo[`i',`j']=r(mean)*100
+	local i=`i'+1 //populates rows 4-23
+	}
+
+sum s_cesd_tot_n1 if `h'==1 [iweight=weight_3] //cesd score n1
+mat sdemo2[2,`j']=r(mean)
+sum s_cesd_tot_p1 if `h'==1 [iweight=weight_3] //cesd score p1
+mat sdemo2[3,`j']=r(mean)
+sum s_cesdchange if `h'==1 [iweight=weight_3] //cesd score change n1 to p1
+mat sdemo2[4,`j']=r(mean)
+local i=5
+foreach v in `sdemovar2' {
+	sum `v' if `h'==1 [iweight=weight_3] 
+	mat sdemo2[`i',`j']=r(mean)*100
+	local i=`i'+1 //populates rows 5-8
+	}
+local j=`j'+1
+}
+
+//standardized difference for matched sample
+//creates new matrix with means then puts the standardized difference into
+//the main demo matrix
+
+mat std_diff_a=J(23,4,.)
+mat std_diff_a2=J(8,4,.)
+
+local r=2
+sum s_age if rhs3d==1 [iweight=weight_3] //get mean,variance treated after matching
+mat std_diff_a[`r',1]=r(mean)
+mat std_diff_a[`r',2]=r(sd)
+
+sum s_age if rhs3d==0 [iweight=weight_3] //get mean,variance contl after matching
+mat std_diff_a[`r',3]=r(mean)
+mat std_diff_a[`r',4]=r(sd)
+
+mat sdemo[`r',6]=(std_diff_a[`r',1]-std_diff_a[`r',3])/sqrt((std_diff_a[`r',2]^2+std_diff_a[`r',4]^2)/2)
+
+local r = 4
+foreach v in `sdemovar1' {
+	sum `v' if rhs3d==1 [iweight=weight_3] //get mean,variance treated after matching
+	mat std_diff_a[`r',1]=r(mean)
+
+	sum `v' if rhs3d==0 [iweight=weight_3] //get mean,variance contl after matching
+	mat std_diff_a[`r',3]=r(mean)
+
+	mat sdemo[`r',6]=(std_diff_a[`r',1]-std_diff_a[`r',3])/sqrt((std_diff_a[`r',1]*(1-std_diff_a[`r',1])+std_diff_a[`r',3]*(1-std_diff_a[`r',3]))/2)
+
+	local r = `r'+1
+}
+
+local r = 2
+foreach v in s_cesd_tot_n1 s_cesd_tot_p1 s_cesdchange  {
+        sum `v' if rhs3d==1 [iweight=weight_3] //get mean,variance treated after matching
+        mat std_diff_a2[`r',1]=r(mean)
+        mat std_diff_a2[`r',2]=r(sd)
+
+        sum `v' if rhs3d==0 [iweight=weight_3] //get mean,variance contl after matching
+        mat std_diff_a2[`r',3]=r(mean)
+        mat std_diff_a2[`r',4]=r(sd)
+
+        mat sdemo2[`r',6]=(std_diff_a2[`r',1]-std_diff_a2[`r',3])/sqrt((std_diff_a2[`r',2]^2+std_diff_a2[`r',4]^2)/2)
+   	local r = `r'+1
+}
+
+local r = 5
+foreach v in `sdemovar2' {
+	sum `v' if rhs3d==1 [iweight=weight_3] //get mean,variance treated after matching
+	mat std_diff_a2[`r',1]=r(mean)
+
+	sum `v' if rhs3d==0 [iweight=weight_3] //get mean,variance contl after matching
+	mat std_diff_a2[`r',3]=r(mean)
+
+	mat sdemo2[`r',6]=(std_diff_a2[`r',1]-std_diff_a2[`r',3])/sqrt((std_diff_a2[`r',1]*(1-std_diff_a2[`r',1])+std_diff_a2[`r',3]*(1-std_diff_a2[`r',3]))/2)
+
+	local r = `r'+1
+}
+
+//just look at it to check means against the pstest output to make sure they are right
+mat rownames std_diff_a= "S age" "" "Female" "White" "HS Degree" ///
+"Medicaid" "SRH poor/fair" "Religion very imp" "Smoker" "Vigorous phys act" ///
+"Comorb - none" "Mild" "Moderate" "Cancer" "Lung disease" "Heart disease" "CHF" "Stroke" ///
+"Memory disease" "Hypertension" "Diabetes" "Psych problems"
+
+mat rownames std_diff_a2= "CESD raw n1" "CESD raw p1" "CESD change" ///
+"Clin depr n1" "Clin depr p1" "CESD improved" "CESD same" "CESD declined"
+
+mat list std_diff_a
+mat list std_diff_a2
+
+mat rownames sdemo ="Sample size n" "Age at r's death, mean" "SD" "Female %" "Non-Hispanic White %" ///
+"Education, High school grad %" "Medicaid %" "SRH poor or fair %" ///
+"Religion very important %" "Currently smoker %" "Vigorous physical activity %" ///
+"Comorbidity index - none" "Mild (1-3)" "Moderate (4-6)" ///
+"Cancer %" "Lung disease %" "Heart disease %" "CHF %" "Stroke %" "Memory disease %" ///
+"Hypertension %" "Diabetes %" "Psychological problems %" ///
+
+mat rownames sdemo2 ="CES-D raw score pre-death, mean" ///
+"CES-D raw score post-death, mean" "Change in raw CES-D" ///
+"Clinical depression pre-death %" "Clinical depression post-death %" ///
+ "CES-D Improved post death %" "Same CES-D post death %" "CES-D Declined post death %"
+
+mat list sdemo
+
+frmttable using `logpath'\spo_Table2_spouse_char, statmat(sdemo) ///
+title("Spouse descriptive characteristics,  3+ hospice days") ///
+ctitle("","Unmatched Sample","","","Matched Sample","","" \ "", "Hospice users","Non-hospice users","Std. Diff.", ///
+  "Hospice users" ,"Non-hospice users" ,"Std. Diff.") ///
+  sdec(2,2,4,2,2,4) replace
+
+frmttable using `logpath'\spo_Table2_spouse_char, statmat(sdemo2) ///
+title("Spouse CES-D depression outcomes,  3+ hospice days") ///
+ctitle("","Unmatched Sample","","","Matched Sample","","" \ "", "Hospice users","Non-hospice users","Std. Diff.", ///
+  "Hospice users" ,"Non-hospice users" ,"Std. Diff.") ///
+  sdec(2,2,4,2,2,4) addtable
+
+***********************************************************************
+//Table of overall sample characteristics
+***********************************************************************
+local varlist1 r_female r_white_e r_hseduc_n1_n3 
+
+local varlist2 s_female s_white_e s_hseduc_n1_n3 s_adl_independent_core_n1
+
+mat quicktab=J(13,5,.)
+
+sum r_age //mean R age
+mat quicktab[1,1]=r(mean)
+local sample = r(N)
+
+local j=2
+foreach v in `varlist1'{
+sum `v'
+mat quicktab[`j',1]=r(mean)*100
+local j=`j'+1 //rows 2-4
+}
+
+sum s_age //mean S age
+mat quicktab[5,1]=r(mean)
+
+local j=6
+foreach v in `varlist2'{
+sum `v'
+mat quicktab[`j',1]=r(mean)*100
+local j=`j'+1 //rows 6-9
+}
+
+local i=10
+sum hs_los_12m if rhs3d==1, detail
+mat quicktab[`i',1]=r(mean)
+mat quicktab[`i',2]=r(sd)
+mat quicktab[`i',3]=r(p50)
+mat quicktab[`i',4]=r(min)
+mat quicktab[`i',5]=r(max)
+
+gen mo_p1_core_dead =days_p1_core_dead/30.5
+gen mo_s_n1_core_dead = s_days_n1_core_dead/30.5
+
+sum mo_p1_core_dead
+mat quicktab[`i'+1,1]=r(mean)
+
+sum mo_s_n1_core_dead 
+mat quicktab[`i'+2,1]=r(mean)
+
+gen mo_s_p1_n1 = (days_p1_core_dead+ s_days_n1_core_dead)/30.5
+sum mo_s_p1_n1 , detail
+mat quicktab[`i'+3,1]=r(mean)
+mat quicktab[`i'+3,2]=r(sd)
+mat quicktab[`i'+3,3]=r(p50)
+mat quicktab[`i'+3,4]=r(min)
+mat quicktab[`i'+3,5]=r(max)
+
+mat list quicktab
+
+mat rownames quicktab="R Age" "R Female" "R White" "R HS Degree" ///
+"S Age" "S Female" "S White" "S HS Degree" "S ADL independent n1" ///
+"Days hospice use" "S n1 ivw months before death" ///
+"S p1 ivw months after death" ///
+"S n1 to p1 interview, months"
+
+frmttable using `logpath'\spo_overall_sample_char, statmat(quicktab) ///
+title("Overall sample descriptive characteristics, n=`sample'") ///
+ctitle("","Mean or Percent" "SD" "Median" "Min" "Max") ///
+sdec(3,2,0,0,0) replace
+
+
+***********************************************************************
+log close
+
+
+H="Caregivers"
+/*
+Runs the models for the helper subsample only
+
+Outcome variables are: CESD improvement indicator, ie any improvement 
+in CESD score from n1 to p1
+And CESD clinical improvement 3+ to <3 n1 to p1
+
+This Stata code runs following analyses:
+1. Determines propensity scores
+2. Runs summary tables for r and s characteristics using px weighting
+3. Px matched logit regression on reduced spouse depressive symptoms 
+
+Runs 3 versions
+1. Hospice users: 1+ days / non users: 0 days
+2. Hospice users: 3+ days / non users: 0 days
+3. Hospice users: 7+ days / non users: 0 days*/
+
+capture log close
+
+clear all
+set mem 500m
+set more off
+set scheme s1color
+
+//Amy's PC
+local logpath E:\data\spouse\logs\sept2014\helper
+local datapath E:\data\spouse\final_data
+
+//RG PC
+//local logpath C:\data\Spouse\logs
+//local datapath C:\data\Spouse
+
+log using "`logpath'\6-HRS_Spouse_analysis_helper_sept2014.txt", text replace
+
+cd `datapath'
+
+use spouse_data_sample_v4.dta if (r_adl_sp_helper_x==1 | r_iadl_sp_helper_x==1) 
+  
+*****************************************************************************
+*****************************************************************************
+//Set up variables and dataset
+*****************************************************************************
+*****************************************************************************
+
+//first sort data randomly
+set seed 2000
+gen x=uniform()
+sort x
+
+*****************************************************************************
+*****************************************************************************
+//Using Stata's pscore to generate px scores - 1 day definition
+*****************************************************************************
+*****************************************************************************
+
+//generate pscore variable hs_pscore
+pscore rhs12m $matchvars, pscore(hs_pscore) blockid(hs_block) logit detail
+
+//graph without dropping any observations in the matching process
+psgraph, treated(rhs12m) pscore(hs_pscore)
+graph save `logpath'/psgraph_1 ,replace
+
+//implement radius matching
+gen logitpscore=ln(hs_pscore/(1-hs_pscore))
+sum logitpscore
+
+sca cal_ps1=r(sd)*0.02
+sca list cal_ps1
+
+//try 0.02* sd
+psmatch2  rhs12m,outcome(s_cesdbetter) pscore(hs_pscore) radius caliper(.01628742) logit
+//note this creates varaible _weight
+
+//graph including off common support information
+psgraph, treated(rhs12m) pscore(hs_pscore)
+graph save `logpath'/psgraph_2 ,replace
+
+histogram hs_pscore if _support==1, by(rhs12m) 
+
+//look at balance of matched vs unmatched samples
+pstest $matchvars ,treated(rhs12m) both hist
+graph save `logpath'/psmatch_1 ,replace
+
+//look at quantile-quantile plots for continuous variables
+foreach v in cc_all_count_12m_2 s_age{
+gen `v'_treated = `v' if rhs12m==1 & _support==1
+gen `v'_comparison = `v' if rhs12m==0 & _support==1
+qqplot `v'_treated `v'_comparison
+graph save `logpath'/qqplot_`v', replace
+}
+
+mat vr=J(40,6,.)
+//compare variance of covariates before and after matching
+local i=1
+foreach v in $matchvars  {
+sum `v' if rhs12m==1 //get variance treated before matching
+mat vr[`i',1]=r(Var)
+sum `v' if rhs12m==0 //get variance comparison before matching
+mat vr[`i',2]=r(Var)
+mat vr[`i',3]= vr[`i',1]/vr[`i',2] //ratio
+sum `v' if rhs12m==1 & _support==1 //get variance treated after matching
+mat vr[`i',4]=r(Var)
+sum `v' if rhs12m==0 [iweight=_weight] //get variance comparison after matching
+mat vr[`i',5]=r(Var)
+mat vr[`i',6]= (vr[`i',4]) / (vr[`i',5]) //ratio
+local i=`i'+1
+}
+
+mat rownames vr="Count of comorbidities" "Alzheimers/Dementia" "AMI / ISCH" ///
+"CHF" "Diabetes" "Chronic kidney disease" "COPD" "Stroke/TIA" "Cancer" "Atrial fibrilation" ///
+"Hip fracture" "Depression" "Osteoporosis" "Arthritis"  ///
+"R Net worth - lowest quart" "NW - med-low quart" "NW - med-high quart" "Nursing home res" ///
+ "ADL stable partial" "ADL stable severe" "ADL Ind to mod" ///
+"ADL mod to severe" "ADL ind to severe" "ADL n2 to n1 missing" "Medicaid" "Champus" "Medigap" ///
+"Advance directive Y" "Advance directive missing" "R Discuss EOL plans" "R SRH Fair/Poor"  ///
+"S age" "S Female" "S White" "S HS Degree" "S Religion very important" "S SRH Fair/Poor" ///
+"S HRS Comorb Mild 1-3" "S HRS Comorb Mod 4-6" "S Psych Problem HRS n1"
+
+mat list vr
+
+//look at standardized differences to assess balance
+//continuous variables
+mat std_diff=J(40,5,.)
+local i=1
+foreach v in cc_all_count_12m_2 s_age {
+sum `v' if rhs12m==1 & _support==1 //get mean,variance treated after matching
+mat std_diff[`i',1]=r(mean)
+mat std_diff[`i',2]=r(sd)
+
+sum `v' if rhs12m==0 [iweight=_weight] //get mean,variance contl after matching
+mat std_diff[`i',3]=r(mean)
+mat std_diff[`i',4]=r(sd)
+
+mat std_diff[`i',5]=(std_diff[`i',1]-std_diff[`i',3])/sqrt((std_diff[`i',2]^2+std_diff[`i',4]^2)/2) 
+	
+local i = `i'+1	
+}
+//indicator variables
+local indvars cc_3_alzhdmta_n12mn0 cc_ami_isch_n12mn0 ///
+cc_8_chf_n12mn0 cc_9_diabetes_n12mn0 cc_6_chrnkidn_n12mn0 cc_7_copd_n12mn0 ///
+cc_16_strketia_n12mn0 cc_cncr_chronic_n12mn0 cc_4_atrialfb_n12mn0 ///
+cc_11_hipfrac_n12mn0 cc_13_depressn_n12mn0 cc_14_osteoprs_n12mn0 ///
+cc_15_ra_oa_n12mn0 ///
+ r_nw_lowest_n1 r_nw_midlow_n1 r_nw_midhigh_n1 ///
+r_nhres_n1 r_adl_stable_partial_n1n2 r_adl_stable_severe_n1n2 ///
+r_adl_change_i_m_n1n2 r_adl_change_m_s_n1n2 r_adl_change_i_s_n1n2 r_adl_change_n1n2_miss ///
+ r_medicaid_n1 r_champus_n1 r_medigap_n1 r_advdir_y r_advdir_miss r_discuss_x r_srh_pf_n1 ///
+ s_female s_white_e  s_hseduc_n1_n3 ///
+s_imprelig_vimp_n1 s_srh_pf_p1 ///
+ s_hrs_comorb_mild_n1 s_hrs_comorb_mod_n1 s_psych_overall_hrs_n1 
+
+foreach v in `indvars' {
+sum `v' if rhs12m==1 & _support==1 //get mean treated after matching
+mat std_diff[`i',1]=r(mean)
+
+sum `v' if rhs12m==0 [iweight=_weight] //get mean contl after matching
+mat std_diff[`i',3]=r(mean)
+
+mat std_diff[`i',5]=(std_diff[`i',1]-std_diff[`i',3])/sqrt((std_diff[`i',1]*(1-std_diff[`i',1])+std_diff[`i',3]*(1-std_diff[`i',3]))/2)
+	
+local i = `i'+1	
+}
+
+mat rownames std_diff="Count of comorbidities" "S age" "Alzheimers/Dementia" "AMI / ISCH" ///
+"CHF" "Diabetes" "Chronic kidney disease" "COPD" "Stroke/TIA" "Cancer" "Atrial fibrilation" ///
+"Hip fracture" "Depression" "Osteoporosis" "Arthritis"  ///
+"R Net worth - lowest quart" "NW - med-low quart" "NW - med-high quart" "Nursing home res" ///
+ "ADL stable partial" "ADL stable severe" "ADL Ind to mod" ///
+"ADL mod to severe" "ADL ind to severe" "ADL n2 to n1 missing" "Medicaid" "Champus" "Medigap" ///
+"Advance directive Y" "Advance directive missing" "R Discuss EOL plans" "R SRH Fair/Poor"  ///
+ "S Female" "S White" "S HS Degree" "S Religion very important" "S SRH Fair/Poor" ///
+"S HRS Comorb Mild 1-3" "S HRS Comorb Mod 4-6" "S Psych Problem HRS n1" 
+
+mat list std_diff
+//standardized difference should be less than 10-25%
+
+//using this matching, 10 obs from the treatment group are dropped b/c they are off support
+//3 are dropped b/c not matched (weight=.)
+//_support ==1 if matched
+tab _support, missing
+tab _support if rhs12m==1, missing
+tab _support if rhs12m==0, missing
+tab _weight if rhs12m==1, missing
+sum _weight if rhs12m==0
+
+//rename ps variables so can call them up later
+rename _support support_1
+rename _weight weight_1
+
+//now run using weighting , outcome = improved CESD score p1
+//need to include the variables used in the propensity score
+
+local yearvars ib2000.r_death_year 
+ 
+logit s_cesdbetter rhs12m `yearvars' $matchvars [iw=weight_1] , or 
+
+outreg using `logpath'\spouse_analysis_sept2014, ///
+	stats(e_b e_ci p) nosubstat ///
+	title("Reduced spousal depressive symptoms and hospice enrollment" \ ///
+	"Propensity Score Matched, Frequency Weighted Sample" \ ///	
+	"Outcome = CESD Score Decreased (by any amount) n1 to p1") ///	
+	ctitles("" "OR" "95% CI" "P-value") ///
+	note("Base categories are year=2000 and spouse has" \ ///
+	"no comorbidities per HRS survey questions." \ ///
+	"P1 interviews 0-3m after r's death are included.") ///
+	varlabels starlevels(10 5 1)  summstat( N) replace
+
+
+tab s_cesdbetter s_cesd_ge3better, missing
+
+//Run logit with outcome=depressed n1, not depressed p1
+//Need alternative variable list excluding advanced directive missing status b/c
+//it predicts the outcome (failure)
+tab s_cesd_ge3better r_advdir_miss if weight_1!=., missing
+
+local new_varlist cc_all_count_12m_2 cc_3_alzhdmta_n12mn0 cc_ami_isch_n12mn0 ///
+cc_8_chf_n12mn0 cc_9_diabetes_n12mn0 cc_6_chrnkidn_n12mn0 cc_7_copd_n12mn0 ///
+cc_16_strketia_n12mn0 cc_cncr_chronic_n12mn0 cc_4_atrialfb_n12mn0 ///
+cc_11_hipfrac_n12mn0 cc_13_depressn_n12mn0 cc_14_osteoprs_n12mn0 ///
+cc_15_ra_oa_n12mn0 ///
+ r_nw_lowest_n1 r_nw_midlow_n1 r_nw_midhigh_n1 ///
+r_nhres_n1 r_adl_stable_partial_n1n2 r_adl_stable_severe_n1n2 ///
+r_adl_change_i_m_n1n2 r_adl_change_m_s_n1n2 r_adl_change_i_s_n1n2 r_adl_change_n1n2_miss ///
+ r_medicaid_n1 r_champus_n1 r_medigap_n1 r_advdir_y /*r_advdir_miss*/ r_discuss_x r_srh_pf_n1 ///
+s_age s_female s_white_e  s_hseduc_n1_n3 ///
+s_imprelig_vimp_n1 s_srh_pf_p1 ///
+ s_hrs_comorb_mild_n1 s_hrs_comorb_mod_n1 s_psych_overall_hrs_n1 
+
+logit s_cesd_ge3better rhs12m `yearvars' `new_varlist' [iw=weight_1] , or 
+
+outreg using `logpath'\spouse_analysis_sept2014, ///
+	stats(e_b e_ci p) nosubstat ///
+	title("Reduced spousal depressive symptoms and hospice enrollment" \ ///
+	"Propensity Score Matched, Frequency Weighted Sample" \ ///	
+	"Outcome = CESD Score 3+ n1 to less than 3 p1") ///	
+	ctitles("" "OR" "95% CI" "P-value") ///
+	note("Base categories are year=2000 and spouse has" \ ///
+	"no comorbidities per HRS survey questions." \ ///
+	"P1 interviews 0-3m after r's death are included.") ///
+	varlabels starlevels(10 5 1)  summstat( N) addtable
+
+*****************************************************************************
+
+*****************************************************************************
+
+//End of 1 day definition , start 3 day definition section
+
+*****************************************************************************
+
+*****************************************************************************
+	
+	
+*****************************************************************************
+*****************************************************************************
+//Using Stata's pscore to generate px scores - 3 day definition
+*****************************************************************************
+*****************************************************************************
+
+//generate pscore variable hs_pscore
+pscore rhs3d $matchvars, pscore(hs_pscore3) blockid(hs_block3) logit detail
+
+//graph without dropping any observations in the matching process
+psgraph, treated(rhs3d) pscore(hs_pscore3)
+graph save `logpath'/psgraph_1_3 ,replace
+
+//implement radius matching
+gen logitpscore3=ln(hs_pscore3/(1-hs_pscore3))
+sum logitpscore3
+
+sca cal_ps3=r(sd)*0.02
+sca list cal_ps3
+
+//try 0.02* sd
+psmatch2  rhs3d,outcome(s_cesdbetter) pscore(hs_pscore3) radius caliper(.01552033) logit
+//note this creates varaible _weight
+
+//graph including off common support information
+psgraph, treated(rhs3d) pscore(hs_pscore3)
+graph save `logpath'/psgraph_2_3 ,replace
+
+histogram hs_pscore3 if _support==1, by(rhs3d) 
+
+//look at balance of matched vs unmatched samples
+pstest $matchvars ,treated(rhs3d) both hist
+graph save `logpath'/psmatch_1_3 ,replace
+
+//look at quantile-quantile plots for continuous variables
+foreach v in cc_all_count_12m_2 s_age{
+gen `v'_treated3 = `v' if rhs3d==1 & _support==1
+gen `v'_comparison3 = `v' if rhs3d==0 & _support==1
+qqplot `v'_treated3 `v'_comparison3
+graph save `logpath'/qqplot_`v'_3, replace
+}
+
+mat vr=J(40,6,.)
+//compare variance of covariates before and after matching
+local i=1
+foreach v in $matchvars  {
+sum `v' if rhs3d==1 //get variance treated before matching
+mat vr[`i',1]=r(Var)
+sum `v' if rhs3d==0 //get variance comparison before matching
+mat vr[`i',2]=r(Var)
+mat vr[`i',3]= vr[`i',1]/vr[`i',2] //ratio
+sum `v' if rhs3d==1 & _support==1 //get variance treated after matching
+mat vr[`i',4]=r(Var)
+sum `v' if rhs3d==0 [iweight=_weight] //get variance comparison after matching
+mat vr[`i',5]=r(Var)
+mat vr[`i',6]= (vr[`i',4]) / (vr[`i',5]) //ratio
+local i=`i'+1
+}
+
+mat rownames vr="Count of comorbidities" "Alzheimers/Dementia" "AMI / ISCH" ///
+"CHF" "Diabetes" "Chronic kidney disease" "COPD" "Stroke/TIA" "Cancer" "Atrial fibrilation" ///
+"Hip fracture" "Depression" "Osteoporosis" "Arthritis"  ///
+"R Net worth - lowest quart" "NW - med-low quart" "NW - med-high quart" "Nursing home res" ///
+ "ADL stable partial" "ADL stable severe" "ADL Ind to mod" ///
+"ADL mod to severe" "ADL ind to severe" "ADL n2 to n1 missing" "Medicaid" "Champus" "Medigap" ///
+"Advance directive Y" "Advance directive missing" "R Discuss EOL plans" "R SRH Fair/Poor"  ///
+"S age" "S Female" "S White" "S HS Degree" "S Religion very important" "S SRH Fair/Poor" ///
+"S HRS Comorb Mild 1-3" "S HRS Comorb Mod 4-6" "S Psych Problem HRS n1"
+
+mat list vr
+
+//look at standardized differences to assess balance
+//continuous variables
+mat std_diff=J(40,5,.)
+local i=1
+foreach v in cc_all_count_12m_2 s_age {
+sum `v' if rhs3d==1 & _support==1 //get mean,variance treated after matching
+mat std_diff[`i',1]=r(mean)
+mat std_diff[`i',2]=r(sd)
+
+sum `v' if rhs3d==0 [iweight=_weight] //get mean,variance contl after matching
+mat std_diff[`i',3]=r(mean)
+mat std_diff[`i',4]=r(sd)
+
+mat std_diff[`i',5]=(std_diff[`i',1]-std_diff[`i',3])/sqrt((std_diff[`i',2]^2+std_diff[`i',4]^2)/2) 
+	
+local i = `i'+1	
+}
+//indicator variables
+local indvars cc_3_alzhdmta_n12mn0 cc_ami_isch_n12mn0 ///
+cc_8_chf_n12mn0 cc_9_diabetes_n12mn0 cc_6_chrnkidn_n12mn0 cc_7_copd_n12mn0 ///
+cc_16_strketia_n12mn0 cc_cncr_chronic_n12mn0 cc_4_atrialfb_n12mn0 ///
+cc_11_hipfrac_n12mn0 cc_13_depressn_n12mn0 cc_14_osteoprs_n12mn0 ///
+cc_15_ra_oa_n12mn0 ///
+ r_nw_lowest_n1 r_nw_midlow_n1 r_nw_midhigh_n1 ///
+r_nhres_n1 r_adl_stable_partial_n1n2 r_adl_stable_severe_n1n2 ///
+r_adl_change_i_m_n1n2 r_adl_change_m_s_n1n2 r_adl_change_i_s_n1n2 r_adl_change_n1n2_miss ///
+ r_medicaid_n1 r_champus_n1 r_medigap_n1 r_advdir_y r_advdir_miss r_discuss_x r_srh_pf_n1 ///
+ s_female s_white_e  s_hseduc_n1_n3 ///
+s_imprelig_vimp_n1 s_srh_pf_p1 ///
+ s_hrs_comorb_mild_n1 s_hrs_comorb_mod_n1 s_psych_overall_hrs_n1 
+
+foreach v in `indvars' {
+sum `v' if rhs3d==1 & _support==1 //get mean treated after matching
+mat std_diff[`i',1]=r(mean)
+
+sum `v' if rhs3d==0 [iweight=_weight] //get mean contl after matching
+mat std_diff[`i',3]=r(mean)
+
+mat std_diff[`i',5]=(std_diff[`i',1]-std_diff[`i',3])/sqrt((std_diff[`i',1]*(1-std_diff[`i',1])+std_diff[`i',3]*(1-std_diff[`i',3]))/2)
+	
+local i = `i'+1	
+}
+
+mat rownames std_diff="Count of comorbidities" "S age" "Alzheimers/Dementia" "AMI / ISCH" ///
+"CHF" "Diabetes" "Chronic kidney disease" "COPD" "Stroke/TIA" "Cancer" "Atrial fibrilation" ///
+"Hip fracture" "Depression" "Osteoporosis" "Arthritis"  ///
+"R Net worth - lowest quart" "NW - med-low quart" "NW - med-high quart" "Nursing home res" ///
+ "ADL stable partial" "ADL stable severe" "ADL Ind to mod" ///
+"ADL mod to severe" "ADL ind to severe" "ADL n2 to n1 missing" "Medicaid" "Champus" "Medigap" ///
+"Advance directive Y" "Advance directive missing" "R Discuss EOL plans" "R SRH Fair/Poor"  ///
+ "S Female" "S White" "S HS Degree" "S Religion very important" "S SRH Fair/Poor" ///
+"S HRS Comorb Mild 1-3" "S HRS Comorb Mod 4-6" "S Psych Problem HRS n1" 
+
+mat list std_diff
+//standardized difference should be less than 10-25%
+
+
+//using this matching, 7 obs from the treatment group are dropped b/c they are off support
+//3 are dropped b/c not matched (weight=.)
+//_support ==1 if matched
+tab _support, missing
+tab _support if rhs3d==1, missing
+tab _support if rhs3d==0, missing
+tab _weight if rhs3d==1, missing
+sum _weight if rhs3d==0
+
+//rename ps variables and save dataset so can call them up later
+rename _support support_3
+rename _weight weight_3
+
+//now run using weighting , outcome = improved CESD score p1
+//need to include the variables used in the propensity score
+//we probably can't keep both spouse and r gender variables in
+ 
+logit s_cesdbetter rhs3d `yearvars' $matchvars [iw=weight_3] , or 
+
+outreg using `logpath'\spouse_analysis_sept2014, ///
+	stats(e_b e_ci p) nosubstat ///
+	title("Reduced spousal depressive symptoms and hospice enrollment" \ ///
+	"Propensity Score Matched, Frequency Weighted Sample" \ ///	
+	"Outcome = CESD Score Decreased (by any amount) n1 to p1" \ ///
+	"3+ days of hospice use = treatment, 0 days = control") ///	
+	ctitles("" "OR" "95% CI" "P-value") ///
+	note("Base categories are year=2000 and spouse has" \ ///
+	"no comorbidities per HRS survey questions." \ ///
+	"P1 interviews 0-3m after r's death are included.") ///
+	varlabels starlevels(10 5 1)  summstat( N) addtable
+
+
+tab s_cesdbetter s_cesd_ge3better, missing
+
+//Run logit with outcome=depressed n1, not depressed p1
+logit s_cesd_ge3better rhs3d `yearvars' `new_varlist' [iw=weight_3] , or 
+
+outreg using `logpath'\spouse_analysis_sept2014, ///
+	stats(e_b e_ci p) nosubstat ///
+	title("Reduced spousal depressive symptoms and hospice enrollment" \ ///
+	"Propensity Score Matched, Frequency Weighted Sample" \ ///	
+	"Outcome = CESD Score 3+ n1 to less than 3 p1" \ ///
+	"3+ days of hospice use = treatment, 0 days = control")  ///	
+	ctitles("" "OR" "95% CI" "P-value") ///
+	note("Base categories are year=2000 and spouse has" \ ///
+	"no comorbidities per HRS survey questions." \ ///
+	"P1 interviews 0-3m after r's death are included.") ///
+	varlabels starlevels(10 5 1)  summstat( N) addtable
+
+*****************************************************************************
+
+*****************************************************************************
+
+//End of 3 day definition , start 7 day definition section
+
+*****************************************************************************
+
+*****************************************************************************
+	
+	
+*****************************************************************************
+*****************************************************************************
+//Using Stata's pscore to generate px scores - 7 day definition
+*****************************************************************************
+*****************************************************************************
+
+//generate pscore variable hs_pscore
+pscore rhs7d $matchvars, pscore(hs_pscore7) blockid(hs_block7) logit detail
+
+//graph without dropping any observations in the matching process
+psgraph, treated(rhs7d) pscore(hs_pscore7)
+graph save `logpath'/psgraph_1_7 ,replace
+
+//implement radius matching
+gen logitpscore7=ln(hs_pscore7/(1-hs_pscore7))
+sum logitpscore7
+
+sca cal_ps7=r(sd)*0.02
+sca list cal_ps7
+
+//try 0.02* sd
+psmatch2  rhs7d,outcome(s_cesdbetter) pscore(hs_pscore7) radius caliper(.01548533) logit
+//note this creates varaible _weight
+
+//graph including off common support information
+psgraph, treated(rhs7d) pscore(hs_pscore7)
+graph save `logpath'/psgraph_2_7 ,replace
+
+histogram hs_pscore7 if _support==1, by(rhs7d) 
+
+//look at balance of matched vs unmatched samples
+pstest $matchvars ,treated(rhs7d) both hist
+graph save `logpath'/psmatch_1_7 ,replace
+
+//look at quantile-quantile plots for continuous variables
+foreach v in cc_all_count_12m_2 s_age{
+gen `v'_treated7 = `v' if rhs7d==1 & _support==1
+gen `v'_comparison7 = `v' if rhs7d==0 & _support==1
+qqplot `v'_treated7 `v'_comparison7
+graph save `logpath'/qqplot_`v'_7, replace
+}
+
+mat vr=J(40,6,.)
+//compare variance of covariates before and after matching
+local i=1
+foreach v in $matchvars  {
+sum `v' if rhs7d==1 //get variance treated before matching
+mat vr[`i',1]=r(Var)
+sum `v' if rhs7d==0 //get variance comparison before matching
+mat vr[`i',2]=r(Var)
+mat vr[`i',3]= vr[`i',1]/vr[`i',2] //ratio
+sum `v' if rhs7d==1 & _support==1 //get variance treated after matching
+mat vr[`i',4]=r(Var)
+sum `v' if rhs7d==0 [iweight=_weight] //get variance comparison after matching
+mat vr[`i',5]=r(Var)
+mat vr[`i',6]= (vr[`i',4]) / (vr[`i',5]) //ratio
+local i=`i'+1
+}
+
+mat rownames vr="Count of comorbidities" "Alzheimers/Dementia" "AMI / ISCH" ///
+"CHF" "Diabetes" "Chronic kidney disease" "COPD" "Stroke/TIA" "Cancer" "Atrial fibrilation" ///
+"Hip fracture" "Depression" "Osteoporosis" "Arthritis"  ///
+"R Net worth - lowest quart" "NW - med-low quart" "NW - med-high quart" "Nursing home res" ///
+ "ADL stable partial" "ADL stable severe" "ADL Ind to mod" ///
+"ADL mod to severe" "ADL ind to severe" "ADL n2 to n1 missing" "Medicaid" "Champus" "Medigap" ///
+"Advance directive Y" "Advance directive missing" "R Discuss EOL plans" "R SRH Fair/Poor"  ///
+"S age" "S Female" "S White" "S HS Degree" "S Religion very important" "S SRH Fair/Poor" ///
+"S HRS Comorb Mild 1-3" "S HRS Comorb Mod 4-6" "S Psych Problem HRS n1"
+
+mat list vr
+
+//look at standardized differences to assess balance
+//continuous variables
+mat std_diff=J(40,5,.)
+local i=1
+foreach v in cc_all_count_12m_2 s_age {
+sum `v' if rhs7d==1 & _support==1 //get mean,variance treated after matching
+mat std_diff[`i',1]=r(mean)
+mat std_diff[`i',2]=r(sd)
+
+sum `v' if rhs7d==0 [iweight=_weight] //get mean,variance contl after matching
+mat std_diff[`i',3]=r(mean)
+mat std_diff[`i',4]=r(sd)
+
+mat std_diff[`i',5]=(std_diff[`i',1]-std_diff[`i',3])/sqrt((std_diff[`i',2]^2+std_diff[`i',4]^2)/2) 
+	
+local i = `i'+1	
+}
+//indicator variables
+local indvars cc_3_alzhdmta_n12mn0 cc_ami_isch_n12mn0 ///
+cc_8_chf_n12mn0 cc_9_diabetes_n12mn0 cc_6_chrnkidn_n12mn0 cc_7_copd_n12mn0 ///
+cc_16_strketia_n12mn0 cc_cncr_chronic_n12mn0 cc_4_atrialfb_n12mn0 ///
+cc_11_hipfrac_n12mn0 cc_13_depressn_n12mn0 cc_14_osteoprs_n12mn0 ///
+cc_15_ra_oa_n12mn0 ///
+ r_nw_lowest_n1 r_nw_midlow_n1 r_nw_midhigh_n1 ///
+r_nhres_n1 r_adl_stable_partial_n1n2 r_adl_stable_severe_n1n2 ///
+r_adl_change_i_m_n1n2 r_adl_change_m_s_n1n2 r_adl_change_i_s_n1n2 r_adl_change_n1n2_miss ///
+ r_medicaid_n1 r_champus_n1 r_medigap_n1 r_advdir_y r_advdir_miss r_discuss_x r_srh_pf_n1 ///
+ s_female s_white_e  s_hseduc_n1_n3 ///
+s_imprelig_vimp_n1 s_srh_pf_p1 ///
+ s_hrs_comorb_mild_n1 s_hrs_comorb_mod_n1 s_psych_overall_hrs_n1 
+
+foreach v in `indvars' {
+sum `v' if rhs7d==1 & _support==1 //get mean treated after matching
+mat std_diff[`i',1]=r(mean)
+
+sum `v' if rhs7d==0 [iweight=_weight] //get mean contl after matching
+mat std_diff[`i',3]=r(mean)
+
+mat std_diff[`i',5]=(std_diff[`i',1]-std_diff[`i',3])/sqrt((std_diff[`i',1]*(1-std_diff[`i',1])+std_diff[`i',3]*(1-std_diff[`i',3]))/2)
+	
+local i = `i'+1	
+}
+
+mat rownames std_diff="Count of comorbidities" "S age" "Alzheimers/Dementia" "AMI / ISCH" ///
+"CHF" "Diabetes" "Chronic kidney disease" "COPD" "Stroke/TIA" "Cancer" "Atrial fibrilation" ///
+"Hip fracture" "Depression" "Osteoporosis" "Arthritis"  ///
+"R Net worth - lowest quart" "NW - med-low quart" "NW - med-high quart" "Nursing home res" ///
+ "ADL stable partial" "ADL stable severe" "ADL Ind to mod" ///
+"ADL mod to severe" "ADL ind to severe" "ADL n2 to n1 missing" "Medicaid" "Champus" "Medigap" ///
+"Advance directive Y" "Advance directive missing" "R Discuss EOL plans" "R SRH Fair/Poor"  ///
+ "S Female" "S White" "S HS Degree" "S Religion very important" "S SRH Fair/Poor" ///
+"S HRS Comorb Mild 1-3" "S HRS Comorb Mod 4-6" "S Psych Problem HRS n1" 
+
+mat list std_diff
+//standardized difference should be less than 10-25%
+
+
+//using this matching, 14 obs from the treatment group are dropped b/c they are off support
+//3 are dropped b/c not matched (weight=.)
+//_support ==1 if matched
+tab _support, missing
+tab _support if rhs7d==1, missing
+tab _support if rhs7d==0, missing
+tab _weight if rhs7d==1, missing
+sum _weight if rhs7d==0
+
+//rename ps variables so can call them up later
+rename _support support_7
+rename _weight weight_7
+
+//now run using weighting , outcome = improved CESD score p1
+//need to include the variables used in the propensity score
+ 
+logit s_cesdbetter rhs7d `yearvars' $matchvars [iw=weight_7] , or 
+
+outreg using `logpath'\spouse_analysis_sept2014, ///
+	stats(e_b e_ci p) nosubstat ///
+	title("Reduced spousal depressive symptoms and hospice enrollment" \ ///
+	"Propensity Score Matched, Frequency Weighted Sample" \ ///	
+	"Outcome = CESD Score Decreased (by any amount) n1 to p1" \ ///
+	"7+ days of hospice use = treatment, 0 days = control") ///	
+	ctitles("" "OR" "95% CI" "P-value") ///
+	note("Base categories are year=2000 and spouse has" \ ///
+	"no comorbidities per HRS survey questions." \ ///
+	"P1 interviews 0-3m after r's death are included.") ///
+	varlabels starlevels(10 5 1)  summstat( N) addtable
+
+
+tab s_cesdbetter s_cesd_ge3better, missing
+
+//Run logit with outcome=depressed n1, not depressed p1
+logit s_cesd_ge3better rhs7d `yearvars' `new_varlist' [iw=weight_7] , or 
+
+outreg using `logpath'\spouse_analysis_sept2014, ///
+	stats(e_b e_ci p) nosubstat ///
+	title("Reduced spousal depressive symptoms and hospice enrollment" \ ///
+	"Propensity Score Matched, Frequency Weighted Sample" \ ///	
+	"Outcome = CESD Score 3+ n1 to less than 3 p1" \ ///
+	"7+ days of hospice use = treatment, 0 days = control")  ///	
+	ctitles("" "OR" "95% CI" "P-value") ///
+	note("Base categories are year=2000 and spouse has" \ ///
+	"no comorbidities per HRS survey questions." \ ///
+	"P1 interviews 0-3m after r's death are included.") ///
+	varlabels starlevels(10 5 1)  summstat( N) addtable
+****************************************************************
+	
+****************************************************************
+//run each dr regression in a row to get a single table with all of the results
+****************************************************************
+
+****************************************************************
+
+//1+day definition, any cesd improvement
+qui logit s_cesdbetter rhs12m `yearvars' $matchvars [iw=weight_1] , or 
+outreg , store(tableall) ///
+	stats(e_b e_ci p) nosubstat keep(rhs12m) ///
+	title("Reduced spousal depressive symptoms and hospice enrollment" \ ///
+	"Propensity Score Matched, Frequency Weighted Sample" \ ///	
+	"Outcome = S Depressive symptom improvement n1 to p1" \ ///
+	"Control group = 0 days hospice use.") ///	
+	ctitles("" "OR" "95% CI" "P-value") ///
+	rtitles("Any improvement 1+day" ) ///
+	note("Base categories are year=2000 and spouse has" \ ///
+	"no comorbidities per HRS survey questions." \ ///
+	"P1 interviews 0-3m after r's death are included.") ///
+	varlabels starlevels(10 5 1)  summstat(N)
+
+//1+day definition, clinical cesd improvement
+qui logit s_cesd_ge3better rhs12m `yearvars' `new_varlist' [iw=weight_1] , or 
+outreg , append(tableall) ///
+	stats(e_b e_ci p) nosubstat keep(rhs12m) ///
+	rtitles("Clinical improvement 1+day") ///
+	varlabels starlevels(10 5 1)  summstat(N) 
+	
+//3+day definition, any cesd improvement
+qui logit s_cesdbetter rhs3d `yearvars' $matchvars [iw=weight_3] , or 
+outreg , append(tableall) ///
+	stats(e_b e_ci p) nosubstat keep(rhs3d) ///
+	rtitles("Any improvement 3+days" ) ///
+	varlabels starlevels(10 5 1)  summstat(N) 
+	
+//3+day definition, clinical cesd improvement
+qui logit s_cesd_ge3better rhs3d `yearvars' `new_varlist' [iw=weight_3] , or 
+outreg , append(tableall) ///
+	stats(e_b e_ci p) nosubstat keep(rhs3d) ///
+	rtitles("Clinical improvement 3+days" ) ///
+	varlabels starlevels(10 5 1)  summstat(N) 
+
+//7+day definition, any cesd improvement
+qui logit s_cesdbetter rhs7d `yearvars' $matchvars [iw=weight_7] , or 
+outreg , append(tableall) ///
+	stats(e_b e_ci p) nosubstat keep(rhs7d) ///
+	rtitles("Any improvement 7+days" ) ///
+	varlabels starlevels(10 5 1)  summstat(N) 
+	
+//7+day definition, clinical cesd improvement
+qui logit s_cesd_ge3better rhs7d `yearvars' `new_varlist' [iw=weight_7] , or 
+outreg using `logpath'\spouse_analysis_sept2014, append(tableall) ///
+	stats(e_b e_ci p) nosubstat keep(rhs7d) ///
+	rtitles("Clinical improvement 7+days" ) ///
+	varlabels starlevels(10 5 1)  summstat(N) addtable	
+
+****************************************************************
+log close
+
+
+
+H="Ivws before / after 12m"
+capture log close
+
+clear all
+set mem 500m
+set more off
+
+//Amy's PC
+local logpath E:\data\spouse\logs\sept2014
+local datapath E:\data\spouse\final_data
+
+log using "`logpath'\6c-HRS_Spouse_analysis_ivw_after_1yr.txt", text replace
+
+cd `datapath'
+
+use spouse_data_sample_v4.dta //if (s_1yr_p1_core_dead==0)
+
+tab rhs3d r_advdir_miss if s_1yr_p1_core_dead==1, missing
+tab rhs3d r_advdir_miss if s_1yr_p1_core_dead==0, missing
+
+tab days_p1_core_dod_cat , missing
+
+//Have to use an alternate variable list because missing category for
+//advanced directive is all 0 for the treated group for where ivw 12+m after death
+global matchvars2 cc_all_count_12m_2 cc_3_alzhdmta_n12mn0 cc_ami_isch_n12mn0 ///
+cc_8_chf_n12mn0 cc_9_diabetes_n12mn0 cc_6_chrnkidn_n12mn0 cc_7_copd_n12mn0 ///
+cc_16_strketia_n12mn0 cc_cncr_chronic_n12mn0 cc_4_atrialfb_n12mn0 ///
+cc_11_hipfrac_n12mn0 cc_13_depressn_n12mn0 cc_14_osteoprs_n12mn0 ///
+cc_15_ra_oa_n12mn0 ///
+ r_nw_lowest_n1 r_nw_midlow_n1 r_nw_midhigh_n1 ///
+r_nhres_n1 r_adl_stable_partial_n1n2 r_adl_stable_severe_n1n2 ///
+r_adl_change_i_m_n1n2 r_adl_change_m_s_n1n2 r_adl_change_i_s_n1n2 r_adl_change_n1n2_miss ///
+ r_medicaid_n1 r_champus_n1 r_medigap_n1 r_advdir_y /*r_advdir_miss*/ r_discuss_x r_srh_pf_n1 ///
+s_age s_female s_white_e  s_hseduc_n1_n3 ///
+s_imprelig_vimp_n1 s_srh_pf_p1 ///
+ s_hrs_comorb_mild_n1 s_hrs_comorb_mod_n1 s_psych_overall_hrs_n1 
+
+//first sort data randomly
+set seed 2000
+gen x=uniform()
+sort x
+
+********************************************************************
+********************************************************************
+//Sample where ivw is 12+m after R's death
+********************************************************************
+********************************************************************
+//generate pscore variable hs_pscore
+pscore rhs3d $matchvars2 if s_1yr_p1_core_dead==0, pscore(hs_pscore) blockid(hs_block) logit detail
+
+//graph without dropping any observations in the matching process
+psgraph, treated(rhs3d) pscore(hs_pscore)
+
+//implement radius matching
+gen logitpscore=ln(hs_pscore/(1-hs_pscore)) if s_1yr_p1_core_dead==0
+sum logitpscore
+
+sca cal_ps1=r(sd)*0.02
+sca list cal_ps1
+
+psmatch2  rhs3d if s_1yr_p1_core_dead==0,outcome(s_cesdbetter) pscore(hs_pscore) radius caliper(.02195066) logit
+//note this creates varaible _weight
+
+//graph including off common support information
+psgraph, treated(rhs3d) pscore(hs_pscore)
+
+histogram hs_pscore if _support==1, by(rhs3d) 
+
+//look at balance of matched vs unmatched samples
+pstest $matchvars2 if s_1yr_p1_core_dead==0,treated(rhs3d) both hist
+
+pstest $matchvars2 if s_1yr_p1_core_dead==0,treated(rhs3d) both graph
+
+//look at quantile-quantile plots for continuous variables
+foreach v in cc_all_count_12m_2 s_age {
+gen `v'_treated = `v' if rhs3d==1 & _support==1 & s_1yr_p1_core_dead==0
+gen `v'_comparison = `v' if rhs3d==0 & _support==1 & s_1yr_p1_core_dead==0
+qqplot `v'_treated `v'_comparison
+}
+
+
+mat vr=J(39,6,.)
+//compare variance of covariates before and after matching
+local i=1
+foreach v in $matchvars2  {
+sum `v' if rhs3d==1 & s_1yr_p1_core_dead==0 //get variance treated before matching
+mat vr[`i',1]=r(Var)
+sum `v' if rhs3d==0 & s_1yr_p1_core_dead==0 //get variance comparison before matching
+mat vr[`i',2]=r(Var)
+mat vr[`i',3]= vr[`i',1]/vr[`i',2] //ratio
+sum `v' if rhs3d==1 & _support==1 & s_1yr_p1_core_dead==0 //get variance treated after matching
+mat vr[`i',4]=r(Var)
+sum `v' if rhs3d==0 & s_1yr_p1_core_dead==0 [iweight=_weight] //get variance comparison after matching
+mat vr[`i',5]=r(Var)
+mat vr[`i',6]= (vr[`i',4]) / (vr[`i',5]) //ratio
+local i=`i'+1
+}
+
+
+mat rownames vr="Count of comorbidities" "Alzheimers/Dementia" "AMI / ISCH" ///
+"CHF" "Diabetes" "Chronic kidney disease" "COPD" "Stroke/TIA" "Cancer" "Atrial fibrilation" ///
+"Hip fracture" "Depression" "Osteoporosis" "Arthritis"  ///
+"R Net worth - lowest quart" "NW - med-low quart" "NW - med-high quart" "Nursing home res" ///
+ "ADL stable partial" "ADL stable severe" "ADL Ind to mod" ///
+"ADL mod to severe" "ADL ind to severe" "ADL n2 to n1 missing" "Medicaid" "Champus" "Medigap" ///
+"Advance directive Y"  "R Discuss EOL plans" "R SRH Fair/Poor"  ///
+"S age" "S Female" "S White" "S HS Degree" "S Religion very important" "S SRH Fair/Poor" ///
+"S HRS Comorb Mild 1-3" "S HRS Comorb Mod 4-6" "S Psych Problem HRS n1" 
+
+mat list vr
+
+//6 from treated group are off common support, 4 control are not matched (weight==.)
+//_support ==1 if matched
+tab _support, missing
+tab _support if rhs3d==1, missing
+tab _support if rhs3d==0, missing
+tab _weight if rhs3d==1, missing
+sum _weight if rhs3d==0
+
+rename _weight weight_after1yr
+
+***********************************************************************
+//now run logit model using weighting 
+***********************************************************************
+//need to include the variables used in the propensity score
+
+tab r_death_year if s_1yr_p1_core_dead==0, missing
+//one obs in 2010 so switch to 2009 for year fixed effects purposes
+
+replace r_death_year=2009 if r_death_year==2010 & s_1yr_p1_core_dead==0
+local yearvars ib2000.r_death_year 
+
+logit s_cesdbetter i.rhs3d `yearvars' $matchvars2 [iw=weight_after1yr] if s_1yr_p1_core_dead==0, or 
+
+outreg using `logpath'\ivw_time_groups_spouse_analysis, ///
+	stats(e_b e_ci p) nosubstat  ///
+	title("Reduced spousal depressive symptoms and hospice enrollment" \ ///
+	"Propensity Score Matched, Frequency Weighted Sample" \ ///
+	"Limited to S p1 interview after 1 year of R's death" \ ///	
+	"Outcome = CESD Score Decreased (by any amount) n1 to p1" \ ///
+	"Hospice use = 3+ days, control=0 days") ///	
+	ctitles("" "OR" "95% CI" "P-value") ///
+	note("Base categories are year=2000 and spouse no comorbidities.") ///
+	varlabels starlevels(10 5 1)  summstat( N) replace
+
+//Run logit with outcome=depressed n1, not depressed p1
+	
+
+logit s_cesd_ge3better i.rhs3d `yearvars' $matchvars2 [iw=weight_after1yr] if s_1yr_p1_core_dead==0 , or 
+
+outreg using `logpath'\ivw_time_groups_spouse_analysis, ///
+	stats(e_b e_ci p) nosubstat  ///
+	title("Reduced spousal depressive symptoms and hospice enrollment" \ ///
+	"Propensity Score Matched, Frequency Weighted Sample" \ ///
+	"Limited to S p1 interview after 1 year of R's death" \ ///	
+	"Outcome = CESD Score 3+ n1 to less than 3 p1" \ ///	
+	"Hospice use = 3+ days, control=0 days") ///	
+	ctitles("" "OR" "95% CI" "P-value") ///
+	note("Base categories are year=2000 and spouse no comorbidities.") ///
+	varlabels starlevels(10 5 1)  summstat( N) addtable
+
+
+********************************************************************
+********************************************************************
+//Sample where ivw is 0-12m after R's death
+********************************************************************
+********************************************************************
+
+//first sort data randomly
+sort x
+
+//generate pscore variable hs_pscore
+pscore rhs3d $matchvars if s_1yr_p1_core_dead==1, pscore(hs_pscore) blockid(hs_block) logit detail
+
+//graph without dropping any observations in the matching process
+//psgraph, treated(rhs3d) pscore(hs_pscore)
+
+//implement radius matching
+gen logitpscore_b=ln(hs_pscore/(1-hs_pscore)) if s_1yr_p1_core_dead==1
+sum logitpscore_b
+
+sca cal_ps_b=r(sd)*0.02
+sca list cal_ps_b
+
+psmatch2 rhs3d if s_1yr_p1_core_dead==1,outcome(s_cesdbetter) pscore(hs_pscore) radius caliper(.01650071) logit
+//note this creates varaible _weight
+
+//graph including off common support information
+psgraph, treated(rhs3d) pscore(hs_pscore)
+
+histogram hs_pscore if _support==1, by(rhs3d) 
+
+//look at balance of matched vs unmatched samples
+pstest $matchvars if s_1yr_p1_core_dead==1,treated(rhs3d) both hist
+
+pstest $matchvars if s_1yr_p1_core_dead==1,treated(rhs3d) both graph
+
+//look at quantile-quantile plots for continuous variables
+foreach v in cc_all_count_12m_2 s_age {
+gen `v'_treated_b = `v' if rhs3d==1 & _support==1 & s_1yr_p1_core_dead==1
+gen `v'_comparison_b = `v' if rhs3d==0 & _support==1 & s_1yr_p1_core_dead==1
+qqplot `v'_treated_b `v'_comparison_b
+}
+
+
+mat vr=J(40,6,.)
+//compare variance of covariates before and after matching
+local i=1
+foreach v in $matchvars  {
+sum `v' if rhs3d==1 & s_1yr_p1_core_dead==1 //get variance treated before matching
+mat vr[`i',1]=r(Var)
+sum `v' if rhs3d==0 & s_1yr_p1_core_dead==1 //get variance comparison before matching
+mat vr[`i',2]=r(Var)
+mat vr[`i',3]= vr[`i',1]/vr[`i',2] //ratio
+sum `v' if rhs3d==1 & _support==1 & s_1yr_p1_core_dead==1 //get variance treated after matching
+mat vr[`i',4]=r(Var)
+sum `v' if rhs3d==0 & s_1yr_p1_core_dead==1 [iweight=_weight] //get variance comparison after matching
+mat vr[`i',5]=r(Var)
+mat vr[`i',6]= (vr[`i',4]) / (vr[`i',5]) //ratio
+local i=`i'+1
+}
+
+
+mat rownames vr="Count of comorbidities" "Alzheimers/Dementia" "AMI / ISCH" ///
+"CHF" "Diabetes" "Chronic kidney disease" "COPD" "Stroke/TIA" "Cancer" "Atrial fibrilation" ///
+"Hip fracture" "Depression" "Osteoporosis" "Arthritis"  ///
+"R Net worth - lowest quart" "NW - med-low quart" "NW - med-high quart" "Nursing home res" ///
+ "ADL stable partial" "ADL stable severe" "ADL Ind to mod" ///
+"ADL mod to severe" "ADL ind to severe" "ADL n2 to n1 missing" "Medicaid" "Champus" "Medigap" ///
+"Advance directive Y" "Adv dir missing" "R Discuss EOL plans" "R SRH Fair/Poor"  ///
+"S age" "S Female" "S White" "S HS Degree" "S Religion very important" "S SRH Fair/Poor" ///
+"S HRS Comorb Mild 1-3" "S HRS Comorb Mod 4-6" "S Psych Problem HRS n1" 
+
+mat list vr
+
+//2 from treated group are off common support, 0 control are not matched (weight==.)
+//_support ==1 if matched
+tab _support, missing
+tab _support if rhs3d==1, missing
+tab _support if rhs3d==0, missing
+tab _weight if rhs3d==1, missing
+sum _weight if rhs3d==0
+
+rename _weight weight_bef1yr
+
+***********************************************************************
+//now run logit model using weighting 
+***********************************************************************
+//need to include the variables used in the propensity score
+
+tab r_death_year if s_1yr_p1_core_dead==1, missing
+//no observations in 2000 in this subsample so base = 2001 for these models
+
+local yearvars ib2001.r_death_year 
+
+logit s_cesdbetter i.rhs3d `yearvars' $matchvars [iw=weight_bef1yr] if s_1yr_p1_core_dead==1, or 
+
+outreg using `logpath'\ivw_time_groups_spouse_analysis, ///
+	stats(e_b e_ci p) nosubstat  ///
+	title("Reduced spousal depressive symptoms and hospice enrollment" \ ///
+	"Propensity Score Matched, Frequency Weighted Sample" \ ///
+	"Limited to S p1 interview within 1 year of R's death" \ ///	
+	"Outcome = CESD Score Decreased (by any amount) n1 to p1" \ ///	
+	"Hospice use = 3+ days, control=0 days") ///	
+	ctitles("" "OR" "95% CI" "P-value") ///
+	note("Base categories are year=2000 and spouse no comorbidities." \ ///
+	"P1 interviews 0-3m after r's death are included.") ///
+	varlabels starlevels(10 5 1)  summstat( N) addtable
+
+//Run logit with outcome=depressed n1, not depressed p1
+	
+logit s_cesd_ge3better i.rhs3d `yearvars' $matchvars [iw=weight_bef1yr] if s_1yr_p1_core_dead==1 , or 
+
+outreg using `logpath'\ivw_time_groups_spouse_analysis, ///
+	stats(e_b e_ci p) nosubstat  ///
+	title("Reduced spousal depressive symptoms and hospice enrollment" \ ///
+	"Propensity Score Matched, Frequency Weighted Sample" \ ///
+	"Limited to S p1 interview within 1 year of R's death" \ ///	
+	"Outcome = CESD Score 3+ n1 to less than 3 p1" \ ///	
+	"Hospice use = 3+ days, control=0 days") ///	
+	ctitles("" "OR" "95% CI" "P-value") ///
+	note("Base categories are year=2000 and spouse no comorbidities." \ ///
+	"P1 interviews 0-3m after r's death are included.") ///
+	varlabels starlevels(10 5 1)  summstat( N) addtable
+
+	
+*****************************************************************************
+
+*****************************************************************************
+
+//End of overall sample  , start caregivers only section
+
+*****************************************************************************
+
+*****************************************************************************
+
+***********************************************************************
+
+//first sort data randomly
+sort x
+
+local cgafter (s_1yr_p1_core_dead==0 & (r_adl_sp_helper_x==1 | r_iadl_sp_helper_x==1))
+
+//generate pscore variable hs_pscore
+pscore rhs3d $matchvars2 if `cgafter' , pscore(hs_pscore) blockid(hs_block) logit detail
+
+//graph without dropping any observations in the matching process
+//psgraph, treated(rhs3d) pscore(hs_pscore)
+
+//implement radius matching
+gen logitpscore_cga=ln(hs_pscore/(1-hs_pscore)) if `cgafter'
+sum logitpscore_cga
+
+sca cal_ps_cga=r(sd)*0.02
+sca list cal_ps_cga
+
+psmatch2  rhs3d  if `cgafter',outcome(s_cesdbetter) pscore(hs_pscore) radius caliper(.02336107) logit
+//note this creates varaible _weight
+
+//graph including off common support information
+psgraph, treated(rhs3d) pscore(hs_pscore)
+
+histogram hs_pscore if _support==1, by(rhs3d) 
+
+//look at balance of matched vs unmatched samples
+pstest $matchvars2  if `cgafter',treated(rhs3d) both hist
+
+pstest $matchvars2  if `cgafter',treated(rhs3d) both graph
+
+//look at quantile-quantile plots for continuous variables
+foreach v in cc_all_count_12m_2 s_age {
+gen `v'_treated_cga = `v' if rhs3d==1 & _support==1 & `cgafter'
+gen `v'_compar_cga = `v' if rhs3d==0 & _support==1 & `cgafter'
+qqplot `v'_treated_cga `v'_compar_cga
+}
+
+
+mat vr=J(39,6,.)
+//compare variance of covariates before and after matching
+local i=1
+foreach v in $matchvars2  {
+sum `v' if rhs3d==1 & `cgafter' //get variance treated before matching
+mat vr[`i',1]=r(Var)
+sum `v' if rhs3d==0 & `cgafter' //get variance comparison before matching
+mat vr[`i',2]=r(Var)
+mat vr[`i',3]= vr[`i',1]/vr[`i',2] //ratio
+sum `v' if rhs3d==1 & _support==1 & `cgafter' //get variance treated after matching
+mat vr[`i',4]=r(Var)
+sum `v' if rhs3d==0 & `cgafter' [iweight=_weight] //get variance comparison after matching
+mat vr[`i',5]=r(Var)
+mat vr[`i',6]= (vr[`i',4]) / (vr[`i',5]) //ratio
+local i=`i'+1
+}
+
+mat rownames vr="Count of comorbidities" "Alzheimers/Dementia" "AMI / ISCH" ///
+"CHF" "Diabetes" "Chronic kidney disease" "COPD" "Stroke/TIA" "Cancer" "Atrial fibrilation" ///
+"Hip fracture" "Depression" "Osteoporosis" "Arthritis"  ///
+"R Net worth - lowest quart" "NW - med-low quart" "NW - med-high quart" "Nursing home res" ///
+ "ADL stable partial" "ADL stable severe" "ADL Ind to mod" ///
+"ADL mod to severe" "ADL ind to severe" "ADL n2 to n1 missing" "Medicaid" "Champus" "Medigap" ///
+"Advance directive Y" "R Discuss EOL plans" "R SRH Fair/Poor"  ///
+"S age" "S Female" "S White" "S HS Degree" "S Religion very important" "S SRH Fair/Poor" ///
+"S HRS Comorb Mild 1-3" "S HRS Comorb Mod 4-6" "S Psych Problem HRS n1" 
+
+mat list vr
+
+//13 from treated group are off common support, 7 control are not matched (weight==.)
+//_support ==1 if matched
+tab _support, missing
+tab _support if rhs3d==1, missing
+tab _support if rhs3d==0, missing
+tab _weight if rhs3d==1, missing
+sum _weight if rhs3d==0
+
+rename _weight weight_cgafter1yr
+
+***********************************************************************
+//now run logit model using weighting 
+***********************************************************************
+//need to include the variables used in the propensity score
+//we probably can't keep both spouse and r gender variables in
+
+tab r_death_year  if `cgafter', missing
+
+local yearvars ib2000.r_death_year 
+
+logit s_cesdbetter i.rhs3d `yearvars' $matchvars2 [iw=weight_cgafter1yr] if `cgafter'  , or 
+
+outreg using `logpath'\ivw_time_groups_spouse_analysis, ///
+	stats(e_b e_ci p) nosubstat  ///
+	title("Reduced spousal depressive symptoms and hospice enrollment" \ ///
+	"Propensity Score Matched, Frequency Weighted Sample" \ ///
+	"Limited to S p1 interview after 1 year of R's death" \ ///	
+	"Limited to Primary Caregiver spouses" \ ///
+	"Outcome = CESD Score Decreased (by any amount) n1 to p1" \ ///
+	"Hospice use = 3+ days, control=0 days") ///		
+	ctitles("" "OR" "95% CI" "P-value") ///
+	note("Base categories are year=2000 and spouse no comorbidities.") ///
+	varlabels starlevels(10 5 1)  summstat( N) addtable
+
+//Run logit with outcome=depressed n1, not depressed p1
+//need alternate match variables since perfect prediction with r_adl_stable_partial_n1n2 variable
+tab s_cesd_ge3better r_adl_stable_partial_n1n2 if `cgafter' & rhs3d==1
+tab s_cesd_ge3better r_adl_stable_partial_n1n2 if `cgafter' & rhs3d==0
+
+global matchvars3 cc_all_count_12m_2 cc_3_alzhdmta_n12mn0 cc_ami_isch_n12mn0 ///
+cc_8_chf_n12mn0 cc_9_diabetes_n12mn0 cc_6_chrnkidn_n12mn0 cc_7_copd_n12mn0 ///
+cc_16_strketia_n12mn0 cc_cncr_chronic_n12mn0 cc_4_atrialfb_n12mn0 ///
+cc_11_hipfrac_n12mn0 cc_13_depressn_n12mn0 cc_14_osteoprs_n12mn0 ///
+cc_15_ra_oa_n12mn0 ///
+ r_nw_lowest_n1 r_nw_midlow_n1 r_nw_midhigh_n1 ///
+r_nhres_n1 /*r_adl_stable_partial_n1n2*/ r_adl_stable_severe_n1n2 ///
+r_adl_change_i_m_n1n2 r_adl_change_m_s_n1n2 r_adl_change_i_s_n1n2 r_adl_change_n1n2_miss ///
+ r_medicaid_n1 r_champus_n1 r_medigap_n1 r_advdir_y /*r_advdir_miss*/ r_discuss_x r_srh_pf_n1 ///
+s_age s_female s_white_e  s_hseduc_n1_n3 ///
+s_imprelig_vimp_n1 s_srh_pf_p1 ///
+ s_hrs_comorb_mild_n1 s_hrs_comorb_mod_n1 s_psych_overall_hrs_n1 	
+
+logit s_cesd_ge3better i.rhs3d `yearvars' $matchvars3 [iw=weight_cgafter1yr] if `cgafter' , or 
+
+outreg using `logpath'\ivw_time_groups_spouse_analysis, ///
+	stats(e_b e_ci p) nosubstat  ///
+	title("Reduced spousal depressive symptoms and hospice enrollment" \ ///
+	"Propensity Score Matched, Frequency Weighted Sample" \ ///
+	"Limited to S p1 interview after 1 year of R's death" \ ///	
+	"Limited to Primary Caregiver spouses" \ ///
+	"Outcome = CESD Score 3+ n1 to less than 3 p1" \ ///	
+	"Hospice use = 3+ days, control=0 days") ///	
+	ctitles("" "OR" "95% CI" "P-value") ///
+	note("Base categories are year=2000 and spouse no comorbidities.") ///
+	varlabels starlevels(10 5 1)  summstat( N) addtable
+	
+	
+***********************************************************************
+***********************************************************************
+//Now caregivers with interview within 12m of r's death
+***********************************************************************
+***********************************************************************
+//first sort data randomly
+sort x
+
+local cgbefore (s_1yr_p1_core_dead==1 & (r_adl_sp_helper_x==1 | r_iadl_sp_helper_x==1))
+
+//generate pscore variable hs_pscore
+pscore rhs3d $matchvars if `cgbefore' , pscore(hs_pscore) blockid(hs_block) logit detail
+
+//graph without dropping any observations in the matching process
+//psgraph, treated(rhs3d) pscore(hs_pscore)
+
+//implement radius matching
+gen logitpscore_cgb=ln(hs_pscore/(1-hs_pscore)) if `cgbefore'
+sum logitpscore_cgb
+
+sca cal_ps_cgb=r(sd)*0.02
+sca list cal_ps_cgb
+
+psmatch2  rhs3d  if `cgbefore',outcome(s_cesdbetter) pscore(hs_pscore) radius caliper(.01692516) logit
+//note this creates varaible _weight
+
+//graph including off common support information
+psgraph, treated(rhs3d) pscore(hs_pscore)
+
+histogram hs_pscore if _support==1, by(rhs3d) 
+
+//look at balance of matched vs unmatched samples
+pstest $matchvars  if `cgbefore',treated(rhs3d) both hist
+
+pstest $matchvars  if `cgbefore',treated(rhs3d) both graph
+
+//look at quantile-quantile plots for continuous variables
+foreach v in cc_all_count_12m_2 s_age {
+gen `v'_treated_cgb = `v' if rhs3d==1 & _support==1 & `cgbefore'
+gen `v'_compar_cgb = `v' if rhs3d==0 & _support==1 & `cgbefore'
+qqplot `v'_treated_cgb `v'_compar_cgb
+}
+
+
+mat vr=J(40,6,.)
+//compare variance of covariates before and after matching
+local i=1
+foreach v in $matchvars  {
+sum `v' if rhs3d==1 & `cgbefore' //get variance treated before matching
+mat vr[`i',1]=r(Var)
+sum `v' if rhs3d==0 & `cgbefore' //get variance comparison before matching
+mat vr[`i',2]=r(Var)
+mat vr[`i',3]= vr[`i',1]/vr[`i',2] //ratio
+sum `v' if rhs3d==1 & _support==1 & `cgbefore' //get variance treated after matching
+mat vr[`i',4]=r(Var)
+sum `v' if rhs3d==0 & `cgbefore' [iweight=_weight]  //get variance comparison after matching
+mat vr[`i',5]=r(Var)
+mat vr[`i',6]= (vr[`i',4]) / (vr[`i',5]) //ratio
+local i=`i'+1
+}
+
+
+mat rownames vr="Count of comorbidities" "Alzheimers/Dementia" "AMI / ISCH" ///
+"CHF" "Diabetes" "Chronic kidney disease" "COPD" "Stroke/TIA" "Cancer" "Atrial fibrilation" ///
+"Hip fracture" "Depression" "Osteoporosis" "Arthritis"  ///
+"R Net worth - lowest quart" "NW - med-low quart" "NW - med-high quart" "Nursing home res" ///
+ "ADL stable partial" "ADL stable severe" "ADL Ind to mod" ///
+"ADL mod to severe" "ADL ind to severe" "ADL n2 to n1 missing" "Medicaid" "Champus" "Medigap" ///
+"Advance directive Y" "Adv dir missing" "R Discuss EOL plans" "R SRH Fair/Poor"  ///
+"S age" "S Female" "S White" "S HS Degree" "S Religion very important" "S SRH Fair/Poor" ///
+"S HRS Comorb Mild 1-3" "S HRS Comorb Mod 4-6" "S Psych Problem HRS n1" 
+
+mat list vr
+
+//7 from treated group are off common support, 0 control are not matched (weight==.)
+//_support ==1 if matched
+tab _support, missing
+tab _support if rhs3d==1, missing
+tab _support if rhs3d==0, missing
+tab _weight if rhs3d==1, missing
+sum _weight if rhs3d==0
+
+rename _weight weight_cgbef1yr
+
+***********************************************************************
+//now run logit model using weighting 
+***********************************************************************
+//need to include the variables used in the propensity score
+//we probably can't keep both spouse and r gender variables in
+
+tab r_death_year if `cgbefore', missing
+//no obs in 2000, base set to 2001
+
+local yearvars ib2001.r_death_year 
+
+logit s_cesdbetter i.rhs3d `yearvars' $matchvars [iw=weight_cgbef1yr] if `cgbefore', or 
+
+outreg using `logpath'\ivw_time_groups_spouse_analysis, ///
+	stats(e_b e_ci p) nosubstat  ///
+	title("Reduced spousal depressive symptoms and hospice enrollment" \ ///
+	"Propensity Score Matched, Frequency Weighted Sample" \ ///
+	"Limited to S p1 interview within 1 year of R's death" \ ///	
+	"Limited to Primary Caregiver spouses" \ ///
+	"Outcome = CESD Score Decreased (by any amount) n1 to p1" \ ///
+	"Hospice use = 3+ days, control=0 days") ///		
+	ctitles("" "OR" "95% CI" "P-value") ///
+	note("Base categories are year=2000 and spouse no comorbidities." \ ///
+	"P1 interviews 0-3m after r's death are included.") ///
+	varlabels starlevels(10 5 1)  summstat( N) addtable
+
+//Run logit with outcome=depressed n1, not depressed p1
+//omit missing adv directive and s moderate comorb variables
+global matchvars4 cc_all_count_12m_2 cc_3_alzhdmta_n12mn0 cc_ami_isch_n12mn0 ///
+cc_8_chf_n12mn0 cc_9_diabetes_n12mn0 cc_6_chrnkidn_n12mn0 cc_7_copd_n12mn0 ///
+cc_16_strketia_n12mn0 cc_cncr_chronic_n12mn0 cc_4_atrialfb_n12mn0 ///
+cc_11_hipfrac_n12mn0 cc_13_depressn_n12mn0 cc_14_osteoprs_n12mn0 ///
+cc_15_ra_oa_n12mn0 ///
+r_nw_lowest_n1 r_nw_midlow_n1 r_nw_midhigh_n1 ///
+r_nhres_n1 r_adl_stable_partial_n1n2 r_adl_stable_severe_n1n2 ///
+r_adl_change_i_m_n1n2 r_adl_change_m_s_n1n2 r_adl_change_i_s_n1n2 r_adl_change_n1n2_miss ///
+r_medicaid_n1 r_champus_n1 r_medigap_n1 r_advdir_y /*r_advdir_miss*/ r_discuss_x r_srh_pf_n1 ///
+s_age s_female s_white_e  s_hseduc_n1_n3 ///
+s_imprelig_vimp_n1 s_srh_pf_p1 ///
+s_hrs_comorb_mild_n1 /*s_hrs_comorb_mod_n1*/ s_psych_overall_hrs_n1 
+
+logit s_cesd_ge3better i.rhs3d `yearvars' $matchvars4 [iw=weight_cgbef1yr] if `cgbefore', or 
+
+outreg using `logpath'\ivw_time_groups_spouse_analysis, ///
+	stats(e_b e_ci p) nosubstat  ///
+	title("Reduced spousal depressive symptoms and hospice enrollment" \ ///
+	"Propensity Score Matched, Frequency Weighted Sample" \ ///
+	"Limited to S p1 interview within 1 year of R's death" \ ///	
+	"Limited to Primary Caregiver spouses" \ ///
+	"Outcome = CESD Score 3+ n1 to less than 3 p1" \ ///
+	"Hospice use = 3+ days, control=0 days") ///		
+	ctitles("" "OR" "95% CI" "P-value") ///
+	note("Base categories are year=2000 and spouse no comorbidities." \ ///
+	"P1 interviews 0-3m after r's death are included.") ///
+	varlabels starlevels(10 5 1)  summstat( N) addtable
+
+****************************************************************
+	
+****************************************************************
+//run each dr regression in a row to get a single table with all of the results
+****************************************************************
+
+****************************************************************
+
+//all spouses with p1 ivws 12+m, any cesd improvement
+qui logit s_cesdbetter rhs3d ib2000.r_death_year $matchvars2 [iw=weight_after1yr] if s_1yr_p1_core_dead==0, or 
+outreg , store(tableall) ///
+	stats(e_b e_ci p) nosubstat keep(rhs3d) ///
+	title("Reduced spousal depressive symptoms and hospice enrollment" \ ///
+	"Propensity Score Matched, Frequency Weighted Sample" \ ///	
+	"Outcome = S Depressive symptom improvement n1 to p1" \ ///
+	"Sample split by p1 ivw timing 0-12m / 12m+ after R's death") ///	
+	ctitles("" "OR" "95% CI" "P-value") ///
+	rtitles("Any improvement, 12+m ivw" ) ///
+	note("Base categories are year=2000 and spouse has" \ ///
+	"no comorbidities per HRS survey questions." \ ///
+	"P1 interviews 0-3m after r's death are included." \ ///
+	"Hospice use = 3+ days, control=0 days") ///	
+	varlabels starlevels(10 5 1)  summstat(N)
+
+//all spouses with p1 ivws 12+m, clinical cesd improvement
+qui logit s_cesd_ge3better rhs3d ib2000.r_death_year $matchvars2 [iw=weight_after1yr] if s_1yr_p1_core_dead==0 , or 
+outreg , append(tableall) ///
+	stats(e_b e_ci p) nosubstat keep(rhs3d) ///
+	rtitles("Clinical improvement, 12+m ivw") ///
+	varlabels starlevels(10 5 1)  summstat(N) 
+	
+//all spouses with p1 ivws 0-12m, any cesd improvement
+qui logit s_cesdbetter rhs3d ib2001.r_death_year $matchvars [iw=weight_bef1yr] if s_1yr_p1_core_dead==1, or 
+outreg , append(tableall) ///
+	stats(e_b e_ci p) nosubstat keep(rhs3d) ///
+	rtitles("Any improvement, 0-12m ivw" ) ///
+	varlabels starlevels(10 5 1)  summstat(N) 
+	
+//all spouses with p1 ivws 0-12m, clinical cesd improvement
+qui logit s_cesd_ge3better rhs3d ib2001.r_death_year $matchvars [iw=weight_bef1yr] if s_1yr_p1_core_dead==1 , or 
+outreg , append(tableall) ///
+	stats(e_b e_ci p) nosubstat keep(rhs3d) ///
+	rtitles("Clinical improvement, 0-12m ivw" ) ///
+	varlabels starlevels(10 5 1)  summstat(N) 
+
+//caregivers 12+m, any cesd improvement
+qui logit s_cesdbetter rhs3d ib2000.r_death_year $matchvars2 [iw=weight_cgafter1yr] if `cgafter'  , or 
+outreg , append(tableall) ///
+	stats(e_b e_ci p) nosubstat keep(rhs3d) ///
+	rtitles("Caregivers, Any improvement, 12+m" ) ///
+	varlabels starlevels(10 5 1)  summstat(N) 
+	
+//caregivers 12+m, clinical cesd improvement
+qui logit s_cesd_ge3better rhs3d ib2000.r_death_year $matchvars3 [iw=weight_cgafter1yr] if `cgafter' , or 
+outreg , append(tableall) ///
+	stats(e_b e_ci p) nosubstat keep(rhs3d) ///
+	rtitles("Caregivers, Clinical improvement, 12+m" ) ///
+	varlabels starlevels(10 5 1)  summstat(N) 
+
+//caregivers 0-12m, any cesd improvement
+qui logit s_cesdbetter rhs3d ib2001.r_death_year $matchvars [iw=weight_cgbef1yr] if `cgbefore', or 
+outreg , append(tableall) ///
+	stats(e_b e_ci p) nosubstat keep(rhs3d) ///
+	rtitles("Caregivers, Any improvement, 0-12m" ) ///
+	varlabels starlevels(10 5 1)  summstat(N) 
+
+//0-12m ivw, caregivers, clinical cesd improvement
+qui logit s_cesd_ge3better rhs3d ib2001.r_death_year $matchvars4 [iw=weight_cgbef1yr] if `cgbefore', or 
+outreg using `logpath'\ivw_time_groups_spouse_analysis, append(tableall) ///
+	stats(e_b e_ci p) nosubstat keep(rhs3d) ///
+	rtitles("Caregivers, clinical improvement, 0-12m" ) ///
+	varlabels starlevels(10 5 1)  summstat(N) addtable	
+
+****************************************************************
+
+	
+*********************************************
+log close

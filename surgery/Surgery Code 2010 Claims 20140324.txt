@@ -7813,19 +7813,27 @@ cd `datapath'
 use `datapath2'\surgery_final_n12m_v2.dta
 
 keep bid_hrs_19 type_adm procedure_date surgery_meet part_ab_6m hmo_d_6m ///
-	age_at_surg_lt65 ind_n1core days_surg_n1core
+	age_at_surg_lt65 ind_n1core days_surg_n1core core_year_n1 em_urgent_admit
 
 rename bid_hrs_19 bid_hrs
 rename part_ab_6m surg_part_ab_6m
 rename hmo_d_6m surg_hmo_d_6m
 rename ind_n1core surg_ind_n1core
+rename core_year_n1 surg_core_year_n1
 
 save `datapath2'\surgery_final_n12m_v_to_merge.dta, replace
+
+//idea, when do merge, match on n1 interview date, so those without n1 ivw
+//will not have surgery information pull in (it would change to a 1:1 merge) 
 
 ***************************************************
 use core_ids_1yr_criteria_5.dta
 
 merge m:1 bid_hrs using `datapath2'\surgery_final_n12m_v_to_merge.dta
+tab _merge
+tab surg_ind_n1core if _merge==2, missing
+//20 obs in surgery dataset didn't have n1 core so don't match up with
+//an interview from the sic dataset
 
 //look at which interviews have a surgery within the 3 years
 gen ivw_to_surg = c_ivw_date - procedure_date
@@ -7875,9 +7883,9 @@ sdec(0) replace
 *******************************************************************
 //drop if core_year==1998
 
-tab core_year, missing
+tab core_year _merge, missing
 
-//unique R's 2000-2010
+//unique R's 1998-2010
 preserve
 
 sort id core_year
@@ -7888,28 +7896,13 @@ by id: gen n2=_N
 keep if n1==n2
 tab n1, missing matcell(cnt)
 
-mat sample_r=J(7,1,.)
+mat sample_r=J(8,1,.)
 mat sample_r[1,1]=r(N)
 restore
-/*
-//unique R's age 65+
-drop if age_ge_65!=1
-preserve
-
-sort id core_year
-
-by id: gen n1=_n
-by id: gen n2=_N
-
-keep if n1==n2
-tab n1, missing matcell(cnt)
-
-mat sample_r[2,1]=r(N)
-restore
-*/
+tab xwalk_yes, missing
 
 //unique R's with xwalk id
-drop if xwalk_yes!=1
+drop if xwalk_yes==0 //keep if xwalk link = . or 1, keeps surgeries that didn't have n1 ivw
 preserve
 
 sort id core_year
@@ -7923,22 +7916,8 @@ tab n1, missing matcell(cnt)
 mat sample_r[2,1]=r(N)
 restore
 
-/*
-//unique R's with ffs mc 6 months
-drop if part_ab_6m!=1 | hmo_d_6m!=0
-preserve
+tab surgery_meet, missing
 
-sort id core_year
-
-by id: gen n1=_n
-by id: gen n2=_N
-
-keep if n1==n2
-tab n1, missing matcell(cnt)
-
-mat sample_r[4,1]=r(N)
-restore
-*/
 //with surgery 
 drop if surgery_meet!=1
 preserve
@@ -7954,24 +7933,6 @@ tab n1, missing matcell(cnt)
 mat sample_r[3,1]=r(N)
 restore
 
-//with urgent / emergent surgery
-destring type_adm, gen(type_adm_2)
-tab type_adm_2, missing
-
-drop if type_adm_2==1 | type_adm_2==9 //2,3=urgent or emergent admission
-preserve
-
-sort id core_year
-
-by id: gen n1=_n
-by id: gen n2=_N
-
-keep if n1==n2
-tab n1, missing matcell(cnt)
-
-mat sample_r[4,1]=r(N)
-restore
-
 //65+ at surgery
 drop if age_at_surg_lt65==1
 preserve
@@ -7984,7 +7945,7 @@ by id: gen n2=_N
 keep if n1==n2
 tab n1, missing matcell(cnt)
 
-mat sample_r[5,1]=r(N)
+mat sample_r[4,1]=r(N)
 restore
 
 //with ffs medicare 6 m prior to surgery
@@ -7999,9 +7960,39 @@ by id: gen n2=_N
 keep if n1==n2
 tab n1, missing matcell(cnt)
 
+mat sample_r[5,1]=r(N)
+restore
+
+tab surg_ind_n1core, missing
+
+//with core n1 interview
+drop if surg_ind_n1core!=1
+preserve
+
+keep if surg_core_year_n1==core_year //just keep n1 core interviews from ivw dataset
+
+sort id
+by id: gen n1=_n
+tab n1, missing matcell(cnt)
+
 mat sample_r[6,1]=r(N)
 restore
 
+//with urgent / emergent surgery
+destring type_adm, gen(type_adm_2)
+tab type_adm_2, missing
+
+drop if em_urgent_admit!=1 //urgent or emergent admission
+preserve
+
+keep if surg_core_year_n1==core_year //just keep n1 core interviews from ivw dataset
+
+sort id
+by id: gen n1=_n
+tab n1, missing matcell(cnt)
+
+mat sample_r[7,1]=r(N)
+restore
 
 //with surgery within 3 years of an interview
 drop if days_surg_n1core>3*365.25 
@@ -8009,13 +8000,11 @@ preserve
 
 sort id core_year
 
+keep if surg_core_year_n1==core_year //just keep n1 core interviews from ivw dataset
 by id: gen n1=_n
-by id: gen n2=_N
-
-keep if n1==n2
 tab n1, missing matcell(cnt)
 
-mat sample_r[7,1]=r(N)
+mat sample_r[8,1]=r(N)
 restore
 
 tab surg_ind_n1core, missing
@@ -8027,9 +8016,9 @@ tab age_at_surg_lt65, missing
 tab type_adm_2, missing
 
 mat rownames sample_r="Core Interviews 1998-2010"  ///
-"With xwalk id"  "Abdominal Surgery" "Urgent/Emergent Surgery" ///
-"Age 65+ at surgery" "With FFS MC 6m pre-surg" ///
-"Surgery wi 3 years of core ivw"
+"With xwalk id"  "Abdominal Surgery"  ///
+"Age 65+ at surgery" "With FFS MC 6m pre-surg" "With n1 core ivw" ///
+"Urgent/Emergent Surgery" "Surgery wi 3 years of core ivw"
 
 mat list sample_r
 

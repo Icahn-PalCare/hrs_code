@@ -3803,7 +3803,8 @@ frmttable using `logpath'\2010_sample_est , statmat(deced_core) ///
 tab r_exit_year_x if n1core_ind==1 & r_xwalk_yes==1 & ins_ind==1 & r_married_x==1 & sp1core_ind==1 & sn1core_ind==1
 **************************************************
 //Another version of the sample table, dropping where ivw < 90 days last
-mat samp2=J(11,1,.)
+//revised to split up causes of missing cesd score (proxy or just missing)
+mat samp2=J(12,1,.)
 
 forvalues i = 1/7{
 mat samp2[`i',1]=deced_core[`i',1]
@@ -3821,18 +3822,30 @@ sum r_exit_year_x if n1core_ind==1 & r_xwalk_yes==1 & ins_ind==1 &  r_married_x=
 sp1core_ind==1 & sn1core_ind==1 & no_cc_12m_excl_cataract==0 & sudden_cause_death==0, detail
 mat samp2[9,1]=r(N)
 
+gen byte proxy_n1_or_p1 = 0
+replace proxy_n1_or_p1 =1 if s_proxy_core_p1==1 | s_proxy_core_n1==1
+
+tab proxy_n1_or_p1 cesd_miss_n1_p1 if n1core_ind==1 & r_xwalk_yes==1 & ins_ind==1 &  r_married_x==1 & /// 
+sp1core_ind==1 & sn1core_ind==1 & no_cc_12m_excl_cataract==0 & sudden_cause_death==0, missing
+
+//missing cesd b/c proxy interview - so not asked
+sum r_exit_year_x if n1core_ind==1 & r_xwalk_yes==1 & ins_ind==1 &  r_married_x==1 & /// 
+sp1core_ind==1 & sn1core_ind==1 & no_cc_12m_excl_cataract==0 & sudden_cause_death==0 & ///
+proxy_n1_or_p1==0, detail
+mat samp2[10,1]=r(N)
+
 //using ccs v2
 //decedents with n1 core + xwalk + married + spouse p1 interview 
 sum r_exit_year_x if n1core_ind==1 & r_xwalk_yes==1 & ins_ind==1 &  r_married_x==1 & /// 
 sp1core_ind==1 & sn1core_ind==1 & no_cc_12m_excl_cataract==0 & sudden_cause_death==0 & ///
-cesd_miss_n1_p1==0, detail
-mat samp2[10,1]=r(N)
+proxy_n1_or_p1==0 & cesd_miss_n1_p1==0, detail
+mat samp2[11,1]=r(N)
 
 //decedents with n1 core + xwalk + married + spouse p1 interview + p1 > 90 days post death
 sum r_exit_year_x if n1core_ind==1 & r_xwalk_yes==1 & ins_ind==1 &  r_married_x==1 & /// 
 sp1core_ind==1 & sn1core_ind==1 & no_cc_12m_excl_cataract==0 ///
 & sudden_cause_death==0 & cesd_miss_n1_p1==0 & p1_wi_90d==0, detail
-mat samp2[11,1]=r(N)
+mat samp2[12,1]=r(N)
 
 frmttable using `logpath'\2010_sample_est , statmat(samp2) ///
 	title("v2 2010 sample size estimate - requiring an n1 core interview") ///
@@ -3840,7 +3853,8 @@ frmttable using `logpath'\2010_sample_est , statmat(samp2) ///
 	"With mc xwalk id" \ "With FFS mc last 6 months of life" \ "Married at time of death" \ ///
 	"Spouse p1 core interview" \"Spouse n1 core interview"  \ ///
 	"No comorb 12m before death" \ "Accidents, Suicide, Homicide = cause of death" \ ///
-	"Full CESD interview n1 and p1" \ "p1 ivw 90+ days from r's death") ///
+	"Not Proxy n1 or p1 s interview" \ "Full CESD interview n1 and p1" \ ///
+	"p1 ivw 90+ days from r's death") ///
 	sdec(0) addtable
 
 **************************************************
@@ -3900,8 +3914,9 @@ gen byte cesd_miss_n1p1 = 0
 replace cesd_miss_n1p1 = 1 if cesd_miss_n1==1 | cesd_miss_p1==1 
 tab cesd_miss_n1p1 , missing
 
-gen byte proxy_n1_or_p1 = 0
-replace proxy_n1_or_p1 =1 if s_proxy_core_p1==1 | s_proxy_core_n1==1
+//moved above
+//gen byte proxy_n1_or_p1 = 0
+//replace proxy_n1_or_p1 =1 if s_proxy_core_p1==1 | s_proxy_core_n1==1
 
 gen byte proxy_n1_and_p1 = 0
 replace proxy_n1_and_p1 =1 if s_proxy_core_p1==1 & s_proxy_core_n1==1
@@ -14142,7 +14157,7 @@ ctitle("","Unmatched Sample","","","Matched Sample","","" \ "", "Hospice users",
   sdec(2,2,4,2,2,4) replace
 
 ***********************************************************************
-//Table of overall sample characteristics
+//Table of overall sample characteristics, not matched
 ***********************************************************************
 local varlist1 r_female r_white_e r_hseduc_n1_n3 
 
@@ -14209,6 +14224,29 @@ title("Overall sample descriptive characteristics, n=`sample'") ///
 ctitle("","Mean or Percent" "SD" "Median" "Min" "Max") ///
 sdec(3,2,0,0,0) replace
 
+//for matched sample, do overall cesd scores improve??
+mat quicktab2=J(3,2,.)
+
+local i = 1
+foreach v in s_cesd_tot_n1 s_cesd_tot_p1{
+	sum `v' [iweight=weight_3]
+	mat quicktab2[`i',1]=r(mean)
+	mat quicktab2[`i',2]=r(sd)
+	local i = `i'+1
+}
+
+sum s_cesdbetter [iweight=weight_3]
+mat quicktab2[`i',1]=r(mean)
+local sample = r(N)
+
+mat rownames quicktab2="Raw CES-D pre-death" "Raw CES-D post-death" "CES-D Improved?"
+
+frmttable using `logpath'\spo_overall_sample_char, statmat(quicktab2) ///
+title("Matched sample CES-D, n=`sample'") ///
+ctitle("","Mean or Percent" "SD" ) ///
+sdec(3,2,0) addtable
+
+mat list quicktab2
 
 ***********************************************************************
 log close

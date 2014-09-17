@@ -2669,6 +2669,205 @@ run;
 
 
 
+H="r's intensive procedures last 6m of life"
+/*uses medpar claims to identify intensive procedures in the last
+6 months of life for R
+Intensive procedure definitions (6) from Evan's project, see 
+"Procedure_0312_2014.txt" for code. Based on Bernato reference.
+
+Indicator for intensive procedure is populated if R has a xwalk id
+(FFS medicare status does not matter)
+
+Adds to the chronic conditions dataset (spo_int.hrs_elix_cc_n12m)
+
+Final dataset is spo_int.hrs_elix_cc_n12m_intens*/
+
+/*first, get list of mc id's and death dates for each r
+5901 decedents have xwalk id*/
+data r_dod_intense;
+set spo_int.r_sp_core_n1_p1_n2_ins;
+if r_xwalk_yes=1;
+death_date=r_death_date_e;
+keep r_BID_hrs death_date;
+run;
+
+/*get ip claims with admission within 6m of R's death for obs with ffs medicare*/
+%macro mp(month_n=,days_start=,days_bef_death=,source=,equ=);
+%let source0=mp;
+
+proc sql;
+create table &source._meet as select a.*,b.death_date
+from medi.&source0._2000_2010(where=(trim(left(SSLSSNF))&equ.="N")) a inner join
+r_dod_intense b
+on trim(left(a.bid_hrs_19))=trim(left(b.r_BID_hrs))
+and &days_start<=b.death_date-a.admit_date<=&days_bef_death;
+quit;
+
+%mend;
+
+%mp(month_n=6,days_start=0,days_bef_death=183,source=ip,equ=~ );
+
+/*restructures dataset so seperate observation for each procedure*/
+data proc_long(keep=bid_hrs_19 pro procedure_date death_date);
+set ip_meet;
+array list PRCDR_CD01-PRCDR_CD25;
+array date PRCDR_DT01-PRCDR_DT25;
+do over list;
+if list~="" then do;
+pro=list+0; *turns procedure code into number, missing if has letters;
+procedure_date=datejul(date);
+output;
+end;
+end;
+format procedure_date date10. death_date date10.;
+run;
+
+/*identify intensive procedures and the dates for those procedures*/
+data proc_long_ba;
+set proc_long;
+array list 
+int_intubation
+int_trach
+int_gastro_tude
+int_hemodia
+int_enteral_nut
+int_cpr;
+do over list;
+list=0;
+end;
+
+if length(trim(left(pro)))>=3 then do;
+
+	if  substr(trim(left(pro)),1,3) in ("967")  then int_intubation =1;
+	if  substr(trim(left(pro)),1,3) in ("311") then  int_trach=1;
+	if  substr(trim(left(pro)),1,3) in ("432") then  int_gastro_tude=1;
+
+	if substr(trim(left(pro)),1,3) in ("966") then  int_enteral_nut=1;
+
+	if length(trim(left(pro)))>3 then do;
+		if substr(trim(left(pro)),1,4) in ("9604","9605") or 
+		  substr(trim(left(pro)),1,3) in ("967") then int_intubation =1;
+		if substr(trim(left(pro)),1,4) in ("3121","3129") or 
+		  substr(trim(left(pro)),1,3) in ("311") then int_trach=1;
+		if substr(trim(left(pro)),1,4) in ("4311","4319","4432")  or 
+		  substr(trim(left(pro)),1,3) in ("432") then int_gastro_tude=1;
+		if substr(trim(left(pro)),1,4) in ("3995") then int_hemodia=1;
+		if substr(trim(left(pro)),1,4) in ("9915") or 
+		  substr(trim(left(pro)),1,3) in ("966") then int_enteral_nut=1;
+		if substr(trim(left(pro)),1,4) in ("9960","9963") then int_cpr=1;
+	end;
+
+end;
+
+if int_intubation|
+int_trach|
+int_gastro_tude|
+int_hemodia|
+int_enteral_nut|
+int_cpr then date_proc=procedure_date;
+run;
+
+/*identify which procedure was first in 6 months before death
+Just keeps that first procedure date and count of each type of procedure
+(Data format is now one row per beneficiary) */
+proc sql;
+create table proc_sum_new as
+select distinct bid_hrs_19,
+min(date_proc) as first_proc_date_6m format=date10.
+label="first intensive procedure date in the last 6m,Barnato",
+sum(int_intubation) as int_intubation_6m,
+sum(int_trach) as int_trach_6m,
+sum(int_gastro_tude) as int_gastro_tude_6m,
+sum(int_hemodia) as int_hemodia_6m,
+sum(int_enteral_nut) as int_enteral_nut_6m,
+sum(int_cpr) as int_cpr_6m
+from proc_long_ba group by bid_hrs_19;
+quit;
+
+/*convert counts to indicator variables, add variable labels*/
+data proc_intensive_new;
+set proc_sum_new ;
+array list int_intubation_6m
+int_trach_6m
+int_gastro_tude_6m
+int_hemodia_6m
+int_enteral_nut_6m
+int_cpr_6m
+;
+do over list;
+if list>0 then list=1;
+if list=. then list=0;
+end;
+label int_intubation_6m="intubation/mechanic ventilation,Barnato";
+label int_trach_6m="trachostomy,Barnato";
+label int_gastro_tude_6m="gastrostomy tube,Barnato";
+label int_hemodia_6m="hemodialysis,Barnato";
+label int_enteral_nut_6m="enteral/parenteral nutrition,Barnato";
+label int_cpr_6m="CPR,Barnato";
+run;
+
+/*n=xxx have at least 1 intensive procedure in the 6m preceding death*/
+proc sql;
+select count(*),count(first_proc_date_6m)
+from proc_intensive_new where (int_intubation_6m
++int_trach_6m
++int_gastro_tude_6m
++int_hemodia_6m
++int_enteral_nut_6m
++int_cpr_6m)>0;
+quit;
+
+proc freq data=proc_intensive_new;
+table int:;
+run;
+
+/*merge with bid / death date list for those with xwalk id's*/
+proc sql;
+create table proc_intensive_6m(drop=bid_hrs_19) as select a.r_bid_hrs,a.death_date,b.*
+from r_dod_intense a 
+left join 
+proc_intensive_new b
+on trim(left(a.r_bid_hrs))=trim(left(b.bid_hrs_19));
+quit;
+
+/*if had xwalk but no procedure, set int_ indicators=0*/
+data spo_int.proc_intensive_6m_2;
+set proc_intensive_6m;
+array list int_intubation_6m
+int_trach_6m
+int_gastro_tude_6m
+int_hemodia_6m
+int_enteral_nut_6m
+int_cpr_6m
+;
+do over list;
+if list=. then list=0;
+end;
+days_1st_proc_death=death_date-first_proc_date_6m;
+if .<days_1st_proc_death<0 then days_1st_proc_death=0;
+label days_1st_proc_death="the days from the first procedure date in the last 6m to death";
+run;
+
+/****************************************************************/
+/*merge into full dataset, keep missing if no xwalk id*/
+/****************************************************************/
+proc sql;
+create table spo_int.hrs_elix_cc_n12m_intens(drop=bid_hrs2 death_date) as select a.*,
+b.*
+from 
+spo_int.hrs_elix_cc_n12m a 
+left join
+spo_int.proc_intensive_6m_2(rename=(r_bid_hrs=bid_hrs2)) b
+on a.r_bid_hrs = b.bid_hrs2;
+quit;
+
+proc freq data=spo_int.hrs_elix_cc_n12m_intens;
+table int_:;
+run;
+
+
+
+
 H="Merge in regional data"
 /*Use Ling's processed, merged regional data file
 Skip next heading section, this section should be revised
@@ -2680,7 +2879,7 @@ starting datasets:
 spo_int.exit_rest_r_s_core_n1_p1_ins
 E:\data\Dartmouth_misc\zip_hrr_hci_bed_eol_3 - saved in E:/data/spouse/ref_data
 
-starting hrs dataset spo_int.hrs_elix_cc_n12m
+starting hrs dataset spo_int.hrs_elix_cc_n12m_intens
 
 Final dataset: spo_int.hrs_elix_cc_n12m_reg
 

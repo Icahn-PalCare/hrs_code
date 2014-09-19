@@ -1,0 +1,290 @@
+= V4 Outline MultiLine NoSorting TabWidth=30
+
+H="R intensive procedures, effect on surving spouse depression"
+Starts with dataset created for the spousal depression outcomes project
+created in the file spouse_2010.txt
+This ds is created in the "Create additional variables" tab of spouse_2010.txt
+
+
+H="Define sample"
+/*This switches to Stata using data dataset exported in spouse_2010.txt code*/
+
+/*Full decedent sample (2002-2010 exit interviews) is restricted to:
+1. Decedents with n1 core interview
+2. With medicare xwalk id
+3. With FFS medicare last 6 months of life
+4. Married at time of death
+5. With spouse p1 interview
+
+Additional variables to consider for sensitivity analysis:
+1. P1 interview within 90 days of R's death
+2. R died suddenly as defined by either no comorbidities 12 m before
+death or cause of death = accident, suicide, homicide
+(no comorbidities = data warehouse cc's, excluding cataract and glaucoma)
+
+Also creates table looking at rates of intensive procedures in the sample
+
+*/
+
+capture log close
+
+clear all
+set mem 500m
+set more off
+
+//Amy's PC
+local logpath E:\data\spouse_intensive\logs
+local origdata E:\data\spouse\final_data
+local datapath E:\data\spouse_intensive\data
+
+log using "`logpath'\1-HRS_Spouse_intensive_sample.txt", text replace
+
+cd `datapath'
+
+use `origdata'\spouse_data_full.dta
+************************************************************
+
+//set matrix for sample size determination table
+mat sample=J(12,1,.)
+
+//all decedents from 2002-2010 exit interviews
+sum r_exit_year_x, detail
+mat sample[1,1]=r(N)
+
+//check of married decedents
+tab r_married_x, missing
+
+gen n1core_ind=.
+replace n1core_ind=0 if  r_core_year_n1==.
+replace n1core_ind=1 if  r_core_year_n1!=.
+tab n1core_ind, missing
+
+tab n1core_ind r_exit_year_x , missing
+tab r_core_year_n1 r_exit_year_x , missing
+
+//decedents with n1 core interview
+sum r_exit_year_x if n1core_ind==1, detail
+mat sample[2,1]=r(N)
+
+//decedents with n1 core + xwalk
+sum r_exit_year_x if n1core_ind==1 & r_xwalk_yes==1, detail
+mat sample[3,1]=r(N)
+
+//with ffs mc last 6 months of life
+//have parst a and b coverage and no hmo
+gen byte ins_ind=.
+replace ins_ind=1 if r_part_ab_6m==1 & r_hmo_d_6m==0
+replace ins_ind=0 if r_part_ab_6m!=1 | r_hmo_d_6m!=0
+tab ins_ind, missing
+
+//decedents with n1 core + xwalk + ffs mc last 6 months of life
+sum r_exit_year_x if n1core_ind==1 & r_xwalk_yes==1 & ins_ind==1, detail
+mat sample[4,1]=r(N)
+
+//decedents with n1 core + xwalk + married
+sum r_exit_year_x if n1core_ind==1 & r_xwalk_yes==1 & ins_ind==1 &  r_married_x==1, detail
+mat sample[5,1]=r(N)
+
+//have spouse p1 interview
+gen byte sp1core_ind=.
+replace sp1core_ind=0 if s_core_year_p1==.
+replace sp1core_ind=1 if s_core_year_p1!=.
+tab sp1core_ind, missing
+tab sp1core_ind r_exit_year_x , missing
+tab s_core_year_p1 r_exit_year_x , missing
+
+//decedents with n1 core + xwalk + married + spouse p1 interview
+sum r_exit_year_x if n1core_ind==1 & r_xwalk_yes==1 & ins_ind==1 &  r_married_x==1 & sp1core_ind==1, detail
+mat sample[6,1]=r(N)
+
+//have spouse n1 interview
+gen byte sn1core_ind=.
+replace sn1core_ind=0 if s_core_year_n1==.
+replace sn1core_ind=1 if s_core_year_n1!=.
+tab sn1core_ind, missing
+tab sn1core_ind r_exit_year_x , missing
+tab s_core_year_n1 r_exit_year_x , missing
+
+//decedents with n1 core + xwalk + married + spouse p1 and n1 interview
+sum r_exit_year_x if n1core_ind==1 & r_xwalk_yes==1 & ins_ind==1 &  r_married_x==1 & sp1core_ind==1 & sn1core_ind==1, detail
+mat sample[7,1]=r(N)
+
+//cc's excluding cataract and glaucoma
+gen cc_all_count_12m_2 = cc_1_ami_n12mn0 + cc_2_alzh_n12mn0 + cc_3_alzhdmta_n12mn0 + ///
+cc_4_atrialfb_n12mn0 + /*cc_5_cataract_n12mn0 +*/ cc_6_chrnkidn_n12mn0 + ///
+cc_7_copd_n12mn0 + cc_8_chf_n12mn0 + cc_9_diabetes_n12mn0 + /*cc_10_glaucoma_n12mn0 +*/ ///
+cc_11_hipfrac_n12mn0 + cc_12_ischmcht_n12mn0 + cc_13_depressn_n12mn0 + ///
+cc_14_osteoprs_n12mn0 + cc_15_ra_oa_n12mn0 + cc_16_strketia_n12mn0 + ///
+cc_17_cncrbrst_n12mn0 + cc_18_cncrclrc_n12mn0 + cc_19_cncrprst_n12mn0 + ///
+cc_20_cncrlung_n12mn0 + cc_21_cncrendm_n12mn0
+la var cc_all_count_12m_2 "Count of cc's, excludes cataract and glaucoma"
+
+tab cc_all_count_12m_2, missing
+
+gen byte no_cc_12m_excl_cataract = .
+replace no_cc_12m_excl_cataract =1 if cc_all_count_12m_2==0
+replace no_cc_12m_excl_cataract =0 if (cc_all_count_12m_2>0 & cc_all_count_12m_2!=.)
+la var no_cc_12m_excl_cataract "Ind. for no Chronic conditions 12m before death"
+tab no_cc_12m_excl_cataract , missing
+
+//using chronic conditions, v2 excluding cataract and glaucoma
+//decedents with n1 core + xwalk + married + spouse p1 interview
+sum r_exit_year_x if n1core_ind==1 & r_xwalk_yes==1 & ins_ind==1 &  r_married_x==1 & /// 
+sp1core_ind==1 & sn1core_ind==1 & no_cc_12m_excl_cataract==0, detail
+mat sample[8,1]=r(N)
+
+//cause of death = Accidents, Suicide, Homicide (var = 12)
+tab r_cause_death_12_n_e, missing
+replace r_cause_death_12_n_e=. if r_cause_death_12_n_e==14
+gen byte sudden_cause_death = .
+replace sudden_cause_death =1 if r_cause_death_12_n_e==12
+replace sudden_cause_death =0 if (r_cause_death_12_n_e!=12 & r_cause_death_12_n_e!=.)
+la var sudden_cause_death "Cause of death = accidents, suicide, homicide"
+tab sudden_cause_death, missing
+
+//using ccs v2
+//decedents with n1 core + xwalk + married + spouse p1 interview + p1 > 90 days post death
+sum r_exit_year_x if n1core_ind==1 & r_xwalk_yes==1 & ins_ind==1 &  r_married_x==1 & /// 
+sp1core_ind==1 & sn1core_ind==1 & no_cc_12m_excl_cataract==0 & sudden_cause_death==0, detail
+mat sample[9,1]=r(N)
+
+//full n1 p1 cesd interview?
+gen byte cesd_miss_n1 = 0
+replace cesd_miss_n1 =1 if s_cesd_tot_n1==.
+gen byte cesd_miss_p1 = 0
+replace cesd_miss_p1 =1 if s_cesd_tot_p1==.
+tab cesd_miss_n1 cesd_miss_p1 , missing
+gen byte cesd_miss_n1_p1 = 0
+replace cesd_miss_n1_p1 =1 if cesd_miss_n1==1 | cesd_miss_p1 ==1
+la var cesd_miss_n1_p1 "CESD missing either n1 or p1"
+tab cesd_miss_n1_p1 , missing
+
+//missing cesd b/c proxy interview - so not asked
+gen byte proxy_n1_or_p1 = 0
+replace proxy_n1_or_p1 =1 if s_proxy_core_p1==1 | s_proxy_core_n1==1
+la var proxy_n1_or_p1 "Ind. that s p1 or n1 ivw is via proxy"
+
+tab proxy_n1_or_p1 cesd_miss_n1_p1 if n1core_ind==1 & r_xwalk_yes==1 & ins_ind==1 &  r_married_x==1 & /// 
+sp1core_ind==1 & sn1core_ind==1 & no_cc_12m_excl_cataract==0 & sudden_cause_death==0, missing
+
+sum r_exit_year_x if n1core_ind==1 & r_xwalk_yes==1 & ins_ind==1 &  r_married_x==1 & /// 
+sp1core_ind==1 & sn1core_ind==1 & no_cc_12m_excl_cataract==0 & sudden_cause_death==0 & ///
+proxy_n1_or_p1==0, detail
+mat sample[10,1]=r(N)
+
+//missing cesd for unknown reason (has interviews and not proxy interviews)
+//decedents with n1 core + xwalk + married + spouse p1 interview 
+sum r_exit_year_x if n1core_ind==1 & r_xwalk_yes==1 & ins_ind==1 &  r_married_x==1 & /// 
+sp1core_ind==1 & sn1core_ind==1 & no_cc_12m_excl_cataract==0 & sudden_cause_death==0 & ///
+proxy_n1_or_p1==0 & cesd_miss_n1_p1==0, detail
+mat sample[11,1]=r(N)
+
+//p1 interview within 30, 90 days of r's death
+gen days_p1_core_dead =  s_c_ivw_date_p1 -  r_death_date_e
+gen p1_wi_90d = .
+replace p1_wi_90d=1 if days_p1_core_dead<=90
+replace p1_wi_90d=0 if (days_p1_core_dead>90 & days_p1_core_dead!=.)
+la var p1_wi_90d "p1 interview w/i 90 days r death"
+tab p1_wi_90d, missing
+
+gen p1_wi_30d = .
+replace p1_wi_30d=1 if days_p1_core_dead<=30
+replace p1_wi_30d=0 if (days_p1_core_dead>30 & days_p1_core_dead!=.)
+la var p1_wi_30d "p1 interview w/i 30 days r death"
+tab p1_wi_30d, missing
+
+//decedents with n1 core + xwalk + married + spouse p1 interview + p1 > 90 days post death
+sum r_exit_year_x if n1core_ind==1 & r_xwalk_yes==1 & ins_ind==1 &  r_married_x==1 & /// 
+sp1core_ind==1 & sn1core_ind==1 & no_cc_12m_excl_cataract==0 ///
+& sudden_cause_death==0 & cesd_miss_n1_p1==0 & p1_wi_90d==0, detail
+mat sample[12,1]=r(N)
+
+mat list sample
+	
+frmttable using `logpath'\1-spouse_intens_pro_sample , statmat(sample) ///
+	title("2010 sample size estimate - requiring an n1 core interview") ///
+	ctitle("","n") ///
+	rtitle("All decedents from 2002-2010 exit interviews" \ "With n1 core interview" \ ///
+	"With mc xwalk id" \ "With FFS mc last 6 months of life" \ "Married at time of death" \ ///
+	"Spouse p1 core interview" \"Spouse n1 core interview" \ "No comorb 12m before death" \ ///
+	"Accidents, Suicide, Homicide = cause of death" \ ///
+	"Not Proxy n1 or p1 s interview" \ "Full CESD interview n1 and p1" \ ///
+	"p1 ivw 90+ days from r's death") ///
+	note("No comorb 12m before death uses data warehouse chronic conditions" \ ///
+	"excluding cataract and glaucoma.") ///
+	sdec(0) replace
+
+**************************************************
+/*drop observations not in the sample*/
+drop if n1core_ind==0
+drop if r_xwalk_yes==0
+drop if ins_ind==0 
+drop if r_married_x==0 
+drop if sp1core_ind==0
+drop if sn1core_ind==0
+
+drop r_part_ab_6m_old r_hmo_d_6m_old
+
+tab r_exit_year_x r_core_year_n1
+
+la def r_cause_death_12_n_e 1 "Infectious disease" 2 "HIV/AIDS" ///
+3 "Cardiovascular disease" 4 "Chronic lower respiratory disease" ///
+5 "Other Respiratory disease" 6 "Diabetes" 7 "Alzheimers Disease" ///
+9 "Neoplasms" 10 "Kidney Disease (not infectious)" ///
+11 "Liver, Gallbladder, Stomach and/or Intestinal disease" ///
+12 "Accidents, Suicide, Homicide" 13 "Other"
+
+la val r_cause_death_12_n_e r_cause_death_12_n_e
+tab r_cause_death_12_n_e, missing
+
+save spouse_intens_data_sample.dta, replace
+**************************************************
+//tables looking at intensive procedure use in the sample
+//just do for those with spouse with full cesd information
+
+//first, look at intensive procedures in the sample before adding in sudden death excl
+local intvars int_intubation_6m int_trach_6m int_gastro_tude_6m ///
+int_hemodia_6m int_enteral_nut_6m int_cpr_6m int_any_6m
+
+local excl no_cc_12m_excl_cataract==0 & sudden_cause_death==0
+
+mat int_n=(1,2,.)
+sum r_exit_year_x if cesd_miss_n1_p1==0
+mat int_n[1,1]=r(N)
+sum r_exit_year_x if cesd_miss_n1_p1==0 & `excl'
+mat int_n[1,2]=r(N)
+
+mat rownames int_n="N"
+frmttable, statmat(int_n) sdec(0) store(int1)
+
+mat int_2=J(7,2,.)
+local r = 1
+foreach v in `intvars'{
+	tab `v' if cesd_miss_n1_p1==0, missing	
+	sum `v' if cesd_miss_n1_p1==0, detail
+	mat int_2[`r',1]=r(mean)*100 //percent
+	sum `v' if cesd_miss_n1_p1==0 & `excl', detail
+	mat int_2[`r',2]=r(mean)*100 //percent
+	local r = `r'+1
+}
+
+mat list int_2
+
+mat rownames int_2=`intvars'
+
+frmttable, varlabels statmat(int_2) sdec(2) store(int2)
+
+outreg using `logpath'\1-spouse_intens_pro_sample , ///
+	replay(int1) append(int2) ///
+	title("Intensive procedures") ///
+	ctitle("","Full sample %" "Not sudden death") ///
+	note("Decedents 2002-2010 exit interviews, with n1 core interview and ffs medicare" \ ///
+	"last 6m of life, married at time of death with spouse with pre and post death core interview" \ ///
+	"and pre and post death CES-D score complete." \ ///
+	"Not sudden death excludes observations where cause of death = accidents, etc, or" \ ///
+	"no comorb 12m before death excluding cataract and glaucoma.") ///
+	addtable
+
+**************************************************
+log close
+

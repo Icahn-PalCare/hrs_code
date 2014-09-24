@@ -9149,6 +9149,7 @@ log close
 H="2008 survey, crit a,b,c vs none"
 /*Looking at criteria a,b,c vs none for 2008 interview year*/
 
+capture log close
 clear all
 set mem 500m
 set more off
@@ -9173,7 +9174,222 @@ gen no_crit = 0
 replace no_crit=1 if criteria_a==0 & criteria_b==0 & criteria_c==0 
 la var no_crit "Criteria not met, 1=yes"
 tab no_crit, missing
+
+//define another criteria - medical illness and ADL impairment (no utilization requirement)
+tab smi_and_adl, missing
+tab smi_and_adl criteria_a, missing
 ***************************************************************
+//Table 1, do we identify high spenders?
+sum core_year
+local samp=r(N)
+
+mat tab1_1=J(2,5,.)
+local r = 1
+local c = 1
+foreach crit of varlist criteria_a criteria_b smi_and_adl criteria_c no_crit {
+	sum `crit', detail
+	mat tab1_1[`r',`c']=r(mean)*r(N) //first row = n
+	mat tab1_1[`r'+1,`c']=r(mean)*100 //first row = n
+	local c = `c'+1
+}
+
+mat rownames tab1_1="N" "% of 2008 R's"
+frmttable, statmat(tab1_1) sdec(0\2) store(tab1_a)
+
+//identify top 5 and 10% of spenders in 2008, 1 year post
+sum tot_paid_by_mc_1yr_wi, detail
+local top5pct=r(p95)
+local top10pct=r(p90)
+
+foreach i in 5 10{
+gen ind_top`i'pct=.
+replace ind_top`i'pct=1 if tot_paid_by_mc_1yr_wi>=`top`i'pct' & tot_paid_by_mc_1yr_wi!=.
+replace ind_top`i'pct=0 if tot_paid_by_mc_1yr_wi<`top`i'pct' & tot_paid_by_mc_1yr_wi!=.
+tab ind_top`i'pct, missing
+sum tot_paid_by_mc_1yr_wi if ind_top`i'pct==1
+sum tot_paid_by_mc_1yr_wi if ind_top`i'pct==0
+la var ind_top`i'pct "Top `i'% Medicare spending"
+}
+
+foreach i in 5 10{
+	mat tab1_`i'=J(6,5,.)
+	local c = 1
+		foreach crit of varlist criteria_a criteria_b smi_and_adl criteria_c no_crit {
+		//of top 5% how many are in criteria category?
+			sum `crit' if ind_top`i'pct==1 
+			mat tab1_`i'[1,`c']=r(mean)*100 //percent
+			sum `crit' if ind_top`i'pct==1 & core_to_dod_1yr==1
+			mat tab1_`i'[2,`c']=r(mean)*100 //percent
+			sum `crit' if ind_top`i'pct==1 & core_to_dod_1yr==0
+			mat tab1_`i'[3,`c']=r(mean)*100 //percent
+			
+			//now of those that meet criteria, how many are in top 5%?
+			sum ind_top`i'pct if `crit'==1 
+			mat tab1_`i'[4,`c']=r(mean)*100 //percent
+			sum ind_top`i'pct if `crit'==1 & core_to_dod_1yr==1
+			mat tab1_`i'[5,`c']=r(mean)*100 //percent
+			sum ind_top`i'pct if `crit'==1 & core_to_dod_1yr==0
+			mat tab1_`i'[6,`c']=r(mean)*100 //percent
+			
+			local c = `c'+1
+		}
+	mat rownames tab1_`i'="% top `i'% MC spending" "died" ///
+		"did not die" ///
+		"% meet crit in top `i'% spend" "died" "did not die"
+	
+	frmttable, statmat(tab1_`i') sdec(2) store(tab1_`i')
+	}
+	
+outreg, replay(tab1_a) append(tab1_5) store(tab1_b)
+
+outreg using `logpath'\sic_Tables_11_2008_wave_crit_a_b_c, ///
+	replay(tab1_b) append(tab1_10) ///
+	ctitles("","Criteria A","Criteria B","Crit B-2","Criteria C","None") ///
+	title("Identifying top spenders, 2008 Interview Wave n=`samp'") ///
+	note("Criteria A = Any serious medical illness and/or ADL impairment" \ ///
+	"Criteria B = Criteria A and Urgent / Emergent hospitalization and/or NH resident" \ ///
+	"Criteria B-2 = Medical illness and ADL Impairment, no util requirement" \ ///
+	"Criteria C = Medical illness and ADL Impairment and hospitalization and/or NH resident" \ ///
+	"Top spenders defined as top 5 or 10% of overall Medicare spending in the 1 year following" \ ///
+	"the 2008 interview within this sample.") ///
+	replace
+
+//quick look at distribution of total medicare spending	
+sum tot_paid_by_mc_1yr_wi, detail
+return list
+
+mat mc=J(8,1,.)
+
+local r=1
+foreach s in N mean sd p50 p90 p95 min max{
+mat mc[`r',1]=r(`s')
+local r = `r'+1
+}
+mat list mc
+mat rownames mc="N" "mean" "SD" "Median" "90%" "95%" "min" "max"
+frmttable using `logpath'\sic_Tables_11_2008_wave_crit_a_b_c, statmat(mc) ///
+	title("Distribution total Medicare spending, 2008 Interview Wave") ///
+	note("Wage index and inflation adjusted Medicare spending" \ ///
+	"Total across all claim types, 1 year after 2008 interview") ///
+	addtable
+	
+//who are the top 5% of spenders??
+local cvars ip_paid_by_mc_1yr_wi snf_paid_by_mc_1yr_wi hh_paid_by_mc_1yr_wi hs_paid_by_mc_1yr_wi ///
+pb_paid_by_mc_1yr_wi op_paid_by_mc_1yr_wi dm_paid_by_mc_1yr_wi tot_paid_by_mc_1yr_wi ///
+age_at_core networth_adj2010
+
+local ivars female black white hisp ///
+srh_pf srh_g srh_ve married smi_dem_ind smi_cancer_ind smi_esrd_ind ///
+smi_chf_ind smi_copd_ind ///
+smi_diab_compl_ind smi_liver_ind smi_als_ind smi_hip_ind ///
+ser_med_illness adl_impair_core smi_and_adl smi_nh_ind ind_em_ur_adm_12m ///
+
+
+mat tab1 = J(32,4,.)
+mat tab1n = J(1,4,.)
+
+	//assign variable names for use in the tables
+la var ip_paid_by_mc_1yr_wi "Inpatient"
+la var snf_paid_by_mc_1yr_wi "SNF"
+la var hh_paid_by_mc_1yr_wi "Home health" 
+la var hs_paid_by_mc_1yr_wi "Hospice" 
+la var pb_paid_by_mc_1yr_wi "Carrier"
+la var op_paid_by_mc_1yr_wi "Outpatient" 
+la var dm_paid_by_mc_1yr_wi "DME"
+la var tot_paid_by_mc_1yr_wi "Total"	
+	
+label var age_at_core "Age, mean (SD)"
+label var networth_adj2010 "Net worth, mean (SD)"
+label var female "Female, n (%)"
+label var black "Black, n (%)"
+label var white "non-Hispanic White, n (%)"
+label var hisp "Hispanic, n (%)"
+
+label var srh_pf "Poor/Fair, n (%)"
+label var srh_g "Good, n (%)"
+label var srh_ve "Very good/Excellent, n (%)"
+
+label var married "Married, n (%)"
+label var smi_dem_ind "Dementia, n (%)"
+label var smi_cancer_ind "Cancer, n (%)"
+label var smi_esrd_ind "ESRD, n (%)"
+label var smi_chf_ind "CHF, n (%)"
+label var smi_copd_ind "COPD, n (%)"
+
+label var smi_diab_compl_ind "Diabetes, n (%)"
+label var smi_liver_ind "Liver disease, n (%)"
+label var smi_als_ind "ALS, n (%)"
+label var smi_hip_ind "Hip Fracture, n (%)"
+label var ser_med_illness "Any serious medical illness, n (%)"
+label var adl_impair_core "ADL Impairment, n (%)"
+
+label var smi_and_adl "Medical illness & ADL Impair., n (%)"
+label var smi_nh_ind "Nursing home resident, n (%)"
+label var ind_em_ur_adm_12m "Hospital admission, n (%)"
+	
+local c = 1	
+foreach i in 1 0{	
+	local r = 1
+	foreach v in `cvars'{
+		sum `v' if ind_top5pct==`i', detail
+		mat tab1[`r',`c']=r(mean)
+		mat tab1[`r',`c'+1]=r(sd)
+		local r = `r'+1
+	}
+
+	foreach v in `ivars'{
+	sum `v' if ind_top5pct==`i'
+	mat tab1[`r',`c']=r(mean)*r(N) //n
+	mat tab1[`r',`c'+1]=r(mean)*100 //percent
+	local r = `r'+1
+	}
+
+	//n for last row
+	sum core_year if ind_top5pct==`i'
+	mat tab1n[1,`c']=r(N)
+	
+	local c = `c'+2
+}
+
+mat tab1n_2 = J(1,3,.)
+
+mat tab1n_2[1,1]=tab1n[1,1]
+mat tab1n_2[1,2]=tab1n[1,3]
+mat tab1n_2[1,3]=tab1n[1,5]
+
+mat rownames tab1=`cvars' `ivars'
+
+mat list tab1
+mat list tab1n_2
+
+//save the table in frmttable	
+mat dmat=(0,1,0,1)
+mat ann=J(27,3,1)
+
+frmttable, statmat(tab1) varlabels ///
+	sdec(1\0\1) doubles(dmat) ///
+	dbldiv(" (") annotate(ann) asymbol(")") ///
+	store(tab1_1) 	
+
+frmttable, statmat(tab1n_2) ///
+	sdec(0)	store(tab1_2) ///
+	rtitles("N")
+
+//outreg, replay(tab1_a) merge(tab1_b) store(tab1_ab)
+//outreg, replay(tab1_ab) merge(tab1_c) store(tab1_abc)
+
+outreg using `logpath'\sic_Tables_11_2008_wave_crit_a_b_c, ///
+	replay(tab1_1) append(tab1_2) ///
+	ctitles("","Top 5%","Bottom 95%") ///
+	title("2008 Interviews, Looking at top 5% of spenders")  ///
+	note("Criteria A = Any serious medical illness and/or ADL impairment" \ ///
+	"Criteria B = Criteria A and Urgent / Emergent hospitalization and/or NH resident" \ ///
+	"Criteria C = Medical illness and ADL Impairment and hospitalization and/or NH resident") ///
+	addtable
+
+	
+***************************************************************
+//Table 2 - looking at outcomes
 //table of 1 year outcomes for the 4 categories, not mutually exclusive groups
 local outcome1 core_to_dod_1yr hs_admit_p12m ind_em_ur_adm_p12m
 
@@ -9294,7 +9510,7 @@ outreg using `logpath'\sic_Tables_11_2008_wave_crit_a_b_c, ///
 	note("Criteria A = Any serious medical illness and/or ADL impairment" \ ///
 	"Criteria B = Criteria A and Urgent / Emergent hospitalization and/or NH resident" \ ///
 	"Criteria C = Medical illness and ADL Impairment and hospitalization and/or NH resident") ///
-	replace
+	addtable
 
 ***************************************************************
 log close

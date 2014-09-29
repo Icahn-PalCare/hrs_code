@@ -374,6 +374,12 @@ la def s_r_educ_3cat 1 "R,S Same educ level" 2 "S more educ than R" 3 "S less ed
 la val s_r_educ_3cat s_r_educ_3cat 
 tab s_r_educ_3cat , missing
 
+//gen indicators for the three categories
+tab s_r_educ_3cat, gen(ind_s_r_educ)
+la var ind_s_r_educ1 "R,S Same educ level"
+la var ind_s_r_educ2 "S more educ than R"
+la var ind_s_r_educ3 "S less educ than R"
+
 gen s_r_educ_5cat = .
 replace s_r_educ_5cat =5 if s_r_educ_cat==6
 replace s_r_educ_5cat =4 if inlist(s_r_educ_cat,4,5)
@@ -395,6 +401,12 @@ replace r_age_cat = 1 if  r_age<75
 replace r_age_cat = 2 if  r_age>=75 & r_age<85
 replace r_age_cat = 3 if  r_age>=85 & r_age!=.
 la var r_age_cat "R Age at death - categorical"
+
+//generate indicators for r age categories
+tab r_age_cat, gen(ind_r_age_cat)
+la var ind_r_age_cat1 "R age 65-74"
+la var ind_r_age_cat2 "R age 75-84"
+la var ind_r_age_cat3 "R age 85+"
 
 gen s_age_cat=.
 replace s_age_cat = 1 if  s_age<75
@@ -444,6 +456,12 @@ la var r_s_age_3cat "R and S age comparison, 3 categories"
 la def r_s_age_3cat 1 "R&S in same age category (<75, 75-84, 85+)" 2 "S older" 3 "S Younger"
 la val r_s_age_3cat r_s_age_3cat 
 tab r_s_age_3cat , missing
+
+//create indicators for categories
+tab r_s_age_3cat, gen(ind_r_s_age)
+la var ind_r_s_age1 "R&S in same age category (<75, 75-84, 85+)"
+la var ind_r_s_age2 "S older" 
+la var ind_r_s_age3 "S Younger"
 
 gen r_s_age_5cat = .
 replace r_s_age_5cat = 5 if r_s_age_cat==9
@@ -2768,5 +2786,845 @@ outreg using `logpath'/7-spfactors_logit_ltd_vars_201409 , ///
 	"S and R in same age category and S and R have same education level.") ///
 	varlabels starlevels(10 5 1)  summstat(r2_p \ ll \ N) addtable
 estat ic
+*****************************************************************
+log close	
+
+
+H="Analysis, removing correlated variables"
+*************
+/*This Stata code runs an initial logistic regression, outputs
+table to the file logs\8-spfactors_logit_ltd_vars_201409_v2.doc
+
+Removes R variables that weren't shown to be related to hospice use
+in the univariate comparison
+
+Removes variables that are highly correlated in pairwise comparisons
+ */
+
+capture log close
+
+clear all
+set mem 500m
+set more off
+
+//Amy's PC
+local logpath E:\data\spouse_factors\logs
+local projdatapath E:\data\spouse_factors
+
+log using "`logpath'\8-HRS_Spouse_analysis_logit_v5.txt", text replace
+
+cd `projdatapath'
+
+use spouse_factors_data_sample_v1.dta if (no_cc_12m_excl_cataract==0 & sudden_cause_death==0)
+
+tab s_proxy_core_n1, missing
+tab r_proxy_core_n1, missing
+
+la var s_age "S age at R's death"
+la var r_age "R age at death"
+la var s_female "S Female"
+la var r_female "R Female" 
+la var r_medicaid_n1 "R Medicaid"
+
+*****************************************************************
+//run a model with just decedent and region characteristics
+local dvars_only ind_r_age_cat2 ind_r_age_cat3 r_hseduc_n1_n3 ///
+r_female r_white_e r_nhres_n1 ///
+r_advdir_x comorb_all_0d_n12m hci_index hospital_beds specialists	
+
+//assign variable names for table row names
+la var r_hseduc_n1_n3 "R High School degree"
+la var r_female "R Female"
+la var r_white_e "R Non-Hispanic White/Caucasian" 
+la var comorb_all_0d_n12m "R Count chronic conditions"
+la var hci_index "Hospital Care Intensity Index"
+la var hospital_beds "No. Hospital Beds/1000 residents"
+la var specialists "No. Specialists/100,000 residents"
+
+logit r_hs_12m `dvars_only' , or
+
+estat ic
+mat ic=r(S)
+local dof=ic[1,4]
+local aic=ic[1,5]
+local aic1:display %5.2f `aic'
+local bic=ic[1,6]
+local bic1:display %5.2f `bic'
+
+outreg using `logpath'/8-spfactors_logit_ltd_vars_201409_v2, ///
+	stats(e_b e_ci p) nosubstat ///
+	title("Decedent factors of hospice enrollment - spouse factors omitted") ///	
+	ctitles("" "OR" "95% CI" "P-value") ///
+	varlabels starlevels(10 5 1) summstat(r2_p \ ll \ N) ///
+	summtitles("Pseudo r-2" \ "Log likelihood" \ "N") ///
+	addrows("Degrees of Freedom AIC/BIC calc", "`dof'" \ ///
+	  "AIC", "`aic1'" \ "BIC", "`bic1'") ///
+	replace
+
+*****************************************************************
+//define local of base variables used in all models
+//use r demo char when correlated with s's
+//use s psyciatric condition variable (not individual medication, treatment vars)
+local xvars ind_r_s_age2 ind_r_s_age3 ind_r_age_cat2 ind_r_age_cat3 ///
+ind_s_r_educ2 ind_s_r_educ3 r_hseduc_n1_n3 ///
+s_srh_pf_n1 s_hrs_comorb_mild_n1 s_hrs_comorb_mod_n1 ///
+r_female r_white_e r_nhres_n1 ///
+r_advdir_x comorb_all_0d_n12m ///
+hci_index hospital_beds specialists	
+
+la var s_srh_pf_n1 "S Self Rated health: Poor/Fair"
+la var s_hrs_comorb_mild_n1 "S Comorbidity index ind - mild 1-3"
+la var s_hrs_comorb_mod_n1 "S Comorbidity index ind - moderate 4-6" 
+
+*****************************************************************
+//Base model - uses variable list defined above
+//define x variables, age and educ dyad 3 category (same, r more, s more)
+//and adding levels for R age , education
+logit r_hs_12m `xvars', or
+
+estat ic
+mat ic=r(S)
+local dof=ic[1,4]
+local aic=ic[1,5]
+local aic1:display %5.2f `aic'
+local bic=ic[1,6]
+local bic1:display %5.2f `bic'
+
+outreg using `logpath'/8-spfactors_logit_ltd_vars_201409_v2, ///
+	stats(e_b e_ci p) nosubstat ///
+	title("Table 1 - Spousal factors of hospice enrollment - v4, 3 categ age,educ dyad + level" \ ///
+	"Categories are same, S more, R more") ///	
+	ctitles("" "OR" "95% CI" "P-value") ///
+	note("Base categories are spouse no comorbidities per HRS survey," \ ///
+	"S and R in same age category and S and R have same education level.") ///
+	varlabels starlevels(10 5 1)  summstat(r2_p \ ll \ N) ///
+	summtitles("Pseudo r-2" \ "Log likelihood" \ "N") ///
+	addrows("Degrees of Freedom AIC/BIC calc", "`dof'" \ ///
+	  "AIC", "`aic1'" \ "BIC", "`bic1'") ///
+	addtable
+
+*****************************************************************
+//Not sure if KO wants to have the next 3 versions, adding cesd, adl impairment for spouse
+//leave in for now and ask her!
+
+//Add control for S depression per ces-d scoore
+la var s_cesd_tot_ge3_n1 "S CES-D indicates depression"
+
+logit r_hs_12m s_cesd_tot_ge3_n1 `xvars', or
+
+estat ic
+mat ic=r(S)
+local dof=ic[1,4]
+local aic=ic[1,5]
+local aic1:display %5.2f `aic'
+local bic=ic[1,6]
+local bic1:display %5.2f `bic'
+
+outreg using `logpath'/8-spfactors_logit_ltd_vars_201409_v2 , ///
+	stats(e_b e_ci p) nosubstat ///
+	title("Table 2 - Spousal factors of hospice enrollment - Add S Depression per CES-D") ///	
+	ctitles("" "OR" "95% CI" "P-value") ///
+	note("Base categories are spouse no comorbidities per HRS survey," \ ///
+	"S and R in same age category and S and R have same education level.") ///
+	varlabels starlevels(10 5 1)  summstat(r2_p \ ll \ N) ///
+	summtitles("Pseudo r-2" \ "Log likelihood" \ "N") ///
+	addrows("Degrees of Freedom AIC/BIC calc", "`dof'" \ ///
+	  "AIC", "`aic1'" \ "BIC", "`bic1'") ///
+	addtable
+
+*****************************************************************
+//Add control for S functional status - ADL impairment
+
+tab s_adl_independent_core_n1, missing
+tab s_adl_partial_core_n1, missing
+tab s_adl_severe_core_n1, missing
+tab s_adl_impair_n1 , missing
+
+la var s_adl_impair_n1 "S ADL impairment n1 interview"
+
+logit r_hs_12m s_adl_impair_n1 `xvars', or
+
+estat ic
+mat ic=r(S)
+local dof=ic[1,4]
+local aic=ic[1,5]
+local aic1:display %5.2f `aic'
+local bic=ic[1,6]
+local bic1:display %5.2f `bic'
+
+outreg using `logpath'/8-spfactors_logit_ltd_vars_201409_v2 , ///
+	stats(e_b e_ci p) nosubstat ///
+	title("Table 3 - Spousal factors of hospice enrollment - Add S Functional status") ///	
+	ctitles("" "OR" "95% CI" "P-value") ///
+	note("Base categories are spouse no comorbidities per HRS survey," \ ///
+	"S and R in same age category and S and R have same education level.") ///
+	varlabels starlevels(10 5 1) summstat(r2_p \ ll \ N) ///
+	summtitles("Pseudo r-2" \ "Log likelihood" \ "N") ///
+	addrows("Degrees of Freedom AIC/BIC calc", "`dof'" \ ///
+	  "AIC", "`aic1'" \ "BIC", "`bic1'") ///
+	addtable
+
+*****************************************************************
+//Add controls for both S Depression and functional status
+
+logit r_hs_12m s_cesd_tot_ge3_n1 s_adl_impair_n1 `xvars', or
+
+estat ic
+mat ic=r(S)
+local dof=ic[1,4]
+local aic=ic[1,5]
+local aic1:display %5.2f `aic'
+local bic=ic[1,6]
+local bic1:display %5.2f `bic'
+
+outreg using `logpath'/8-spfactors_logit_ltd_vars_201409_v2 , ///
+	stats(e_b e_ci p) nosubstat ///
+	title("Table 4 - Spousal factors of hospice enrollment - Add S Depr and Functional status") ///	
+	ctitles("" "OR" "95% CI" "P-value") ///
+	note("Base categories are spouse no comorbidities per HRS survey," \ ///
+	"S and R in same age category and S and R have same education level.") ///
+	varlabels starlevels(10 5 1)  summstat(r2_p \ ll \ N) ///
+	summtitles("Pseudo r-2" \ "Log likelihood" \ "N") ///
+	addrows("Degrees of Freedom AIC/BIC calc", "`dof'" \ ///
+	  "AIC", "`aic1'" \ "BIC", "`bic1'") ///
+	addtable
+
+*****************************************************************
+//Split by Gender
+
+*****************************************************************
+//first decedent characteristics only for comparison
+local donly_s ind_r_age_cat2 ind_r_age_cat3 ///
+r_hseduc_n1_n3 r_white_e r_nhres_n1 ///
+r_advdir_x comorb_all_0d_n12m ///
+hci_index hospital_beds specialists	
+
+//Respondant female
+logit r_hs_12m `donly_s' if r_female==1, or
+
+estat ic
+mat ic=r(S)
+local dof=ic[1,4]
+local aic=ic[1,5]
+local aic1:display %5.2f `aic'
+local bic=ic[1,6]
+local bic1:display %5.2f `bic'
+
+outreg using `logpath'/8-spfactors_logit_ltd_vars_201409_v2 , ///
+	stats(e_b e_ci p) nosubstat ///
+	title("Spousal factors of hospice enrollment - Subsample of S=Male" \ ///
+	"Decedent characteristics only") ///	
+	ctitles("" "OR" "95% CI" "P-value") ///
+	varlabels starlevels(10 5 1)  summstat(r2_p \ ll \ N) ///
+	summtitles("Pseudo r-2" \ "Log likelihood" \ "N") ///
+	addrows("Degrees of Freedom AIC/BIC calc", "`dof'" \ ///
+	  "AIC", "`aic1'" \ "BIC", "`bic1'") ///
+	addtable
+
+//Respondant male
+logit r_hs_12m `donly_s' if r_female==0, or
+
+estat ic
+mat ic=r(S)
+local dof=ic[1,4]
+local aic=ic[1,5]
+local aic1:display %5.2f `aic'
+local bic=ic[1,6]
+local bic1:display %5.2f `bic'
+
+outreg using `logpath'/8-spfactors_logit_ltd_vars_201409_v2 , ///
+	stats(e_b e_ci p) nosubstat ///
+	title("Spousal factors of hospice enrollment - Subsample of S=Female" \ ///
+	"Decedent characteristics only") ///	
+	ctitles("" "OR" "95% CI" "P-value") ///
+	varlabels starlevels(10 5 1)  summstat(r2_p \ ll \ N) ///
+	summtitles("Pseudo r-2" \ "Log likelihood" \ "N") ///
+	addrows("Degrees of Freedom AIC/BIC calc", "`dof'" \ ///
+	  "AIC", "`aic1'" \ "BIC", "`bic1'") ///
+	addtable
+*****************************************************************
+//S characteristics added
+local xvars_s ind_r_s_age2 ind_r_s_age3 ind_r_age_cat2 ind_r_age_cat3 ///
+ind_s_r_educ2 ind_s_r_educ3 r_hseduc_n1_n3 ///
+s_srh_pf_n1 s_hrs_comorb_mild_n1 s_hrs_comorb_mod_n1 ///
+r_white_e r_nhres_n1 ///
+r_advdir_x comorb_all_0d_n12m ///
+hci_index hospital_beds specialists	
+
+//Respondant female
+logit r_hs_12m `xvars_s' if r_female==1, or
+
+estat ic
+mat ic=r(S)
+local dof=ic[1,4]
+local aic=ic[1,5]
+local aic1:display %5.2f `aic'
+local bic=ic[1,6]
+local bic1:display %5.2f `bic'
+
+outreg using `logpath'/8-spfactors_logit_ltd_vars_201409_v2 , ///
+	stats(e_b e_ci p) nosubstat ///
+	title("Table 5 - Spousal factors of hospice enrollment - Subsample of S=Male") ///	
+	ctitles("" "OR" "95% CI" "P-value") ///
+	note("Base categories are spouse no comorbidities per HRS survey," \ ///
+	"S and R in same age category and S and R have same education level.") ///
+	varlabels starlevels(10 5 1)  summstat(r2_p \ ll \ N) ///
+	summtitles("Pseudo r-2" \ "Log likelihood" \ "N") ///
+	addrows("Degrees of Freedom AIC/BIC calc", "`dof'" \ ///
+	  "AIC", "`aic1'" \ "BIC", "`bic1'") ///
+	addtable
+
+//Respondant male
+logit r_hs_12m `xvars_s' if r_female==0, or
+
+estat ic
+mat ic=r(S)
+local dof=ic[1,4]
+local aic=ic[1,5]
+local aic1:display %5.2f `aic'
+local bic=ic[1,6]
+local bic1:display %5.2f `bic'
+
+outreg using `logpath'/8-spfactors_logit_ltd_vars_201409_v2 , ///
+	stats(e_b e_ci p) nosubstat ///
+	title("Table 6 - Spousal factors of hospice enrollment - Subsample of S=Female") ///	
+	ctitles("" "OR" "95% CI" "P-value") ///
+	note("Base categories are spouse no comorbidities per HRS survey," \ ///
+	"S and R in same age category and S and R have same education level.") ///
+	varlabels starlevels(10 5 1)  summstat(r2_p \ ll \ N) ///
+	summtitles("Pseudo r-2" \ "Log likelihood" \ "N") ///
+	addrows("Degrees of Freedom AIC/BIC calc", "`dof'" \ ///
+	  "AIC", "`aic1'" \ "BIC", "`bic1'") ///
+	addtable
+
+
+*****************************************************************
+//With controls for both S Depression and functional status
+
+//Respondant female
+logit r_hs_12m s_cesd_tot_ge3_n1 s_adl_impair_n1 `xvars_s' if r_female==1, or
+
+estat ic
+mat ic=r(S)
+local dof=ic[1,4]
+local aic=ic[1,5]
+local aic1:display %5.2f `aic'
+local bic=ic[1,6]
+local bic1:display %5.2f `bic'
+
+outreg using `logpath'/8-spfactors_logit_ltd_vars_201409_v2 , ///
+	stats(e_b e_ci p) nosubstat ///
+	title("Table 7 - Spousal factors of hospice enrollment - Subsample of S=Male" \ ///
+	"Add S Depr and Functional status") ///	
+	ctitles("" "OR" "95% CI" "P-value") ///
+	note("Base categories are spouse no comorbidities per HRS survey," \ ///
+	"S and R in same age category and S and R have same education level.") ///
+	varlabels starlevels(10 5 1)  summstat(r2_p \ ll \ N) ///
+	summtitles("Pseudo r-2" \ "Log likelihood" \ "N") ///
+	addrows("Degrees of Freedom AIC/BIC calc", "`dof'" \ ///
+	  "AIC", "`aic1'" \ "BIC", "`bic1'") ///
+	addtable
+
+//Respondant male
+logit r_hs_12m s_cesd_tot_ge3_n1 s_adl_impair_n1 `xvars_s' if r_female==0, or
+
+estat ic
+mat ic=r(S)
+local dof=ic[1,4]
+local aic=ic[1,5]
+local aic1:display %5.2f `aic'
+local bic=ic[1,6]
+local bic1:display %5.2f `bic'
+
+outreg using `logpath'/8-spfactors_logit_ltd_vars_201409_v2 , ///
+	stats(e_b e_ci p) nosubstat ///
+	title("Table 8 - Spousal factors of hospice enrollment - Subsample of S=Female" \ ///
+	"Add S Depr and Functional status") ///	
+	ctitles("" "OR" "95% CI" "P-value") ///
+	note("Base categories are spouse no comorbidities per HRS survey," \ ///
+	"S and R in same age category and S and R have same education level.") ///
+	varlabels starlevels(10 5 1)  summstat(r2_p \ ll \ N) ///
+	summtitles("Pseudo r-2" \ "Log likelihood" \ "N") ///
+	addrows("Degrees of Freedom AIC/BIC calc", "`dof'" \ ///
+	  "AIC", "`aic1'" \ "BIC", "`bic1'") ///
+	addtable
+
+*****************************************************************
+//With controls for S functional status only
+
+//Respondant female
+logit r_hs_12m s_adl_impair_n1 `xvars_s' if r_female==1, or
+
+estat ic
+mat ic=r(S)
+local dof=ic[1,4]
+local aic=ic[1,5]
+local aic1:display %5.2f `aic'
+local bic=ic[1,6]
+local bic1:display %5.2f `bic'
+
+outreg using `logpath'/8-spfactors_logit_ltd_vars_201409_v2 , ///
+	stats(e_b e_ci p) nosubstat ///
+	title("Table 9 - Spousal factors of hospice enrollment - Subsamle of S=Male" \ ///
+	"Add S Functional status (no S depression to retain sample size)") ///	
+	ctitles("" "OR" "95% CI" "P-value") ///
+	note("Base categories are spouse no comorbidities per HRS survey," \ ///
+	"S and R in same age category and S and R have same education level.") ///
+	varlabels starlevels(10 5 1)  summstat(r2_p \ ll \ N) ///
+	summtitles("Pseudo r-2" \ "Log likelihood" \ "N") ///
+	addrows("Degrees of Freedom AIC/BIC calc", "`dof'" \ ///
+	  "AIC", "`aic1'" \ "BIC", "`bic1'") ///
+	addtable
+
+//Respondant male
+logit r_hs_12m s_adl_impair_n1 `xvars_s' if r_female==0, or
+
+estat ic
+mat ic=r(S)
+local dof=ic[1,4]
+local aic=ic[1,5]
+local aic1:display %5.2f `aic'
+local bic=ic[1,6]
+local bic1:display %5.2f `bic'
+
+outreg using `logpath'/8-spfactors_logit_ltd_vars_201409_v2 , ///
+	stats(e_b e_ci p) nosubstat ///
+	title("Table 10 - Spousal factors of hospice enrollment - Subsample of S=Female" \ ///
+	"Add S Functional status (no S depression to retain sample size)") ///	
+	ctitles("" "OR" "95% CI" "P-value") ///
+	note("Base categories are spouse no comorbidities per HRS survey," \ ///
+	"S and R in same age category and S and R have same education level.") ///
+	varlabels starlevels(10 5 1)  summstat(r2_p \ ll \ N) ///
+	summtitles("Pseudo r-2" \ "Log likelihood" \ "N") ///
+	addrows("Degrees of Freedom AIC/BIC calc", "`dof'" \ ///
+	  "AIC", "`aic1'" \ "BIC", "`bic1'") ///
+	addtable
+
+*****************************************************************
+log close	
+
+
+H="Analysis, indiv chronic conditions added"
+*************
+/*This Stata code runs an initial logistic regression, outputs
+table to the file logs\9-spfactors_logit_ltd_vars_201409_v3.doc
+
+Removes R variables that weren't shown to be related to hospice use
+in the univariate comparison
+
+Removes variables that are highly correlated in pairwise comparisons
+
+Version with individual chronic conditions included, count of cc's not
+However, alzheimers is dropped bc correlated with nursing home resident
+ */
+
+capture log close
+
+clear all
+set mem 500m
+set more off
+
+//Amy's PC
+local logpath E:\data\spouse_factors\logs
+local projdatapath E:\data\spouse_factors
+
+log using "`logpath'\9-HRS_Spouse_analysis_logit_v6.txt", text replace
+
+cd `projdatapath'
+
+use spouse_factors_data_sample_v1.dta if (no_cc_12m_excl_cataract==0 & sudden_cause_death==0)
+
+tab s_proxy_core_n1, missing
+tab r_proxy_core_n1, missing
+
+la var s_age "S age at R's death"
+la var r_age "R age at death"
+la var s_female "S Female"
+la var r_female "R Female" 
+la var r_medicaid_n1 "R Medicaid"
+
+*****************************************************************
+//run a model with just decedent and region characteristics
+local dvars_only ind_r_age_cat2 ind_r_age_cat3 r_hseduc_n1_n3 ///
+r_female r_white_e r_nhres_n1 ///
+r_advdir_x cc_6_chrnkidn_n12mn0 cc_12_ischmcht_n12mn0 cc_8_chf_n12mn0 ///
+cc_9_diabetes_n12mn0 cc_7_copd_n12mn0 cc_cncr_chronic_n12mn0  ///
+cc_13_depressn_n12mn0 cc_14_osteoprs_n12mn0  ///
+hci_index hospital_beds specialists	
+
+//assign variable names for table row names
+la var r_hseduc_n1_n3 "R High School degree"
+la var r_female "R Female"
+la var r_white_e "R Non-Hispanic White/Caucasian" 
+la var comorb_all_0d_n12m "R Count chronic conditions"
+la var hci_index "Hospital Care Intensity Index"
+la var hospital_beds "No. Hospital Beds/1000 residents"
+la var specialists "No. Specialists/100,000 residents"
+
+logit r_hs_12m `dvars_only' , or
+
+estat ic
+mat ic=r(S)
+local dof=ic[1,4]
+local aic=ic[1,5]
+local aic1:display %5.2f `aic'
+local bic=ic[1,6]
+local bic1:display %5.2f `bic'
+
+outreg using `logpath'/9-spfactors_logit_ltd_vars_201409_v3, ///
+	stats(e_b e_ci p) nosubstat ///
+	title("Decedent factors of hospice enrollment - spouse factors omitted") ///	
+	ctitles("" "OR" "95% CI" "P-value") ///
+	varlabels starlevels(10 5 1) summstat(r2_p \ ll \ N) ///
+	summtitles("Pseudo r-2" \ "Log likelihood" \ "N") ///
+	addrows("Degrees of Freedom AIC/BIC calc", "`dof'" \ ///
+	  "AIC", "`aic1'" \ "BIC", "`bic1'") ///
+	replace
+
+*****************************************************************
+//define local of base variables used in all models
+//use r demo char when correlated with s's
+local xvars ind_r_s_age2 ind_r_s_age3 ind_r_age_cat2 ind_r_age_cat3 ///
+ind_s_r_educ2 ind_s_r_educ3 r_hseduc_n1_n3 ///
+s_srh_pf_n1 s_hrs_comorb_mild_n1 s_hrs_comorb_mod_n1 ///
+r_female r_white_e r_nhres_n1 ///
+r_advdir_x cc_6_chrnkidn_n12mn0 cc_12_ischmcht_n12mn0 cc_8_chf_n12mn0 ///
+cc_9_diabetes_n12mn0 cc_7_copd_n12mn0 cc_cncr_chronic_n12mn0  ///
+cc_13_depressn_n12mn0 cc_14_osteoprs_n12mn0  ///
+hci_index hospital_beds specialists	
+
+la var s_srh_pf_n1 "S Self Rated health: Poor/Fair"
+la var s_hrs_comorb_mild_n1 "S Comorbidity index ind - mild 1-3"
+la var s_hrs_comorb_mod_n1 "S Comorbidity index ind - moderate 4-6" 
+
+*****************************************************************
+//Base model - uses variable list defined above
+//define x variables, age and educ dyad 3 category (same, r more, s more)
+//and adding levels for R age , education
+logit r_hs_12m `xvars', or
+
+estat ic
+mat ic=r(S)
+local dof=ic[1,4]
+local aic=ic[1,5]
+local aic1:display %5.2f `aic'
+local bic=ic[1,6]
+local bic1:display %5.2f `bic'
+
+outreg using `logpath'/9-spfactors_logit_ltd_vars_201409_v3, ///
+	stats(e_b e_ci p) nosubstat ///
+	title("Table 1 - Spousal factors of hospice enrollment - v4, 3 categ age,educ dyad + level" \ ///
+	"Categories are same, S more, R more") ///	
+	ctitles("" "OR" "95% CI" "P-value") ///
+	note("Base categories are spouse no comorbidities per HRS survey," \ ///
+	"S and R in same age category and S and R have same education level.") ///
+	varlabels starlevels(10 5 1)  summstat(r2_p \ ll \ N) ///
+	summtitles("Pseudo r-2" \ "Log likelihood" \ "N") ///
+	addrows("Degrees of Freedom AIC/BIC calc", "`dof'" \ ///
+	  "AIC", "`aic1'" \ "BIC", "`bic1'") ///
+	addtable
+
+*****************************************************************
+//Not sure if KO wants to have the next 3 versions, adding cesd, adl impairment for spouse
+//leave in for now and ask her!
+
+//Add control for S depression per ces-d scoore
+la var s_cesd_tot_ge3_n1 "S CES-D indicates depression"
+
+logit r_hs_12m s_cesd_tot_ge3_n1 `xvars', or
+
+estat ic
+mat ic=r(S)
+local dof=ic[1,4]
+local aic=ic[1,5]
+local aic1:display %5.2f `aic'
+local bic=ic[1,6]
+local bic1:display %5.2f `bic'
+
+outreg using `logpath'/9-spfactors_logit_ltd_vars_201409_v3 , ///
+	stats(e_b e_ci p) nosubstat ///
+	title("Table 2 - Spousal factors of hospice enrollment - Add S Depression per CES-D") ///	
+	ctitles("" "OR" "95% CI" "P-value") ///
+	note("Base categories are spouse no comorbidities per HRS survey," \ ///
+	"S and R in same age category and S and R have same education level.") ///
+	varlabels starlevels(10 5 1)  summstat(r2_p \ ll \ N) ///
+	summtitles("Pseudo r-2" \ "Log likelihood" \ "N") ///
+	addrows("Degrees of Freedom AIC/BIC calc", "`dof'" \ ///
+	  "AIC", "`aic1'" \ "BIC", "`bic1'") ///
+	addtable
+
+*****************************************************************
+//Add control for S functional status - ADL impairment
+
+tab s_adl_independent_core_n1, missing
+tab s_adl_partial_core_n1, missing
+tab s_adl_severe_core_n1, missing
+tab s_adl_impair_n1 , missing
+
+la var s_adl_impair_n1 "S ADL impairment n1 interview"
+
+logit r_hs_12m s_adl_impair_n1 `xvars', or
+
+estat ic
+mat ic=r(S)
+local dof=ic[1,4]
+local aic=ic[1,5]
+local aic1:display %5.2f `aic'
+local bic=ic[1,6]
+local bic1:display %5.2f `bic'
+
+outreg using `logpath'/9-spfactors_logit_ltd_vars_201409_v3 , ///
+	stats(e_b e_ci p) nosubstat ///
+	title("Table 3 - Spousal factors of hospice enrollment - Add S Functional status") ///	
+	ctitles("" "OR" "95% CI" "P-value") ///
+	note("Base categories are spouse no comorbidities per HRS survey," \ ///
+	"S and R in same age category and S and R have same education level.") ///
+	varlabels starlevels(10 5 1) summstat(r2_p \ ll \ N) ///
+	summtitles("Pseudo r-2" \ "Log likelihood" \ "N") ///
+	addrows("Degrees of Freedom AIC/BIC calc", "`dof'" \ ///
+	  "AIC", "`aic1'" \ "BIC", "`bic1'") ///
+	addtable
+
+*****************************************************************
+//Add controls for both S Depression and functional status
+
+logit r_hs_12m s_cesd_tot_ge3_n1 s_adl_impair_n1 `xvars', or
+
+estat ic
+mat ic=r(S)
+local dof=ic[1,4]
+local aic=ic[1,5]
+local aic1:display %5.2f `aic'
+local bic=ic[1,6]
+local bic1:display %5.2f `bic'
+
+outreg using `logpath'/9-spfactors_logit_ltd_vars_201409_v3 , ///
+	stats(e_b e_ci p) nosubstat ///
+	title("Table 4 - Spousal factors of hospice enrollment - Add S Depr and Functional status") ///	
+	ctitles("" "OR" "95% CI" "P-value") ///
+	note("Base categories are spouse no comorbidities per HRS survey," \ ///
+	"S and R in same age category and S and R have same education level.") ///
+	varlabels starlevels(10 5 1)  summstat(r2_p \ ll \ N) ///
+	summtitles("Pseudo r-2" \ "Log likelihood" \ "N") ///
+	addrows("Degrees of Freedom AIC/BIC calc", "`dof'" \ ///
+	  "AIC", "`aic1'" \ "BIC", "`bic1'") ///
+	addtable
+
+*****************************************************************
+//Split by Gender
+
+*****************************************************************
+//first decedent characteristics only for comparison
+local donly_s ind_r_age_cat2 ind_r_age_cat3 ///
+r_hseduc_n1_n3 r_white_e r_nhres_n1 ///
+r_advdir_x cc_6_chrnkidn_n12mn0 cc_12_ischmcht_n12mn0 cc_8_chf_n12mn0 ///
+cc_9_diabetes_n12mn0 cc_7_copd_n12mn0 cc_cncr_chronic_n12mn0  ///
+cc_13_depressn_n12mn0 cc_14_osteoprs_n12mn0  ///
+hci_index hospital_beds specialists	
+
+//Respondant female
+logit r_hs_12m `donly_s' if r_female==1, or
+
+estat ic
+mat ic=r(S)
+local dof=ic[1,4]
+local aic=ic[1,5]
+local aic1:display %5.2f `aic'
+local bic=ic[1,6]
+local bic1:display %5.2f `bic'
+
+outreg using `logpath'/9-spfactors_logit_ltd_vars_201409_v3 , ///
+	stats(e_b e_ci p) nosubstat ///
+	title("Spousal factors of hospice enrollment - Subsample of S=Male" \ ///
+	"Decedent characteristics only") ///	
+	ctitles("" "OR" "95% CI" "P-value") ///
+	varlabels starlevels(10 5 1)  summstat(r2_p \ ll \ N) ///
+	summtitles("Pseudo r-2" \ "Log likelihood" \ "N") ///
+	addrows("Degrees of Freedom AIC/BIC calc", "`dof'" \ ///
+	  "AIC", "`aic1'" \ "BIC", "`bic1'") ///
+	addtable
+
+//Respondant male
+logit r_hs_12m `donly_s' if r_female==0, or
+
+estat ic
+mat ic=r(S)
+local dof=ic[1,4]
+local aic=ic[1,5]
+local aic1:display %5.2f `aic'
+local bic=ic[1,6]
+local bic1:display %5.2f `bic'
+
+outreg using `logpath'/9-spfactors_logit_ltd_vars_201409_v3 , ///
+	stats(e_b e_ci p) nosubstat ///
+	title("Spousal factors of hospice enrollment - Subsample of S=Female" \ ///
+	"Decedent characteristics only") ///	
+	ctitles("" "OR" "95% CI" "P-value") ///
+	varlabels starlevels(10 5 1)  summstat(r2_p \ ll \ N) ///
+	summtitles("Pseudo r-2" \ "Log likelihood" \ "N") ///
+	addrows("Degrees of Freedom AIC/BIC calc", "`dof'" \ ///
+	  "AIC", "`aic1'" \ "BIC", "`bic1'") ///
+	addtable
+
+*****************************************************************
+//adding spouse char
+local xvars_s ind_r_s_age2 ind_r_s_age3 ind_r_age_cat2 ind_r_age_cat3 ///
+ind_s_r_educ2 ind_s_r_educ3 r_hseduc_n1_n3 ///
+s_srh_pf_n1 s_hrs_comorb_mild_n1 s_hrs_comorb_mod_n1 ///
+r_white_e r_nhres_n1 ///
+r_advdir_x cc_6_chrnkidn_n12mn0 cc_12_ischmcht_n12mn0 cc_8_chf_n12mn0 ///
+cc_9_diabetes_n12mn0 cc_7_copd_n12mn0 cc_cncr_chronic_n12mn0  ///
+cc_13_depressn_n12mn0 cc_14_osteoprs_n12mn0  ///
+hci_index hospital_beds specialists	
+
+//Respondant female
+logit r_hs_12m `xvars_s' if r_female==1, or
+
+estat ic
+mat ic=r(S)
+local dof=ic[1,4]
+local aic=ic[1,5]
+local aic1:display %5.2f `aic'
+local bic=ic[1,6]
+local bic1:display %5.2f `bic'
+
+outreg using `logpath'/9-spfactors_logit_ltd_vars_201409_v3 , ///
+	stats(e_b e_ci p) nosubstat ///
+	title("Table 5 - Spousal factors of hospice enrollment - Subsample of S=Male") ///	
+	ctitles("" "OR" "95% CI" "P-value") ///
+	note("Base categories are spouse no comorbidities per HRS survey," \ ///
+	"S and R in same age category and S and R have same education level.") ///
+	varlabels starlevels(10 5 1)  summstat(r2_p \ ll \ N) ///
+	summtitles("Pseudo r-2" \ "Log likelihood" \ "N") ///
+	addrows("Degrees of Freedom AIC/BIC calc", "`dof'" \ ///
+	  "AIC", "`aic1'" \ "BIC", "`bic1'") ///
+	addtable
+
+//Respondant male
+logit r_hs_12m `xvars_s' if r_female==0, or
+
+estat ic
+mat ic=r(S)
+local dof=ic[1,4]
+local aic=ic[1,5]
+local aic1:display %5.2f `aic'
+local bic=ic[1,6]
+local bic1:display %5.2f `bic'
+
+outreg using `logpath'/9-spfactors_logit_ltd_vars_201409_v3 , ///
+	stats(e_b e_ci p) nosubstat ///
+	title("Table 6 - Spousal factors of hospice enrollment - Subsample of S=Female") ///	
+	ctitles("" "OR" "95% CI" "P-value") ///
+	note("Base categories are spouse no comorbidities per HRS survey," \ ///
+	"S and R in same age category and S and R have same education level.") ///
+	varlabels starlevels(10 5 1)  summstat(r2_p \ ll \ N) ///
+	summtitles("Pseudo r-2" \ "Log likelihood" \ "N") ///
+	addrows("Degrees of Freedom AIC/BIC calc", "`dof'" \ ///
+	  "AIC", "`aic1'" \ "BIC", "`bic1'") ///
+	addtable
+
+
+*****************************************************************
+//With controls for both S Depression and functional status
+
+//Respondant female
+logit r_hs_12m s_cesd_tot_ge3_n1 s_adl_impair_n1 `xvars_s' if r_female==1, or
+
+estat ic
+mat ic=r(S)
+local dof=ic[1,4]
+local aic=ic[1,5]
+local aic1:display %5.2f `aic'
+local bic=ic[1,6]
+local bic1:display %5.2f `bic'
+
+outreg using `logpath'/9-spfactors_logit_ltd_vars_201409_v3 , ///
+	stats(e_b e_ci p) nosubstat ///
+	title("Table 7 - Spousal factors of hospice enrollment - Subsample of S=Male" \ ///
+	"Add S Depr and Functional status") ///	
+	ctitles("" "OR" "95% CI" "P-value") ///
+	note("Base categories are spouse no comorbidities per HRS survey," \ ///
+	"S and R in same age category and S and R have same education level.") ///
+	varlabels starlevels(10 5 1)  summstat(r2_p \ ll \ N) ///
+	summtitles("Pseudo r-2" \ "Log likelihood" \ "N") ///
+	addrows("Degrees of Freedom AIC/BIC calc", "`dof'" \ ///
+	  "AIC", "`aic1'" \ "BIC", "`bic1'") ///
+	addtable
+
+//Respondant male
+logit r_hs_12m s_cesd_tot_ge3_n1 s_adl_impair_n1 `xvars_s' if r_female==0, or
+
+estat ic
+mat ic=r(S)
+local dof=ic[1,4]
+local aic=ic[1,5]
+local aic1:display %5.2f `aic'
+local bic=ic[1,6]
+local bic1:display %5.2f `bic'
+
+outreg using `logpath'/9-spfactors_logit_ltd_vars_201409_v3 , ///
+	stats(e_b e_ci p) nosubstat ///
+	title("Table 8 - Spousal factors of hospice enrollment - Subsample of S=Female" \ ///
+	"Add S Depr and Functional status") ///	
+	ctitles("" "OR" "95% CI" "P-value") ///
+	note("Base categories are spouse no comorbidities per HRS survey," \ ///
+	"S and R in same age category and S and R have same education level.") ///
+	varlabels starlevels(10 5 1)  summstat(r2_p \ ll \ N) ///
+	summtitles("Pseudo r-2" \ "Log likelihood" \ "N") ///
+	addrows("Degrees of Freedom AIC/BIC calc", "`dof'" \ ///
+	  "AIC", "`aic1'" \ "BIC", "`bic1'") ///
+	addtable
+
+*****************************************************************
+//With controls for S functional status only
+
+//Respondant female
+logit r_hs_12m s_adl_impair_n1 `xvars_s' if r_female==1, or
+
+estat ic
+mat ic=r(S)
+local dof=ic[1,4]
+local aic=ic[1,5]
+local aic1:display %5.2f `aic'
+local bic=ic[1,6]
+local bic1:display %5.2f `bic'
+
+outreg using `logpath'/9-spfactors_logit_ltd_vars_201409_v3 , ///
+	stats(e_b e_ci p) nosubstat ///
+	title("Table 9 - Spousal factors of hospice enrollment - Subsamle of S=Male" \ ///
+	"Add S Functional status (no S depression to retain sample size)") ///	
+	ctitles("" "OR" "95% CI" "P-value") ///
+	note("Base categories are spouse no comorbidities per HRS survey," \ ///
+	"S and R in same age category and S and R have same education level.") ///
+	varlabels starlevels(10 5 1)  summstat(r2_p \ ll \ N) ///
+	summtitles("Pseudo r-2" \ "Log likelihood" \ "N") ///
+	addrows("Degrees of Freedom AIC/BIC calc", "`dof'" \ ///
+	  "AIC", "`aic1'" \ "BIC", "`bic1'") ///
+	addtable
+
+//Respondant male
+logit r_hs_12m s_adl_impair_n1 `xvars_s' if r_female==0, or
+
+estat ic
+mat ic=r(S)
+local dof=ic[1,4]
+local aic=ic[1,5]
+local aic1:display %5.2f `aic'
+local bic=ic[1,6]
+local bic1:display %5.2f `bic'
+
+outreg using `logpath'/9-spfactors_logit_ltd_vars_201409_v3 , ///
+	stats(e_b e_ci p) nosubstat ///
+	title("Table 10 - Spousal factors of hospice enrollment - Subsample of S=Female" \ ///
+	"Add S Functional status (no S depression to retain sample size)") ///	
+	ctitles("" "OR" "95% CI" "P-value") ///
+	note("Base categories are spouse no comorbidities per HRS survey," \ ///
+	"S and R in same age category and S and R have same education level.") ///
+	varlabels starlevels(10 5 1)  summstat(r2_p \ ll \ N) ///
+	summtitles("Pseudo r-2" \ "Log likelihood" \ "N") ///
+	addrows("Degrees of Freedom AIC/BIC calc", "`dof'" \ ///
+	  "AIC", "`aic1'" \ "BIC", "`bic1'") ///
+	addtable
+
 *****************************************************************
 log close	

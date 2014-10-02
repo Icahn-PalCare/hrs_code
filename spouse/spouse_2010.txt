@@ -1516,18 +1516,26 @@ for ip, snf, and hs for 2 years prior to r's death*/
 /**********************************************************/
 
 /*First need to get lists of claims across all claim
-types for 12 months before death*/
+types for 12 months before death and 6-12m before death*/
 
 /*use claims macro created above, re-run for 12 months across
 all claim types, list includes claims fully within 1 year and 
 those that span the 1 year cutoff*/
 
+//run for 0-12m before death
 %claims(days_start=0,days_bef_death=365,source=hh,suf=12m); /*home health*/
 %claims(days_start=0,days_bef_death=365,source=hs,suf=12m); /*hospice*/
 %claims(days_start=0,days_bef_death=365,source=mp,suf=12m); /*medpar*/
 %claims(days_start=0,days_bef_death=365,source=dm,suf=12m); /*dme*/
 %claims(days_start=0,days_bef_death=365,source=op,suf=12m); /*outpatient*/
 %claims(days_start=0,days_bef_death=365,source=pb,suf=12m); /*carrier*/
+//run for 6-12m before death
+%claims(days_start=184,days_bef_death=365,source=hh,suf=6m12m); /*home health*/
+%claims(days_start=184,days_bef_death=365,source=hs,suf=6m12m); /*hospice*/
+%claims(days_start=184,days_bef_death=365,source=mp,suf=6m12m); /*medpar*/
+%claims(days_start=184,days_bef_death=365,source=dm,suf=6m12m); /*dme*/
+%claims(days_start=184,days_bef_death=365,source=op,suf=6m12m); /*outpatient*/
+%claims(days_start=184,days_bef_death=365,source=pb,suf=6m12m); /*carrier*/
 
 
 %macro dx_time_range(range1=, range2=, suf=);
@@ -1652,6 +1660,9 @@ run;
 
 /*run macro to create data file spo_int.dx_0d_n12m */
 %dx_time_range(range1=0d, range2=n12m, suf=12m);
+
+/*run macro to create data file spo_int.dx_6m_n12m */
+%dx_time_range(range1=6m, range2=n12m, suf=6m12m);
 
 /*5335 bid's have at least 1 dx in the 1 year before death*/
 proc sql;
@@ -2345,16 +2356,21 @@ code is run from
 Dataset created is spo_int.hrs_elix_cc_n12m
 */
 
-/*export list of diagnosis codes to Stata*/
+/*export lists of diagnosis codes to Stata*/
 proc export data=spo_int.dx_0d_n12m
 outfile="E:\data\spouse\int_data\dx_0d_n12m.dta" replace;
 run;
+
+proc export data=spo_int.dx_6m_n12m
+outfile="E:\data\spouse\int_data\dx_6m_n12m.dta" replace;
+run;
+
 
 /*******************************************************************/
 /*put the sas data to stata in to dot format
 This is STATA code*/
 /*******************************************************************/
-
+set more off
 clear
 set memory 500m
 
@@ -2374,15 +2390,41 @@ drop icd9_c new
 
 save "E:\data\spouse\int_data\dx_0d_n12m_2.dta",replace
 
+***********************************************
+clear all
+set memory 500m
+
+//process diagnosis codes 12 months pre-surgery
+clear
+use "E:\data\spouse\int_data\dx_6m_n12m.dta",clear
+
+// convert diagnosis codes to string variables, tostring diag,gen(icd9_c)
+gen new=ltrim(diag)
+icd9 check new,gen(icd9_c)
+replace new="" if icd9_c>0 
+// convert into dot format (ex 12.1 instead of 121)
+icd9 clean new,dots 
+
+replace diag=new
+drop icd9_c new
+
+save "E:\data\spouse\int_data\dx_6m_n12m_2.dta",replace
+
+
 /*******************************************************************/
 //Convert back to SAS
 //This is SAS Code
 /* to the cms 21 chronic comorbidity*/ /*******************************************************************/
 
-/*bring in formatted Stata dataset of dx codes*/
+/*bring in formatted Stata datasets of dx codes*/
 proc import 
 datafile="E:\data\spouse\int_data\dx_0d_n12m_2.dta" 
 out=dx_0d_n12m_2 replace;
+run;
+
+proc import 
+datafile="E:\data\spouse\int_data\dx_6m_n12m_2.dta" 
+out=dx_6m_n12m_2 replace;
 run;
 
 /*bring in excel list of dx codes associated with each chronic condition*/
@@ -2417,11 +2459,11 @@ resulting file has chronic conditions using dx codes 12 months
 before death
 predeath= n12m */
 
-%macro cc(predeath=);
+%macro cc(start=,predeath=);
 
 /*initialize the chronic conditions variables*/
-data list_&predeath._dx;
-set dx_0d_&predeath._2;
+data list_&start._&predeath._dx;
+set dx_&start._&predeath._2;
 array list CC_1_AMI
 CC_2_ALZH
 CC_3_ALZHDMTA
@@ -2488,7 +2530,7 @@ run;
 
 /*aggregate all chronic condition variables by bid*/
 proc sql;
-create table bid_dx_0d_&predeath.(rename=(bid_hrs_19=bid)) as
+create table bid_dx_&start._&predeath.(rename=(bid_hrs_19=bid)) as
 select distinct bid_hrs_19,
 sum(CC_1_AMI) as CC_1_AMI,
 sum(CC_2_ALZH) as CC_2_ALZH,
@@ -2512,23 +2554,23 @@ sum(CC_19_CNCRPRST) as CC_19_CNCRPRST,
 sum(CC_20_CNCRLUNG) as CC_20_CNCRLUNG,
 sum(CC_21_CNCREndM) as CC_21_CNCREndM
 
-from list_&predeath._dx group by bid_hrs_19;
+from list_&start._&predeath._dx group by bid_hrs_19;
 quit;
 
 
 /*merges with table r's with hrs dataset by id*/
  proc sql;
- create table bid_dx_0d_&predeath.2(drop=bid) as 
+ create table bid_dx_&start._&predeath.2(drop=bid) as 
 select a.r_bid_hrs,b.*
  from r_dod a
  left join
-  bid_dx_0d_&predeath. b 
+  bid_dx_&start._&predeath. b 
  on trim(left(a.r_bid_hrs))=trim(left(b.bid));
  quit;
 
 /*convert to chronic condition vars. to binary variables*/
- data bid_dx_0d_&predeath.3;
- set bid_dx_0d_&predeath.2;
+ data bid_dx_&start._&predeath.3;
+ set bid_dx_&start._&predeath.2;
  array list CC_1_AMI
 CC_2_ALZH
 CC_3_ALZHDMTA
@@ -2617,9 +2659,11 @@ run;
 
 %mend;
 
-%cc(predeath=n12m);
+%cc(start=0d,predeath=n12m);
+%cc(start=6m,predeath=n12m);
 
-/*so resulting datastets is bid_dx_0d_n12m3 with variable r_bid_hrs to merge*/
+/*so resulting datastets are bid_dx_0d_n12m3 and bid_dx_6m_n12m3 with 
+variable r_bid_hrs to merge*/
 
 /************************************************************/
 /*rename the 12 month pre-surgery chronic condition vars*/
@@ -2641,10 +2685,26 @@ r_bid_hrs=r_bid_hrs_n12mn0;
 drop r_bid_hrs_n12mn0;
 run;
 
+/*same for 6-12m dataset*/
+data test;
+set bid_dx_6m_n12m3;
+run;
+%rename(WORK,TEST,n12mn6m);
+data spo_int.chronic_21_n12m_n6m_0;
+set test;
+r_bid_hrs=r_bid_hrs_n12mn6m;
+drop r_bid_hrs_n12mn6m;
+run;
+
+
 proc freq data=spo_int.chronic_21_n12m_n0_0;
 table cc_alzheim_n12mn0 cc_cncr_chronic_n12mn0;
 run;
 proc contents;
+run;
+
+proc freq data=spo_int.chronic_21_n12m_n6m_0;
+table cc_alzheim_n12mn6m cc_cncr_chronic_n12mn6m;
 run;
 
 /************************************************************/
@@ -2652,18 +2712,29 @@ run;
 /************************************************************/
 /*merge chronic conditions into HRS dataset
 again leave cc's blank if no hrs xwalk id to claims *913 missing*/
+
+/*first merge the two cc datasets together*/
+proc sql;
+create table cc_6m12m_0m12m(drop=r_bid_hrs2) as select *
+from
+spo_int.chronic_21_n12m_n0_0 a
+left join
+spo_int.chronic_21_n12m_n6m_0(rename=(r_bid_hrs=r_bid_hrs2)) b
+on a.r_bid_hrs=b.r_bid_hrs2;
+quit;
+
 proc sql;
 create table spo_int.hrs_elix_cc_n12m(drop=bid_hrs2) as select a.*,
 b.*
 from 
 spo_int.hrs_elix_n12m a 
 left join
-spo_int.chronic_21_n12m_n0_0(rename=(r_bid_hrs=bid_hrs2)) b
+cc_6m12m_0m12m(rename=(r_bid_hrs=bid_hrs2)) b
 on a.r_bid_hrs = b.bid_hrs2;
 quit;
 
 proc freq data=spo_int.hrs_elix_cc_n12m;
-table cc_alzheim_n12mn0 cc_cncr_chronic_n12mn0;
+table cc_alzheim_n12mn0 cc_cncr_chronic_n12mn0 cc_alzheim_n12mn6m cc_cncr_chronic_n12mn6m;
 run;
 
 

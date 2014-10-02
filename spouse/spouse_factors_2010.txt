@@ -575,6 +575,9 @@ tab s_hrs_comorb_sev_n1, missing
 la def comor_c 0 "None" 1 "Mild (1-3)" 2 "Moderate (4-6)" 3 "Severe (7+)"
 la val s_comor_c_hrs_p1 s_comor_c_hrs_n1 comor_c
 
+//for obs with severe, lump in with moderate category since only 1 obs
+tab s_comor_in_hrs_n1 s_comor_c_hrs_n1, missing
+replace s_hrs_comorb_mod_n1=1 if s_hrs_comorb_sev_n1==1
 
 //label spouse shr poor/fair variable
 la def srhfp 0 "SRH Good, VG, or Exc" 1 "SRH Fair or Poor"
@@ -1276,7 +1279,7 @@ sdec(0,2,0,2,3) addtable
 log close
 
 
-H="Means tables, select variables only"
+H="Table 1 - Means tables, select variables only"
 /*This Stata code outputs univariate comparison tables comparing the hospice
 use group vs non-hospice use group to the file logs\spofactors_univ_compar_tables.doc
 
@@ -3628,3 +3631,150 @@ outreg using `logpath'/9-spfactors_logit_ltd_vars_201409_v3 , ///
 
 *****************************************************************
 log close	
+
+
+H="Analysis for presentation, creates output tables"
+*************
+/*This Stata code runs an initial logistic regression, outputs
+table to the file logs\10-spfactors_logit_ltd_vars_201410_v4.doc
+
+Removes S and R variables that weren't shown to be related to hospice use
+in the univariate comparison
+
+Removes variables that are highly correlated in pairwise comparisons
+
+Version with individual chronic conditions included (that are related
+to hospice use in the univariate) and count of cc's
+However, alzheimers is dropped bc correlated with nursing home resident
+ */
+
+capture log close
+
+clear all
+set mem 500m
+set more off
+
+//Amy's PC
+local logpath E:\data\spouse_factors\logs
+local projdatapath E:\data\spouse_factors
+
+log using "`logpath'\10-HRS_Spouse_analysis_logit_v7.txt", text replace
+
+cd `projdatapath'
+
+use spouse_factors_data_sample_v1.dta if (no_cc_12m_excl_cataract==0 & sudden_cause_death==0)
+
+//1 person has 7 comorbidities, lumped in with the moderate group
+// in the create new variables work
+tab s_comor_in_hrs_n1 s_comor_c_hrs_n1, missing
+tab s_comor_c_hrs_n1 s_hrs_comorb_mod_n1, missing
+
+*****************************************************************
+//run a model with just decedent and region characteristics
+local dvars_only ind_r_age_cat2 ind_r_age_cat3 r_hseduc_n1_n3 ///
+r_female r_white_e r_nhres_n1 ///
+r_advdir_x cc_6_chrnkidn_n12mn0 cc_12_ischmcht_n12mn0 cc_8_chf_n12mn0 ///
+cc_9_diabetes_n12mn0 cc_7_copd_n12mn0 cc_cncr_chronic_n12mn0  ///
+cc_13_depressn_n12mn0 cc_14_osteoprs_n12mn0 specialists	
+
+//assign variable names for table row names
+la var r_hseduc_n1_n3 "R High School degree"
+la var r_female "R Female"
+la var r_white_e "R Non-Hispanic White/Caucasian" 
+la var comorb_all_0d_n12m "R Count chronic conditions"
+la var hci_index "Hospital Care Intensity Index"
+la var hospital_beds "No. Hospital Beds/1000 residents"
+la var specialists "No. Specialists/100,000 residents"
+
+logit r_hs_12m `dvars_only' , or
+
+estat ic
+mat ic=r(S)
+local dof=ic[1,4]
+local aic=ic[1,5]
+local aic1:display %5.2f `aic'
+local bic=ic[1,6]
+local bic1:display %5.2f `bic'
+
+outreg, ///
+	stats(e_b e_ci p) nosubstat ///
+	title("Table 2 - Spousal and Decedent Factors of Hospice Enrollment") ///	
+	ctitles("" "(1) Decedent factors only" "" "" \ "" "OR" "95% CI" "P-value") ///
+	varlabels starlevels(10 5 1) summstat(r2_p \ ll \ N) ///
+	summtitles("Pseudo r-2" \ "Log likelihood" \ "N") ///
+	addrows("Degrees of Freedom AIC/BIC calc", "`dof'" \ ///
+	  "AIC", "`aic1'" \ "BIC", "`bic1'") ///
+	store(tab1) landscape
+
+*****************************************************************
+//Add spouse variables
+//this has both S SRH and S comorbidity category added
+local xvars1 ind_s_r_educ2 ind_s_r_educ3 r_hseduc_n1_n3 ///
+s_srh_pf_n1 s_hrs_comorb_mild_n1 s_hrs_comorb_mod_n1 
+
+local xvars2 ind_r_age_cat2 ind_r_age_cat3 r_female r_white_e r_nhres_n1 ///
+r_advdir_x cc_6_chrnkidn_n12mn0 cc_12_ischmcht_n12mn0 cc_8_chf_n12mn0 ///
+cc_9_diabetes_n12mn0 cc_7_copd_n12mn0 cc_cncr_chronic_n12mn0  ///
+cc_13_depressn_n12mn0 cc_14_osteoprs_n12mn0  specialists	
+
+la var s_srh_pf_n1 "S Self Rated health: Poor/Fair"
+la var s_hrs_comorb_mild_n1 "S Comorbidity - mild 1-3"
+la var s_hrs_comorb_mod_n1 "S Comorbidity - moderate 4-6" 
+
+*****************************************************************
+logit r_hs_12m `xvars1' `xvars2', or
+
+estat ic
+mat ic=r(S)
+local dof=ic[1,4]
+local aic=ic[1,5]
+local aic1:display %5.2f `aic'
+local bic=ic[1,6]
+local bic1:display %5.2f `bic'
+
+outreg using `logpath'/10-spfactors_logit_ltd_vars_201410_v4, ///
+	stats(e_b e_ci p) nosubstat ///
+	ctitles("" "(2) Decedent and spouse factors" "" "" \ "" "OR" "95% CI" "P-value") ///
+	note("Base categories are spouse no comorbidities per HRS survey," \ ///
+	"and S and R have same education level.") ///
+	varlabels starlevels(10 5 1)  summstat(r2_p \ ll \ N) ///
+	summtitles("Pseudo r-2" \ "Log likelihood" \ "N") ///
+	addrows("Degrees of Freedom AIC/BIC calc", "`dof'" \ ///
+	  "AIC", "`aic1'" \ "BIC", "`bic1'") ///
+	merge(tab1) landscape replace
+*****************************************************************
+//Table 3, split by gender
+local xvars1 ind_s_r_educ2 ind_s_r_educ3 r_hseduc_n1_n3 ///
+s_srh_pf_n1 s_hrs_comorb_mild_n1 s_hrs_comorb_mod_n1 
+
+local xvars2_s ind_r_age_cat2 ind_r_age_cat3 r_white_e r_nhres_n1 ///
+r_advdir_x cc_6_chrnkidn_n12mn0 cc_12_ischmcht_n12mn0 cc_8_chf_n12mn0 ///
+cc_9_diabetes_n12mn0 cc_7_copd_n12mn0 cc_cncr_chronic_n12mn0  ///
+cc_13_depressn_n12mn0 cc_14_osteoprs_n12mn0  specialists	
+
+//First S=male / R=Female
+logit r_hs_12m `xvars1' `xvars2_s' if r_female==1, or
+
+outreg , ///
+	stats(e_b e_ci p) nosubstat ///
+	title("Table 3 - Factors of Hospice Enrollment, Sample split by Gender") ///	
+	ctitles("" "(3) Decedent=Female" "" "" \ "" "OR" "95% CI" "P-value") ///
+	note("Base categories are spouse no comorbidities per HRS survey," \ ///
+	"and S and R have same education level.") ///
+	varlabels starlevels(10 5 1)  summstat(N) ///
+	store(tab2) landscape
+*****************************************************************
+//2nd column S=female / R=Male
+logit r_hs_12m `xvars1' `xvars2_s' if r_female==0, or
+
+outreg using `logpath'/10-spfactors_logit_ltd_vars_201410_v4, ///
+	stats(e_b e_ci p) nosubstat ///
+	title("Table 3 - Factors of Hospice Enrollment, Sample split by Gender") ///	
+	ctitles("" "(4) Decedent=Male" "" "" \ "" "OR" "95% CI" "P-value") ///
+	note("Base categories are spouse no comorbidities per HRS survey," \ ///
+	"and S and R have same education level.") ///
+	varlabels starlevels(10 5 1)  summstat(N) ///
+	merge(tab2) landscape addtable
+
+*****************************************************************
+log close

@@ -1101,18 +1101,72 @@ proc sort data=medi.dn_2000_2010 out=dn_2000_20102  nodupkey;
 by BID_HRS_19 year;
 run;
 
-/*assign death year using merged dataset with all r and s info*/
-data r_sp;
+/***********************************************************/
+/*first, backfill missing hrs dod with dod from claims denominator file*/
+data r_dod_missing;
 set spo_int.r_s_core_x_e;
-r_death_year=year(r_death_date_e);
+if r_death_date_e=.;
 run;
 
+*n=175 obs have missing dod in the HRS restricted dataset but have exit interview
+do they have a dod in the claims denominator file?;
+proc sql;
+create table r_dod_missing1 as select BID_HRS_19,year,death_date 
+from dn_2000_20102
+where BID_HRS_19 in(select r_BID_hrs from r_dod_missing);
+quit;
+
+proc sort data=r_dod_missing1; by BID_HRS_19 year;
+run;
+
+*just keep latest year since looking for dod;
+data r_dod_missing2;
+set r_dod_missing1;
+by BID_HRS_19;
+if last.BID_HRS_19;
+run;
+
+data r_dod_missing3(rename=(death_date=claims_dod));
+set r_dod_missing2;
+if death_date~=.;
+format death_date date9.;
+run;
+
+/*if dod is missing from hrs, then fill in with claims dod for pulling claims relative to dod*/
+proc sql;
+create table r_sp as select a.*,b.claims_dod from
+spo_int.r_s_core_x_e a left join
+r_dod_missing3 b
+on a.r_BID_hrs=b.BID_HRS_19;
+quit;
+
+data r_sp_1;
+set r_sp;
+dod_hrs_claims=r_death_date_e;
+if r_death_date_e=. then dod_hrs_claims=claims_dod;
+run;
+
+*now only n=40 missing dod;
+data miss_dod_incl_claims;
+set r_sp_1;
+if dod_hrs_claims=.;
+run;
+
+/*assign death year using merged dataset with all r and s info*/
+data r_sp_2;
+set r_sp_1;
+r_death_year=year(dod_hrs_claims);
+run;
+
+proc freq; table r_death_year /missprint; run;
+
+/***********************************************************/
 /*get denominator file for just death year
 for those with xwalk id only*/
 proc sql;
 create table dn_death_y as select
 a.*,b.buyin12,b.year,b.HMOIND12
-from r_sp a inner join
+from r_sp_2 a inner join
 dn_2000_20102 b
 on trim(left(a.r_BID_hrs))=trim(left(b.BID_hrs_19))
 and a.r_death_year=b.year;
@@ -1122,10 +1176,14 @@ proc freq data=dn_death_y;
 table r_death_year;
 run;
 
-/*5547 from exit have denominator file linked*/
+/*5682 from exit have denominator file linked*/
 proc sql;
 select count(distinct r_BID_hrs) from dn_death_y;
 quit;
+
+/***********************************************************/
+/*revise starting here for dod, using combined restricted, claims dod!*/
+/***********************************************************/
 
 /*note death month should from restricted file*/
 data dn_death_y2;

@@ -60,9 +60,29 @@ tab int_any_of5_6m int_hemodia_6m, missing
 tab r_exit_year_x if r_death_date_e==., missing
 tab r_xwalk_yes if r_death_date_e==., missing
 //if have xwalk, check if there is a dod present in the claims
+gen r_ind_claims_dod = 0
+replace r_ind_claims_dod=1 if r_claims_dod~=.
+tab r_ind_claims_dod, missing
+tab r_ind_claims_dod if r_death_date_e==., missing
+
+//use the claims dod if the HRS dod is missing
+gen r_death_date = r_death_date_e
+replace r_death_date = r_claims_dod if  r_death_date_e==.
+la var r_death_date "R DOD from HRS or claims"
+gen r_use_claims_dod = 0
+replace r_use_claims_dod = 1 if r_death_date_e==. & r_ind_claims_dod==1
+tab r_use_claims_dod, missing
+
+gen r_ind_dod = 0
+replace r_ind_dod = 1 if r_death_date ~=.
+la var r_ind_dod "Indicator R death date present"
+tab r_ind_dod, missing
 
 //Decedent has n1 core interview or n2 if n1 w/i 6m of death
-gen r_days_n1_core_dead = r_death_date_e - r_c_ivw_date_n1
+gen r_days_n1_core_dead = r_death_date - r_c_ivw_date_n1
+tab r_ind_dod if r_days_n1_core_dead==., missing
+//missing days all have no core n1 interview
+tab r_core_year_n1 if r_days_n1_core_dead==., missing
 
 gen r_ind_n1_wi_6m_dead = .
 replace r_ind_n1_wi_6m_dead=1 if r_days_n1_core_dead <183 & r_days_n1_core_dead!=.
@@ -81,6 +101,7 @@ tab r_core_pre_ind r_exit_year_x , missing
 gen byte ins_ind=.
 replace ins_ind=1 if r_part_ab_6m==1 & r_hmo_d_6m==0
 replace ins_ind=0 if r_part_ab_6m!=1 | r_hmo_d_6m!=0
+la var ins_ind "FFS Medicare 6m pre-death"
 tab ins_ind, missing
 
 //has spouse p1 interview
@@ -92,7 +113,8 @@ tab sp1core_ind r_exit_year_x , missing
 tab s_core_year_p1 r_exit_year_x , missing
 
 //has spouse n1 interview or n2 if n1 w/i 6m of R's death
-gen s_days_n1_core_dead = r_death_date_e - s_c_ivw_date_n1
+gen s_days_n1_core_dead = r_death_date - s_c_ivw_date_n1
+tab s_core_year_n1 if s_days_n1_core_dead==., missing
  
 gen s_ind_n1_wi_6m_dead = .
 replace s_ind_n1_wi_6m_dead=1 if s_days_n1_core_dead <183 & s_days_n1_core_dead!=.
@@ -111,7 +133,7 @@ tab s_core_pre_ind r_exit_year_x , missing
 tab s_cesd_tot_n1 s_ind_n1_wi_6m_dead, missing
 gen s_cesd_tot_n1n2 = s_cesd_tot_n1 if s_ind_n1_wi_6m_dead==0
 replace s_cesd_tot_n1n2 = s_cesd_tot_n2 if s_ind_n1_wi_6m_dead==1
-tab s_cesd_tot_n1n2, missing
+tab s_cesd_tot_n1n2 s_core_pre_ind, missing
 
 gen byte cesd_miss_n1n2 = 0
 replace cesd_miss_n1n2 =1 if s_cesd_tot_n1n2==.
@@ -130,6 +152,7 @@ tab s_proxy_n1n2 , missing
 gen byte proxy_n1_or_p1 = 0
 replace proxy_n1_or_p1 =1 if s_proxy_core_p1==1 | s_proxy_n1n2==1
 la var proxy_n1_or_p1 "Ind. that s p1 or n1 ivw is via proxy"
+tab proxy_n1_or_p1, missing
 
 tab proxy_n1_or_p1 cesd_miss_n1_p1 if r_core_pre_ind==1 & r_xwalk_yes==1 & ///
 	ins_ind==1 & r_married_x==1 & sp1core_ind==1 & s_core_pre_ind==1 , missing
@@ -246,7 +269,7 @@ sp1core_ind==1 & s_core_pre_ind==1 & no_cc_12m_excl_cataract==0 ///
 mat sample[12,1]=r(N)
 
 mat list sample
-	/*	
+
 frmttable using `logpath'\1-spouse_intens_pro_sample , statmat(sample) ///
 	title("2010 sample size estimate - requiring an n1 core interview") ///
 	ctitle("","n") ///
@@ -256,7 +279,7 @@ frmttable using `logpath'\1-spouse_intens_pro_sample , statmat(sample) ///
 	"Not Proxy n1 or p1 s interview" \ "Full CESD interview n1 and p1" \ ///
 	"No comorb 12m before death" \ "Accidents, Suicide, Homicide = cause of death" \ ///
 	"p1 ivw 90+ days from r's death") ///
-	note("Pre-death core interview defined as having core intervivew at least" \ ///
+	note("Pre-death core interview defined as having core interview at least" \ ///
 	"6m prior to R's death for both R and S. No comorb 12m before death uses data" \ ///
 	"warehouse chronic conditions excluding cataract and glaucoma.") ///
 	sdec(0) replace
@@ -271,8 +294,6 @@ drop if ins_ind==0
 drop if r_married_x==0 
 drop if sp1core_ind==0
 drop if s_core_pre_ind==0
-
-drop r_part_ab_6m_old r_hmo_d_6m_old
 
 tab r_exit_year_x r_core_year_n1
 
@@ -544,10 +565,12 @@ la var cc_all_count_6m12m_2 "Count of cc's, 6-12m pre-death, excludes cataract a
 tab cc_all_count_6m12m_2 , missing
 
 //interview timeline variables
+//note these use the dod from HRS if present and claims if HRS is missing
 sum r_days_n1_core_dead, detail
 sum s_days_n1_core_dead, detail
-gen r_days_x_exit_dead = r_e_ivw_date_x - r_death_date_e
+gen r_days_x_exit_dead = r_e_ivw_date_x - r_death_date
 label var days_p1_core_dead "Days from R's death to S p1 interview"
+sum r_days_x_exit_dead, detail
 tab days_p1_core_dead, missing
 
 tab r_ind_n1_wi_6m_dead, missing
@@ -556,7 +579,8 @@ tab s_ind_n1_wi_6m_dead, missing
 *************************************************
 //variables that use n2 core if r n1 within 6m of death
 local rvarn1n2 r_nhres r_rel_nb r_adl_impair r_srh_pf 
-local svarn1n2 s_psych_overall_hrs s_cesd_tot s_cesd_tot_ge3
+local svarn1n2 s_psych_overall_hrs s_cesd_tot_ge3 s_srh_pf
+//note s_cesd_tot_n1n2 created in previous section
 
 foreach i in r s{
 	foreach v in ``i'varn1n2'{
@@ -574,6 +598,23 @@ la var r_srh_pf_n1n2 "R SRH Fair/Poor n1 or n2 core"
 la var s_psych_overall_hrs_n1n2 "S Psych condition n1 or n2 core"
 la var s_cesd_tot_n1n2 "S CES-D score, n1 or n2 core"
 la var s_cesd_tot_ge3_n1n2 "S Depressed CESD 3+, n1 or n2 core"
+la var s_srh_pf_n1n2 "S SRH Poor/Fair, n1 or n2 core"
+*************************************************
+//s comorb category indicators
+tab s_comor_c_hrs_n1, missing
+tab s_comor_c_hrs_n1, gen(scom)
+rename scom1 s_hrs_comorb_none_n1
+rename scom2 s_hrs_comorb_mild_n1
+rename scom3 s_hrs_comorb_mod_n1
+rename scom4 s_hrs_comorb_sev_n1
+
+tab s_hrs_comorb_none_n1, missing
+tab s_hrs_comorb_mild_n1, missing
+tab s_hrs_comorb_mod_n1, missing
+tab s_hrs_comorb_sev_n1, missing
+
+//since only 1 obs has severe, categorize as mod
+replace s_hrs_comorb_mod_n1=1 if s_hrs_comorb_sev_n1==1
 
 *************************************************
 //s cesd change variables from interview before 6m before R's death to p1 interview
@@ -670,16 +711,16 @@ log using "`logpath'\3-Spouse_intensive_univariate.txt", text replace
 cd `datapath'
 
 //use sample with full ces-d information
-use spouse_intens_data_sample.dta if cesd_miss_n1_p1==0
+use spouse_intens_data_cleaned.dta if cesd_miss_n1_p1==0
 *********************************************************
 
 tab int_any_of5_6m, missing 
 *********************************************************
 //Table 1 Decedent characteristics
 *********************************************************
-local rvars r_female r_black_e r_hisp_eth_e r_hseduc_n1_n3 r_nw_lowest_n1 ///
+local rvars r_female r_black_e r_hisp_eth_e r_white_e r_hseduc_n1_n3 r_nw_lowest_n1 ///
 r_nw_midlow_n1 r_nw_midhigh_n1 r_nw_highest_n1 r_medicaid_n1 r_champus_n1 r_medigap_n1 ///
-r_imprelig_vimp_n1 r_rel_nb_n1n2 r_nhres_n1n2 r_advdir_y r_discuss_x ///
+r_imprelig_vimp_n1 r_rel_nb_n1n2 r_nhres_n1n2 r_advdir_x r_discuss_x ///
 r_adl_impair_n1n2 r_srh_pf_n1n2 ///
 cc_3_alzhdmta_n12mn6m ///
 cc_6_chrnkidn_n12mn6m cc_ami_isch_n12mn6m cc_8_chf_n12mn6m ///
@@ -691,8 +732,9 @@ local rvars_2 cc_all_count_6m12m_2 hci_index hospital_beds specialists
 
 la var r_age "Age at death, years, mean (SD)"
 la var r_female "Female, %"
-la var r_black_e "Race, Non-Hispanic, Black, %"
-la var r_hisp_eth_e "Hispanic Ethnicity, %"
+la var r_black_e "Race, Non-Hispanic, Black, %*"
+la var r_hisp_eth_e "Hispanic Ethnicity, %*"
+la var r_white_e "White, %*"
 la var r_hseduc_n1_n3 "Education, High School Grad, %"
 la var r_nw_lowest_n1 "Net Worth, 1 (low) Quartile, %"
 la var r_nw_midlow_n1  "Net Worth, 2 Quartile, %"
@@ -702,13 +744,16 @@ la var r_medicaid_n1  "Medicaid, %"
 la var r_champus_n1  "VA Insurance, %"
 la var r_medigap_n1 "Medigap, %"
 la var r_imprelig_vimp_n1 "Religion very important, %"
-la var r_rel_nb_n1n2 "Relatives nearby, %"
-la var r_nhres_n1n2 "Nursing home resident pre-death, %"
-la var r_advdir_y "Had advanced directive, %**
+la var r_rel_nb_n1n2 "Relatives nearby, %**"
+la var r_nhres_n1n2 "Nursing home resident pre-death, %**"
+la var r_advdir_x "Had advanced directive, %**"
 la var r_discuss_x "Discussion of EOL care, %"
-la var r_adl_impair_n1n2 "ADL Impairment, %"
-la var r_srh_pf_n1n2 "SRH poor or fair, %"
+la var r_adl_impair_n1n2 "ADL Impairment, %**"
+la var r_srh_pf_n1n2 "SRH poor or fair, %**"
 la var cc_all_count_6m12m_2 "Number of chronic conditions, mean (SD)"
+la var hci_index "Hospital care intensity index, mean (SD)"
+la var hospital_beds "Acute care hospital beds/1000 res., mean (SD)"
+la var specialists "Specialists/10000 res., mean (SD)"
 
 //part 1, get n's
 mat t1_n=J(1,3,.)
@@ -726,13 +771,13 @@ local c = 1
 foreach i in 1 0{
 	sum r_age if int_any_of5_6m==`i'
 	mat t1_2[1,`c']=r(mean)
-	mat t1_2[1,`c'+2]=r(sd)
+	mat t1_2[1,`c'+1]=r(sd)
 	local c = `c'+2	
 }
-
+local r = 1
 mat t1_2[`r',5]=(t1_2[`r',1]-t1_2[`r',3])/sqrt((t1_2[`r',2]^2+t1_2[`r',4]^2)/2) 
 
-mat rownames t1_2=`r_age'
+mat rownames t1_2=r_age
 
 mat dmat=(0,1,0,1,0)
 mat ann=(1,1,0\1,1,0)
@@ -747,7 +792,7 @@ frmttable, statmat(t1_2) varlabels ///
 	store(tab1_2) 	
 
 //part 3, r characteristics, binary vars, % and std diff
-mat t1_3=J(31,3,.)
+mat t1_3=J(32,3,.)
 local r = 1
 foreach v in `rvars'{
 	local c = 1
@@ -771,16 +816,22 @@ foreach v in `rvars_2'{
 	local c = 1
 	foreach i in 1 0{
 		sum `v' if int_any_of5_6m==`i'
-		mat t1_4[1,`c']=r(mean)
-		mat t1_4[1,`c'+2]=r(sd)
+		mat t1_4[`r',`c']=r(mean)
+		mat t1_4[`r',`c'+1]=r(sd)
 		local c = `c'+2	
 	}
 	mat t1_4[`r',5]=(t1_4[`r',1]-t1_4[`r',3])/sqrt((t1_4[`r',2]^2+t1_4[`r',4]^2)/2) 
+
 	local r = `r'+1
 }
 mat rownames t1_4=`rvars_2'
 
 mat list t1_4
+
+mat dmat=(0,1,0,1,0)
+mat ann=(1,1,0\1,1,0\1,1,0\1,1,0)
+mat list dmat
+mat list ann
 
 frmttable, statmat(t1_4) varlabels ///
 	sdec(2) doubles(dmat) ///
@@ -790,16 +841,19 @@ frmttable, statmat(t1_4) varlabels ///
 //combine into single table and export
 outreg, replay(tab1_1) append(tab1_2) store(tab1_a)
 outreg, replay(tab1_a) append(tab1_3) store(tab1_b)
-outreg using `logpath'/3_s_intens_pro_univar, 
+outreg using `logpath'/3_s_intens_pro_univar, ///
 	replay(tab1_b) append(tab1_4) ///
-	title("Table 1: Decedent and region char by intensive procedure use") ///
-	ctitles("","Intensive Procedure Used","No intesive procedure","Stand Diff (%)" ///
+	title("Table 1: Decedent and region characteristics by intensive procedure use") ///
+	ctitles("","Intensive Procedure Used","No intensive procedure","Stand Diff (%)") ///
+	note("* Categories do not total 100% because of missing responses" \ ///
+	"** If pre-death interview within 6m of death, use prior interview (n2) response" \ ///
+	"Chronic conditions are cms data warehouse chronic conditions, 6-12 pre death") ///
 	replace
 
 *********************************************************
 //Table 2 Spouse characteristics
 *********************************************************
-local svars s_female s_black_e s_hisp_eth_e s_hseduc_n1_n3 ///
+local svars s_female s_black_e s_hisp_eth_e s_white_e s_hseduc_n1_n3 ///
 s_srh_pf_n1n2 s_imprelig_vimp_n1 s_hrs_comorb_none_n1 ///
 s_hrs_comorb_mild_n1 s_hrs_comorb_mod_n1 s_psych_overall_hrs_n1n2 ///
 s_cesdbetter s_cesd_ge3better s_cesd_tot_ge3_n1n2 s_cesd_tot_ge3_p1 
@@ -808,16 +862,17 @@ local svars_2 s_cesd_tot_n1n2 s_cesd_tot_p1
 
 la var s_age "Age at  R's death, years, mean (SD)"
 la var s_female "Female, %"
-la var s_black_e "Race, Non-Hispanic, Black, %"
-la var s_hisp_eth_e "Hispanic Ethnicity, %"
+la var s_black_e "Race, Non-Hispanic, Black, %*"
+la var s_hisp_eth_e "Hispanic Ethnicity, %*"
+la var s_white_e "White, %*"
 la var s_hseduc_n1_n3 "Education, High School Grad, %"
 
-la var s_srh_pf_n1n2 "SRH Fair or Poor, %"
+la var s_srh_pf_n1n2 "SRH Fair or Poor, %**"
 la var s_imprelig_vimp_n1 "Religion very important, %" 
 la var s_hrs_comorb_none_n1 "Comorbidities - none, %"
 la var s_hrs_comorb_mild_n1 "Mild (1-3), %"
-la var s_hrs_comorb_mod_n1 "Moderate (4-6), %"
-la var s_psych_overall_hrs_n1n2 "Psychiatric condition, %"
+la var s_hrs_comorb_mod_n1 "Moderate (4-6) or Severe (7), %"
+la var s_psych_overall_hrs_n1n2 "Psychiatric condition, %**"
 la var s_cesdbetter "CESD Improved (any amount) pre to post death, %"
 la var s_cesd_ge3better "CESD Clinical Improvement pre to post death, %"
 la var s_cesd_tot_ge3_n1n2 "Clinically depressed (3+) pre death, %"
@@ -835,13 +890,13 @@ local c = 1
 foreach i in 1 0{
 	sum s_age if int_any_of5_6m==`i'
 	mat t2_2[1,`c']=r(mean)
-	mat t2_2[1,`c'+2]=r(sd)
+	mat t2_2[1,`c'+1]=r(sd)
 	local c = `c'+2	
 }
-
+local r = 1
 mat t2_2[`r',5]=(t2_2[`r',1]-t2_2[`r',3])/sqrt((t2_2[`r',2]^2+t2_2[`r',4]^2)/2) 
 
-mat rownames t2_2=`s_age'
+mat rownames t2_2=s_age
 
 mat dmat=(0,1,0,1,0)
 mat ann=(1,1,0\1,1,0)
@@ -856,7 +911,7 @@ frmttable, statmat(t2_2) varlabels ///
 	store(tab2_2) 	
 
 //part 3, s characteristics, binary vars, % and std diff
-mat t2_3=J(14,3,.)
+mat t2_3=J(15,3,.)
 local r = 1
 foreach v in `svars'{
 	local c = 1
@@ -870,6 +925,7 @@ foreach v in `svars'{
 	local r = `r'+1
 }
 mat rownames t2_3=`svars'
+mat list t2_3
 frmttable, statmat(t2_3) varlabels ///
 	sdec(2) store(tab2_3)
 
@@ -880,8 +936,8 @@ foreach v in `svars_2'{
 	local c = 1
 	foreach i in 1 0{
 		sum `v' if int_any_of5_6m==`i'
-		mat t2_4[1,`c']=r(mean)
-		mat t2_4[1,`c'+2]=r(sd)
+		mat t2_4[`r',`c']=r(mean)
+		mat t2_4[`r',`c'+1]=r(sd)
 		local c = `c'+2	
 	}
 	mat t2_4[`r',5]=(t2_4[`r',1]-t2_4[`r',3])/sqrt((t2_4[`r',2]^2+t2_4[`r',4]^2)/2) 
@@ -899,14 +955,17 @@ frmttable, statmat(t2_4) varlabels ///
 //combine into single table and export
 outreg, replay(tab1_1) append(tab2_2) store(tab2_a)
 outreg, replay(tab2_a) append(tab2_3) store(tab2_b)
-outreg using `logpath'/3_s_intens_pro_univar, 
+outreg using `logpath'/3_s_intens_pro_univar, ///
 	replay(tab2_b) append(tab2_4) ///
-	title("Table 2: Spouse char by intensive procedure use") ///
-	ctitles("","Intensive Procedure Used","No intesive procedure","Stand Diff (%)" ///
+	title("Table 2: Spouse characteristics by intensive procedure use") ///
+	ctitles("","Intensive Procedure Used","No intensive procedure","Stand Diff (%)") ///
+	note("* Categories do not total 100% because of missing responses" \ ///
+	"** If pre-death interview within 6m of death, use prior interview (n2) response") ///
 	addtable
 
 *********************************************************
 log close
+
 
 H="Set up dataset for propensity score matching"
 

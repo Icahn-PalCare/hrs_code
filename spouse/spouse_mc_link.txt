@@ -19,8 +19,11 @@ libname spo_mc 'E:\data\spouse_claims\data';
 libname medi 'E:\data\cms_DUA_25000_2010';
 
 H="FFS determination for spouse"
-/*determine ffs medicare 6 months before R's death using the 
-claims denominator files*/
+/*determine Spouse ffs medicare before R's death using the 
+claims denominator files
+
+Several sets of variables created, looking back 6m, 12m, 18m, 24m from R's death
+*/
 
 /*sort claims denominator file*/
 proc sort data=medi.dn_2000_2010 out=dn_2000_20102  nodupkey;
@@ -33,21 +36,39 @@ just keep in those observations where s has a medicare xwalk id*/
 proc contents data=spo_fnl.spouse_data; run;
 proc freq data=spo_fnl.spouse_data; table s_xwalk_yes; run;
 
+/*use R dod from claims if missing in the HRS dataset*/
 data r_sp;
-set spo_fnl.spouse_data(keep=r_death_date_e r_id r_bid_hrs r_xwalk_yes s_id s_bid_hrs s_xwalk_yes s_age);
+set spo_fnl.spouse_data(keep=r_death_date_e r_id r_bid_hrs r_xwalk_yes s_id s_bid_hrs 
+	s_xwalk_yes s_age r_claims_dod);
 if s_xwalk_yes=1;
-r_death_year=year(r_death_date_e);
-r_death_month=month(r_death_date_e);
+r_dod_hrs_claims = r_death_date_e;
+r_dod_use_claims=0;
+if r_death_date_e=. & r_claims_dod~=. then do;
+	r_dod_hrs_claims=r_claims_dod;
+	r_dod_use_claims=1;
+	end;
+r_dod_missing_yes=0;
+if r_dod_hrs_claims=. then r_dod_missing_yes=1;
+r_death_year=year(r_dod_hrs_claims);
+r_death_month=month(r_dod_hrs_claims);
 run;
 
-proc sort data=r_sp nodupkey; by r_id; run;
+proc freq; table r_death_month r_death_year r_dod_missing_yes r_dod_use_claims; run;
+
+*keep a version with only those with dod;
+data r_sp2;
+set r_sp;
+if r_dod_missing_yes=0;
+run;
+
+proc sort data=r_sp2 nodupkey; by r_id; run;
 proc freq; table s_xwalk_yes; run;
 
 /*get denominator file for just death year for those with xwalk id only*/
 proc sql;
 create table s_dn_death_y as select
 a.*,b.buyin12,b.year,b.HMOIND12
-from r_sp a inner join
+from r_sp2 a inner join
 dn_2000_20102 b
 on trim(left(a.s_bid_hrs))=trim(left(b.BID_hrs_19))
 and a.r_death_year=b.year;
@@ -59,14 +80,14 @@ run;
 
 /*who is missing denominator file??*/
 proc sql;
-create table s_missing_dn as select * from r_sp where s_bid_hrs
+create table s_missing_dn as select * from r_sp2 where s_bid_hrs
 not in (select BID_hrs_19 from dn_2000_20102); 
 quit;
 
 proc sql;
 create table s_missing_dn_2 as select
 a.*,b.buyin12,b.year,b.HMOIND12
-from r_sp a left join
+from r_sp2 a left join
 dn_2000_20102 b
 on trim(left(a.s_bid_hrs))=trim(left(b.BID_hrs_19))
 and a.r_death_year=b.year;
@@ -85,10 +106,10 @@ set s_missing_dn_3;
 if dn_missing=1;
 run;
 
-/*144 of the 269 missing denominator file are <65 when R dies*/
-proc freq; table s_age; run;
+/*144 of the 245 missing denominator file are <65 when R dies*/
+proc freq; table r_death_year s_age; run;
 
-/*1915 spouses have denominator file linked year of R's death
+/*1932 spouses have denominator file linked year of R's death
 cases where spouse remarried after first r's death, and then in sample when 2nd r dies*/
 proc sql;
 select count(distinct s_bid_hrs) from s_dn_death_y;
@@ -106,6 +127,7 @@ buyin_dy=trim(left(buyin12));
 hmo_dy=trim(left(HMOIND12));
 end;
 format r_death_date_e date9.;
+format r_dod_hrs_claims date9.;
 run;
 proc means n;
 var r_death_month;
@@ -113,7 +135,7 @@ run;
 
 /*Check year prior to death to backfill for death dates
 in the first half of the year (since doing 6 mo look back)*/
-/* 1756 have the -1 year dn file*/
+/* 1772 have the -1 year dn file*/
 proc sql;
 create table s_dn_death_y_bef as select
 a.r_bid_hrs,a.s_bid_hrs,a.year as death_year,
@@ -125,6 +147,20 @@ on trim(left(a.s_bid_hrs))=trim(left(b.BID_hrs_19))
 and 0<a.year-b.year<=1 order by s_bid_hrs,year;
 quit;
 
+
+/* and the year before... 1537 have the -2 year dn file*/
+proc sql;
+create table s_dn_death_y_2bef as select
+a.r_bid_hrs,a.s_bid_hrs,a.death_year,a.death_year_bef,
+b.year as death_year_2bef,
+b.year,b.buyin12,b.HMOIND12
+from s_dn_death_y_bef a inner join
+dn_2000_20102 b
+on trim(left(a.s_bid_hrs))=trim(left(b.BID_hrs_19))
+and 0<a.death_year_bef-b.year<=1 order by s_bid_hrs,year;
+quit;
+
+/*merge the insurance data for death year, -1 and -2 years into single dataset*/
 proc sql;
 create table s_all_insurance as select a.*,b.buyin12 as buyin_bef,b.HMOIND12 as hmo_bef from
 s_dn_death_y2 a
@@ -133,19 +169,28 @@ s_dn_death_y_bef b
 on trim(left(a.s_bid_hrs))=trim(left(b.s_bid_hrs)) and trim(left(a.r_bid_hrs))=trim(left(b.r_bid_hrs));
 quit;
 
+proc sql;
+create table s_all_insurance2 as select a.*,b.buyin12 as buyin_2bef,b.HMOIND12 as hmo_2bef from
+s_all_insurance a
+left join
+s_dn_death_y_2bef b
+on trim(left(a.s_bid_hrs))=trim(left(b.s_bid_hrs)) and trim(left(a.r_bid_hrs))=trim(left(b.r_bid_hrs));
+quit;
+
+
 /*merge death year and year before death buy-in and hmo variables
 Trim so the final variable _6m is 6 months pre-death
 Note: indicator variables for parts a and b and hmo are null if don't
 have information for full 6 months pre-death*/
-data s_all_insurance2;
-set s_all_insurance;
-buyin_2y=trim(left(buyin_bef))||trim(left(buyin_dy));
-hmo_2y=trim(left(hmo_bef))||trim(left(hmo_dy));
+data s_all_insurance3;
+set s_all_insurance2;
+buyin_2y=trimn(left(buyin_2bef))||trimn(left(buyin_bef))||trimn(left(buyin_dy));
+hmo_2y=trimn(left(hmo_2bef))||trimn(left(hmo_bef))||trimn(left(hmo_dy));
 
 buyin_2y_r=reverse(trim(buyin_2y));
 hmo_2y_r=reverse(trim(hmo_2y));
 
-/*create 6 month variable*/
+/*create 6 month variables*/
 if length(buyin_2y_r)>5 then buyin_6m_r=substr(trim(left(buyin_2y_r)),1,6);
 if length(hmo_2y_r)>5 then hmo_6m_r=substr(trim(left(hmo_2y_r)),1,6);
 
@@ -161,8 +206,48 @@ if indexc(buyin_6m,"0","1","2","A","B") then part_ab_6m=0;
 if indexc(buyin_6m,"0","1","2","A","B")=0 then part_ab_6m=1;
 end;
 if length(hmo_6m)=6 then do;
-if index(hmo_6m,"00000") then hmo_d_6m=0;
-if index(hmo_6m,"00000")=0 then hmo_d_6m=1;
+if index(hmo_6m,"000000") then hmo_d_6m=0;
+if index(hmo_6m,"000000")=0 then hmo_d_6m=1;
+end;
+
+/*create 12 month variables*/
+if length(buyin_2y_r)>11 then buyin_12m_r=substr(trim(left(buyin_2y_r)),1,12);
+if length(hmo_2y_r)>11 then hmo_12m_r=substr(trim(left(hmo_2y_r)),1,12);
+
+if length(buyin_2y_r)<12 then buyin_12m_r="";
+if length(hmo_2y_r)<12 then hmo_12m_r="";
+
+buyin_12m=reverse(trim(buyin_12m_r));
+hmo_12m=reverse(trim(hmo_12m_r));
+
+/*create indicator variable for mc coverage 12 mo. 0=no, 1=yes*/
+if length(buyin_12m)=12 then do;
+if indexc(buyin_12m,"0","1","2","A","B") then part_ab_12m=0;
+if indexc(buyin_12m,"0","1","2","A","B")=0 then part_ab_12m=1;
+end;
+if length(hmo_12m)=12 then do;
+if index(hmo_12m,"000000000000") then hmo_d_12m=0;
+if index(hmo_12m,"00000000000")=0 then hmo_d_12m=1;
+end;
+
+/*create 24 month variables*/
+if length(buyin_2y_r)>23 then buyin_24m_r=substr(trim(left(buyin_2y_r)),1,24);
+if length(hmo_2y_r)>23 then hmo_24m_r=substr(trim(left(hmo_2y_r)),1,24);
+
+if length(buyin_2y_r)<24 then buyin_24m_r="";
+if length(hmo_2y_r)<24 then hmo_24m_r="";
+
+buyin_24m=reverse(trim(buyin_24m_r));
+hmo_24m=reverse(trim(hmo_24m_r));
+
+/*create indicator variable for mc coverage 24 mo. 0=no, 1=yes*/
+if length(buyin_24m)=24 then do;
+if indexc(buyin_24m,"0","1","2","A","B") then part_ab_24m=0;
+if indexc(buyin_24m,"0","1","2","A","B")=0 then part_ab_24m=1;
+end;
+if length(hmo_24m)=24 then do;
+if index(hmo_24m,"000000000000000000000000") then hmo_d_24m=0;
+if index(hmo_24m,"000000000000000000000000")=0 then hmo_d_24m=1;
 end;
 
 run;
@@ -170,26 +255,28 @@ run;
 /*36 observations don't have full denominator data re insurance status
 either died Before July 2000 or are missing year -1 dn file*/
 proc freq;
-table part_ab_6m hmo_d_6m;
+table part_ab_6m*hmo_d_6m part_ab_12m*hmo_d_12m part_ab_24m*hmo_d_24m;
 run;
 
 data zzzztest;
-set s_all_insurance2;
+set s_all_insurance3;
 if part_ab_6m=.;
 run;
 
 /*bring in insurance indicators to full decedent/spouse dataset*/
 proc sql;
 create table spo_mc.r_sp_ins as select
-a.*, b.part_ab_6m as s_part_ab_6m , b.hmo_d_6m as s_hmo_d_6m 
+a.*, b.part_ab_6m as s_part_ab_6m , b.hmo_d_6m as s_hmo_d_6m , 
+b.part_ab_12m as s_part_ab_12m , b.hmo_d_12m as s_hmo_d_12m ,
+b.part_ab_24m as s_part_ab_24m , b.hmo_d_24m as s_hmo_d_24m 
 from 
 spo_fnl.spouse_data a left join 
-s_all_insurance2 b
+s_all_insurance3 b
 on a.r_id=b.r_id;
 quit;
 
 proc freq;
-table s_part_ab_6m*s_hmo_d_6m;
+table s_part_ab_6m*s_hmo_d_6m s_part_ab_12m*s_hmo_d_12m s_part_ab_24m*s_hmo_d_24m;
 run;
 
 
@@ -199,7 +286,10 @@ outfile="E:\data\spouse_claims\data\r_sp_ins.dta" replace;
 run;
 
 
-H="Sample size requiring xwalk only"
+H="Sample size requiring S ffs mc"
+/*sample size for Spouse claims data
+Requires both R and S to have FFS MC 6m prior to R's death*/
+
 capture log close
 
 clear all
@@ -216,7 +306,7 @@ cd "`projdatapath'"
 use r_sp_ins.dta
 
 //set matrix for sample size determination table
-mat deced_core=J(6,1,.)
+mat deced_core=J(8,1,.)
 
 //all decedents from 2002-2010 exit interviews
 sum r_exit_year_x, detail
@@ -256,15 +346,33 @@ mat deced_core[5,1]=r(N)
 
 //add spouse has ffs medicare 6 months prior to r's death
 //have parts a and b coverage and no hmo
-gen byte s_ins_ind=.
-replace s_ins_ind=1 if s_part_ab_6m==1 & s_hmo_d_6m==0
-replace s_ins_ind=0 if s_part_ab_6m!=1 | s_hmo_d_6m!=0
-tab s_ins_ind, missing
+gen byte s_ins_ind_6m=.
+replace s_ins_ind_6m=1 if s_part_ab_6m==1 & s_hmo_d_6m==0
+replace s_ins_ind_6m=0 if s_part_ab_6m!=1 | s_hmo_d_6m!=0
+tab s_ins_ind_6m, missing
+
+gen byte s_ins_ind_12m=.
+replace s_ins_ind_12m=1 if s_part_ab_12m==1 & s_hmo_d_12m==0
+replace s_ins_ind_12m=0 if s_part_ab_12m!=1 | s_hmo_d_12m!=0
+tab s_ins_ind_12m, missing
+
+gen byte s_ins_ind_24m=.
+replace s_ins_ind_24m=1 if s_part_ab_24m==1 & s_hmo_d_24m==0
+replace s_ins_ind_24m=0 if s_part_ab_24m!=1 | s_hmo_d_24m!=0
+tab s_ins_ind_24m, missing
 
 //with spouse ffs medicare
 sum r_exit_year_x if r_xwalk_yes==1 & r_ins_ind==1 &  r_married_x==1 & ///
-	s_xwalk_yes==1 & s_ins_ind==1, detail
+	s_xwalk_yes==1 & s_ins_ind_6m==1, detail
 mat deced_core[6,1]=r(N)
+
+sum r_exit_year_x if r_xwalk_yes==1 & r_ins_ind==1 &  r_married_x==1 & ///
+	s_xwalk_yes==1 & s_ins_ind_6m==1 & s_ins_ind_12m==1, detail
+mat deced_core[7,1]=r(N)
+
+sum r_exit_year_x if r_xwalk_yes==1 & r_ins_ind==1 &  r_married_x==1 & ///
+	s_xwalk_yes==1 & s_ins_ind_6m==1 & s_ins_ind_12m==1 & s_ins_ind_24m==1, detail
+mat deced_core[8,1]=r(N)
 
 mat list deced_core
 	
@@ -273,7 +381,8 @@ frmttable using `logpath'\2010_sample_est , statmat(deced_core) ///
 	ctitle("","n") ///
 	rtitle("All decedents from exit interviews" \ "With mc xwalk id" \ ///
 	"With FFS mc last 6 months of life" \ "Married at time of death" \ ///
- 	"Spouse has mc xwalk id" \ "S has ffs medicare 6 months before R's death") ///
+ 	"Spouse has mc xwalk id" \ "S has ffs medicare 6 months before R's death" \ ///
+	"S has ffs medicare 12m before R's death" \ "S has ffs medicare 24m before R's death") ///
 	sdec(0) replace
 
 **********************************************************

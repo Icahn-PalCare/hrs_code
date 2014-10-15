@@ -250,6 +250,16 @@ if index(hmo_24m,"000000000000000000000000") then hmo_d_24m=0;
 if index(hmo_24m,"000000000000000000000000")=0 then hmo_d_24m=1;
 end;
 
+label r_dod_hrs_claims = "R DOD from HRS or Claims";
+label r_dod_use_claims = "R DOD from Claims (missing in HRS)";
+label part_ab_6m = "S MC Parts A and B 6m pre R's death";
+label hmo_d_6m = "S HMO 6m pre R's death";
+label part_ab_12m = "S MC Parts A and B 12m pre R's death";
+label hmo_d_12m = "S HMO 12m pre R's death";
+label part_ab_24m = "S MC Parts A and B 24m pre R's death";
+label hmo_d_24m = "S HMO 24m pre R's death";
+
+
 run;
 
 /*36 observations don't have full denominator data re insurance status
@@ -266,7 +276,8 @@ run;
 /*bring in insurance indicators to full decedent/spouse dataset*/
 proc sql;
 create table spo_mc.r_sp_ins as select
-a.*, b.part_ab_6m as s_part_ab_6m , b.hmo_d_6m as s_hmo_d_6m , 
+a.*, b.r_dod_hrs_claims , b.r_dod_use_claims , 
+b.part_ab_6m as s_part_ab_6m , b.hmo_d_6m as s_hmo_d_6m , 
 b.part_ab_12m as s_part_ab_12m , b.hmo_d_12m as s_hmo_d_12m ,
 b.part_ab_24m as s_part_ab_24m , b.hmo_d_24m as s_hmo_d_24m 
 from 
@@ -411,3 +422,951 @@ Other Medicare use variables
 	IP days - last 2 years of life
 	SNF days - last 2 years of life
  
+
+H="Get S MC claims lists 6, 12 and 24m pre and post R's death"
+/*get claims lists, all claims types, for the 6m 12m and 24m before
+and after R's death
+
+get consolidated diagnosis list for each S across all claim types for the
+6m 12m and 24m before and after death periods*/
+
+/*Get pared down dataset
+Limit to those where spouse has ffs medicare 6m prior to r's death
+if missing the death date from the restricted dataset, use the claims dod
+Keep R's HRS ID so can use to match the R/S combination later on*/
+data spo_mc.s_r_dod;
+set spo_mc.r_sp_ins;
+if s_xwalk_yes=1 & s_part_ab_6m=1 & s_hmo_d_6m=0 ;
+ind_dod_yes=0;
+if r_dod_hrs_claims~=. then ind_dod_yes=1;
+keep r_BID_hrs r_id s_BID_hrs r_dod_hrs_claims r_dod_use_claims ind_dod_yes;
+run;
+
+proc freq; table r_dod_use_claims ind_dod_yes; run;
+
+/**************************************************************************/
+/* ************** S Claims Before R's Death  ******************************/
+/**************************************************************************/
+/*macro to get claims before death
+saves datasets for each claim type / time window to the spo_mc directory*/
+%macro claims(days_start=,days_bef_death=,source=,suf=);
+
+/*claims fully within x time of death date*/
+proc sql;
+create table &source._meet_1 as select a.*,b.r_dod_hrs_claims,b.r_id 
+from medi.&source._2000_2010 a inner join
+spo_mc.s_r_dod b
+on trim(left(a.bid_hrs_19))=trim(left(b.s_bid_hrs))
+and &days_start<=b.r_dod_hrs_claims-a.admit_date<=&days_bef_death ;
+quit;
+
+/*claims that start earlier than x time but span into x time before death*/
+proc sql;
+create table &source._meet_2 as select a.*,b.r_dod_hrs_claims,b.r_id 
+from medi.&source._2000_2010 a inner join
+spo_mc.s_r_dod b
+on trim(left(a.bid_hrs_19))=trim(left(b.s_bid_hrs))
+and b.r_dod_hrs_claims-a.admit_date>&days_bef_death and b.r_dod_hrs_claims-a.disch_date<=&days_bef_death;
+quit;
+
+data spo_mc.&source._meet_&suf.(compress=yes);
+set &source._meet_1 &source._meet_2;
+run;
+%mend;
+
+/*6m before death*/
+%claims(days_start=0,days_bef_death=183,source=hh,suf=6m); /*home health*/
+%claims(days_start=0,days_bef_death=183,source=hs,suf=6m); /*hospice*/
+%claims(days_start=0,days_bef_death=183,source=mp,suf=6m); /*medpar*/
+%claims(days_start=0,days_bef_death=183,source=dm,suf=6m); /*dme*/
+%claims(days_start=0,days_bef_death=183,source=op,suf=6m); /*outpatient*/
+%claims(days_start=0,days_bef_death=183,source=pb,suf=6m); /*carrier*/
+/*12m before death*/
+%claims(days_start=0,days_bef_death=365,source=hh,suf=12m); /*home health*/
+%claims(days_start=0,days_bef_death=365,source=hs,suf=12m); /*hospice*/
+%claims(days_start=0,days_bef_death=365,source=mp,suf=12m); /*medpar*/
+%claims(days_start=0,days_bef_death=365,source=dm,suf=12m); /*dme*/
+%claims(days_start=0,days_bef_death=365,source=op,suf=12m); /*outpatient*/
+%claims(days_start=0,days_bef_death=365,source=pb,suf=12m); /*carrier*/
+/*run for 24m before death*/
+%claims(days_start=0,days_bef_death=365*2,source=hh,suf=24m); /*home health*/
+%claims(days_start=0,days_bef_death=365*2,source=hs,suf=24m); /*hospice*/
+%claims(days_start=0,days_bef_death=365*2,source=mp,suf=24m); /*medpar*/
+%claims(days_start=0,days_bef_death=365*2,source=dm,suf=24m); /*dme*/
+%claims(days_start=0,days_bef_death=365*2,source=op,suf=24m); /*outpatient*/
+%claims(days_start=0,days_bef_death=365*2,source=pb,suf=24m); /*carrier*/
+
+/**************************************************************************/
+/* ************** S Claims After R's Death   ******************************/
+/**************************************************************************/
+/*macro to get claims after death
+saves datasets for each claim type / time window to the spo_mc directory*/
+%macro claims(days_start=,days_aft_death=,source=,suf=);
+
+/*claims fully within x time of death date*/
+proc sql;
+create table &source._meet_1 as select a.*,b.r_dod_hrs_claims,b.r_id 
+from medi.&source._2000_2010 a inner join
+spo_mc.s_r_dod b
+on trim(left(a.bid_hrs_19))=trim(left(b.s_bid_hrs))
+and &days_start<=a.admit_date - b.r_dod_hrs_claims<=&days_aft_death ;
+quit;
+
+/*claims that start earlier than R's DOD but span after R's death*/
+proc sql;
+create table &source._meet_2 as select a.*,b.r_dod_hrs_claims,b.r_id 
+from medi.&source._2000_2010 a inner join
+spo_mc.s_r_dod b
+on trim(left(a.bid_hrs_19))=trim(left(b.s_bid_hrs))
+and a.admit_date<b.r_dod_hrs_claims
+and &days_start<=a.disch_date - b.r_dod_hrs_claims;
+quit;
+
+data spo_mc.&source._meet_&suf.(compress=yes);
+set &source._meet_1 &source._meet_2;
+format disch_date date9.;
+format admit_date date9.;
+run;
+%mend;
+
+/*6m after death*/
+%claims(days_start=0,days_aft_death=183,source=hh,suf=p6m); /*home health*/
+%claims(days_start=0,days_aft_death=183,source=hs,suf=p6m); /*hospice*/
+%claims(days_start=0,days_aft_death=183,source=mp,suf=p6m); /*medpar*/
+%claims(days_start=0,days_aft_death=183,source=dm,suf=p6m); /*dme*/
+%claims(days_start=0,days_aft_death=183,source=op,suf=p6m); /*outpatient*/
+%claims(days_start=0,days_aft_death=183,source=pb,suf=p6m); /*carrier*/
+/*12m before death*/
+%claims(days_start=0,days_aft_death=365,source=hh,suf=p12m); /*home health*/
+%claims(days_start=0,days_aft_death=365,source=hs,suf=p12m); /*hospice*/
+%claims(days_start=0,days_aft_death=365,source=mp,suf=p12m); /*medpar*/
+%claims(days_start=0,days_aft_death=365,source=dm,suf=p12m); /*dme*/
+%claims(days_start=0,days_aft_death=365,source=op,suf=p12m); /*outpatient*/
+%claims(days_start=0,days_aft_death=365,source=pb,suf=p12m); /*carrier*/
+/*run for 24m before death*/
+%claims(days_start=0,days_aft_death=365*2,source=hh,suf=p24m); /*home health*/
+%claims(days_start=0,days_aft_death=365*2,source=hs,suf=p24m); /*hospice*/
+%claims(days_start=0,days_aft_death=365*2,source=mp,suf=p24m); /*medpar*/
+%claims(days_start=0,days_aft_death=365*2,source=dm,suf=p24m); /*dme*/
+%claims(days_start=0,days_aft_death=365*2,source=op,suf=p24m); /*outpatient*/
+%claims(days_start=0,days_aft_death=365*2,source=pb,suf=p24m); /*carrier*/
+
+/**************************************************************************/
+/* ********************* S Diagnosis Lists   ******************************/
+/**************************************************************************/
+
+%macro dx_time_range(range1=, range2=, suf=);
+/*pulls just dx codes from carrier claims*/
+data pb_last_&range2._dx(keep=bid_hrs_19 r_id diag);
+set spo_mc.pb_meet_&suf.(keep=bid_hrs_19 r_id PDGNS_CD DGNS_CD1-DGNS_CD12 );
+array dx PDGNS_CD DGNS_CD1-DGNS_CD12;
+do over dx;
+diag=dx ;
+output;
+end;
+run;
+proc sort data=pb_last_&range2._dx out=pb_last_&range2._dx2 nodupkey;
+by bid_hrs_19 r_id diag;
+run;
+
+/*outpatient claims*/
+data op_last_&range2._dx(keep=bid_hrs_19 r_id diag);
+set spo_mc.op_meet_&suf.(keep=bid_hrs_19 r_id PDGNS_CD DGNSCD01-DGNSCD25  );
+array dx PDGNS_CD DGNSCD01-DGNSCD25 ;
+do over dx;
+diag=dx ;
+output;
+end;
+run;
+proc sort data=op_last_&range2._dx out=op_last_&range2._dx2 nodupkey;
+by bid_hrs_19 r_id diag;
+run;
+
+/*medpar claims*/
+data mp_last_&range2._dx(keep=bid_hrs_19 r_id diag);
+set spo_mc.mp_meet_&suf.(keep=bid_hrs_19 r_id AD_DGNS DGNS_CD01-DGNS_CD25 );
+array dx D_DGNS DGNS_CD01-DGNS_CD25 ;
+do over dx;
+diag=dx ;
+output;
+end;
+run;
+proc sort data=mp_last_&range2._dx out=mp_last_&range2._dx2 nodupkey;
+by bid_hrs_19 r_id diag;
+run;
+
+/*dme claims*/
+data dm_last_&range2._dx(keep=bid_hrs_19 r_id diag);
+set spo_mc.dm_meet_&suf.(keep=bid_hrs_19 r_id PDGNS_CD DGNS_CD1-DGNS_CD12 );
+array dx PDGNS_CD DGNS_CD1-DGNS_CD12 ;
+do over dx;
+diag=dx ;
+output;
+end;
+run;
+proc sort data=dm_last_&range2._dx out=dm_last_&range2._dx2 nodupkey;
+by bid_hrs_19 r_id diag;
+run;
+
+/*home health agency*/
+data hh_last_&range2._dx(keep=bid_hrs_19 r_id diag);
+set spo_mc.hh_meet_&suf.(keep=bid_hrs_19 r_id PDGNS_CD DGNSCD01-DGNSCD25 );
+array dx PDGNS_CD DGNSCD01-DGNSCD25 ;
+do over dx;
+diag=dx ;
+output;
+end;
+run;
+proc sort data=hh_last_&range2._dx out=hh_last_&range2._dx2 nodupkey;
+by bid_hrs_19 r_id diag;
+run;
+
+/*hospice*/
+data hs_last_&range2._dx(keep=bid_hrs_19 r_id diag);
+set spo_mc.hs_meet_&suf.(keep=bid_hrs_19 r_id PDGNS_CD DGNSCD01-DGNSCD25 );
+array dx PDGNS_CD DGNSCD01-DGNSCD25 ;
+do over dx;
+diag=dx ;
+output;
+end;
+run;
+proc sort data=hs_last_&range2._dx out=hs_last_&range2._dx2 nodupkey;
+by bid_hrs_19 r_id diag;
+run;
+
+/*set diag variable length = 7 chars since that's the max length from the mc claims
+Need to do this because length varies across the different mc claim types*/
+data hs_last_&range2._dx3;
+length diag $7;
+set hs_last_&range2._dx2;
+run;
+data hh_last_&range2._dx3;
+length diag $7;
+set hh_last_&range2._dx2;
+run;
+data mp_last_&range2._dx3;
+length diag $7;
+set mp_last_&range2._dx2;
+run;
+data dm_last_&range2._dx3;
+length diag $7;
+set dm_last_&range2._dx2;
+run;
+data op_last_&range2._dx3;
+length diag $7;
+set op_last_&range2._dx2;
+run;
+data pb_last_&range2._dx3;
+length diag $7;
+set pb_last_&range2._dx2;
+run;
+
+data dx_all_last_&range2.;
+set hs_last_&range2._dx3
+hh_last_&range2._dx3
+mp_last_&range2._dx3
+dm_last_&range2._dx3
+op_last_&range2._dx3
+pb_last_&range2._dx3;
+run;
+
+proc sort data=dx_all_last_&range2.(where=(diag~="")) out=spo_mc.dx_&range1._&range2 nodupkey;
+by bid_hrs_19 r_id diag;
+run;
+
+%mend;
+
+/*run macro to create data files spo_mc.dx_0d_n6m spo_mc.dx_0d_n12m and spo_mc.dx_0d_n24m */
+%dx_time_range(range1=0d, range2=n6m, suf=6m);
+%dx_time_range(range1=0d, range2=n12m, suf=12m);
+%dx_time_range(range1=0d, range2=n24m, suf=24m);
+
+/*run for dx lists after R's death*/
+%dx_time_range(range1=0d, range2=p6m, suf=p6m);
+%dx_time_range(range1=0d, range2=p12m, suf=p12m);
+%dx_time_range(range1=0d, range2=p24m, suf=p24m);
+
+H="Get S Elixhauser comorbidities"
+/*creates indicators for each of the Elixhauser comorbidities
+based on the dx codes lists 6, 12, and 24m before and after R's death
+
+resulting datasets are spo_mc.hrs_elix*/
+
+/*rename macro - called within the elixhauser macro
+to add time suffix to variables
+
+lib=library
+dsn=dataset name
+pre=suffix to be added to all of the variable names
+*/
+
+%macro rename(lib,dsn,pre);
+options pageno=1 nodate;
+proc contents data=&lib..&dsn;
+title "Before Renaming All Variables";
+run;
+
+proc sql noprint;
+select nvar into :num_vars
+from dictionary.tables
+where libname="&LIB" and
+memname="&DSN";
+select distinct(name) into :var1-
+:var%TRIM(%LEFT(&num_vars))
+from dictionary.columns
+where libname="&LIB" and
+memname="&DSN";
+quit;
+run;
+
+proc datasets library=&LIB;
+modify &DSN;
+rename
+%do i=1 %to &num_vars;
+&&var&i=&&var&i.._&pre 
+%end;
+;
+quit;
+run;
+options pageno=1 nodate;
+proc contents data=&lib..&dsn;
+title "After Renaming All Variables";
+run;
+%mend rename;
+
+
+
+/*Elixhauser index macro
+Note includes additional 2 comorbidities: Dementia and Coronary Artery Disease*/
+
+%macro elixhauser(range1=, range2=);
+
+data dx_31_comor_&range2;
+set spo_mc.dx_&range1._&range2(rename=(diag=dx_0));
+dx=trim(left(dx_0));
+
+if dx~="" then do;
+
+comorbi_1=0;
+comorbi_2=0;
+comorbi_3=0;
+comorbi_4=0;
+comorbi_5=0;
+comorbi_6=0;
+comorbi_7=0;
+comorbi_8=0;
+comorbi_9=0;
+comorbi_10=0;
+comorbi_11=0;
+comorbi_12=0;
+comorbi_13=0;
+comorbi_14=0;
+comorbi_15=0;
+comorbi_16=0;
+comorbi_17=0;
+comorbi_18=0;
+comorbi_19=0;
+comorbi_20=0;
+comorbi_21=0;
+comorbi_22=0;
+comorbi_23=0;
+comorbi_24=0;
+comorbi_25=0;
+comorbi_26=0;
+comorbi_27=0;
+comorbi_28=0;
+comorbi_29=0;
+comorbi_30=0;
+*end of intialize of 30 binary variables;
+*add dementia and CAD;
+dementia=0;
+cad=0;
+
+*do over dx;
+	*Congestive Heart Failure;
+	if (substr(dx,1,5)='39891' or
+		substr(dx,1,5)='40211' or
+		substr(dx,1,5)='40291' or
+		substr(dx,1,5)='40411' or
+		substr(dx,1,5)='40413' or
+		substr(dx,1,5)='40491' or
+		substr(dx,1,5)='40493' or
+		substr(dx,1,3)='428') 
+		and comorbi_1=0 
+		then comorbi_1=1;*add one binary variables here.;
+	*Cardiac Arrhythmias;
+	if (substr(dx,1,5)='42610' or
+		substr(dx,1,5)='42611' or
+		substr(dx,1,5)='42613' or
+		substr(dx,1,4)='4262' or
+		substr(dx,1,4)='4263' or
+		substr(dx,1,4)='4264' or
+		substr(dx,1,5)='42650' or
+		substr(dx,1,5)='42651' or
+		substr(dx,1,5)='42652' or
+		substr(dx,1,5)='42653' or
+		substr(dx,1,4)='4266' or
+		substr(dx,1,4)='4267' or
+		substr(dx,1,4)='4268' or
+		substr(dx,1,4)='4270' or
+		substr(dx,1,4)='4272' or
+		substr(dx,1,5)='42731' or
+		substr(dx,1,5)='42760' or
+		substr(dx,1,4)='4279' or
+		substr(dx,1,4)='7850' or
+		substr(dx,1,4)='V450' or
+		substr(dx,1,4)='V533')
+			and comorbi_2=0 
+		then comorbi_2=1;
+	* Valvular Disease ;
+	if (substr(dx,1,5)='09320' or
+		substr(dx,1,5)='09321' or
+		substr(dx,1,5)='09322' or
+		substr(dx,1,5)='09323' or
+		substr(dx,1,5)='09324' or
+		substr(dx,1,3)='394' or
+		substr(dx,1,3)='395' or
+		substr(dx,1,3)='396' or
+		substr(dx,1,4)='3970' or
+		substr(dx,1,4)='3971' or
+		substr(dx,1,4)='4240' or
+		substr(dx,1,4)='4241' or
+		substr(dx,1,4)='4242' or
+		substr(dx,1,4)='4243' or
+		substr(dx,1,4)='4244' or
+		substr(dx,1,4)='4245' or
+		substr(dx,1,4)='4246' or
+		substr(dx,1,4)='4247' or
+		substr(dx,1,4)='4248' or
+		substr(dx,1,5)='42490' or
+		substr(dx,1,5)='42491' or
+		substr(dx,1,4)='7463' or
+		substr(dx,1,4)='7464' or
+		substr(dx,1,4)='7465' or
+		substr(dx,1,4)='7466' or
+		substr(dx,1,4)='V422' or
+		substr(dx,1,5)='V433')
+			and comorbi_3=0 
+		then comorbi_3=1;
+	*Pulmonary Circulation Disorders;
+	if (substr(dx,1,3)='416' or
+		substr(dx,1,4)='4179')
+			and comorbi_4=0 
+		then comorbi_4=1;
+	*Peripheral Vascular Disorders;
+	if (substr(dx,1,3)='440' or
+		substr(dx,1,4)='4412' or
+		substr(dx,1,4)='4414' or
+		substr(dx,1,4)='4417' or
+		substr(dx,1,4)='4419' or
+		substr(dx,1,4)='4431' or
+		substr(dx,1,4)='4432' or
+		substr(dx,1,4)='4438' or
+		substr(dx,1,4)='4439' or
+		substr(dx,1,4)='4471' or
+		substr(dx,1,4)='5571' or
+		substr(dx,1,4)='5579' or
+		substr(dx,1,4)='V434')
+			and comorbi_5=0 
+		then comorbi_5=1;
+	*Hypertension;
+	if ((substr(dx,1,4)='4011' or
+		substr(dx,1,4)='4019')) or
+	   ((substr(dx,1,5)='40210' or
+		substr(dx,1,5)='40290' or
+		substr(dx,1,5)='40410' or
+		substr(dx,1,5)='40490' or
+		substr(dx,1,5)='40511' or
+		substr(dx,1,5)='40519' or
+		substr(dx,1,5)='40591' or
+		substr(dx,1,5)='40599')) 
+			and comorbi_6=0 
+		then comorbi_6=1;
+	*Paralysis;	
+	if (substr(dx,1,4)='3420' or
+		substr(dx,1,5)='34210' or
+		substr(dx,1,5)='34211' or
+		substr(dx,1,5)='34212' or
+		substr(dx,1,4)='3429' or
+		substr(dx,1,3)='343' or
+		substr(dx,1,3)='344')
+			and comorbi_7=0 
+		then comorbi_7=1;
+	*Other Neurological Disorders;
+	if (substr(dx,1,4)='3319' or
+		substr(dx,1,4)='3320' or
+		substr(dx,1,4)='3334' or
+		substr(dx,1,4)='3335' or
+		substr(dx,1,3)='334' or
+		substr(dx,1,3)='335' or
+		substr(dx,1,3)='340' or
+		substr(dx,1,4)='3411' or
+		substr(dx,1,4)='3418' or
+		substr(dx,1,4)='3419' or
+		substr(dx,1,5)='34500' or
+		substr(dx,1,5)='34501' or
+		substr(dx,1,5)='34510' or
+		substr(dx,1,5)='34511' or
+		substr(dx,1,4)='3454' or
+		substr(dx,1,5)='34550' or
+		substr(dx,1,5)='34551' or
+		substr(dx,1,4)='3458' or
+		substr(dx,1,5)='34590' or
+		substr(dx,1,5)='34591' or
+		substr(dx,1,4)='3481' or
+		substr(dx,1,4)='3483' or
+		substr(dx,1,4)='7803' or
+		substr(dx,1,4)='7843') 
+			and comorbi_8=0 
+		then comorbi_8=1;	
+	*Chronic Pulmonary Disease;
+	if (substr(dx,1,3)='490' or
+		substr(dx,1,3)='491' or
+		substr(dx,1,3)='492' or
+		substr(dx,1,4)='4930' or
+		substr(dx,1,4)='4931' or
+		substr(dx,1,4)='4932' or
+		substr(dx,1,4)='4938' or
+		substr(dx,1,5)='49390' or
+		substr(dx,1,5)='49391' or
+		substr(dx,1,3)='494' or
+		substr(dx,1,3)='495' or
+		substr(dx,1,3)='496' or
+		substr(dx,1,3)='497' or
+		substr(dx,1,3)='498' or
+		substr(dx,1,3)='499' or
+		substr(dx,1,3)='500' or
+		substr(dx,1,3)='501' or
+		substr(dx,1,3)='502' or
+		substr(dx,1,3)='503' or
+		substr(dx,1,3)='504' or
+		substr(dx,1,3)='505' or
+		substr(dx,1,4)='5064') 
+			and comorbi_9=0 
+		then comorbi_9=1;	
+	*Diabetes, uncomplicated;
+	if (substr(dx,1,4)='2500' or
+		substr(dx,1,4)='2501' or
+		substr(dx,1,4)='2502' or
+		substr(dx,1,4)='2503') 
+			and comorbi_10=0 
+		then comorbi_10=1;
+	*Diabetes, complicated;
+	if (substr(dx,1,4)='2504' or
+		substr(dx,1,4)='2505' or
+		substr(dx,1,4)='2506' or
+		substr(dx,1,4)='2507' or
+		substr(dx,1,4)='2509') 
+			and comorbi_11=0 
+		then comorbi_11=1;
+	*Hypothyroidism;
+	if (substr(dx,1,3)='243' or
+		substr(dx,1,4)='2440' or
+		substr(dx,1,4)='2441' or
+		substr(dx,1,4)='2442' or
+		substr(dx,1,4)='2448' or
+		substr(dx,1,4)='2449') 	
+			and comorbi_12=0 
+		then comorbi_12=1;
+	*Renal Failure;
+	if (substr(dx,1,5)='40311' or
+		substr(dx,1,5)='40391' or
+		substr(dx,1,5)='40412' or
+		substr(dx,1,5)='40492' or
+		substr(dx,1,3)='585' or
+		substr(dx,1,3)='586' or
+		substr(dx,1,4)='V420' or
+		substr(dx,1,4)='V451' or
+		substr(dx,1,4)='V560' or
+		substr(dx,1,4)='V568') 
+			and comorbi_13=0 
+		then comorbi_13=1;
+	*Liver Disease;
+	if (substr(dx,1,5)='07032' or
+		substr(dx,1,5)='07033' or
+		substr(dx,1,5)='07054' or
+		substr(dx,1,4)='4560' or
+		substr(dx,1,4)='4561' or
+		substr(dx,1,5)='45620' or
+		substr(dx,1,5)='45621' or
+		substr(dx,1,4)='5710' or
+		substr(dx,1,4)='5712' or
+		substr(dx,1,4)='5713' or
+		substr(dx,1,4)='5714' or
+		substr(dx,1,4)='5715' or
+		substr(dx,1,4)='5716' or
+		substr(dx,1,4)='5718' or
+		substr(dx,1,4)='5719' or
+		substr(dx,1,4)='5723' or
+		substr(dx,1,4)='5728' or
+		substr(dx,1,4)='V427') 
+			and comorbi_14=0 
+		then comorbi_14=1;
+	*Peptic Ulcer Disease excluding bleeding;
+	if (substr(dx,1,5)='53170' or
+		substr(dx,1,5)='53190' or
+		substr(dx,1,5)='53270' or
+		substr(dx,1,5)='53290' or
+		substr(dx,1,5)='53370' or
+		substr(dx,1,5)='53390' or
+		substr(dx,1,5)='53470' or
+		substr(dx,1,5)='53490' or
+		substr(dx,1,5)='V1271') 
+			and comorbi_15=0 
+		then comorbi_15=1;
+	*AIDS;
+	if (substr(dx,1,3)='042' or
+		substr(dx,1,3)='043' or
+		substr(dx,1,3)='044') 
+			and comorbi_16=0 
+		then comorbi_16=1;
+	*Lymphoma;
+	if (substr(dx,1,3)='200' or
+		substr(dx,1,4)='201' or
+		substr(dx,1,4)='2020' or
+		substr(dx,1,4)='2021' or
+		substr(dx,1,4)='2022' or
+		substr(dx,1,4)='2023' or
+		substr(dx,1,4)='2025' or
+		substr(dx,1,4)='2026' or
+		substr(dx,1,4)='2027' or
+		substr(dx,1,4)='2028' or
+		substr(dx,1,4)='2029' or
+		substr(dx,1,4)='2030' or
+		substr(dx,1,4)='2038' or
+		substr(dx,1,4)='2386' or
+		substr(dx,1,4)='2733' or
+		substr(dx,1,4)='V1071' or
+		substr(dx,1,4)='V1072' or
+		substr(dx,1,4)='V1079')
+			and comorbi_17=0 
+		then comorbi_17=1;
+	*Metastatic Cancer;
+	if (substr(dx,1,3)='196' or
+		substr(dx,1,3)='197' or
+		substr(dx,1,3)='198' or
+		substr(dx,1,4)='199') 
+			and comorbi_18=0 
+		then comorbi_18=1;	
+	*Solid Tumor without Metastisis;
+	if (substr(dx,1,2)='14' or
+		substr(dx,1,2)='15' or
+		substr(dx,1,2)='16' or
+		substr(dx,1,3)='170' or
+		substr(dx,1,3)='171' or
+		substr(dx,1,3)='172' or
+		substr(dx,1,3)='174' or
+		substr(dx,1,3)='175' or
+		substr(dx,1,3)='179' or
+		substr(dx,1,2)='18' or
+		substr(dx,1,3)='190' or
+		substr(dx,1,3)='191' or
+		substr(dx,1,3)='192' or
+		substr(dx,1,3)='193' or
+		substr(dx,1,3)='194' or
+		substr(dx,1,3)='195' or
+		substr(dx,1,3)='V10')
+			and comorbi_19=0 
+		then comorbi_19=1;
+	*Rheumatoid Arthritis/Collagen Vascular Diseases;
+	if (substr(dx,1,4)='7010' or
+		substr(dx,1,3)='710' or
+		substr(dx,1,3)='714' or
+		substr(dx,1,3)='720' or
+		substr(dx,1,3)='725') 
+			and comorbi_20=0 
+		then comorbi_20=1;
+	*Coagulopathy;
+	if (substr(dx,1,3)='286' or
+		substr(dx,1,4)='2871' or
+		substr(dx,1,4)='2873' or
+		substr(dx,1,4)='2874' or
+		substr(dx,1,4)='2875') 
+			and comorbi_21=0 
+		then comorbi_21=1;
+	*Obesity;
+	if (substr(dx,1,4)='2780')  
+			and comorbi_22=0 
+		then comorbi_22=1;
+	*Weight Loss;
+	if (substr(dx,1,3)='260' or
+		substr(dx,1,3)='261' or
+		substr(dx,1,3)='262' or
+		substr(dx,1,3)='263') 
+			and comorbi_23=0 
+		then comorbi_23=1;	
+	*Fluid and Electrolyte Disorders;
+	if (substr(dx,1,3)='276') 
+			and comorbi_24=0 
+		then comorbi_24=1;
+	*Blood Loss Anemia;
+	if (substr(dx,1,4)='2800') 
+			and comorbi_25=0 
+		then comorbi_25=1;
+	*Deficiency Anemias;
+	if (substr(dx,1,4)='2801' or
+		substr(dx,1,4)='2808' or
+		substr(dx,1,4)='2809' or
+		substr(dx,1,4)='2859') 
+			and comorbi_26=0 
+		then comorbi_26=1;
+	*Alcohol Abuse;
+	if (substr(dx,1,4)='2911' or
+		substr(dx,1,4)='2912' or
+		substr(dx,1,4)='2915' or
+		substr(dx,1,4)='2918' or
+		substr(dx,1,4)='2919' or
+		substr(dx,1,4)='3039' or
+		substr(dx,1,4)='3050' or
+		substr(dx,1,4)='V113') 
+			and comorbi_27=0 
+		then comorbi_27=1;
+	*Drug Abuse;
+	if (substr(dx,1,4)='2920' or
+		substr(dx,1,5)='29282' or
+		substr(dx,1,5)='29283' or
+		substr(dx,1,5)='29284' or
+		substr(dx,1,5)='29289' or
+		substr(dx,1,4)='2929' or
+		substr(dx,1,3)='304' or
+		substr(dx,1,4)='3052' or
+		substr(dx,1,4)='3053' or
+		substr(dx,1,4)='3054' or
+		substr(dx,1,4)='3055' or
+		substr(dx,1,4)='3056' or
+		substr(dx,1,4)='3057' or
+		substr(dx,1,4)='3058' or
+		substr(dx,1,4)='3059')
+			and comorbi_28=0 
+		then comorbi_28=1;	
+	*Psychoses;
+	if (substr(dx,1,3)='295' or
+		substr(dx,1,3)='296' or
+		substr(dx,1,3)='297' or
+		substr(dx,1,3)='298' or
+		substr(dx,1,4)='2991') 
+			and comorbi_29=0 
+		then comorbi_29=1;
+	*Depression;
+	if (substr(dx,1,4)='3004' or
+		substr(dx,1,5)='30112' or
+		substr(dx,1,4)='3090' or
+		substr(dx,1,4)='3091' or
+		substr(dx,1,3)='311')
+			and comorbi_30=0 
+		then comorbi_30=1;
+
+
+	*Dementia;
+	if (substr(dx,1,4) in ('3310','3311','3312','2900','2901',
+             '2902','2903','2912','2948','2949') or
+		substr(dx,1,5) in ('29410','29411','29040','29041','29042','29043')) 
+		and dementia=0 
+          then dementia=1;
+
+	*CAD coronary artery disease;
+	if (substr(dx,1,4) in ('4140','4142','4143','4148','4149') or 
+		substr(dx,1,3) in ('410','411','412','413') or
+		substr(dx,1,5) in ('V4581','V4582'))
+		and cad=0 
+          then cad=1;
+
+/* CAD list
+410.00-410.92
+411.0-411.89
+412
+413.0-413.9
+414.00-414.07
+414.2
+414.3
+414.8
+414.9
+V45.81
+V45.82 */
+
+end;
+run;
+
+
+/*check sums of each comorbidity for each ID*/
+proc sql;
+create table com_test1_&range2 as
+select distinct BID_hrs_19 r_bid_hrs,
+sum(comorbi_1) as com_1,
+sum(comorbi_2) as com_2,
+sum(comorbi_3) as com_3,
+sum(comorbi_4) as com_4,
+sum(comorbi_5) as com_5,
+sum(comorbi_6) as com_6,
+sum(comorbi_7) as com_7,
+sum(comorbi_8) as com_8,
+sum(comorbi_9) as com_9,
+sum(comorbi_10) as com_10,
+sum(comorbi_11) as com_11,
+sum(comorbi_12) as com_12,
+sum(comorbi_13) as com_13,
+sum(comorbi_14) as com_14,
+sum(comorbi_15) as com_15,
+sum(comorbi_16) as com_16,
+sum(comorbi_17) as com_17,
+sum(comorbi_18) as com_18,
+sum(comorbi_19) as com_19,
+sum(comorbi_20) as com_20,
+sum(comorbi_21) as com_21,
+sum(comorbi_22) as com_22,
+sum(comorbi_23) as com_23,
+sum(comorbi_24) as com_24,
+sum(comorbi_25) as com_25,
+sum(comorbi_26) as com_26,
+sum(comorbi_27) as com_27,
+sum(comorbi_28) as com_28,
+sum(comorbi_29) as com_29,
+sum(comorbi_30) as com_30,
+sum(dementia) as com_31,
+sum(cad) as com_32
+from dx_31_comor_&range2
+group by BID_hrs_19 r_bid_hrs;
+quit;
+
+/*define comorbidities as binary indicators*/
+data comorbidity_&range2.(keep=BID_hrs_19 r_bid_hrs 
+	comorb_1-comorb_32 comorb_all);
+set com_test1_&range2;
+array list_com com_1-com_30 com_31 com_32;
+array list_com_bin comorb_1-comorb_30 comorb_31 comorb_32;
+
+/*note this defines comorbidity 31 = dementia & 32 = cad*/
+do over list_com;
+  list_com_bin=0;
+
+  if list_com>0 then do;
+    list_com_bin=1;
+   end;
+
+end;
+
+/*define aggregate comorbidity as sum of 30 individual indicator vars.
+note: CAD not included in this aggregate score*/
+comorb_all=comorb_1+comorb_2+comorb_3+comorb_4+comorb_5+comorb_6+comorb_7+
+comorb_8+comorb_9+comorb_10+comorb_11+comorb_12+comorb_13+comorb_14+
+comorb_15+comorb_16+comorb_17+comorb_18+comorb_19+comorb_20+comorb_21+
+comorb_22+comorb_23+comorb_24+comorb_25+comorb_26+comorb_27+comorb_28+
+comorb_29+comorb_30+comorb_31;
+run;
+
+
+proc sort data=comorbidity_&range2. nodupkey;
+by BID_hrs_19 r_bid_hrs;
+run;
+
+/*merges with list of s's with xwalk id, dod & ffs mc 6m before R's death
+leaves blanks for comorbidities observations with no dx but with xwalk id*/
+proc sql;
+create table ids_w_xwalk_&range2._1 as
+select a.s_bid_hrs,b.*
+from spo_mc.s_r_dod a 
+left join
+comorbidity_&range2. b
+on trim(left(a.s_bid_hrs))=trim(left(b.BID_hrs_19)) and
+	trim(left(a.r_bid_hrs))=trim(left(b.r_bid_hrs));
+quit;
+
+/*if comorbidity=null, set to zero for this group with the ffs mc 6m*/
+data spo_mc.elix_&range1._&range2;
+set ids_w_xwalk_&range2._1;
+array list comorb_1-comorb_32 comorb_all;
+do over list;
+	if list=. then list=0;
+	end;
+
+label comorb_1 ="Congestive Heart Failure";
+label comorb_2 ="Cardiac Arrhythmias";
+label comorb_3 ="Valvular Disease";
+label comorb_4 ="Pulmonary Circulation Disorders";
+label comorb_5 ="Peripheral Vascular Disorders";
+label comorb_6 ="Hypertension";
+label comorb_7 ="Paralysis";
+label comorb_8 ="Other Neurological Disorders";
+label comorb_9 ="Chronic Pulmonary Disease";
+label comorb_10 ="Diabetes, uncomplicated";
+label comorb_11 ="Diabetes, complicated";
+label comorb_12 ="Hypothyroidism";
+label comorb_13 ="Renal Failure";
+label comorb_14 ="Liver Disease";
+label comorb_15 ="Peptic Ulcer Disease excluding bleeding";
+label comorb_16 ="AIDS";
+label comorb_17 ="Lymphoma";
+label comorb_18 ="Metastatic Cancer";
+label comorb_19 ="Solid Tumor without Metastisis";
+label comorb_20 ="Rheumatoid Arthritis/Collagen Vascular Diseases";
+label comorb_21 ="Coagulopathy";
+label comorb_22 ="Obesity";
+label comorb_23 ="Weight Loss";
+label comorb_24 ="Fluid and Electrolyte Disorders";
+label comorb_25 ="Blood Loss Anemia";
+label comorb_26 ="Deficiency Anemias";
+label comorb_27 ="Alcohol Abuse";
+label comorb_28 ="Drug Abuse";
+label comorb_29 ="Psychoses";
+label comorb_30 ="Depression";
+label comorb_31 ="Dementia";
+label comorb_32 ="Coronary Artery Disease";
+
+/*drop extra bid field*/
+drop BID_HRS_19;
+run;
+
+data test;
+set spo_int.elix_&range1._&range2;
+run;
+
+/*calls rename macro*/
+%rename(WORK,TEST,&range1._&range2);
+
+/*rename r&s BID variables*/
+data spo_int.elix_&range1._&range2._2
+	(rename =(r_BID_hrs_&range1._&range2=r_BID_hrs)
+	rename =(s_BID_hrs_&range1._&range2=s_BID_hrs));
+set test;
+keep r_bid_hrs_&range1._&range2 comorb:;
+run;
+
+proc sort data=spo_int.elix_&range1._&range2._2;
+by s_bid_hrs r_bid_hrs;
+run;
+
+%mend;
+
+/*run macro to get elixhauser comorbidities 6, 12, 24m pre and post death
+resulting dataset is spo_int.elix_0d_n12m_2 which has r_bid_hrs to merge back to dataset*/
+%elixhauser(range1=0d, range2=n12m);
+
+proc freq data=spo_int.elix_0d_n12m;
+table comorb:;
+run;
+
+/*merge comorbidities into HRS dataset
+for observations with no mc xwalk, the comorbidities are left as null*/
+proc sql;
+create table spo_int.hrs_elix_n12m(drop=bid_hrs2)
+as select a.*,b.*
+from 
+spo_int.add_los3 a 
+left join
+spo_int.elix_0d_n12m_2(rename=(r_bid_hrs=bid_hrs2)) b
+on a.r_bid_hrs = b.bid_hrs2;
+quit;
+
+/*917 have no xwalk id or are missing dod so missing comorbidities*/
+proc freq data=spo_int.hrs_elix_n12m;
+table comorb: ;
+run;
+
+
+H="Get S data warehouse chronic conditions"
+
+
+H="Get S Medicare Costs"
+
+
+H="Get S other Medicare utilization variables from claims"

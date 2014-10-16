@@ -1769,6 +1769,132 @@ run;
 
 
 H="Get S Medicare Costs"
+%macro mp(days_start=,days_bef_death=,source=,equ=,name=);
+%let source0=mp;
 
+*first get claims lists for the specific claims type, snf or ip;
+data &source._meet;
+set spo_mc_i.&source0._meet_&name.;
+if (trim(left(SSLSSNF))&equ.="N");
+win_start_dt=r_dod_hrs_claims-&days_bef_death;
+format admit_date disch_date win_start_dt date9.;
+run;
+
+/*identify claims where entire claim is within the x months prior to death*/
+data &source._meet_1;
+set &source._meet;
+if win_start_dt<=admit_date<=r_dod_hrs_claims and
+	win_start_dt<=disch_date<=r_dod_hrs_claims;
+run;
+
+/*identify claims where start before window but end during window*/
+data &source._meet_2;
+set &source._meet;
+if win_start_dt>admit_date and
+	win_start_dt<=disch_date<=r_dod_hrs_claims;
+run;
+
+/*identify fraction of claims to be attributed to period before death
+by just using the fraction of time that was included in the time window*/
+data &source._meet_3;
+set &source._meet_2;
+pct_xm=(disch_date-win_start_dt+1)/(disch_date-admit_date+1);
+array list pmt_amt passthru;
+do over list;
+if list=. then list=0;
+/*scale the partial claims by the time within the x month period*/
+list=list*pct_xm;
+end;
+
+run;
+
+/*claims where start within window but end after R's death*/
+data &source._meet_4;
+set &source._meet;
+if win_start_dt<=admit_date<=r_dod_hrs_claims and
+	disch_date>r_dod_hrs_claims;
+run;
+
+/*again fraction to attribute to window*/
+data &source._meet_5;
+set &source._meet_4;
+pct_xm=(r_dod_hrs_claims-admit_date+1)/(disch_date-admit_date+1);
+array list pmt_amt passthru;
+do over list;
+if list=. then list=0;
+/*scale the partial claims by the time within the x month period*/
+list=list*pct_xm;
+end;
+run;
+
+/*merge claims into single dataset, adjust for inflation*/
+data &source._cost;
+set &source._meet_1 &source._meet_3 &source._meet_5;
+array list pmt_amt passthru;
+do over list;
+if list=. then list=0;
+end;
+
+if year(admit_date)>=2010 then rate=1;
+if year(admit_date)=2009 then rate=1.0350;
+if year(admit_date)=2008 then rate=1.06823;
+if year(admit_date)=2007 then rate=1.11347;
+if year(admit_date)=2006 then rate=1.17287;
+if year(admit_date)=2005 then rate=1.22119;
+if year(admit_date)=2004 then rate=1.27983;
+if year(admit_date)=2003 then rate=1.34381;
+if year(admit_date)=2002 then rate=1.40392;
+if year(admit_date)=2001 then rate=1.47492;
+if year(admit_date)=2000 then rate=1.54589;
+if year(admit_date)<=1999 then rate=1.61195;
+
+&source._paid_by_mc=rate*(pmt_amt+passthru);
+run;
+
+*calculates total of mc charges for the claim type by hrs bid;
+proc sql;
+create table &source._pay as select distinct bid_hrs_19,r_id,
+sum(&source._paid_by_mc) as &source._paid_by_mc 
+from &source._cost group by BID_HRS_19,r_id;
+quit;
+
+/*merge into a full bid list of those s's with ffs mc 6m or more*/
+proc sql;
+create table &source._&name. as select 
+a.s_bid_hrs,a.r_id,coalesce(b.&source._paid_by_mc,0) as &source._paid_by_mc_&name.
+from spo_mc_i.s_r_dod a
+left join
+ &source._pay b
+ on trim(left(a.s_BID_hrs))=trim(left(b.bid_hrs_19)) and a.r_id=b.r_id;
+ quit;
+
+proc sort data=&source._&name.; by s_BID_hrs r_id; run;
+
+%mend;
+
+%mp(days_start=0,days_bef_death=(183),source=snf,equ=,name=6m );
+%mp(days_start=0,days_bef_death=(365.25),source=snf,equ=,name=12m );
+%mp(days_start=0,days_bef_death=(2*365.25),source=snf,equ=,name=24m );
+%mp(days_start=0,days_bef_death=(183),source=ip,equ=~,name=6m );
+%mp(days_start=0,days_bef_death=(365.25),source=ip,equ=~,name=12m );
+%mp(days_start=0,days_bef_death=(2*365.25),source=ip,equ=~,name=24m );
+
+
+proc means data=snf_6m; var snf_paid_by_mc_6m;run;
+
+/*merge the 3 datasets with before snf costs*/
+data snf_bef;
+merge snf_6m snf_12m snf_24m;
+by s_BID_hrs r_id; 
+run;
+
+proc means data=snf_bef; var snf_paid_by_mc_: ;run;
+
+data ip_bef;
+merge ip_6m ip_12m ip_24m;
+by s_BID_hrs r_id; 
+run;
+
+proc means data=ip_bef; var ip_paid_by_mc_: ;run;
 
 H="Get S other Medicare utilization variables from claims"

@@ -13,7 +13,8 @@ But now this code adds variables derived from the spouse claims
 libname spo_fnl 'E:\data\spouse\final_data';
 
 /*data for this project with spouse medicare variables added in*/
-libname spo_mc 'E:\data\spouse_claims\data';
+libname spo_mc_i 'E:\data\spouse_claims\data\int_data';
+libname spo_mc_f 'E:\data\spouse_claims\data\final_data';
 
 /*2000-2010 medicare claims*/
 libname medi 'E:\data\cms_DUA_25000_2010';
@@ -275,7 +276,7 @@ run;
 
 /*bring in insurance indicators to full decedent/spouse dataset*/
 proc sql;
-create table spo_mc.r_sp_ins as select
+create table spo_mc_i.r_sp_ins as select
 a.*, b.r_dod_hrs_claims , b.r_dod_use_claims , 
 b.part_ab_6m as s_part_ab_6m , b.hmo_d_6m as s_hmo_d_6m , 
 b.part_ab_12m as s_part_ab_12m , b.hmo_d_12m as s_hmo_d_12m ,
@@ -292,8 +293,8 @@ run;
 
 
 /*export to stata to get sample size estimate table*/
-proc export data=spo_mc.r_sp_ins
-outfile="E:\data\spouse_claims\data\r_sp_ins.dta" replace;
+proc export data=spo_mc_i.r_sp_ins
+outfile="E:\data\spouse_claims\data\int_data\r_sp_ins.dta" replace;
 run;
 
 
@@ -309,7 +310,7 @@ set more off
 
 //Amy's PC
 local logpath E:\data\spouse_claims\logs
-local projdatapath E:\data\spouse_claims\data
+local projdatapath E:\data\spouse_claims\data\int_data
 
 log using "`logpath'\1-HRS_Spouse_claims_xwalk_sample.txt", text replace
 
@@ -434,8 +435,8 @@ get consolidated diagnosis list for each S across all claim types for the
 Limit to those where spouse has ffs medicare 6m prior to r's death
 if missing the death date from the restricted dataset, use the claims dod
 Keep R's HRS ID so can use to match the R/S combination later on*/
-data spo_mc.s_r_dod;
-set spo_mc.r_sp_ins;
+data spo_mc_i.s_r_dod;
+set spo_mc_i.r_sp_ins;
 if s_xwalk_yes=1 & s_part_ab_6m=1 & s_hmo_d_6m=0 ;
 ind_dod_yes=0;
 if r_dod_hrs_claims~=. then ind_dod_yes=1;
@@ -448,14 +449,14 @@ proc freq; table r_dod_use_claims ind_dod_yes; run;
 /* ************** S Claims Before R's Death  ******************************/
 /**************************************************************************/
 /*macro to get claims before death
-saves datasets for each claim type / time window to the spo_mc directory*/
+saves datasets for each claim type / time window to the spo_mc_i directory*/
 %macro claims(days_start=,days_bef_death=,source=,suf=);
 
 /*claims fully within x time of death date*/
 proc sql;
 create table &source._meet_1 as select a.*,b.r_dod_hrs_claims,b.r_id 
 from medi.&source._2000_2010 a inner join
-spo_mc.s_r_dod b
+spo_mc_i.s_r_dod b
 on trim(left(a.bid_hrs_19))=trim(left(b.s_bid_hrs))
 and &days_start<=b.r_dod_hrs_claims-a.admit_date<=&days_bef_death ;
 quit;
@@ -464,12 +465,12 @@ quit;
 proc sql;
 create table &source._meet_2 as select a.*,b.r_dod_hrs_claims,b.r_id 
 from medi.&source._2000_2010 a inner join
-spo_mc.s_r_dod b
+spo_mc_i.s_r_dod b
 on trim(left(a.bid_hrs_19))=trim(left(b.s_bid_hrs))
 and b.r_dod_hrs_claims-a.admit_date>&days_bef_death and b.r_dod_hrs_claims-a.disch_date<=&days_bef_death;
 quit;
 
-data spo_mc.&source._meet_&suf.(compress=yes);
+data spo_mc_i.&source._meet_&suf.(compress=yes);
 set &source._meet_1 &source._meet_2;
 run;
 %mend;
@@ -500,14 +501,14 @@ run;
 /* ************** S Claims After R's Death   ******************************/
 /**************************************************************************/
 /*macro to get claims after death
-saves datasets for each claim type / time window to the spo_mc directory*/
+saves datasets for each claim type / time window to the spo_mc_i directory*/
 %macro claims(days_start=,days_aft_death=,source=,suf=);
 
 /*claims fully within x time of death date*/
 proc sql;
 create table &source._meet_1 as select a.*,b.r_dod_hrs_claims,b.r_id 
 from medi.&source._2000_2010 a inner join
-spo_mc.s_r_dod b
+spo_mc_i.s_r_dod b
 on trim(left(a.bid_hrs_19))=trim(left(b.s_bid_hrs))
 and &days_start<=a.admit_date - b.r_dod_hrs_claims<=&days_aft_death ;
 quit;
@@ -516,13 +517,13 @@ quit;
 proc sql;
 create table &source._meet_2 as select a.*,b.r_dod_hrs_claims,b.r_id 
 from medi.&source._2000_2010 a inner join
-spo_mc.s_r_dod b
+spo_mc_i.s_r_dod b
 on trim(left(a.bid_hrs_19))=trim(left(b.s_bid_hrs))
 and a.admit_date<b.r_dod_hrs_claims
 and &days_start<=a.disch_date - b.r_dod_hrs_claims;
 quit;
 
-data spo_mc.&source._meet_&suf.(compress=yes);
+data spo_mc_i.&source._meet_&suf.(compress=yes);
 set &source._meet_1 &source._meet_2;
 format disch_date date9.;
 format admit_date date9.;
@@ -558,7 +559,7 @@ run;
 %macro dx_time_range(range1=, range2=, suf=);
 /*pulls just dx codes from carrier claims*/
 data pb_last_&range2._dx(keep=bid_hrs_19 r_id diag);
-set spo_mc.pb_meet_&suf.(keep=bid_hrs_19 r_id PDGNS_CD DGNS_CD1-DGNS_CD12 );
+set spo_mc_i.pb_meet_&suf.(keep=bid_hrs_19 r_id PDGNS_CD DGNS_CD1-DGNS_CD12 );
 array dx PDGNS_CD DGNS_CD1-DGNS_CD12;
 do over dx;
 diag=dx ;
@@ -571,7 +572,7 @@ run;
 
 /*outpatient claims*/
 data op_last_&range2._dx(keep=bid_hrs_19 r_id diag);
-set spo_mc.op_meet_&suf.(keep=bid_hrs_19 r_id PDGNS_CD DGNSCD01-DGNSCD25  );
+set spo_mc_i.op_meet_&suf.(keep=bid_hrs_19 r_id PDGNS_CD DGNSCD01-DGNSCD25  );
 array dx PDGNS_CD DGNSCD01-DGNSCD25 ;
 do over dx;
 diag=dx ;
@@ -584,7 +585,7 @@ run;
 
 /*medpar claims*/
 data mp_last_&range2._dx(keep=bid_hrs_19 r_id diag);
-set spo_mc.mp_meet_&suf.(keep=bid_hrs_19 r_id AD_DGNS DGNS_CD01-DGNS_CD25 );
+set spo_mc_i.mp_meet_&suf.(keep=bid_hrs_19 r_id AD_DGNS DGNS_CD01-DGNS_CD25 );
 array dx D_DGNS DGNS_CD01-DGNS_CD25 ;
 do over dx;
 diag=dx ;
@@ -597,7 +598,7 @@ run;
 
 /*dme claims*/
 data dm_last_&range2._dx(keep=bid_hrs_19 r_id diag);
-set spo_mc.dm_meet_&suf.(keep=bid_hrs_19 r_id PDGNS_CD DGNS_CD1-DGNS_CD12 );
+set spo_mc_i.dm_meet_&suf.(keep=bid_hrs_19 r_id PDGNS_CD DGNS_CD1-DGNS_CD12 );
 array dx PDGNS_CD DGNS_CD1-DGNS_CD12 ;
 do over dx;
 diag=dx ;
@@ -610,7 +611,7 @@ run;
 
 /*home health agency*/
 data hh_last_&range2._dx(keep=bid_hrs_19 r_id diag);
-set spo_mc.hh_meet_&suf.(keep=bid_hrs_19 r_id PDGNS_CD DGNSCD01-DGNSCD25 );
+set spo_mc_i.hh_meet_&suf.(keep=bid_hrs_19 r_id PDGNS_CD DGNSCD01-DGNSCD25 );
 array dx PDGNS_CD DGNSCD01-DGNSCD25 ;
 do over dx;
 diag=dx ;
@@ -623,7 +624,7 @@ run;
 
 /*hospice*/
 data hs_last_&range2._dx(keep=bid_hrs_19 r_id diag);
-set spo_mc.hs_meet_&suf.(keep=bid_hrs_19 r_id PDGNS_CD DGNSCD01-DGNSCD25 );
+set spo_mc_i.hs_meet_&suf.(keep=bid_hrs_19 r_id PDGNS_CD DGNSCD01-DGNSCD25 );
 array dx PDGNS_CD DGNSCD01-DGNSCD25 ;
 do over dx;
 diag=dx ;
@@ -670,13 +671,13 @@ op_last_&range2._dx3
 pb_last_&range2._dx3;
 run;
 
-proc sort data=dx_all_last_&range2.(where=(diag~="")) out=spo_mc.dx_&range1._&range2 nodupkey;
+proc sort data=dx_all_last_&range2.(where=(diag~="")) out=spo_mc_i.dx_&range1._&range2 nodupkey;
 by bid_hrs_19 r_id diag;
 run;
 
 %mend;
 
-/*run macro to create data files spo_mc.dx_0d_n6m spo_mc.dx_0d_n12m and spo_mc.dx_0d_n24m */
+/*run macro to create data files spo_mc_i.dx_0d_n6m spo_mc_i.dx_0d_n12m and spo_mc_i.dx_0d_n24m */
 %dx_time_range(range1=0d, range2=n6m, suf=6m);
 %dx_time_range(range1=0d, range2=n12m, suf=12m);
 %dx_time_range(range1=0d, range2=n24m, suf=24m);
@@ -690,7 +691,7 @@ H="Get S Elixhauser comorbidities"
 /*creates indicators for each of the Elixhauser comorbidities
 based on the dx codes lists 6, 12, and 24m before and after R's death
 
-resulting datasets are spo_mc.hrs_elix*/
+resulting datasets are spo_mc_i.hrs_elix*/
 
 /*rename macro - called within the elixhauser macro
 to add time suffix to variables
@@ -742,7 +743,7 @@ Note includes additional 2 comorbidities: Dementia and Coronary Artery Disease*/
 %macro elixhauser(range1=, range2=);
 
 data dx_31_comor_&range2;
-set spo_mc.dx_&range1._&range2(rename=(diag=dx_0));
+set spo_mc_i.dx_&range1._&range2(rename=(diag=dx_0));
 dx=trim(left(dx_0));
 
 if dx~="" then do;
@@ -1264,7 +1265,7 @@ leaves blanks for comorbidities observations with no dx but with xwalk id*/
 proc sql;
 create table ids_w_xwalk_&range2._1 as
 select a.s_bid_hrs,b.*
-from spo_mc.s_r_dod a 
+from spo_mc_i.s_r_dod a 
 left join
 comorbidity_&range2. b
 on trim(left(a.s_bid_hrs))=trim(left(b.BID_hrs_19)) and
@@ -1272,7 +1273,7 @@ on trim(left(a.s_bid_hrs))=trim(left(b.BID_hrs_19)) and
 quit;
 
 /*if comorbidity=null, set to zero for this group with the ffs mc 6m*/
-data spo_mc.elix_&range1._&range2;
+data spo_mc_i.elix_&range1._&range2;
 set ids_w_xwalk_&range2._1;
 array list comorb_1-comorb_32 comorb_all;
 do over list;

@@ -1382,7 +1382,120 @@ outreg using `logpath'\5_multivar_logit_results, ///
 log close
 
 
-H="Set up dataset for propensity score matching"
+H="Set up and run initial propensity score matching"
+capture log close
+
+clear all
+set more off
+
+//Amy's PC
+local logpath E:\data\spouse_intensive\logs
+local datapath E:\data\spouse_intensive\data
+
+log using "`logpath'\6-Spouse_intensive_ps_match.txt", text replace
+
+cd `datapath'
+
+//use sample with full ces-d information
+use spouse_intens_data_cleaned.dta if cesd_miss_n1_p1==0
+*******************************************************************
+//where r&s highly correlated, use r
+local rvars r_age r_female r_white_e ///
+r_hseduc_n1_n3 r_nw_midlow_n1 r_nw_midhigh_n1 r_nw_highest_n1 ///
+r_nhres_n1n2 r_srh_pf_n1n2 r_advdir_x r_adl_impair_n1n2 ///
+cc_3_alzhdmta_n12mn6m cc_6_chrnkidn_n12mn6m cc_ami_isch_n12mn6m ///
+cc_8_chf_n12mn6m cc_9_diabetes_n12mn6m cc_7_copd_n12mn6m ///
+cc_16_strketia_n12mn6m cc_cncr_chronic_n12mn6m cc_15_ra_oa_n12mn6m ///
+cc_13_depressn_n12mn0 cc_all_count_6m12m_2
+
+local region hci_index hospital_beds specialists
+
+local svars s_srh_pf_n1n2 s_imprelig_vimp_n1  ///
+s_hrs_comorb_mild_n1 s_hrs_comorb_mod_n1 s_psych_overall_hrs_n1n2 ///
+ days_p1_core_dod_6_12m days_p1_core_dod_12_18m ///
+days_p1_core_dod_18_24m days_p1_core_dod_gt2yr
+
+//drop observations that are missing in any of the variables
+foreach v in `rvars' `svars'{
+tab `v', missing
+drop if `v'==.
+}
+
+tab int_any_of5_6m , missing
+*******************************************************************
+//propensity score generation
+
+//first sort data randomly
+set seed 2000
+gen x=uniform()
+sort x
+
+//generate pscore variable hs_pscore
+pscore int_any_of5_6m `rvars' `svars', pscore(ip_pscore) blockid(ip_block) logit detail
+
+psgraph, treated(int_any_of5_6m) pscore(ip_pscore)
+
+*******************************************************************
+//implement radius matching
+gen logitpscore=ln(ip_pscore/(1-ip_pscore))
+sum logitpscore
+
+sca cal_ps1=r(sd)*0.02
+sca list cal_ps1
+
+//rule of thumb 0.2*sd, try 0.02* sd
+psmatch2  int_any_of5_6m,outcome(s_cesdbetter) pscore(ip_pscore) radius caliper(.01170502) logit
+//note this creates varaible _weight
+
+*******************************************************************
+//look at balance of propensity score across variables
+psgraph, treated(int_any_of5_6m) pscore(ip_pscore)
+
+pstest `rvars' `svars' ,treated(int_any_of5_6m) both hist
+
+//look at quantile-quantile plots for continuous variables
+foreach v in r_age cc_all_count_6m12m_2{
+gen `v'_treated = `v' if int_any_of5_6m==1 & _support==1
+gen `v'_comparison = `v' if int_any_of5_6m==0 & _support==1
+qqplot `v'_treated `v'_comparison
+graph save `logpath'/qqplot_`v', replace
+}
+
+mat vr=J(31,6,.)
+//compare variance of covariates before and after matching
+local i=1
+foreach v in `rvars' `svars'  {
+sum `v' if int_any_of5_6m==1 //get variance treated before matching
+mat vr[`i',1]=r(Var)
+sum `v' if int_any_of5_6m==0 //get variance comparison before matching
+mat vr[`i',2]=r(Var)
+mat vr[`i',3]= vr[`i',1]/vr[`i',2] //ratio
+sum `v' if int_any_of5_6m==1 & _support==1 //get variance treated after matching
+mat vr[`i',4]=r(Var)
+sum `v' if int_any_of5_6m==0 [iweight=_weight] //get variance comparison after matching
+mat vr[`i',5]=r(Var)
+mat vr[`i',6]= (vr[`i',4]) / (vr[`i',5]) //ratio
+local i=`i'+1
+}
+
+mat rownames vr=`rvars' `svars'
+
+mat list vr
+
+//what gets dropped from sample using this match?
+tab _support, missing
+tab _support if int_any_of5_6m==1, missing //n=1 treated dropped, off comm support
+tab _support if int_any_of5_6m==0, missing
+tab _weight if int_any_of5_6m==1, missing
+sum _weight if int_any_of5_6m==0 //n=3 control dropped, no weight assigned
+*******************************************************************
+//run the doubly robust models
+logit s_cesdbetter int_any_of5_6m `rvars' `svars' [iw=_weight], or
+
+logit s_cesd_ge3better int_any_of5_6m `rvars' `svars' [iw=_weight], or
+
+*******************************************************************
+log close
 
 
 H="notes"

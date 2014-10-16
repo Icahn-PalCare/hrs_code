@@ -1400,7 +1400,372 @@ table s_comorb: ;
 run;
 
 
+H="Convert dx list to dot format for cc's"
+/*export lists of diagnosis codes to Stata*/
+%macro exp(su=);
+proc export data=spo_mc_i.dx_0d_&su.
+outfile="E:\data\spouse_claims\data\int_data\dx_0d_&su..dta" replace;
+run;
+%mend;
+
+%exp(su=n6m);
+%exp(su=n12m);
+%exp(su=n24m);
+%exp(su=p6m);
+%exp(su=p12m);
+%exp(su=p24m);
+
+/*******************************************************************/
+/*put the sas data to stata in to dot format
+This is STATA code*/
+/*******************************************************************/
+set more off
+
+foreach s in n6m n12m n24m p6m p12m p24m{
+	use "E:\data\spouse_claims\data\int_data\dx_0d_`s'.dta",clear
+
+//convert diagnosis codes to string variables, tostring diag,gen(icd9_c)
+	gen new=ltrim(diag)
+	icd9 check new,gen(icd9_c)
+	replace new="" if icd9_c>0 
+// convert into dot format (ex 12.1 instead of 121)
+	icd9 clean new,dots 
+
+	replace diag=new
+	drop icd9_c new
+
+	save "E:\data\spouse_claims\data\int_data\dx_0d_`s'_2.dta",replace
+//save to csv to import into sas (sas won't import stata13 .dta files
+	outsheet using "E:\data\spouse_claims\data\int_data\dx_0d_`s'_2.csv", comma replace
+}
+
+
 H="Get S data warehouse chronic conditions"
+/*begin of chronic 21 conditions.
+Determines presence of 21 chronic conditions 6,12,24m pre and post R's death
+
+Note this pulls from a list of icd-9 codes associated with each of the chronic
+conditions. The file path may need to be updated depending on the PC the
+code is run from
+
+Dataset created is spo_mc_i.hrs_elix_cc
+*/
+
+/*bring in formatted Stata datasets of dx codes*/
+
+%macro imp(su=);
+proc import datafile="E:\data\spouse_claims\data\int_data\dx_0d_&su._2.csv"
+out=dx_0d_&su._2 DBMS=csv replace;
+getnames=yes;
+run;
+%mend;
+
+%imp(su=n6m);
+%imp(su=n12m);
+%imp(su=n24m);
+%imp(su=p6m);
+%imp(su=p12m);
+%imp(su=p24m);
+
+/*bring in excel list of dx codes associated with each chronic condition*/
+proc import datafile='E:\data\spouse\ref_data\chronic_21_condition_icd9.xls'
+out=icd9_21_chronic dbms=xls replace;
+run;
+
+proc contents data=icd9_21_chronic;
+run;
+
+/*creates macro variables of each of the chronic conditions listing of dx codes*/
+proc sql;
+select icd_9 into :chronic_desc1-:chronic_desc21 from icd9_21_chronic;
+quit;
+%put &chronic_desc10;
+%put &chronic_desc5;
+
+/*******************************************************************/
+/*Generate chronic conditions indicator variables using dx
+codes 12 months pre-death */
+/*******************************************************************/
+
+/*macro to create indicator variables for 21 chronic conditions
+resulting files have spouse chronic conditions using dx codes 6, 12, and 24m
+before and after R's death*/
+
+%macro cc(start=,predeath=);
+
+/*initialize the chronic conditions variables*/
+data list_&start._&predeath._dx;
+set dx_&start._&predeath._2;
+array list s_CC_1_AMI
+s_CC_2_ALZH
+s_CC_3_ALZHDMTA
+s_CC_4_ATRIALFB
+s_CC_5_CATARACT
+s_CC_6_CHRNKIDN
+s_CC_7_COPD
+s_CC_8_CHF
+s_CC_9_DIABETES
+s_CC_10_GLAUCOMA
+s_CC_11_HIPFRAC
+s_CC_12_ISCHMCHT
+s_CC_13_DEPRESSN
+s_CC_14_OSTEOPRS
+s_CC_15_RA_OA
+s_CC_16_STRKETIA
+s_CC_17_CNCRBRST
+s_CC_18_CNCRCLRC
+s_CC_19_CNCRPRST
+s_CC_20_CNCRLUNG
+s_CC_21_CNCREndM
+;
+do over list ;
+list=0;
+end;
+
+diag_string=diag;
+
+/* for dx codes that begin with numbers, process chronic cond variables*/
+if anydigit(substr(trim(left(diag_string)),1,1))=1 then do;
+diag=diag_string+0;
+
+if diag in (&chronic_desc1) then s_CC_1_AMI=1;
+if diag in (&chronic_desc2)  then s_CC_2_ALZH=1;
+if diag in (&chronic_desc3)  then s_CC_3_ALZHDMTA=1;
+if diag in (&chronic_desc4) then s_CC_4_ATRIALFB=1;
+if diag in (&chronic_desc5) then s_CC_5_CATARACT=1;
+if diag in (&chronic_desc6) then s_CC_6_CHRNKIDN=1;
+if diag in (&chronic_desc7) then s_CC_7_COPD=1;
+if diag in (&chronic_desc8) then s_CC_8_CHF=1;
+if diag in (&chronic_desc9) then s_CC_9_DIABETES=1;
+if diag in (&chronic_desc10) then s_CC_10_GLAUCOMA=1;
+if diag in (&chronic_desc11) then s_CC_11_HIPFRAC=1;
+if diag in (&chronic_desc12) then s_CC_12_ISCHMCHT=1;
+if diag in (&chronic_desc13) then s_CC_13_DEPRESSN=1;
+if diag in (&chronic_desc14) then s_CC_14_OSTEOPRS=1;
+if diag in (&chronic_desc15) then s_CC_15_RA_OA=1;
+if diag in (&chronic_desc16) then s_CC_16_STRKETIA=1;
+if diag in (&chronic_desc17) then s_CC_17_CNCRBRST=1;
+if diag in (&chronic_desc18) then s_CC_18_CNCRCLRC=1;
+if diag in (&chronic_desc19) then s_CC_19_CNCRPRST=1;
+if diag in (&chronic_desc20) then s_CC_20_CNCRLUNG=1;
+if diag in (&chronic_desc21) then s_CC_21_CNCREndM=1;
+end;
+
+/*deal with dx codes that start with letters
+Only two of them in the list we have to worry about*/
+if anydigit(substr(trim(left(diag_string)),1,1))=0 then do;
+if trim(left(diag_string)) in ("V431") then s_CC_5_CATARACT=1;
+if trim(left(diag_string)) in ("V801") then s_CC_10_GLAUCOMA=1;
+end;
+
+run;
+
+/*aggregate all chronic condition variables by bid*/
+proc sql;
+create table bid_dx_&start._&predeath.(rename=(bid_hrs_19=bid)) as
+select distinct bid_hrs_19,r_id,
+sum(s_CC_1_AMI) as s_CC_1_AMI,
+sum(s_CC_2_ALZH) as s_CC_2_ALZH,
+sum(s_CC_3_ALZHDMTA) as s_CC_3_ALZHDMTA,
+sum(s_CC_4_ATRIALFB) as s_CC_4_ATRIALFB,
+sum(s_CC_5_CATARACT) as s_CC_5_CATARACT,
+sum(s_CC_6_CHRNKIDN) as s_CC_6_CHRNKIDN,
+sum(s_CC_7_COPD) as s_CC_7_COPD,
+sum(s_CC_8_CHF) as s_CC_8_CHF,
+sum(s_CC_9_DIABETES) as s_CC_9_DIABETES,
+sum(s_CC_10_GLAUCOMA) as s_CC_10_GLAUCOMA,
+sum(s_CC_11_HIPFRAC) as s_CC_11_HIPFRAC,
+sum(s_CC_12_ISCHMCHT) as s_CC_12_ISCHMCHT,
+sum(s_CC_13_DEPRESSN) as s_CC_13_DEPRESSN,
+sum(s_CC_14_OSTEOPRS) as s_CC_14_OSTEOPRS,
+sum(s_CC_15_RA_OA) as s_CC_15_RA_OA,
+sum(s_CC_16_STRKETIA) as s_CC_16_STRKETIA,
+sum(s_CC_17_CNCRBRST) as s_CC_17_CNCRBRST,
+sum(s_CC_18_CNCRCLRC) as s_CC_18_CNCRCLRC,
+sum(s_CC_19_CNCRPRST) as s_CC_19_CNCRPRST,
+sum(s_CC_20_CNCRLUNG) as s_CC_20_CNCRLUNG,
+sum(s_CC_21_CNCREndM) as s_CC_21_CNCREndM
+
+from list_&start._&predeath._dx group by bid_hrs_19,r_id;
+quit;
+
+
+/*merges with table of spouses w/ ffs mc 6m before r's death*/
+ proc sql;
+ create table bid_dx_&start._&predeath.2(drop=bid r_id2) as 
+select a.s_bid_hrs,a.r_id,b.* 
+ from spo_mc_i.s_r_dod a
+ left join
+  bid_dx_&start._&predeath.(rename=(r_id=r_id2)) b 
+on trim(left(a.s_bid_hrs))=trim(left(b.bid)) and
+	a.r_id=b.r_id2;
+ quit;
+
+/*convert to chronic condition vars. to binary variables*/
+ data bid_dx_&start._&predeath.3;
+ set bid_dx_&start._&predeath.2;
+ array list s_CC_1_AMI
+s_CC_2_ALZH
+s_CC_3_ALZHDMTA
+s_CC_4_ATRIALFB
+s_CC_5_CATARACT
+s_CC_6_CHRNKIDN
+s_CC_7_COPD
+s_CC_8_CHF
+s_CC_9_DIABETES
+s_CC_10_GLAUCOMA
+s_CC_11_HIPFRAC
+s_CC_12_ISCHMCHT
+s_CC_13_DEPRESSN
+s_CC_14_OSTEOPRS
+s_CC_15_RA_OA
+s_CC_16_STRKETIA
+s_CC_17_CNCRBRST
+s_CC_18_CNCRCLRC
+s_CC_19_CNCRPRST
+s_CC_20_CNCRLUNG
+s_CC_21_CNCREndM
+;
+do over list ;
+if list>0 then list=1;
+if list<=0 then list=0;
+end;
+
+/*create aggregated indicators*/
+s_CC_AMI_isch=s_CC_1_AMI|s_CC_12_ISCHMCHT;
+s_CC_alzheim=s_CC_2_ALZH|s_CC_3_ALZHDMTA;
+s_CC_cncr_chronic=s_CC_17_CNCRBRST | s_CC_18_CNCRCLRC | s_CC_19_CNCRPRST | s_CC_20_CNCRLUNG | 
+	s_CC_21_CNCREndM ;
+
+/*label variables*/
+label s_CC_1_AMI="AMI"
+s_CC_2_ALZH="Alzheimer's disease"
+s_CC_3_ALZHDMTA="Alzheimer's or Dementia"
+s_CC_4_ATRIALFB="Atrial fibrillation"
+s_CC_5_CATARACT="Cataract"
+s_CC_6_CHRNKIDN="Chronic kidney disease"
+s_CC_7_COPD="COPD"
+s_CC_8_CHF="CHF"
+s_CC_9_DIABETES="Diabetes"
+s_CC_10_GLAUCOMA="Glaucoma"
+s_CC_11_HIPFRAC="Hip fracture"
+s_CC_12_ISCHMCHT="Ischemic heart disease"
+s_CC_13_DEPRESSN="Depression"
+s_CC_14_OSTEOPRS="Osteoporosis"
+s_CC_15_RA_OA="Arthritis"
+s_CC_16_STRKETIA="Stroke/TIA"
+s_CC_17_CNCRBRST="Breast cancer"
+s_CC_18_CNCRCLRC="Colorectal cancer"
+s_CC_19_CNCRPRST="Prostate cancer"
+s_CC_20_CNCRLUNG="Lung cancer"
+s_CC_21_CNCREndM="Endometrial cancer"
+s_CC_AMI_isch="AMI or Ischemic heart failure"
+s_CC_alzheim="Alzheimer's or dementia"
+s_CC_cncr_chronic="Cancer, all types"
+;
+run;
+
+
+proc means;
+var s_CC_1_AMI
+s_CC_2_ALZH
+s_CC_3_ALZHDMTA
+s_CC_4_ATRIALFB
+s_CC_5_CATARACT
+s_CC_6_CHRNKIDN
+s_CC_7_COPD
+s_CC_8_CHF
+s_CC_9_DIABETES
+s_CC_10_GLAUCOMA
+s_CC_11_HIPFRAC
+s_CC_12_ISCHMCHT
+s_CC_13_DEPRESSN
+s_CC_14_OSTEOPRS
+s_CC_15_RA_OA
+s_CC_16_STRKETIA
+s_CC_17_CNCRBRST
+s_CC_18_CNCRCLRC
+s_CC_19_CNCRPRST
+s_CC_20_CNCRLUNG
+s_CC_21_CNCREndM;
+run;
+
+/************************************************************/
+/*rename the cc variables with suffix for time period*/
+/************************************************************/
+
+/*creates dataset to use in the rename macro below*/
+data test;
+set bid_dx_&start._&predeath.3;
+run;
+
+/*rename macro to add _n12mn0 suffix to the chronic conditions variable names
+Data file is still work.test but variables renamed after running this macro*/
+%rename(WORK,TEST,&predeath.);
+
+/*Changes name of bid_hrs variables so no suffix*/
+data spo_mc_i.chronic_21_&predeath._0;
+set test;
+r_id=r_id_&predeath.;
+s_bid_hrs=s_bid_hrs_&predeath.;
+drop r_id_&predeath. s_bid_hrs_&predeath.;
+run;
+
+proc sort data=spo_mc_i.chronic_21_&predeath._0;
+by s_bid_hrs r_id;
+run;
+
+%mend;
+
+%cc(start=0d,predeath=n6m);
+%cc(start=0d,predeath=n12m);
+%cc(start=0d,predeath=n24m);
+
+%cc(start=0d,predeath=p6m);
+%cc(start=0d,predeath=p12m);
+%cc(start=0d,predeath=p24m);
+/*so resulting datastets are spo_mc_i.chronic_21_x#n_0 
+x: n=pre p=post death
+#: 6, 12, or 24m time period
+merge to main dataset using r_id and s_bid_hrs*/
+
+proc freq data=spo_mc_i.chronic_21_n6m_0;
+table s_cc_alzheim_n6m s_cc_cncr_chronic_n6m;
+run;
+
+proc freq data=spo_mc_i.chronic_21_p24m_0;
+table s_cc_alzheim_p24m s_cc_cncr_chronic_p24m;
+run;
+
+
+/************************************************************/
+/*Merge into HRS dataset with elix already added */
+/************************************************************/
+
+/*first merge the cc datasets together*/
+data cc_all;
+merge spo_mc_i.chronic_21_n6m_0 spo_mc_i.chronic_21_n12m_0
+spo_mc_i.chronic_21_n24m_0 spo_mc_i.chronic_21_p6m_0
+spo_mc_i.chronic_21_p12m_0 spo_mc_i.chronic_21_p24m_0;
+by s_bid_hrs r_id;
+run;
+
+/*merge chronic conditions into main spouse dataset
+for observations with no s with ffs mc 6m pre-death, keep cc's as missing*/
+proc sql;
+create table spo_mc_i.hrs_elix_cc(drop=s_bid_hrs2 r_id2) as select *
+from 
+spo_mc_i.hrs_elix a 
+left join
+cc_all(rename=(s_bid_hrs=s_bid_hrs2) rename=(r_id=r_id2)) b
+on a.s_bid_hrs=b.s_bid_hrs2 and a.r_id=b.r_id2;
+quit;
+
+proc means data=spo_mc_i.hrs_elix_cc;
+vars s_cc_:;
+run;
+
+
 
 
 H="Get S Medicare Costs"

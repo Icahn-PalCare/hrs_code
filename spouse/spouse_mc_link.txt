@@ -445,6 +445,17 @@ run;
 
 proc freq; table r_dod_use_claims ind_dod_yes; run;
 
+*check if all obs in this dataset have both r_id (HRS) and s_bid_hrs (claims);
+data miss_rid;
+set spo_mc_i.s_r_dod;
+if r_id=.;
+run;
+
+data miss_sid;
+set spo_mc_i.s_r_dod;
+if s_BID_hrs='';
+run;
+
 /**************************************************************************/
 /* ************** S Claims Before R's Death  ******************************/
 /**************************************************************************/
@@ -687,11 +698,22 @@ run;
 %dx_time_range(range1=0d, range2=p12m, suf=p12m);
 %dx_time_range(range1=0d, range2=p24m, suf=p24m);
 
+*check all obs have r_id and bid_hrs_19 (s mc id);
+data miss_rid;
+set spo_mc_i.dx_0d_n6m;
+if r_id=.;
+run;
+
+data miss_sid;
+set spo_mc_i.dx_0d_n6m;
+if bid_hrs_19='';
+run;
+
 H="Get S Elixhauser comorbidities"
 /*creates indicators for each of the Elixhauser comorbidities
 based on the dx codes lists 6, 12, and 24m before and after R's death
 
-resulting datasets are spo_mc_i.hrs_elix*/
+resulting dataset is spo_mc_i.hrs_elix*/
 
 /*rename macro - called within the elixhauser macro
 to add time suffix to variables
@@ -1192,7 +1214,7 @@ run;
 /*check sums of each comorbidity for each ID*/
 proc sql;
 create table com_test1_&range2 as
-select distinct BID_hrs_19 r_bid_hrs,
+select distinct BID_hrs_19, r_id,
 sum(comorbi_1) as com_1,
 sum(comorbi_2) as com_2,
 sum(comorbi_3) as com_3,
@@ -1226,15 +1248,15 @@ sum(comorbi_30) as com_30,
 sum(dementia) as com_31,
 sum(cad) as com_32
 from dx_31_comor_&range2
-group by BID_hrs_19 r_bid_hrs;
+group by BID_hrs_19, r_id;
 quit;
 
 /*define comorbidities as binary indicators*/
-data comorbidity_&range2.(keep=BID_hrs_19 r_bid_hrs 
-	comorb_1-comorb_32 comorb_all);
+data comorbidity_&range2.(keep=BID_hrs_19 r_id 
+	s_comorb_1-s_comorb_32 s_comorb_all);
 set com_test1_&range2;
 array list_com com_1-com_30 com_31 com_32;
-array list_com_bin comorb_1-comorb_30 comorb_31 comorb_32;
+array list_com_bin s_comorb_1-s_comorb_30 s_comorb_31 s_comorb_32;
 
 /*note this defines comorbidity 31 = dementia & 32 = cad*/
 do over list_com;
@@ -1248,119 +1270,133 @@ end;
 
 /*define aggregate comorbidity as sum of 30 individual indicator vars.
 note: CAD not included in this aggregate score*/
-comorb_all=comorb_1+comorb_2+comorb_3+comorb_4+comorb_5+comorb_6+comorb_7+
-comorb_8+comorb_9+comorb_10+comorb_11+comorb_12+comorb_13+comorb_14+
-comorb_15+comorb_16+comorb_17+comorb_18+comorb_19+comorb_20+comorb_21+
-comorb_22+comorb_23+comorb_24+comorb_25+comorb_26+comorb_27+comorb_28+
-comorb_29+comorb_30+comorb_31;
+s_comorb_all=s_comorb_1+s_comorb_2+s_comorb_3+s_comorb_4+s_comorb_5+s_comorb_6+
+s_comorb_7+s_comorb_8+s_comorb_9+s_comorb_10+s_comorb_11+s_comorb_12+s_comorb_13+
+s_comorb_14+s_comorb_15+s_comorb_16+s_comorb_17+s_comorb_18+s_comorb_19+s_comorb_20+
+s_comorb_21+s_comorb_22+s_comorb_23+s_comorb_24+s_comorb_25+s_comorb_26+s_comorb_27+
+s_comorb_28+s_comorb_29+s_comorb_30+s_comorb_31;
 run;
 
 
 proc sort data=comorbidity_&range2. nodupkey;
-by BID_hrs_19 r_bid_hrs;
+by BID_hrs_19 r_id;
 run;
 
-/*merges with list of s's with xwalk id, dod & ffs mc 6m before R's death
-leaves blanks for comorbidities observations with no dx but with xwalk id*/
+/*merges with list of s's with xwalk id, dod & ffs mc 6m before R's death*/
 proc sql;
-create table ids_w_xwalk_&range2._1 as
-select a.s_bid_hrs,b.*
+create table ids_w_xwalk_&range2._1(drop=BID_hrs_192 r_id2) as
+select a.s_bid_hrs,a.r_id,b.* 
 from spo_mc_i.s_r_dod a 
 left join
-comorbidity_&range2. b
-on trim(left(a.s_bid_hrs))=trim(left(b.BID_hrs_19)) and
-	trim(left(a.r_bid_hrs))=trim(left(b.r_bid_hrs));
+comorbidity_&range2.(rename=(BID_hrs_19=BID_hrs_192) rename=(r_id=r_id2))  b
+on trim(left(a.s_bid_hrs))=trim(left(b.BID_hrs_192)) and
+	a.r_id=b.r_id2;
 quit;
 
 /*if comorbidity=null, set to zero for this group with the ffs mc 6m*/
 data spo_mc_i.elix_&range1._&range2;
 set ids_w_xwalk_&range2._1;
-array list comorb_1-comorb_32 comorb_all;
+array list s_comorb_1-s_comorb_32 s_comorb_all;
 do over list;
 	if list=. then list=0;
 	end;
 
-label comorb_1 ="Congestive Heart Failure";
-label comorb_2 ="Cardiac Arrhythmias";
-label comorb_3 ="Valvular Disease";
-label comorb_4 ="Pulmonary Circulation Disorders";
-label comorb_5 ="Peripheral Vascular Disorders";
-label comorb_6 ="Hypertension";
-label comorb_7 ="Paralysis";
-label comorb_8 ="Other Neurological Disorders";
-label comorb_9 ="Chronic Pulmonary Disease";
-label comorb_10 ="Diabetes, uncomplicated";
-label comorb_11 ="Diabetes, complicated";
-label comorb_12 ="Hypothyroidism";
-label comorb_13 ="Renal Failure";
-label comorb_14 ="Liver Disease";
-label comorb_15 ="Peptic Ulcer Disease excluding bleeding";
-label comorb_16 ="AIDS";
-label comorb_17 ="Lymphoma";
-label comorb_18 ="Metastatic Cancer";
-label comorb_19 ="Solid Tumor without Metastisis";
-label comorb_20 ="Rheumatoid Arthritis/Collagen Vascular Diseases";
-label comorb_21 ="Coagulopathy";
-label comorb_22 ="Obesity";
-label comorb_23 ="Weight Loss";
-label comorb_24 ="Fluid and Electrolyte Disorders";
-label comorb_25 ="Blood Loss Anemia";
-label comorb_26 ="Deficiency Anemias";
-label comorb_27 ="Alcohol Abuse";
-label comorb_28 ="Drug Abuse";
-label comorb_29 ="Psychoses";
-label comorb_30 ="Depression";
-label comorb_31 ="Dementia";
-label comorb_32 ="Coronary Artery Disease";
+label s_comorb_1 ="Congestive Heart Failure";
+label s_comorb_2 ="Cardiac Arrhythmias";
+label s_comorb_3 ="Valvular Disease";
+label s_comorb_4 ="Pulmonary Circulation Disorders";
+label s_comorb_5 ="Peripheral Vascular Disorders";
+label s_comorb_6 ="Hypertension";
+label s_comorb_7 ="Paralysis";
+label s_comorb_8 ="Other Neurological Disorders";
+label s_comorb_9 ="Chronic Pulmonary Disease";
+label s_comorb_10 ="Diabetes, uncomplicated";
+label s_comorb_11 ="Diabetes, complicated";
+label s_comorb_12 ="Hypothyroidism";
+label s_comorb_13 ="Renal Failure";
+label s_comorb_14 ="Liver Disease";
+label s_comorb_15 ="Peptic Ulcer Disease excluding bleeding";
+label s_comorb_16 ="AIDS";
+label s_comorb_17 ="Lymphoma";
+label s_comorb_18 ="Metastatic Cancer";
+label s_comorb_19 ="Solid Tumor without Metastisis";
+label s_comorb_20 ="Rheumatoid Arthritis/Collagen Vascular Diseases";
+label s_comorb_21 ="Coagulopathy";
+label s_comorb_22 ="Obesity";
+label s_comorb_23 ="Weight Loss";
+label s_comorb_24 ="Fluid and Electrolyte Disorders";
+label s_comorb_25 ="Blood Loss Anemia";
+label s_comorb_26 ="Deficiency Anemias";
+label s_comorb_27 ="Alcohol Abuse";
+label s_comorb_28 ="Drug Abuse";
+label s_comorb_29 ="Psychoses";
+label s_comorb_30 ="Depression";
+label s_comorb_31 ="Dementia";
+label s_comorb_32 ="Coronary Artery Disease";
 
-/*drop extra bid field*/
-drop BID_HRS_19;
 run;
 
 data test;
-set spo_int.elix_&range1._&range2;
+set spo_mc_i.elix_&range1._&range2;
 run;
 
 /*calls rename macro*/
 %rename(WORK,TEST,&range1._&range2);
 
 /*rename r&s BID variables*/
-data spo_int.elix_&range1._&range2._2
-	(rename =(r_BID_hrs_&range1._&range2=r_BID_hrs)
+data spo_mc_i.elix_&range1._&range2._2
+	(rename =(r_id_&range1._&range2=r_id)
 	rename =(s_BID_hrs_&range1._&range2=s_BID_hrs));
 set test;
-keep r_bid_hrs_&range1._&range2 comorb:;
+keep s_BID_hrs_&range1._&range2 r_id_&range1._&range2 s_comorb:;
 run;
 
-proc sort data=spo_int.elix_&range1._&range2._2;
-by s_bid_hrs r_bid_hrs;
+proc sort data=spo_mc_i.elix_&range1._&range2._2;
+by s_bid_hrs r_id;
 run;
 
 %mend;
 
 /*run macro to get elixhauser comorbidities 6, 12, 24m pre and post death
-resulting dataset is spo_int.elix_0d_n12m_2 which has r_bid_hrs to merge back to dataset*/
+resulting datasets are spo_int.elix_0d_x#m_2
+x = n=before, p=after death
+# = 6, 12, or 24 for time window (months) 
+have r_id and s_bid_hrs to merge back to dataset*/
+%elixhauser(range1=0d, range2=n6m);
 %elixhauser(range1=0d, range2=n12m);
+%elixhauser(range1=0d, range2=n24m);
 
-proc freq data=spo_int.elix_0d_n12m;
+%elixhauser(range1=0d, range2=p6m);
+%elixhauser(range1=0d, range2=p12m);
+%elixhauser(range1=0d, range2=p24m);
+
+proc freq data=spo_mc_i.elix_0d_n12m_2;
 table comorb:;
+run;
+
+/*combine the 6 sets of variables into a single dataset
+then merge this into main hrs spouse dataset*/
+data elix_all;
+merge spo_mc_i.elix_0d_n6m_2 spo_mc_i.elix_0d_n12m_2 spo_mc_i.elix_0d_n24m_2
+spo_mc_i.elix_0d_p6m_2 spo_mc_i.elix_0d_p12m_2 spo_mc_i.elix_0d_p24m_2;
+by s_bid_hrs r_id;
 run;
 
 /*merge comorbidities into HRS dataset
 for observations with no mc xwalk, the comorbidities are left as null*/
 proc sql;
-create table spo_int.hrs_elix_n12m(drop=bid_hrs2)
+create table spo_mc_i.hrs_elix(drop=s_bid_hrs2 r_id2)
 as select a.*,b.*
 from 
-spo_int.add_los3 a 
+spo_mc_i.r_sp_ins a 
 left join
-spo_int.elix_0d_n12m_2(rename=(r_bid_hrs=bid_hrs2)) b
-on a.r_bid_hrs = b.bid_hrs2;
+elix_all(rename=(s_bid_hrs=s_bid_hrs2) rename=(r_id=r_id2)) b
+on a.s_bid_hrs=b.s_bid_hrs2 and a.r_id=b.r_id2;
 quit;
 
-/*917 have no xwalk id or are missing dod so missing comorbidities*/
-proc freq data=spo_int.hrs_elix_n12m;
-table comorb: ;
+/*5437 do not have s with ffs medicare 6m before R's death so missing*/
+proc freq data=spo_mc_i.hrs_elix;
+table s_comorb: ;
 run;
 
 

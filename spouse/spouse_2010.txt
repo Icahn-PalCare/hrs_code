@@ -1412,6 +1412,7 @@ log close
 H="Create additional medicare use variables from claims"
 /*Variables required are:
 1. Number of IP, SNF and hospice days in last 2 years of life
+1a. Hospice initial enrollment date
 2. Elixhauser comorbidities
 3. Chronic conditions
 */
@@ -1544,8 +1545,35 @@ run;
 %los(source=hs,days_bef_death=12m,days=(365));
 %los(source=hs,days_bef_death=6m,days=(183));
 
+/**********************************************************/
+/*******Get hospice enrollment date                   *****/
+/**********************************************************/
+/*start with list of claims last 2y of life, get earliest claim*/
+proc sort data=hs_meet_24m; 
+by bid_hrs_19 admit_date; 
+run;
+
+data hs_enrol_1;
+set hs_meet_24m;
+by bid_hrs_19;
+if first.bid_hrs_19;
+run;
+
+data hs_enrol_2;
+set hs_enrol_1;
+days_enr_to_dod=death_date-admit_date;
+run;
+
+proc freq; table days_enr_to_dod;
+run;
+
+data spo_int.hs_enrol_3(keep=bid_hrs_19 hs_enrol_dt);
+set hs_enrol_2(rename=( admit_date = hs_enrol_dt));
+label hs_enrol_dt="Hospice enrollment date, from claims 24m pre death";
+run;
+
 /*****************************************************************/
-/*pull los variables into main dataset*/
+/*pull los and hospice enrollment date variables into main dataset*/
 /*****************************************************************/
 /*try compressing the main dataset before adding new variables*/
 data ivws(compress=yes);
@@ -1561,8 +1589,17 @@ on a.r_bid_hrs = b.bid_hrs_19;
 quit;
 
 proc sql;
-create table add_los2 as select a.*, b.ip_los_24m from
+create table add_los1_1 as select a.*, b.hs_enrol_dt from
 add_los1 a
+left join
+spo_int.hs_enrol_3 b
+on a.r_bid_hrs = b.bid_hrs_19;
+quit;
+
+
+proc sql;
+create table add_los2 as select a.*, b.ip_los_24m from
+add_los1_1 a
 left join
 spo_int.ip24m b
 on a.r_bid_hrs = b.bid_hrs_19;

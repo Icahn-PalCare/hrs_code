@@ -9431,7 +9431,6 @@ local spvars2 medicaid_60m medicaid_x champus_60m champus_x ///
 medigap_60m medigap_x married_60m married_x
 
 **************************************************
-
 //assign variable names so can use varlabels when make all tables
 la var age_at_death_e "Age at death"
 la var adj_total_costs_60m_wi "Total payments, all types"
@@ -11110,4 +11109,158 @@ graph save bar_quart_2y, replace
 graph export bar_quart_2y.tif, replace
 
 ***********************************************************
+log close
+
+
+H="New Table 2, split on demo char, Oct 2014"
+/*This section creates tables by DA 2 year EOL HRR quartiles
+in three groups (0-25%, 25-75%, 75-100%)
+of age,sex, race adjusted 5 year EOL spending per the HRS dataset
+
+Note Spending is wage index adjusted across all categories in this version
+
+Tables are basically the same as in the previous section, but rowns included and
+formatting are different to get tables for publication*/
+
+capture log close
+clear all
+set mem 500m
+set more off
+
+local logpath E:\data\hrs_oop_2010\logs
+local datapath E:\data\hrs_oop_2010\final_data
+//local logpath H:\OOP\local_logs
+//local datapath C:\Users\gorger01\Desktop\oop
+
+log using `logpath'\17-mc_oop_5yr_adjust_wi_demo-LOG.txt, text replace
+
+cd `datapath'
+
+use oop_mc_sample_adj_age_etc.dta
+**************************************************
+//gen ratio of oop to total wealth
+gen oop_to_fin_wealth = adj_total_oop_60m_wi/networth_adj2010_60m
+la var oop_to_fin_wealth "Ratio OOP/Total wealth 5y pre-death (median %)"
+
+//spending categories to check
+local sp_cat adj_total_costs_60m_wi adj_tot_gov_pay_60m_wi adj_nh_cost_private_60m_wi ///
+ adj_inf_care_costs_60m_wi adj_total_oop_60m_wi 
+
+//demo categories to check
+tab age_at_death_cat, missing
+gen age_lt_80=.
+replace age_lt_80=1 if inlist(age_at_death_cat,1,2)
+replace age_lt_80=0 if inlist(age_at_death_cat,3,4,5)
+tab age_at_death_cat age_lt_80
+
+gen age_80up=1 if age_lt_80==0
+replace age_80up=0 if age_lt_80==1
+
+gen male=1 if female_x==0
+replace male=0 if female_x==1
+
+gen educ_hs_plus=1 if educ_hsdeg==1 | educ_some_coll==1
+replace educ_hs_plus=0 if educ_hsdeg==0 & educ_some_coll==0
+
+local demo age_lt_80 age_80up black hisp_eth white other_re ///
+female_x male educ_lt_hs educ_hs_plus educ_coll 
+
+foreach v in `demo'{
+tab `v', missing
+}
+
+la var age_lt_80 "Age at death <80"
+la var age_80up "Age at death 80+"
+la var black "Black"
+la var hisp_eth "Hispanic"
+la var white "White"
+la var other_re "Other race,ethnicity"
+la var female_x "Female"
+la var male "Male"
+la var educ_lt_hs "< High school"
+la var educ_hs_plus "High school +"
+la var educ_coll "College +"
+
+**************************************************
+//first row of table, overall sample spending
+frmttable, clear
+
+foreach i in 1 0{
+
+mat t2_n=J(1,1,.)
+sum adj_total_costs_60m_wi if pr_dem_gt50==`i'
+mat t2_n[1,1]=r(N)
+
+frmttable, statmat(t2_n) sdec(0) store(t2_a)
+
+mat t2_1=J(1,10,.)
+local c=1
+foreach v in `sp_cat'{
+	sum `v' if pr_dem_gt50==`i', detail
+	mat t2_1[1,`c']=r(mean)
+	mat t2_1[1,`c'+1]=r(p50)
+	local c = `c'+2
+}
+
+frmttable, statmat(t2_1) sdec(0) substat(1) ///
+rtitles("Overall sample, dementia=`i'") ///
+merge(t2_a) store(t2_b)
+
+mat t2_2=J(1,3,.)
+sum oop_to_fin_wealth  if pr_dem_gt50==`i', detail
+mat t2_2[1,1]=r(p50)*100
+mat t2_2[1,2]=r(p25)*100
+mat t2_2[1,3]=r(p75)*100
+frmttable, statmat(t2_2) sdec(2) ///
+merge(t2_b) store(t2_c_`i')
+
+//now by demo characteristics
+
+foreach d in `demo'{
+	mat t2_n=J(1,1,.)
+	sum adj_total_costs_60m_wi if pr_dem_gt50==`i' & `d'==1
+	mat t2_n[1,1]=r(N)
+
+	mat rownames t2_n=`d'
+	frmttable, statmat(t2_n) sdec(0) varlabels store(t2_d) 
+
+mat t2_1=J(1,10,.)
+local c=1
+foreach v in `sp_cat'{
+	sum `v' if pr_dem_gt50==`i' & `d'==1, detail
+	mat t2_1[1,`c']=r(mean)
+	mat t2_1[1,`c'+1]=r(p50)
+	local c = `c'+2
+}
+
+mat rownames t2_1=`d'
+frmttable, statmat(t2_1) sdec(0) substat(1)varlabels ///
+merge(t2_d) store(t2_e)
+
+mat t2_2=J(1,3,.)
+sum oop_to_fin_wealth  if pr_dem_gt50==`i' & `d'==1, detail
+mat t2_2[1,1]=r(p50)*100
+mat t2_2[1,2]=r(p25)*100
+mat t2_2[1,3]=r(p75)*100
+
+	mat rownames t2_2=`d'
+frmttable, statmat(t2_2) sdec(2) varlabels ///
+merge(t2_e) store(t2_f)
+
+outreg, replay(t2_g_`i') append(t2_f) store(t2_g_`i')
+}
+
+}
+outreg, replay(t2_c_1) append(t2_g_1) store(table2_1)
+outreg, replay(table2_1) append(t2_c_0) store(table2_2)
+
+outreg , ///
+replay(table2_2) append(t2_g_0) landscape ///
+ctitles("","N","Total social","Medicare &","3rd Party", ///
+"Implicit Costs","Out-of-Pocket","Median OOP", ///
+"Interquartile","Range" \ ///
+"","","costs","Medicaid","Private","of Helping","Expenditures","to Wealth", ///
+" 25%","75%") store(table2)
+
+**************************************************
 log close

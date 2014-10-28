@@ -9905,6 +9905,94 @@ outreg using `logpath'\sic_Tables_11_2008_wave_crit_a_b_c, ///
 log close
 
 
+H="Initial try of fmm model for costs"
+capture log close
+
+clear all
+set mem 500m
+set more off
+
+local logpath E:\data\serious_ill\logs
+local datapath2 E:\data\serious_ill\int_data
+local datapath E:\data\serious_ill\final_data
+
+log using "`logpath'\12_fmm_crit_a.txt", text replace
+
+cd `datapath'
+
+use n0_n1_p1_p2_x_criteria_a_v1.dta if core_year_n0<2010
+***************************************************************
+la var n_hospd_p12m_n0 "Hospital nights"
+la var tot_paid_by_mc_1yr_wi_n0 "Total MC spending"
+
+
+gen hs_deg = 0 if educ_level_hs!=.
+replace hs_deg = 1 if educ_level_hs==1 | educ_level_somcol==1 | educ_level_col==1
+
+//base no high school degree, male, white, no adl impairment, adl stable partial depend n1 to n0
+
+local cvars age_at_core_n0 networth_adj2010_n0
+
+local ivars female_n0 re_black re_hisp re_other_unk ///
+hs_deg srh_pf_n0 married_n0 smi_dem_ind_n0 smi_cancer_ind_n0 smi_esrd_ind_n0 ///
+smi_chf_ind_n0 smi_copd_ind_n0 ///
+smi_diab_compl_ind_n0 smi_liver_ind_n0 smi_als_ind_n0 smi_hip_ind_n0 ///
+ser_med_illness_n0 adl_impair_core_n0 smi_nh_ind_n0 ind_em_ur_adm_12m_n0 ///
+adl_stable_severe_n0n1 ///
+adl_change_i_m_n0n1 adl_change_i_s_n0n1 adl_change_m_s_n0n1
+
+tab n_hospd_p12m_n0
+
+//nb-2
+nbreg n_hospd_p12m_n0 `cvars' `ivars', vce(robust)
+
+//fmm model, nb-2 dist, 2 comp
+fmm n_hospd_p12m_n0 `cvars' `ivars', mix(negbin2) comp(2) vce(robust)
+est save `datapath'\fmm_2comp, replace
+estat ic
+
+//fmm model, nb-2 dist, 3 comp
+/*fmm n_hospd_p12m_n0 `cvars' `ivars', mix(negbin2) comp(3) vce(robust)
+est save `datapath'\fmm_3comp, replace
+estat ic
+*/
+***************************************************************
+//component density
+predict yhat1, eq(component1)
+predict yhat2, eq(component2)
+
+sum yhat1
+scalar yhat1mean = r(mean)
+
+sum yhat2
+scalar yhat2mean = r(mean)
+
+scalar alpha1=`e(alpha1_est)'
+scalar alpha2=`e(alpha2_est)'
+scalar psi1=1/alpha1
+scalar psi2=1/alpha2
+
+gen y=.
+gen f1=.
+gen f2=.
+forvalues i = 1/30 {
+replace y = `i' in `i=`i'+1'
+replace f1=exp(lngamma(`i'+psi1) - lngamma(`i'+1) - lngamma(psi1) ///
+	+psi1*ln(1+yhat1mean*alpha1) - `i'*ln(1+1/(yhat1mean*alpha1))) in `=`i'+1'
+replace f2=exp(lngamma(`i'+psi2) - lngamma(`i'+1) - lngamma(psi2) ///
+	+psi2*ln(1+yhat2mean*alpha2) - `i'*ln(1+1/(yhat1mean*alpha2))) in `=`i'+1'
+}
+
+graph bar (asis) f1 f2, over(y, label(labsize(small))) ///
+bar(1, color(midblue)) bar(2, color(orange)) ///
+legend(label(1 "f(LOS|x,c=1)") label(1 "f(LOS|x,c=2)") row(1)) ///
+title("Hospital nights 1 year after meet criteria A") ///
+note("{&pi}{sub:1}=`:di %4.2f `=`e(pi1_est)''', {&pi}{sub:2}=`:di %4.2f `=`e(pi2_est)'''", size(medium))
+
+***************************************************************
+log close
+
+
 H="xxxxNotes"
 Helper files - A respondant gets an entry (or many entries) in the helper file
 if they report getting help in the ADLs, IADLs and Money (MG062_1 or _2) questions:
@@ -9927,6 +10015,23 @@ or if it was related to the primary DRG of the patient, it was NOT used
 in coding the Elixhauser comorbidity index. This is different from what we are
 doing in that we want to identify people with serious illness, regardless
 (and in many cases specifically) if they are the primary disease or diagnosis.
+
+****************************************************************
+outcomes
+
+at 1 year:
+binary:
+died 
+hospice enrollment
+hospital admission
+continuous:
+hospital nights
+medicare costs
+
+status at 2 years - from p1 interview
+	died
+	meet criteria
+	did not meet criteria
 
 
 

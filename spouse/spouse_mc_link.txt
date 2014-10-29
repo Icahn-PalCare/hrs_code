@@ -2190,3 +2190,89 @@ quit;
 
 
 H="Get S other Medicare utilization variables from claims"
+/*additional outcome variables
+
+Spouse - 6m 12m and 24m post R's death:
+Hospital # visits
+Hospital nights
+# ED visits
+# OP visits*/
+
+/*get admissions and ip ed visits from ip claims 6, 12 and 24m post R's death*/
+%macro admissions(days=,suffix=);
+
+/*pull list of ip claims from all medpar claims x days pre-interview*/
+data ip_meet_&days.;
+set spo_mc_i.mp_meet_&suffix.(where=(trim(left(SSLSSNF))~="N"));
+run;
+
+data ip_&days._2;
+set ip_meet_&days.;
+if icarecnt=. then icarecnt=0; /*medpar intensive care day count*/
+if CRNRYDAY=. then CRNRYDAY=0; /*medpar coronary day count*/
+icu_days=icarecnt+CRNRYDAY;
+em_urgent_admit=0; /*Urgent , emergent admissions from admission type*/
+if type_adm in (1,2) then em_urgent_admit=1;
+em_admit=0;
+if type_adm=1 then em_admit=1;
+urgent_admit=0;
+if type_adm=2 then urgent_admit=1;
+elect_admit=0;
+if type_adm=3 then elect_admit=1;
+ind_ed_charge=0; /*ED charges as another indicator of ED use*/
+if ER_AMT>0 & ER_AMT~=. then ind_ed_charge=1;
+if ER_AMT=0 | ER_AMT=. then ind_ed_charge=0;
+
+/*truncate stays where the admit is more than x days before interview
+or discharge is after the interview date so can get accurate LOS*/
+if admit_date<r_dod_hrs_claims then do;
+	admit_date=c_ivw_date-&days.;
+	admit_trunc=1;
+	end;
+if r_dod_hrs_claims + &days.<disch_date then do;
+	disch_date=r_dod_hrs_claims + &days.;
+	disch_trunc=1;	
+	end;
+adj_los=disch_date-admit_date;
+if disch_date-admit_date=0 then adj_los=1;
+run;
+
+proc sort data=ip_&days._2;
+by BID_hrs_19 core_year;
+run;
+
+proc sql;
+create table ip_&days._3 as select distinct BID_hrs_19,core_year,
+/*total ICU days*/
+sum(icu_days) as icu_days_&suffix. label="total icu days &suffix. pre core ivw",
+/*count of IP admissions, all types*/
+count(*) as n_ip_admit_&suffix. label="total n of hospital admit &suffix. pre core ivw",
+/*total Hospital LOS*/
+sum(adj_los) as n_hospd_&suffix. label="total hospital days &suffix. pre core ivw",
+/*count urgent or emergency admissions*/
+count(case when em_urgent_admit=1 then em_urgent_admit else . end) as n_em_urgent_admit_&suffix. 
+	label="total n of urgent/emergent hospital admit &suffix. pre core ivw",
+/*count of emergency admissions, from admission type code*/
+count(case when em_admit=1 then em_admit else . end) as n_em_admit_&suffix. 
+	label="total n of emergent hospital admit &suffix. pre core ivw",
+/*count of urgent admissions, from admission type code*/
+count(case when urgent_admit=1 then urgent_admit else . end) as n_urgent_admit_&suffix. 
+	label="total n of urgent hospital admit &suffix. pre core ivw",
+/*count of elective admissions, from admission type code*/
+count(case when elect_admit=1 then elect_admit else . end) as n_elect_admit_&suffix. 
+	label="total n of elective hospital admit &suffix. pre core ivw",
+/*count of admissions with any ED charges*/
+count(case when ind_ed_charge=1 then ind_ed_charge else . end) as n_ED_ip_&suffix. 
+	label="total n of ED visits with subsequent admit &suffix. pre core ivw"
+
+ from ip_&days._2 group by BID_hrs_19,core_year;
+quit;
+
+data ip_&days._4;
+set ip_&days._3;
+if icu_days_&suffix.>n_hospd_&suffix. then icu_days_&suffix.=n_hospd_&suffix.;
+run;
+
+%mend;
+
+%admissions(days=183,suffix=6m);

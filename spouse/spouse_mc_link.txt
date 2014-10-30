@@ -2198,7 +2198,9 @@ Hospital nights
 # ED visits
 # OP visits*/
 
+/*****************************************************************************/
 /*get admissions and ip ed visits from ip claims 6, 12 and 24m post R's death*/
+/*****************************************************************************/
 %macro admissions(days=,suffix=);
 
 /*pull list of ip claims from all medpar claims x days pre-interview*/
@@ -2223,10 +2225,10 @@ ind_ed_charge=0; /*ED charges as another indicator of ED use*/
 if ER_AMT>0 & ER_AMT~=. then ind_ed_charge=1;
 if ER_AMT=0 | ER_AMT=. then ind_ed_charge=0;
 
-/*truncate stays where the admit is more than x days before interview
-or discharge is after the interview date so can get accurate LOS*/
+/*truncate stays where the admit is more before R's death
+or discharge is after the x days after R's death so can get accurate LOS*/
 if admit_date<r_dod_hrs_claims then do;
-	admit_date=c_ivw_date-&days.;
+	admit_date=r_dod_hrs_claims;
 	admit_trunc=1;
 	end;
 if r_dod_hrs_claims + &days.<disch_date then do;
@@ -2238,41 +2240,187 @@ if disch_date-admit_date=0 then adj_los=1;
 run;
 
 proc sort data=ip_&days._2;
-by BID_hrs_19 core_year;
+by BID_hrs_19 r_id;
 run;
 
 proc sql;
-create table ip_&days._3 as select distinct BID_hrs_19,core_year,
+create table ip_&days._3 as select distinct BID_hrs_19,r_id,
 /*total ICU days*/
-sum(icu_days) as icu_days_&suffix. label="total icu days &suffix. pre core ivw",
+sum(icu_days) as s_icu_days_&suffix. label="total icu days &suffix.",
 /*count of IP admissions, all types*/
-count(*) as n_ip_admit_&suffix. label="total n of hospital admit &suffix. pre core ivw",
+count(*) as s_n_ip_admit_&suffix. label="total n of hospital admit &suffix.",
 /*total Hospital LOS*/
-sum(adj_los) as n_hospd_&suffix. label="total hospital days &suffix. pre core ivw",
-/*count urgent or emergency admissions*/
-count(case when em_urgent_admit=1 then em_urgent_admit else . end) as n_em_urgent_admit_&suffix. 
-	label="total n of urgent/emergent hospital admit &suffix. pre core ivw",
-/*count of emergency admissions, from admission type code*/
-count(case when em_admit=1 then em_admit else . end) as n_em_admit_&suffix. 
-	label="total n of emergent hospital admit &suffix. pre core ivw",
-/*count of urgent admissions, from admission type code*/
-count(case when urgent_admit=1 then urgent_admit else . end) as n_urgent_admit_&suffix. 
-	label="total n of urgent hospital admit &suffix. pre core ivw",
-/*count of elective admissions, from admission type code*/
-count(case when elect_admit=1 then elect_admit else . end) as n_elect_admit_&suffix. 
-	label="total n of elective hospital admit &suffix. pre core ivw",
+sum(adj_los) as s_n_hospd_&suffix. label="total hospital days &suffix.",
 /*count of admissions with any ED charges*/
-count(case when ind_ed_charge=1 then ind_ed_charge else . end) as n_ED_ip_&suffix. 
-	label="total n of ED visits with subsequent admit &suffix. pre core ivw"
+count(case when ind_ed_charge=1 then ind_ed_charge else . end) as s_n_ED_ip_&suffix. 
+	label="total n of ED visits with subsequent admit &suffix."
 
- from ip_&days._2 group by BID_hrs_19,core_year;
+ from ip_&days._2 group by BID_hrs_19,r_id;
 quit;
 
 data ip_&days._4;
 set ip_&days._3;
-if icu_days_&suffix.>n_hospd_&suffix. then icu_days_&suffix.=n_hospd_&suffix.;
+if s_icu_days_&suffix.>s_n_hospd_&suffix. then s_icu_days_&suffix.=s_n_hospd_&suffix.;
 run;
+
+proc freq; 
+table s_icu_days_&suffix. s_n_ip_admit_&suffix. s_n_hospd_&suffix.  s_n_ED_ip_&suffix.;
+run;
+
+proc sort data=ip_&days._4; by bid_hrs_19 r_id; run;
 
 %mend;
 
-%admissions(days=183,suffix=6m);
+%admissions(days=183,suffix=p6m);
+%admissions(days=365,suffix=p12m);
+%admissions(days=730,suffix=p24m);
+
+/*****************************************************************************/
+/*get outpatient visits and ed use from op claims 6, 12 and 24m post R's death*/
+/*****************************************************************************/
+%macro op(days=,suffix=);
+
+data op_meet_&days.;
+set spo_mc_i.op_meet_&suffix.(keep=bid_hrs_19 r_id admit_date disch_date 
+	r_dod_hrs_claims RVCNTR01-RVCNTR45);
+run;
+
+proc sort data=op_meet_&days.; by bid_hrs_19 r_id admit_date; run;
+
+data ed_op_&days._1;
+set op_meet_&days.;
+ed_op=0;
+array list RVCNTR01-RVCNTR45;
+do over list;
+	if list >= 450 and list < 460 and ed_op=0 then  
+	ed_op = 1;
+	end;
+run;
+
+proc freq;
+table ed_op;
+run;
+
+proc sql;
+create table ed_op_&days._2 as select distinct bid_hrs_19,r_id,
+count(case when ed_op=1 then ed_op else . end)
+	as s_n_ed_op_visits_&suffix. label="n of OP ED visits &suffix.",
+count(*) as s_n_op_visits_&suffix. label="n OP visits &suffix."
+	from ed_op_&days._1 group by bid_hrs_19,r_id;
+quit;
+
+proc freq;
+table s_n_ed_op_visits_&suffix s_n_op_visits_&suffix;
+run;
+
+proc sort data=ed_op_&days._2; by bid_hrs_19 r_id; run;
+
+%mend;
+
+%op(days=183,suffix=p6m);
+%op(days=365,suffix=p12m);
+%op(days=730,suffix=p24m);
+
+/*****************************************************************************/
+/*merge IP and OP variables into main dataset*/
+/*****************************************************************************/
+data ip_all;
+merge ip_183_4 ip_365_4 ip_730_4;
+by bid_hrs_19 r_id;
+run;
+
+data op_all;
+merge ed_op_183_2 ed_op_365_2 ed_op_730_2;
+by bid_hrs_19 r_id;
+run;
+
+/*now bring in to list of obs with ffs medicare 6m prior to R's death*/
+proc sql;
+create table add_ip(drop=bid_hrs_19 r_id2) as select 
+a.s_bid_hrs,a.r_id,b.*
+from spo_mc_i.s_r_dod a
+left join
+ip_all(rename=(r_id=r_id2)) b
+ on trim(left(a.s_BID_hrs))=trim(left(b.bid_hrs_19)) and a.r_id=b.r_id2;
+ quit;
+
+proc sql;
+create table add_op(drop=bid_hrs_19 r_id2) as select *
+from add_ip a
+left join
+op_all(rename=(r_id=r_id2)) b
+ on trim(left(a.s_BID_hrs))=trim(left(b.bid_hrs_19)) and a.r_id=b.r_id2;
+ quit;
+
+/*set to 0 if had ffs mc 6m prior to R's death*/
+data spo_mc_i.op_ip;
+set add_op;
+array list s_icu_days_p6m s_n_ip_admit_p6m s_n_hospd_p6m s_n_ED_ip_p6m 
+s_icu_days_p12m s_n_ip_admit_p12m s_n_hospd_p12m s_n_ED_ip_p12m 
+s_icu_days_p24m s_n_ip_admit_p24m s_n_hospd_p24m s_n_ED_ip_p24m 
+s_n_ed_op_visits_p6m s_n_op_visits_p6m s_n_ed_op_visits_p12m s_n_op_visits_p12m
+s_n_ed_op_visits_p24m s_n_op_visits_p24m;
+	do over list;
+	if list=. then list=0;
+	end;
+s_n_ed_p6m=s_n_ED_ip_p6m +s_n_ed_op_visits_p6m;
+label s_n_ed_p6m="S n ED Visits p6m, from IP or OP claims"; 
+s_n_ed_p12m=s_n_ED_ip_p12m +s_n_ed_op_visits_p12m;
+label s_n_ed_p12m="S n ED Visits p12m, from IP or OP claims"; 
+s_n_ed_p24m=s_n_ED_ip_p24m +s_n_ed_op_visits_p24m;
+label s_n_ed_p24m="S n ED Visits p24m, from IP or OP claims"; 
+run;
+
+/*merge into overall dataset*/
+proc sql;
+create table spo_mc_i.hrs_elix_cc_pay_out(drop=s_bid_hrs2 r_id2) as select *
+from 
+spo_mc_i.hrs_elix_cc_pay a 
+left join
+spo_mc_i.op_ip(rename=(s_bid_hrs=s_bid_hrs2) rename=(r_id=r_id2)) b
+on a.s_bid_hrs=b.s_bid_hrs2 and a.r_id=b.r_id2;
+quit;
+
+proc means n mean median min max; var s_icu: s_n_ip_admit: s_n_hospd: s_n_op_visits: 
+s_n_ed_: ;run;
+
+/*need to drop some variables because of Stata IC limit*/
+proc contents data=spo_mc_i.hrs_elix_cc_pay_out; run;
+
+data ltdvars;
+set spo_mc_i.hrs_elix_cc_pay_out;
+drop zip: s_comorb_: s_ZIP: s_STATEUSPS: s_PN_: r_ZIP: r_STATEUSPS: r_PN_: comorb_: ;
+run;
+
+proc export data=ltdvars
+outfile="E:\data\spouse_claims\data\int_data\hrs_elix_cc_pay_out.dta" replace;
+run;
+
+
+H="First look at sample characteristics"
+/*sample size for Spouse claims data
+Requires both R and S to have FFS MC 6m prior to R's death*/
+
+capture log close
+
+clear all
+set mem 500m
+set more off
+
+//Amy's PC
+local logpath E:\data\spouse_claims\logs
+local projdatapath E:\data\spouse_claims\data\int_data
+
+log using `logpath'\2-HRS_Spouse_claims_sample_char.txt, text replace
+
+cd `projdatapath'
+use hrs_elix_cc_pay_out.dta if (r_xwalk_yes==1 & r_part_ab_6m==1 & ///
+	r_hmo_d_6m==0 & r_married_x==1 & s_xwalk_yes==1 & ///
+	s_part_ab_6m==1 & s_hmo_d_6m==0)
+*********************************************************
+
+
+
+
+*********************************************************
+log close

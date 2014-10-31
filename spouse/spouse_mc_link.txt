@@ -24,7 +24,8 @@ H="FFS determination for spouse"
 claims denominator files
 
 Several sets of variables created, looking back 6m, 12m, 18m, 24m from R's death
-*/
+
+Also pulls in spouse date of death where available in the claims s_claims_dod*/
 
 /*sort claims denominator file*/
 proc sort data=medi.dn_2000_2010 out=dn_2000_20102  nodupkey;
@@ -273,17 +274,61 @@ data zzzztest;
 set s_all_insurance3;
 if part_ab_6m=.;
 run;
+/******************************************************************/
+/*******Get Spouse death date from claims ************************/
+/******************************************************************/
+/*keep just the last entry in the dn file, if died, this will have dod*/
+data s_dod_1;
+set dn_2000_20102;
+by bid_hrs_19;
+if last.bid_hrs_19;
+run;
 
+/*keep just list of those S's with xwalk id, and R with DOD*/
+proc sql;
+create table s_dod_2 as select a.s_bid_hrs,a.r_id,b.BENE_DOB as s_claims_dob,
+b.DEATH_DT as s_claims_dod from
+r_sp2 a left join
+s_dod_1 b
+on a.s_bid_hrs=b.bid_hrs_19;
+run;
+
+data s_dod_3;
+set s_dod_2;
+if s_claims_dod="00000000" then s_claims_dod="" ;
+label s_claims_dod="S DOD from claims";
+label s_claims_dob="S DOB from claims";
+/*convert these dates into sas dates*/
+s_claims_dod2=input(s_claims_dod,8.);
+s_claims_dob2=input(s_claims_dob,8.);
+format s_claims_dod2 date9.;
+s_claims_dod2=input(put(s_claims_dod2,z8.),yymmdd8.);
+format s_claims_dob2 date9.;
+s_claims_dob2=input(put(s_claims_dob2,z8.),yymmdd8.);
+run;
+
+/*add to the insurance indicators dataset*/
+proc sql;
+create table s_all_insurance4 as select a.*,b.s_claims_dob2 as s_claims_dob,
+b.s_claims_dod2 as s_claims_dod
+from s_all_insurance3 a left join
+s_dod_3 b
+on a.r_id=b.r_id & a.s_bid_hrs=b.s_bid_hrs;
+quit;
+
+/******************************************************************/
 /*bring in insurance indicators to full decedent/spouse dataset*/
+/******************************************************************/
 proc sql;
 create table spo_mc_i.r_sp_ins as select
 a.*, b.r_dod_hrs_claims , b.r_dod_use_claims , 
 b.part_ab_6m as s_part_ab_6m , b.hmo_d_6m as s_hmo_d_6m , 
 b.part_ab_12m as s_part_ab_12m , b.hmo_d_12m as s_hmo_d_12m ,
-b.part_ab_24m as s_part_ab_24m , b.hmo_d_24m as s_hmo_d_24m 
+b.part_ab_24m as s_part_ab_24m , b.hmo_d_24m as s_hmo_d_24m ,
+b.s_claims_dob, b.s_claims_dod
 from 
 spo_fnl.spouse_data a left join 
-s_all_insurance3 b
+s_all_insurance4 b
 on a.r_id=b.r_id;
 quit;
 
@@ -2580,6 +2625,49 @@ outreg using `logpath'/2_Spouse_sample_char, addtable ///
 //Spouse additional utilization measures, after R's death
 
 **add in spouse dies
+gen s_dod_hrs_claims = s_death_date_e
+replace s_dod_hrs_claims=s_claims_dod if s_death_date_e==. & s_claims_dod!=.
+format s_dod_hrs_claims %td
+
+gen s_dod_use_claims=0
+replace s_dod_use_claims=1 if s_death_date_e==. & s_claims_dod!=.
+tab s_dod_use_claims, missing
+la var s_dod_hrs_claims "S DOD from HRS or Claims"
+la var s_dod_use_claims "S DOD from claims (missing in HRS)"
+
+gen s_r_dod_diff= s_dod_hrs_claims-r_dod_hrs_claims
+sum s_r_dod_diff, detail
+tab s_dod_hrs_claims r_dod_hrs_claims if s_r_dod_diff<0
+tab s_dod_use_claims if s_r_dod_diff<0
+
+//do these 2 obs have a S claims dod after R's dod?
+tab s_dod_hrs_claims s_claims_dod if s_r_dod_diff<0
+//for observation where claims dod is after R's death, use that instead
+replace s_dod_use_claims=1 if s_r_dod_diff<0 & s_dod_hrs_claims<s_claims_dod
+replace s_dod_hrs_claims=s_claims_dod if s_r_dod_diff<0 & s_dod_hrs_claims<s_claims_dod
+
+replace s_r_dod_diff= s_dod_hrs_claims-r_dod_hrs_claims
+**1 observation still has s DOD < r DOD
+**need to look into this further, for now, assign as died w/i 6m
+
+gen s_died_p6m=0
+replace s_died_p6m=1 if s_r_dod_diff<183 & s_r_dod_diff~=.
+gen s_died_p12m=0
+replace s_died_p12m=1 if s_r_dod_diff<365 & s_r_dod_diff~=.
+gen s_died_p24m=0
+replace s_died_p24m=1 if s_r_dod_diff<730 & s_r_dod_diff~=.
+
+la var s_died_p6m "S died within 6m of R's death"
+la var s_died_p12m "S died within 12m of R's death"
+la var s_died_p24m "S died within 24m of R's death"
+
+tab s_died_p6m, missing
+tab s_died_p12m, missing
+tab s_died_p24m, missing
+
+*********************************************************
+//save this dataset
+save spouse_claims_v1.dta, replace
 
 //create indicator variables for any hospitalization, ICU use, and ED use
 foreach t in p6m p12m p24m{
@@ -2593,7 +2681,7 @@ foreach t in p6m p12m p24m{
 	la var s_admit_ind_`t' "Any Hospitalization, n, %"
 	la var s_n_ip_admit_`t' "Number hospitalizations, mean, sd"
 	
-	la var s_n_hospd_`n' "Hospital days, mean, sd"
+	la var s_n_hospd_`t' "Hospital days, mean, sd"
 	
 	gen s_ed_ind_`t'=1 if s_n_ed_`t'>0 & s_n_ed_`t'!=.
 	replace s_ed_ind_`t'=0 if s_n_ed_`t'==0
@@ -2602,9 +2690,51 @@ foreach t in p6m p12m p24m{
 	
 	la var s_n_op_visits_`t' "Number Outpatient visits, mean, sd"
 }
-local util_c  s_n_ip_admit_ s_n_hospd_ s_icu_days_ s_n_ED_ip_ /// 
-s_n_ed_op_visits_ s_n_op_visits_ s_n_ed_
+local util_c s_n_ip_admit_ s_n_hospd_ s_icu_days_  /// 
+ s_n_op_visits_ s_n_ed_
 
-local util_i s_admit_ind_ s_icu_ind_ s_ed_ind_
+local util_i s_died_ s_admit_ind_ s_icu_ind_ s_ed_ind_
+
+mat out=J(1,2,.)
+mat out_n=J(1,1,.)
+//all periods after R's death, same sample R&S have FFS MC 6m before death
+foreach t in p6m p12m p24m{
+	label var s_died_`t' "S died, n, %"
+	foreach v in `util_i'{ //indicator variables, report n, %
+		sum `v'`t'
+		mat out[1,1]=r(mean)*r(N) //n
+		mat out[1,2]=r(mean)*100 //pct
+		mat rownames out=`v'`t'
+		frmttable, statmat(out) append(tab_out_`t') store(tab_out_`t') ///
+			sdec(0,2) varlabels
+		}
+	
+	foreach v in `util_c'{ //cont variables, report mean,sd
+		sum `v'`t', detail
+		mat out[1,1]=r(mean) //mean
+		mat out[1,2]=r(sd) //sd
+		mat rownames out=`v'`t'
+		frmttable, statmat(out) append(tab_out_`t') store(tab_out_`t') ///
+			sdec(2,2) varlabels
+		}
+//last row - n for each column
+	sum r_exit_year_x
+	mat out_n[1,1]=r(N)
+	mat rownames out_n="N"
+	frmttable, statmat(out_n) append(tab_out_`t') store(tab_out_`t') ///
+		sdec(0) 
+}
+
+outreg, replay(tab_out_p6m) merge(tab_out_p12m) store(tab_out1)
+outreg using `logpath'/2_Spouse_sample_char, addtable ///
+	replay(tab_out1) merge(tab_out_p24m) ///
+	ctitles("", "6m", "", "12m", "", "24m", "" \ ///
+		"", "N", "percent", "N", "percent", "N", "percent" \ ///
+		"", "mean", "sd", "mean", "sd", "mean", "sd") ///
+	title("S Medicare utilization after R's death") ///
+	note("Sample limited to those S with FFS Medicare" \ ///
+	"6m prior to R's death.")
+
+
 *********************************************************
 log close

@@ -1613,6 +1613,9 @@ log close
 
 
 H="Plot cesd vs time"
+/*creates two versions of the plots, first has 6m time windows
+second is 1 year time windows to get smaller 95%CI's with larger groups*/
+
 capture log close
 
 clear all
@@ -1629,7 +1632,9 @@ cd `datapath'
 //use sample with full ces-d information
 use spouse_intens_data_cleaned.dta if cesd_miss_n1_p1==0
 *******************************************************************
-//create pre death time variable
+//create pre death time variables
+
+//first set of time variables - 6m time windows
 //use n1 ivw if >6m pre death, n2 otherwise
 gen s_days_n_core_dead = s_days_n1_core_dead if s_ind_n1_wi_6m_dead==0
 replace s_days_n_core_dead = s_days_n2_core_dead if s_ind_n1_wi_6m_dead==1
@@ -1648,6 +1653,25 @@ tab days_n_core_dod_cat , missing
 
 tab days_p1_core_dod_cat, missing 
 
+//second set of time variables - 12m time windows
+gen n_core_cat2=0 if inlist(days_n_core_dod_cat,0,1)
+replace n_core_cat2=1 if inlist(days_n_core_dod_cat,2,3)
+replace n_core_cat2=2 if days_n_core_dod_cat==4
+la def n_core_cat2 0 "0-12 months" 1"12-24 months" 2"24+ months"
+la val n_core_cat2 n_core_cat2
+
+gen p_core_cat2=0 if inlist(days_p1_core_dod_cat,0,1)
+replace p_core_cat2=1 if inlist(days_p1_core_dod_cat,2,3)
+replace p_core_cat2=2 if days_p1_core_dod_cat==4
+la def p_core_cat2 0 "0-12 months" 1"12-24 months" 2"24+ months"
+la val p_core_cat2 p_core_cat2
+
+tab n_core_cat2 days_n_core_dod_cat, missing
+tab p_core_cat2 days_p1_core_dod_cat, missing
+
+****************************************************************
+//Plot using 6m time windows
+****************************************************************
 mat mean_pro0=J(10,1,.) //means if procedure=no
 mat mean_pro1=J(10,1,.) //means if procedure=yes
 mat v_pro0=J(10,1,.)
@@ -1718,6 +1742,80 @@ twoway rcap ll_pro0 ul_pro0 sitenum, color(gs9) ///
 graph save `logpath'/mean_cesd_time,replace
 graph export `logpath'/mean_cesd_time.eps,replace
 
+drop mean_pro0 mean_pro1 v_pro0 v_pro1 sitenum se_pro0 se_pro1 ///
+ll_pro0 ll_pro1 ul_pro0 ul_pro1
+****************************************************************
+//Plot using 12m time windows
+****************************************************************
+mat mean_pro0=J(7,1,.) //means if procedure=no
+mat mean_pro1=J(7,1,.) //means if procedure=yes
+mat v_pro0=J(7,1,.)
+mat v_pro1=J(7,1,.)
+
+//get pre death cesd scores, by intensive procedures and time
+mat struct_n=[0,1 \ 1,2 \ 2,3 ]
+mat list struct_n
+
+forvalues r=1/3{
+mean s_cesd_tot_n1n2 if  n_core_cat2==struct_n[`r',1], over(int_any_of5_6m)
+mat mean=e(b)
+mat mean_pro0[struct_n[`r',2],1]= mean[1,1]
+mat mean_pro1[struct_n[`r',2],1]= mean[1,2]
+mat v=e(V)
+mat v_pro0[struct_n[`r',2],1]= v[1,1]
+mat v_pro1[struct_n[`r',2],1]= v[2,2]
+}
+
+//post death cesd, by intensive procedures and time
+mat struct_p=[0,5 \ 1,6 \ 2,7 ]
+mat list struct_p
+
+forvalues r=1/3{
+mean s_cesd_tot_p1 if  p_core_cat2==struct_p[`r',1], over(int_any_of5_6m)
+mat mean=e(b)
+mat mean_pro0[struct_p[`r',2],1]= mean[1,1]
+mat mean_pro1[struct_p[`r',2],1]= mean[1,2]
+mat v=e(V)
+mat v_pro0[struct_p[`r',2],1]= v[1,1]
+mat v_pro1[struct_p[`r',2],1]= v[2,2]
+}
+
+svmat mean_pro0
+svmat mean_pro1
+svmat v_pro0
+svmat v_pro1
+
+gen int sitenum = 1 in 1/7
+forvalues i=2/7{
+replace sitenum=`i' in `i'
+}
+
+list sitenum mean_pro0 mean_pro1 v_pro0 v_pro1 in 1/7
+
+foreach x in 0 1{
+gen se_pro`x'=sqrt(v_pro`x')
+
+gen ll_pro`x'=mean_pro`x'-1.96*se_pro`x'
+gen ul_pro`x'=mean_pro`x'+1.96*se_pro`x'
+}
+
+list sitenum mean_pro0 se_pro0 ll_pro0 ul_pro0 mean_pro1 se_pro1 ll_pro1 ul_pro1 in 1/7
+
+
+twoway rcap ll_pro0 ul_pro0 sitenum, color(gs9) ///
+	|| scatter mean_pro0 sitenum, color(midblue) ///
+	|| rcap ll_pro1 ul_pro1 sitenum, color(gs5) ///
+	|| scatter mean_pro1 sitenum, color(orange) ///
+	xline(4) ytitle("Mean CES-D score") ///
+	xlabel(1 "24+" 2 "12-24" 3 "0-12" 4"0" 5"0-12" 6"12-24" 7"24+") ///
+	xtitle("Months relative to R's death") ///
+	legend(order(4 3 2 1) symxsize(*.5) cols(2) ///
+	label(1 95% confidence interval) label(2 No Itensive Procedure) ///
+		label(3 95% confidence interval) label(4 Intensive Procedure) )  ///
+	title("Mean CES-D score by time of interview" ///
+	"and intensive procedure utilization")
+graph save `logpath'/mean_cesd_time_12m,replace
+graph export `logpath'/mean_cesd_time_12m.eps,replace
 *******************************************************************
 log close
 

@@ -3164,9 +3164,12 @@ starting datasets:
 spo_int.exit_rest_r_s_core_n1_p1_ins
 E:\data\Dartmouth_misc\zip_hrr_hci_bed_eol_3 - saved in E:/data/spouse/ref_data
 
+Wage index 2010 file, originally downloaded for the OOP project (oop_mc_2010_2yr.txt code)
+E:\data\hrs_oop_2010\ref_data\wage_index\wage_index_cbsa_2010.xls
+
 starting hrs dataset spo_int.hrs_elix_cc_n12m_intens
 
-Final dataset: spo_int.hrs_elix_cc_n12m_reg
+Final dataset: spo_int.hrs_elix_cc_n12m_reg2
 
 */
 
@@ -3211,16 +3214,216 @@ zip_exit_n=zip_exit+0;
 drop zip_exit;
 run;
 
+proc contents data=ref.zip_hrr_hci_bed_eol_3; run;
+
 /*merge in the region data by zip code*/
 proc sql;
-create table spo_int.hrs_elix_cc_n12m_reg as select a.*,b.*
+create table spo_int.hrs_elix_cc_n12m_reg as select a.*,b.hci_index, b.hospital_beds,
+	b.physicians, b.specialists, b.wage_index_2008, b.hrrnum, b.hrrcity, b.hrrstate
 from id_zip_3 a 
 left join
 ref.zip_hrr_hci_bed_eol_3 b
 on a.zip_exit_n=b.zip;
 quit;
 
+/*2008 Wage index missing for 40% of the dataset so bring in separately*/
+proc freq data=spo_int.hrs_elix_cc_n12m_reg; table wage_index_2008; run;
 
+data hrs_add_wi;
+set spo_int.hrs_elix_cc_n12m_reg(drop=wage_index_2008);
+run;
+
+/*bring in 2010 wage index file*/
+proc import datafile="E:\data\hrs_oop_2010\ref_data\wage_index\wage_index_cbsa_2010.xls"
+out=spo_int.wage_index dbms=xls
+replace;
+run;
+
+/*RI and DC don't have overall state wage index so use average*/
+data wi_ri;
+set spo_int.wage_index;
+if index(trim(left(Area_Title)),", RI")>0;
+run;
+
+proc means;
+var wage_index;
+run;
+
+/*get DC average*/
+data wi_dc;
+set spo_int.wage_index;
+if index(trim(left(Area_Title)),", DC")>0;
+run;
+
+proc means;
+var wage_index;
+run;
+
+data wage_index2;
+set spo_int.wage_index;
+cbsa_n=cbsa_code+0;
+if trim(left(cbsa_code))~="";
+wage_index_2010=Wage_Index;
+if index(trim(left(Area_Title)),", RI")>0 then RI=1;
+if index(trim(left(Area_Title)),", DC")>0 then DC=1;
+*state 44=RI ,state 11=DC;
+if state_in_wage_index=44 then wage_index_2010=1.0783000; 
+if state_in_wage_index=11 then wage_index_2010= 1.0701250; 
+run;
+
+*Look at observations from Rhode Island;
+proc freq data=wage_index2(where=(ri=1));
+table Area_Title;
+run;
+
+%let var=ri;
+proc means data=wage_index2;
+class &var;
+var wage_index_2010;
+run;
+
+*Look at observations from DC;
+proc freq data=wage_index2(where=(DC=1));
+table Area_Title;
+run;
+
+%let var=DC;
+proc means data=wage_index2;
+class &var;
+var wage_index_2010;
+run;
+
+/******************************************************************/
+/* Link CBSA codes and zip codes from the WI file*/
+/******************************************************************/
+/*Bring in xwalk file between CBSA codes and zip codes
+Note only keep variables needed from xwalk file because formats 
+are missing for some of the other text variables*/
+
+libname oop_ref "E:\data\hrs_oop_2010\ref_data";
+
+data zip_cb;
+set oop_ref.xtract(keep=zip5 cbsa state);
+zip_n=zip5+0;
+cbsa_n=cbsa+0;
+/*If zip code is not missing, add state code*/
+if zip_n~=.;
+state_n=state+0;
+run;
+
+*Remove duplicate entries for zip5 and cbsa from xwalk file;
+*Goes from 399045 to 49289 rows;
+proc sort data=zip_cb out=zip_cb2 nodupkey;
+by zip_n cbsa_n;
+run;
+
+*Check to see zip codes in a cbsa code for Rochester, NY;
+proc sql;
+select zip5, cbsa from zip_cb2
+where cbsa_n in (40380);
+quit;
+
+/*note several zip codes have multiple cbsa*/
+/*create dataset with just one entry for each zip code
+8029 zip codes have more than one cbsa code
+Just use the first one when sort*/
+proc sort data=zip_cb2 out=cbsa_zip_final nodupkey;
+by zip_n;
+run;
+
+*Check to see zip codes in a cbsa code for Rochester, NY;
+proc sql;
+select zip_n, cbsa from cbsa_zip_final
+where cbsa_n in (40380);
+quit;
+
+/******************************************************************/
+/* Create dataset with cbsa, wage index and zip code */
+/******************************************************************/
+
+/*for zip codes with no cbsa, wage index is left missing
+there are also many cbsas with missing wage index*/
+proc sql;
+create table zip_cbsa_wage_index as
+select a.*,b.wage_index_2010 from
+cbsa_zip_final a
+left join
+wage_index2 b
+on a.cbsa_n=b.cbsa_n;
+quit;
+
+/*Check for and remove duplicates by zip, keep first entry*/
+proc sort data=zip_cbsa_wage_index out=zip_cbsa_wage_index2 nodupkey;
+by zip_n;
+run;
+
+/* 7 zip codes without an associated cbsa */
+proc sql;
+select count(distinct zip_exit_n) from hrs_add_wi
+where zip_exit_n not in 
+(select zip_n from zip_cbsa_wage_index2);
+quit;
+
+/******************************************************************/
+/* Bring wage index and state code into main data file by zip-cbsa*/
+/******************************************************************/
+proc sql;
+create table hrs_wage_index as
+select a.*,b.wage_index_2010,b.state_n from 
+hrs_add_wi a
+left join 
+zip_cbsa_wage_index2 b
+on a.zip_exit_n=b.zip_n;
+quit;
+
+/*3177 observations do not have wage id by cbsa-zip*/
+proc sql; 
+select count(distinct r_id) from hrs_wage_index
+where wage_index_2010 is null ;
+quit;
+
+/******************************************************************/
+/* Bring wage index into cost file by state if missing above*/
+/******************************************************************/
+/*Get dataset with one wage index per state*/
+proc sort data=wage_index2 out=wage_index3 nodupkey;
+by state_in_wage_index;
+run;
+
+*Puerto Rico is missing state;
+proc freq; table state_in_wage_index; run;
+
+/*Merges in wage index if there's one for the state but was missing for the zip*/
+proc sql;
+create table spo_int.hrs_elix_cc_n12m_reg2 
+as select a.*,coalesce(a.wage_index_2010,b.wage_index_2010) as wage_index_20102
+from
+hrs_wage_index a
+left join
+wage_index3 b
+on a.state_n=b.state_in_wage_index;
+quit;
+
+/*check for missing values*/
+proc means;
+var wage_index_2010 wage_index_20102;
+run;
+
+/*50 obs have missing state so can't backfill using state wage index*/
+proc sql;
+select distinct state_n ,count(*) from spo_int.hrs_elix_cc_n12m_reg2 
+where wage_index_20102=. group by state_n;
+quit;
+
+/*who is missing wage index?
+most don't have valid zip codes*/
+data miss_wi;
+set spo_int.hrs_elix_cc_n12m_reg2;
+if wage_index_20102=.;
+run;
+
+proc freq; table state_n zip_exit_n;
+run;
 
 H="xxxx = Process location level raw data"
 /*
@@ -3621,12 +3824,12 @@ H="Create additional variables"
 6. live alone different waves
 */
 
-proc freq data=spo_int.hrs_elix_cc_n12m_reg;
+proc freq data=spo_int.hrs_elix_cc_n12m_reg2;
 table r_adl_cat_core_n1 r_adl_cat_core_n2 /missprint;
 run;
 
 data adl_change_1;
-set spo_int.hrs_elix_cc_n12m_reg;
+set spo_int.hrs_elix_cc_n12m_reg2;
 
 /*initalize variable - stable ind = 1 if stays the same or improves (0 if declines)*/
 r_adl_stable_ind_n1n2=0;

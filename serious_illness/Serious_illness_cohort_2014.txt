@@ -337,9 +337,15 @@ or adl_independent_core=0;
 quit;
 ods rtf close;
 
-H="Link in Wage Index by Zip Code or State"
-/*Note that the raw data with the wage index is saved in the out of pocket
-(OOP) spending project folders rather than duplicating it for this project*/
+H="Link in Regional data by Zip Code or State"
+/*Brings in wage index by ZIP or state
+
+Also gets HRR, Dartmouth EOL spending by ZIP
+
+Note that the raw data with the regional data is saved in the out of pocket
+(OOP) spending project folders rather than duplicating it for this project
+
+Final dataset is sic_int.core_age_zip_wi_da*/
 
 /******************************************************************/
 /* Adjust subtotals for wage index */
@@ -350,7 +356,7 @@ H="Link in Wage Index by Zip Code or State"
 /******************************************************************/
 /*bring in 2010 wage index file*/
 proc import datafile="E:\data\hrs_oop_2010\ref_data\wage_index\wage_index_cbsa_2010.xls"
-out=sic_int.wage_index 
+out=sic_int.wage_index dbms=xls
 replace;
 run;
 
@@ -511,7 +517,7 @@ proc sort data=wage_index2 out=wage_index3 nodupkey;
 by state_in_wage_index;
 run;
 
-proc freq data=wage_index3; table State_; run;
+proc freq data=wage_index3; table State; run;
 
 /*Merges in wage index if there's one for the state but was missing for the zip*/
 proc sql;
@@ -521,7 +527,7 @@ from
 core_age_zip_wi a
 left join
 wage_index3 b
-on a.state_wave=b.State_;
+on a.state_wave=b.State;
 quit;
 
 /*check for missing values*/
@@ -540,6 +546,108 @@ where wage_index_20102=. group by zip_wave_n;
 quit;
 
 proc freq data=sic_int.core_age_zip_wi_2; table  state_wave  /missprint ; run;
+
+/******************************************************************/
+/******************************************************************/
+/* Bring in Dartmouth spending data by HRR/zip xwalk  */
+/******************************************************************/
+/******************************************************************/
+
+/*first get HRR - ZIP crosswalk, 2007 since using the 2003-2007 eol spending data*/
+proc import
+datafile="E:\data\hrs_oop_2010\ref_data\HRR_ZIP_xwalk\ziphsahrr07.xls"
+out=ziphsahrr07 dbms=xls replace;	
+run;
+
+data ziphsahrr07_1;
+set ziphsahrr07(rename=(zipcode07=zip));
+*zip_n = put(zip,z5.);
+zip_n=zip;
+label zip_n="Zip code for HRR xwalk";
+drop zip;
+run;
+
+proc freq; table hrrnum; run;
+
+/*merge in Dartmouth eol spending and HCI (2003-2007) to HRR-zip xwalk*/
+proc import
+datafile="E:\data\hrs_oop_2010\ref_data\EOL_mc_2yrs_HRR\DAP_HRR_03_07_to_merge.xls"
+out=EOL_dartmouth dbms=xls replace;
+run;
+
+data EOL_dartmouth_1;
+set EOL_dartmouth;
+rename HRR = HRR_number; /*note this is not the right HRR number, not sure what it is*/
+rename TOTAL_MEDICARE_SPENDING=tot_eol_spending_hrr;
+label TOTAL_MEDICARE_SPENDING="EOL MC spend last 2 yr of life HRR level";
+run;
+
+proc freq; table HRR_number; run;
+
+/*merge in additional Dartmouth data for number hospital beds, specialists, physicians
+This is 2006 data by HRR from Dartmouth*/
+/*capacity data per capita - number beds/physicians/specialists*/
+proc import datafile="E:\data\Dartmouth_misc\HRR_data_beds_specialist_per_capital.xls"
+out=hrr_beds_per_capita dbms=xls
+replace;
+run;
+proc contents ;
+run;
+
+proc freq; table HRR; run;
+
+/*merge the two DA datasets together by hrr*/
+proc sql; 
+create table da_full as select
+a.HRR_number, a.HRR_Name, a.HRR_State, a.tot_eol_spending_hrr, a.Hospital_care_intensity_index__s,
+b.Physicians, b.Specialists, b.hospital_beds
+from 
+EOL_dartmouth_1 a
+left join
+hrr_beds_per_capita b
+on a.HRR_number=b.HRR;
+quit;
+
+/*merge the DA data into the zip code/hrr list*/
+proc sql;
+create table zip_eol_2 as select *
+from ziphsahrr07_1 a left join
+da_full b
+on a.hrrnum=b.HRR_number;
+quit;
+
+/*all matched using hrr number to link*/
+proc means; var tot_eol_spending_hrr; run;
+
+/*merge into the overall dataset by zip code*/
+proc sql;
+create table hrs_add_da as select
+a.*,b.* from
+sic_int.core_age_zip_wi_2 a left join
+zip_eol_2 b
+on a.zip_wave_n=b.zip_n;
+quit;
+
+/*check for missing da data*/
+data sic_int.core_age_zip_wi_da;
+set hrs_add_da ;
+miss_hrr=0;
+if hrr_number=. then miss_hrr=1;
+label miss_hrr = "Missing HRR - zip link"
+run;
+
+proc freq; table miss_hrr; run;
+
+/*who is missing the hrr - zip link??
+72% don't have valid zip code = 99999
+Rest have zip codes that aren't in the hrr-zip crosswalk file*/
+data zzzz_misshrr;
+set sic_int.core_age_zip_wi_da;
+if miss_hrr=1;
+run;
+
+proc freq;
+table zip_wave_n state_wave core_year; run;
 
 H="Create frequency tables of core variables"
 /*creates log file to review with Amy for new variables*/
@@ -628,7 +736,7 @@ run;*/
 sic_int.core_xwalk_1 has core interviews, age and claims xwalk id */
 
 /*prepare core dataset to merge*/
-proc sort data=sic_int.core_age_zip_wi_2 out=core_id nodupkey;
+proc sort data=sic_int.core_age_zip_wi_da out=core_id nodupkey;
 by id c_ivw_date;
 run;
 
@@ -2140,6 +2248,8 @@ replace diag=new
 drop icd9_c new
 
 save `datapath'\dx_0_1yr_2.dta,replace
+outsheet using `datapath'\dx_0_1yr_2.csv, comma replace
+
 
 clear all
 
@@ -2156,6 +2266,7 @@ replace diag=new
 drop icd9_c new
 
 save `datapath'\dx_0_2yr_2.dta,replace
+outsheet using `datapath'\dx_0_2yr_2.csv, comma replace
 
 /****************************************************************************/
 /****************************************************************************/
@@ -2164,12 +2275,12 @@ save `datapath'\dx_0_2yr_2.dta,replace
 /****************************************************************************/
 
 proc import 
-datafile="E:\data\serious_ill\int_data\dx_0_1yr_2.dta" 
+datafile="E:\data\serious_ill\int_data\dx_0_1yr_2.csv" 
 out=dx_0_1yr_2 replace;
 run;
 
 proc import 
-datafile="E:\data\serious_ill\int_data\dx_0_2yr_2.dta" 
+datafile="E:\data\serious_ill\int_data\dx_0_2yr_2.csv" 
 out=dx_0_2yr_2 replace;
 run;
 
@@ -5305,6 +5416,7 @@ array list ivw_meet_crit_a ivw_meet_crit_b ivw_meet_crit_c ivw_meet_crit_smi
 do over list;
 if list=. & comorb_1_0_1yr~=. then list=0;
 end;
+rename Hospital_care_intensity_index__s=hospital_care_intensity;
 run;
 
 /*should be 5158 and 2901 and 1333*/
@@ -5747,6 +5859,7 @@ data core_all_drop;
 set sic_int.core_ids_1yr_criteria_6(drop=birth_date death_date white black hisp_eth native_amer 
 asian_pi other_race other_na_api_race wage_index_2010 
 zip_0: zip_10: zip_98: first_ivw_year last_ivw_year restr_yes dod_claims cause_death_12_n);
+rename Hospital_care_intensity_index__s=hospital_care_intensity;
 run;
 
 data core_educ_only;
@@ -6236,6 +6349,7 @@ data core_all_drop;
 set sic_int.core_ids_1yr_criteria_6(drop=birth_date death_date white black hisp_eth native_amer 
 asian_pi other_race other_na_api_race wage_index_2010 
 zip_0: zip_10: zip_98: first_ivw_year last_ivw_year restr_yes dod_claims cause_death_12_n);
+rename Hospital_care_intensity_index__s=hospital_care_intensity;
 run;
 
 data core_educ_only;
@@ -10245,6 +10359,38 @@ smi_dem_ind smi_cancer_ind smi_esrd_ind ///
 smi_chf_ind smi_copd_ind ///
 smi_diab_compl_ind smi_liver_ind /*smi_als_ind*/ smi_hip_ind */
 
+//regional variables, split by quartile of hrr eol spending per dartmouth atlas
+local rvars tot_eol_spending_hrr_n0 hospital_care_intensity_n0 ///
+	physicians_n0 specialists_n0 hospital_beds_n0
+foreach v in `rvars'{
+sum `v', detail
+drop if `v'==.
+}
+
+centile tot_eol_spending_hrr_n0, centile(20(20)80)
+sca d_qui_20=r(c_1)
+sca d_qui_40=r(c_2)
+sca d_qui_60=r(c_3)
+sca d_qui_80=r(c_4)
+
+gen quintile_dm_2yr=.
+replace quintile_dm_2yr=1 if tot_eol_spending_hrr_n0 <=d_qui_20 & tot_eol_spending_hrr_n0 <.
+replace quintile_dm_2yr=2 if tot_eol_spending_hrr_n0 >d_qui_20 & tot_eol_spending_hrr_n0 <=d_qui_40
+replace quintile_dm_2yr=3 if tot_eol_spending_hrr_n0 >d_qui_40 & tot_eol_spending_hrr_n0 <=d_qui_60
+replace quintile_dm_2yr=4 if tot_eol_spending_hrr_n0 >d_qui_60 & tot_eol_spending_hrr_n0 <=d_qui_80
+replace quintile_dm_2yr=5 if tot_eol_spending_hrr_n0 >d_qui_80 & tot_eol_spending_hrr_n0 <.
+tab quintile_dm_2yr, missing
+la var quintile_dm_2yr"Quintiles of 2 year Dartmouth EOL Medicare Spending, HRR level (within this sample)"
+la val quintile_dm_2yr quint
+
+sum tot_eol_spending_hrr_n0 if quintile_dm_2yr==1, detail
+sum tot_eol_spending_hrr_n0 if quintile_dm_2yr==2, detail
+sum tot_eol_spending_hrr_n0 if quintile_dm_2yr==3, detail
+sum tot_eol_spending_hrr_n0 if quintile_dm_2yr==4, detail
+sum tot_eol_spending_hrr_n0 if quintile_dm_2yr==5, detail
+
+tab quintile_dm_2yr, gen(d_eol_spend_quint) missing
+
 foreach v in `cvars'{
 sum `v', detail
 drop if `v'==.
@@ -10259,8 +10405,11 @@ drop if `v'==.
 save n0_n1_p1_p2_x_criteria_2008_v2_fmm.dta, replace
 
 ********************************************************************
+local da_quint d_eol_spend_quint1 d_eol_spend_quint2 d_eol_spend_quint3 ///
+d_eol_spend_quint4
+
 //total medicare payments - run base glm model
-glm tot_paid_by_mc_1yr_wi_n0 `cvars' `ivars', family(gamma) vce(robust)
+glm tot_paid_by_mc_1yr_wi_n0 `cvars' `ivars' `da_quint', family(gamma) vce(robust)
 glm , eform
 
 //2 comp fmm
@@ -10270,18 +10419,18 @@ glm , eform
 
 ********************************************************************
 //hospital nights - base nb2 model
-nbreg n_hospd_p12m_n0 `cvars' `ivars', vce(robust)
+nbreg n_hospd_p12m_n0 `cvars' `ivars' `da_quint', vce(robust)
 
-fmm n_hospd_p12m_n0 `cvars' `ivars', components(2) mixtureof(negbin2) ///
+fmm n_hospd_p12m_n0 `cvars' `ivars' `da_quint', components(2) mixtureof(negbin2) ///
  diff vce(robust)
 estimates save hospd_08_fmm_2comp, replace
 
-fmm n_hospd_p12m_n0 `cvars' `ivars', components(3) mixtureof(negbin2) ///
+fmm n_hospd_p12m_n0 `cvars' `ivars' `da_quint', components(3) mixtureof(negbin2) ///
  diff vce(robust) 
 estimates save hospd_08_fmm_3comp, replace
 
-fmm n_hospd_p12m_n0 `cvars' `ivars', components(4) mixtureof(negbin2) ///
- diff vce(robust) 
+fmm n_hospd_p12m_n0 `cvars' `ivars' `da_quint', components(4) mixtureof(negbin2) ///
+ diff vce(robust) iter(200)
 estimates save hospd_08_fmm_4comp, replace
  
 ********************************************************************

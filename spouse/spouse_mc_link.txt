@@ -1917,7 +1917,7 @@ quit;
 /*merge into a full bid list of those s's with ffs mc 6m or more*/
 proc sql;
 create table &source._&name. as select 
-a.s_bid_hrs,a.r_id,coalesce(b.&source._paid_by_mc,0) as &source._paid_by_mc_&name.
+a.s_bid_hrs,a.r_id,coalesce(b.&source._paid_by_mc,0) as s_&source._paid_by_mc_&name.
 from spo_mc_i.s_r_dod a
 left join
  &source._pay b
@@ -1944,14 +1944,14 @@ merge snf_6m snf_12m snf_24m;
 by s_BID_hrs r_id; 
 run;
 
-proc means data=snf_bef; var snf_paid_by_mc_: ;run;
+proc means data=snf_bef; var s_snf_paid_by_mc_: ;run;
 
 data ip_bef;
 merge ip_6m ip_12m ip_24m;
 by s_BID_hrs r_id; 
 run;
 
-proc means data=ip_bef; var ip_paid_by_mc_: ;run;
+proc means data=ip_bef; var s_ip_paid_by_mc_: ;run;
 
 /****************************************************************/
 /*medpar claims, time periods after R's death********************/
@@ -2047,7 +2047,7 @@ quit;
 /*merge into a full bid list of those s's with ffs mc 6m or more*/
 proc sql;
 create table &source._&name. as select 
-a.s_bid_hrs,a.r_id,coalesce(b.&source._paid_by_mc,0) as &source._paid_by_mc_&name.
+a.s_bid_hrs,a.r_id,coalesce(b.&source._paid_by_mc,0) as s_&source._paid_by_mc_&name.
 from spo_mc_i.s_r_dod a
 left join
  &source._pay b
@@ -2066,7 +2066,7 @@ proc sort data=&source._&name.; by s_BID_hrs r_id; run;
 %mp_p(days_start=0,days_aft_death=(2*365.25),source=ip,equ=~,name=p24m );
 
 
-proc means data=snf_p6m; var snf_paid_by_mc_p6m;run;
+proc means data=snf_p6m; var s_snf_paid_by_mc_p6m;run;
 
 /*merge the 3 datasets with after snf costs*/
 data snf_aft;
@@ -2074,14 +2074,14 @@ merge snf_p6m snf_p12m snf_p24m;
 by s_BID_hrs r_id; 
 run;
 
-proc means data=snf_aft n mean median min max; var snf_paid_by_mc_: ;run;
+proc means data=snf_aft n mean median min max; var s_snf_paid_by_mc_: ;run;
 
 data ip_aft;
 merge ip_p6m ip_p12m ip_p24m;
 by s_BID_hrs r_id; 
 run;
 
-proc means data=ip_aft n mean median min max; var ip_paid_by_mc_: ;run;
+proc means data=ip_aft n mean median min max; var s_ip_paid_by_mc_: ;run;
 
 /****************************************************************/
 /*other claim types, time periods before and after R's death*****/
@@ -2125,7 +2125,7 @@ quit;
 /*merge into a full bid list of those s's with ffs mc 6m or more*/
 proc sql;
 create table &source._&name. as select
-a.s_bid_hrs,a.r_id,coalesce(b.&source._paid_by_mc,0) as &source._paid_by_mc_&name. 
+a.s_bid_hrs,a.r_id,coalesce(b.&source._paid_by_mc,0) as s_&source._paid_by_mc_&name. 
 from spo_mc_i.s_r_dod a
 left join
  &source._pay b
@@ -2178,7 +2178,7 @@ merge &source._&su.6m &source._&su.12m &source._&su.24m;
 by s_BID_hrs r_id;
 run;
 
-proc means n mean median min max; var &source._paid_by_mc_: ; run;
+proc means n mean median min max; var s_&source._paid_by_mc_: ; run;
 %mend;
 
 %merge(source=op,su=,name=bef);
@@ -2202,8 +2202,8 @@ run;
 %macro total(su=);
 data mc_costs_all;
 set mc_costs_all;
-tot_paid_by_mc_&su=ip_paid_by_mc_&su + snf_paid_by_mc_&su + op_paid_by_mc_&su + 
-pb_paid_by_mc_&su + hh_paid_by_mc_&su + hs_paid_by_mc_&su + dm_paid_by_mc_&su;
+s_tot_paid_by_mc_&su=s_ip_paid_by_mc_&su + s_snf_paid_by_mc_&su + s_op_paid_by_mc_&su + 
+s_pb_paid_by_mc_&su + s_hh_paid_by_mc_&su + s_hs_paid_by_mc_&su + s_dm_paid_by_mc_&su;
 run;
 %mend;
 
@@ -2233,6 +2233,7 @@ spo_mc_i.mc_costs_all(rename=(s_bid_hrs=s_bid_hrs2) rename=(r_id=r_id2)) b
 on a.s_bid_hrs=b.s_bid_hrs2 and a.r_id=b.r_id2;
 quit;
 
+proc contents; run;
 
 H="Get S other Medicare utilization variables from claims"
 /*additional outcome variables
@@ -2443,9 +2444,10 @@ outfile="E:\data\spouse_claims\data\int_data\hrs_elix_cc_pay_out.dta" replace;
 run;
 
 
-H="First look at sample characteristics"
-/*sample characteristics for Spouse claims data
-Requires both R and S to have FFS MC 6m prior to R's death*/
+H="Variable setup in Stata"
+/*General data setup for the spouse dataset
+Limited to decedents with FFS MC 6m prior to death, married at time of death,
+with spouse mc id*/
 
 capture log close
 
@@ -2453,30 +2455,32 @@ clear all
 set mem 500m
 set more off
 
-//Amy's PC
+//Server file paths
 local logpath E:\data\spouse_claims\logs
 local projdatapath E:\data\spouse_claims\data\int_data
 
 log using `logpath'\2-HRS_Spouse_claims_sample_char.txt, text replace
 
 cd `projdatapath'
+
 use hrs_elix_cc_pay_out.dta if (r_xwalk_yes==1 & r_part_ab_6m==1 & ///
-	r_hmo_d_6m==0 & r_married_x==1 & s_xwalk_yes==1 & ///
-	s_part_ab_6m==1 & s_hmo_d_6m==0)
+	r_hmo_d_6m==0 & r_married_x==1 & s_xwalk_yes==1)
 *********************************************************
 tab r_exit_year_x, missing
 
 **adjust mc spending for wage index, now its inflation adjusted only
-**n=3 missing wage index, set to 1 for adjustment purposes
+**n=4 missing wage index, set to 1 for adjustment purposes
 sum wage_index_20102, detail
 
 gen wage_index_missing=1 if wage_index_20102==.
 replace wage_index_20102=1 if wage_index_missing==1
+la var wage_index_missing "Wage index missing 1=yes"
 
+//n=3 missing hrr number
 sum hrrnum, detail
 
-local mcsp tot_paid_by_mc_ ip_paid_by_mc_ snf_paid_by_mc_ op_paid_by_mc_ ///
-pb_paid_by_mc_ hh_paid_by_mc_ hs_paid_by_mc_ dm_paid_by_mc_
+local mcsp s_tot_paid_by_mc_ s_ip_paid_by_mc_ s_snf_paid_by_mc_ s_op_paid_by_mc_ ///
+s_pb_paid_by_mc_ s_hh_paid_by_mc_ s_hs_paid_by_mc_ s_dm_paid_by_mc_
 
 foreach t in 6m 12m 24m p6m p12m p24m{
 foreach v in `mcsp'{
@@ -2486,16 +2490,54 @@ foreach v in `mcsp'{
 	}
 }
 
+//label spending variables
+foreach t in 6m 12m 24m {
+la var s_tot_paid_by_mc_`t' "S total MC spending `t' before R's death"
+la var s_tot_paid_by_mc_wi_`t' "S WI Adj total MC spending `t' before R's death"
+la var s_ip_paid_by_mc_`t' "S IP MC spending `t' before R's death"
+la var s_ip_paid_by_mc_wi_`t' "S WI Adj IP MC spending `t' before R's death"
+la var s_snf_paid_by_mc_`t' "S SNF MC spending `t' before R's death" 
+la var s_snf_paid_by_mc_wi_`t' "S WI Adj SNF MC spending `t' before R's death" 
+la var s_op_paid_by_mc_`t' "S OP MC spending `t' before R's death" 
+la var s_op_paid_by_mc_wi_`t' "S WI Adj OP MC spending `t' before R's death" 
+la var s_pb_paid_by_mc_`t' "S Carr. MC spending `t' before R's death" 
+la var s_pb_paid_by_mc_wi_`t' "S WI Adj Carr. MC spending `t' before R's death" 
+la var s_hh_paid_by_mc_`t' "S HH MC spending `t' before R's death" 
+la var s_hh_paid_by_mc_wi_`t' "S WI Adj HH MC spending `t' before R's death" 
+la var s_hs_paid_by_mc_`t' "S HS MC spending `t' before R's death"  
+la var s_hs_paid_by_mc_wi_`t' "S WI Adj HS MC spending `t' before R's death" 
+la var s_dm_paid_by_mc_`t' "S DME MC spending `t' before R's death" 
+la var s_dm_paid_by_mc_wi_`t' "S WI Adj DME MC spending `t' before R's death" 
+}
+
+foreach t in p6m p12m p24m {
+la var s_tot_paid_by_mc_`t' "S total MC spending `t' after R's death"
+la var s_tot_paid_by_mc_wi_`t' "S WI Adj total MC spending `t' after R's death"
+la var s_ip_paid_by_mc_`t' "S IP MC spending `t' after R's death"
+la var s_ip_paid_by_mc_wi_`t' "S WI Adj IP MC spending `t' after R's death"
+la var s_snf_paid_by_mc_`t' "S SNF MC spending `t' after R's death" 
+la var s_snf_paid_by_mc_wi_`t' "S WI Adj SNF MC spending `t' after R's death" 
+la var s_op_paid_by_mc_`t' "S OP MC spending `t' after R's death" 
+la var s_op_paid_by_mc_wi_`t' "S WI Adj OP MC spending `t' after R's death" 
+la var s_pb_paid_by_mc_`t' "S Carr. MC spending `t' after R's death" 
+la var s_pb_paid_by_mc_wi_`t' "S WI Adj Carr. MC spending `t' after R's death" 
+la var s_hh_paid_by_mc_`t' "S HH MC spending `t' after R's death" 
+la var s_hh_paid_by_mc_wi_`t' "S WI Adj HH MC spending `t' after R's death" 
+la var s_hs_paid_by_mc_`t' "S HS MC spending `t' after R's death"  
+la var s_hs_paid_by_mc_wi_`t' "S WI Adj HS MC spending `t' after R's death" 
+la var s_dm_paid_by_mc_`t' "S DME MC spending `t' after R's death" 
+la var s_dm_paid_by_mc_wi_`t' "S WI Adj DME MC spending `t' after R's death" 
+}
+
+**************************************************************************
 //set sample variables
-gen sample_n6m = 1
+gen sample_n6m = 1 if s_part_ab_6m==1 & s_hmo_d_6m==0
 gen sample_n12m = 1 if s_part_ab_12m==1 & s_hmo_d_12m==0
 gen sample_n24m = 1 if s_part_ab_24m==1 & s_hmo_d_24m==0
-gen sample_6m=1
-gen sample_12m = 1 if s_part_ab_12m==1 & s_hmo_d_12m==0
-gen sample_24m = 1 if s_part_ab_24m==1 & s_hmo_d_24m==0
-gen sample_p6m = 1
-gen sample_p12m = 1
-gen sample_p24m = 1
+
+la var sample_n6m "S FFS MC 6m pre R's death 1=yes"
+la var sample_n12m "S FFS MC 12m pre R's death 1=yes"
+la var sample_n24m "S FFS MC 24m pre R's death 1=yes"
 
 //count of chronic conditions in each time period
 foreach t in n6m n12m n24m p6m p12m p24m{
@@ -2509,11 +2551,186 @@ s_cc_19_cncrprst_`t'+s_cc_20_cncrlung_`t'+s_cc_21_cncrendm_`t'
 sum s_cc_count_`t', detail
 la var s_cc_count_`t' "Count chronic conditions, mean, sd"
 }
-//S died within 6, 12, 24m of R's death
 
 *********************************************************
+//Spouse additional utilization measures, after R's death
+
+**add in spouse dies
+gen s_dod_hrs_claims = s_death_date_e
+replace s_dod_hrs_claims=s_claims_dod if s_death_date_e==. & s_claims_dod!=.
+format s_dod_hrs_claims %td
+
+gen s_dod_use_claims=0
+replace s_dod_use_claims=1 if s_death_date_e==. & s_claims_dod!=.
+tab s_dod_use_claims, missing
+la var s_dod_hrs_claims "S DOD from HRS or Claims"
+la var s_dod_use_claims "S DOD from claims (missing in HRS)"
+
+gen s_r_dod_diff= s_dod_hrs_claims-r_dod_hrs_claims
+sum s_r_dod_diff, detail
+la var s_r_dod_diff "Days R DOD to S DOD"
+
+//n=14 have S DOD before R's DOD
+tab s_r_dod_diff if s_r_dod_diff<0
+tab s_dod_hrs_claims r_dod_hrs_claims if s_r_dod_diff<0
+tab s_dod_use_claims if s_r_dod_diff<0
+
+tab s_dod_hrs_claims s_e_ivw_date_x if s_r_dod_diff<0, missing
+
+//do these 14 obs have a S claims dod after R's dod?
+tab s_dod_hrs_claims s_claims_dod if s_r_dod_diff<0
+//for observation where claims dod is after R's death, use that instead
+replace s_dod_use_claims=1 if s_r_dod_diff<0 & s_dod_hrs_claims<s_claims_dod
+replace s_dod_hrs_claims=s_claims_dod if s_r_dod_diff<0 & s_dod_hrs_claims<s_claims_dod
+
+replace s_r_dod_diff= s_dod_hrs_claims-r_dod_hrs_claims
+tab s_r_dod_diff if s_r_dod_diff<0
+**all 14 observations still have s DOD < r DOD
+tab s_r_dod_diff if s_r_dod_diff<0 & sample_n6m==1
+**in this sample where S has ffs mc 6m pre R's death, its just n=1 with this problem
+**need to look into this further, for now, assign as died w/i 6m
+
+//S died within 6, 12, 24m of R's death
+gen s_died_p6m=0
+replace s_died_p6m=1 if s_r_dod_diff<183 & s_r_dod_diff~=.
+gen s_died_p12m=0
+replace s_died_p12m=1 if s_r_dod_diff<365 & s_r_dod_diff~=.
+gen s_died_p24m=0
+replace s_died_p24m=1 if s_r_dod_diff<730 & s_r_dod_diff~=.
+
+la var s_died_p6m "S died within 6m of R's death"
+la var s_died_p12m "S died within 12m of R's death"
+la var s_died_p24m "S died within 24m of R's death"
+
+tab s_died_p6m, missing
+tab s_died_p12m, missing
+tab s_died_p24m, missing
+
+*******************************************
+
+//indicator for R's hospice use 12 months preceeding death
+gen byte r_hs_12m = .
+replace r_hs_12m = 1 if hs_los_12m != 0 & hs_los_12m != .
+replace r_hs_12m = 0 if hs_los_12m == 0 
+la var r_hs_12m "Indicator hospice use last 12 months of life"
+la def hs 0 "No hospice use" 1 "Hospice use", replace
+tab r_hs_12m, missing
+
+//create new hospice variables
+//note if hs use 1-2 days, then missing by this definition
+gen r_hs_12m_gt3d = .
+replace r_hs_12m_gt3d = 1 if hs_los_12m >= 3 & hs_los_12m != .
+replace r_hs_12m_gt3d = 0 if hs_los_12m == 0 
+la var r_hs_12m_gt3d "Indicator hospice use last 12 months of life"
+la def r_hs_12m_gt3d  0 "No hospice use" 1 "3+ days hospice use", replace
+la val r_hs_12m_gt3d r_hs_12m_gt3d
+tab r_hs_12m_gt3d r_hs_12m, missing
+tab hs_los_12m r_hs_12m_gt3d , missing
+
+*********************************************************
+
+//create indicator variables for S any hospitalization, ICU use, and ED use
+foreach t in p6m p12m p24m{
+	gen s_icu_ind_`t'=1 if s_icu_days_`t'>0 & s_icu_days_`t'!=.
+	replace s_icu_ind_`t'=0 if s_icu_days_`t'==0
+	la var s_icu_ind_`t' "Any ICU use, n, %"
+	la var s_icu_days_`t' "ICU days, mean, sd"
+	
+	gen s_admit_ind_`t'=1 if s_n_ip_admit_`t'>0 & s_n_ip_admit_`t'!=.
+	replace s_admit_ind_`t'=0 if s_n_ip_admit_`t'==0
+	la var s_admit_ind_`t' "Any Hospitalization, n, %"
+	la var s_n_ip_admit_`t' "Number hospitalizations, mean, sd"
+	
+	la var s_n_hospd_`t' "Hospital days, mean, sd"
+	
+	gen s_ed_ind_`t'=1 if s_n_ed_`t'>0 & s_n_ed_`t'!=.
+	replace s_ed_ind_`t'=0 if s_n_ed_`t'==0
+	la var s_ed_ind_`t' "Any ED use, n, %"
+	la var  s_n_ed_`t' "Number ED visits, mean, sd"
+	
+	la var s_n_op_visits_`t' "Number Outpatient visits, mean, sd"
+}
+************************************************************
+//label / rename some R claims derived variables to make it clear
+//what they are and that they apply to R and not S
+la var r_part_ab_6m "R MC Parts A&B 6m pre-death"
+la var r_hmo_d_6m "R HMO 6m pre-death"
+la var r_claims_dod "R death date from claims"
+rename hs_los_24m r_hs_los_24m 
+la var r_hs_los_24m "R Hospice LOS 24m pre-death"
+rename hs_enrol_dt r_hs_enrol_dt
+rename ip_los_24m r_ip_los_24m 
+la var r_ip_los_24m "R IP Hospital LOS 24m pre-death"
+rename snf_los_24m r_snf_los_24m 
+la var r_snf_los_24m "R SNF LOS 24m pre-death"
+rename hs_los_12m r_hs_los_12m 
+la var r_hs_los_12m "R Hospice LOS 12m pre-death"
+rename hs_los_6m r_hs_los_6m 
+la var r_hs_los_6m "R Hospice LOS 6m pre-death"
+
+//rename r cc variables with r_ prefix
+local cclist cc_1_ami_ cc_2_alzh_ cc_3_alzhdmta_ cc_4_atrialfb_ cc_5_cataract_ ///
+cc_6_chrnkidn_ cc_7_copd_ cc_8_chf_ cc_9_diabetes_ cc_10_glaucoma_ cc_11_hipfrac_ ///
+cc_12_ischmcht_ cc_13_depressn_ cc_14_osteoprs_ cc_15_ra_oa_ cc_16_strketia_ ///
+cc_17_cncrbrst_ cc_18_cncrclrc_ cc_19_cncrprst_ cc_20_cncrlung_ cc_21_cncrendm_ ///
+cc_ami_isch_ cc_alzheim_ cc_cncr_chronic_
+
+foreach v in `cclist'{
+	foreach su in n12mn0 n12mn6m{
+		rename `v'`su' r_`v'`su'
+		}
+	}
+
+//r intensive procedure variables rename with r prefix
+local intpro first_proc_date_6m int_intubation_6m int_trach_6m ///
+int_gastro_tude_6m int_hemodia_6m int_enteral_nut_6m int_cpr_6m ///
+first_proc_date_excl_hd_6m int_any_6m days_1st_proc_death	
+
+foreach v in `intpro'{
+	rename `v' r_`v'
+}
+	
+************************************************************
+//save this dataset
+save spouse_claims_v1.dta, replace
+
+*********************************************************
+log close
+
+
+H="First look at sample characteristics"
+/*General data setup for the spouse dataset
+Limited to decedents with FFS MC 6m prior to death, married at time of death,
+with spouse mc id*/
+
+capture log close
+
+clear all
+set mem 500m
+set more off
+
+//Server file paths
+local logpath E:\data\spouse_claims\logs
+local projdatapath E:\data\spouse_claims\data\int_data
+
+log using `logpath'\3-HRS_Spouse_claims_sample_char.txt, text replace
+
+cd `projdatapath'
+
+use spouse_claims_v1.dta if (s_part_ab_6m==1 & s_hmo_d_6m==0)
+*********************************************************
+*********************************************************
+//all obs should be flagged as in the 6m sample, R&S have FFS MC 6m pre R's death
+tab sample_n6m 
+
 //tables of S chronic conditions
 //3 samples based on having ffs #m before R's death
+
+//samples for looking at CC's after R's death just require FFS MC for S 6m pre-death
+gen sample_p6m = 1
+gen sample_p12m = 1
+gen sample_p24m = 1
+
 local cclist s_cc_ami_isch_ s_cc_alzheim_ s_cc_4_atrialfb_ s_cc_6_chrnkidn_ ///
 s_cc_7_copd_ s_cc_8_chf_ s_cc_9_diabetes_ s_cc_11_hipfrac_ s_cc_13_depressn_ ///
 s_cc_14_osteoprs_ s_cc_15_ra_oa_ s_cc_16_strketia_ s_cc_cncr_chronic_
@@ -2548,7 +2765,7 @@ foreach t in n6m n12m n24m p6m p12m p24m{
 
 
 outreg, replay(tab_cc_n6m) merge(tab_cc_n12m) store(tab_cc1)
-outreg using `logpath'/2_Spouse_sample_char, replace ///
+outreg using `logpath'/3_Spouse_sample_char, replace ///
 	replay(tab_cc1) merge(tab_cc_n24m) ///
 	ctitles("", "6m", "", "12m", "", "24m", "" \ ///
 		"", "N", "percent", "N", "percent", "N", "percent") ///
@@ -2557,7 +2774,7 @@ outreg using `logpath'/2_Spouse_sample_char, replace ///
 	"6m, 12m, and 24m prior to R's death respectively.")
 
 outreg, replay(tab_cc_p6m) merge(tab_cc_p12m) store(tab_cc2)
-outreg using `logpath'/2_Spouse_sample_char, addtable ///
+outreg using `logpath'/3_Spouse_sample_char, addtable ///
 	replay(tab_cc2) merge(tab_cc_p24m) ///
 	ctitles("", "6m", "", "12m", "", "24m", "" \ ///
 		"", "N", "percent", "N", "percent", "N", "percent") ///
@@ -2568,31 +2785,37 @@ outreg using `logpath'/2_Spouse_sample_char, addtable ///
 //tables of S Medicare spending
 //label medicare payments variables
 foreach t in 6m 12m 24m p6m p12m p24m{
-la var  tot_paid_by_mc_wi_`t' "Total Medicare Payments, all types"
+la var  s_tot_paid_by_mc_wi_`t' "Total Medicare Payments, all types"
 }
 foreach t in 6m 12m 24m p6m p12m p24m{
-la var  ip_paid_by_mc_wi_`t' "Inpatient"
+la var  s_ip_paid_by_mc_wi_`t' "Inpatient"
 }
 foreach t in 6m 12m 24m p6m p12m p24m{
-la var  snf_paid_by_mc_wi_`t' "Skilled Nursing Facility"
+la var  s_snf_paid_by_mc_wi_`t' "Skilled Nursing Facility"
 }
 foreach t in 6m 12m 24m p6m p12m p24m{
-la var  op_paid_by_mc_wi_`t' "Outpatient"
+la var  s_op_paid_by_mc_wi_`t' "Outpatient"
 }
 foreach t in 6m 12m 24m p6m p12m p24m{
-la var  pb_paid_by_mc_wi_`t' "Carrier"
+la var  s_pb_paid_by_mc_wi_`t' "Carrier"
 }
 foreach t in 6m 12m 24m p6m p12m p24m{
-la var  hh_paid_by_mc_wi_`t' "Home health"
+la var  s_hh_paid_by_mc_wi_`t' "Home health"
 }
 foreach t in 6m 12m 24m p6m p12m p24m{
-la var  hs_paid_by_mc_wi_`t' "Hospice"
+la var  s_hs_paid_by_mc_wi_`t' "Hospice"
 }
 foreach t in 6m 12m 24m p6m p12m p24m{
-la var  dm_paid_by_mc_wi_`t' "Durable medical equipment"
+la var  s_dm_paid_by_mc_wi_`t' "Durable medical equipment"
 }
-local mcsp tot_paid_by_mc_wi ip_paid_by_mc_wi snf_paid_by_mc_wi op_paid_by_mc_wi ///
-pb_paid_by_mc_wi hh_paid_by_mc_wi hs_paid_by_mc_wi dm_paid_by_mc_wi
+
+//sample variables with naming that matches the spending variable suffixes
+gen sample_6m = sample_n6m
+gen sample_12m = sample_n12m
+gen sample_24m = sample_n24m
+
+local mcsp s_tot_paid_by_mc_wi s_ip_paid_by_mc_wi s_snf_paid_by_mc_wi s_op_paid_by_mc_wi ///
+s_pb_paid_by_mc_wi s_hh_paid_by_mc_wi s_hs_paid_by_mc_wi s_dm_paid_by_mc_wi
 
 mat mc=J(1,2,.)
 mat mc_n=J(1,1,.)
@@ -2618,7 +2841,7 @@ foreach t in 6m 12m 24m p6m p12m p24m{
 
 
 outreg, replay(tab_mc_6m) merge(tab_mc_12m) store(tab_mc1)
-outreg using `logpath'/2_Spouse_sample_char, addtable ///
+outreg using `logpath'/3_Spouse_sample_char, addtable ///
 	replay(tab_mc1) merge(tab_mc_24m) ///
 	ctitles("", "6m", "", "12m", "", "24m", "" \ ///
 		"", "mean", "median", "mean", "median", "mean", "median") ///
@@ -2628,7 +2851,7 @@ outreg using `logpath'/2_Spouse_sample_char, addtable ///
 	"Spending values are adjusted for inflation to 2010$ and for 2010 CMS wage index")
 
 outreg, replay(tab_mc_p6m) merge(tab_mc_p12m) store(tab_mc2)
-outreg using `logpath'/2_Spouse_sample_char, addtable ///
+outreg using `logpath'/3_Spouse_sample_char, addtable ///
 	replay(tab_mc2) merge(tab_mc_p24m) ///
 	ctitles("", "6m", "", "12m", "", "24m", "" \ ///
 		"", "mean", "median", "mean", "median", "mean", "median") ///
@@ -2636,76 +2859,7 @@ outreg using `logpath'/2_Spouse_sample_char, addtable ///
 	note("Sample limited to those S with FFS Medicare 6m prior" \ ///
 	"to R's death for all columns" \ ///
 	"Spending values are adjusted for inflation to 2010$ and for 2010 CMS wage index")
-	
-*********************************************************
-//Spouse additional utilization measures, after R's death
 
-**add in spouse dies
-gen s_dod_hrs_claims = s_death_date_e
-replace s_dod_hrs_claims=s_claims_dod if s_death_date_e==. & s_claims_dod!=.
-format s_dod_hrs_claims %td
-
-gen s_dod_use_claims=0
-replace s_dod_use_claims=1 if s_death_date_e==. & s_claims_dod!=.
-tab s_dod_use_claims, missing
-la var s_dod_hrs_claims "S DOD from HRS or Claims"
-la var s_dod_use_claims "S DOD from claims (missing in HRS)"
-
-gen s_r_dod_diff= s_dod_hrs_claims-r_dod_hrs_claims
-sum s_r_dod_diff, detail
-tab s_dod_hrs_claims r_dod_hrs_claims if s_r_dod_diff<0
-tab s_dod_use_claims if s_r_dod_diff<0
-
-//do these 2 obs have a S claims dod after R's dod?
-tab s_dod_hrs_claims s_claims_dod if s_r_dod_diff<0
-//for observation where claims dod is after R's death, use that instead
-replace s_dod_use_claims=1 if s_r_dod_diff<0 & s_dod_hrs_claims<s_claims_dod
-replace s_dod_hrs_claims=s_claims_dod if s_r_dod_diff<0 & s_dod_hrs_claims<s_claims_dod
-
-replace s_r_dod_diff= s_dod_hrs_claims-r_dod_hrs_claims
-**1 observation still has s DOD < r DOD
-**need to look into this further, for now, assign as died w/i 6m
-
-gen s_died_p6m=0
-replace s_died_p6m=1 if s_r_dod_diff<183 & s_r_dod_diff~=.
-gen s_died_p12m=0
-replace s_died_p12m=1 if s_r_dod_diff<365 & s_r_dod_diff~=.
-gen s_died_p24m=0
-replace s_died_p24m=1 if s_r_dod_diff<730 & s_r_dod_diff~=.
-
-la var s_died_p6m "S died within 6m of R's death"
-la var s_died_p12m "S died within 12m of R's death"
-la var s_died_p24m "S died within 24m of R's death"
-
-tab s_died_p6m, missing
-tab s_died_p12m, missing
-tab s_died_p24m, missing
-
-*********************************************************
-//save this dataset
-save spouse_claims_v1.dta, replace
-
-//create indicator variables for any hospitalization, ICU use, and ED use
-foreach t in p6m p12m p24m{
-	gen s_icu_ind_`t'=1 if s_icu_days_`t'>0 & s_icu_days_`t'!=.
-	replace s_icu_ind_`t'=0 if s_icu_days_`t'==0
-	la var s_icu_ind_`t' "Any ICU use, n, %"
-	la var s_icu_days_`t' "ICU days, mean, sd"
-	
-	gen s_admit_ind_`t'=1 if s_n_ip_admit_`t'>0 & s_n_ip_admit_`t'!=.
-	replace s_admit_ind_`t'=0 if s_n_ip_admit_`t'==0
-	la var s_admit_ind_`t' "Any Hospitalization, n, %"
-	la var s_n_ip_admit_`t' "Number hospitalizations, mean, sd"
-	
-	la var s_n_hospd_`t' "Hospital days, mean, sd"
-	
-	gen s_ed_ind_`t'=1 if s_n_ed_`t'>0 & s_n_ed_`t'!=.
-	replace s_ed_ind_`t'=0 if s_n_ed_`t'==0
-	la var s_ed_ind_`t' "Any ED use, n, %"
-	la var  s_n_ed_`t' "Number ED visits, mean, sd"
-	
-	la var s_n_op_visits_`t' "Number Outpatient visits, mean, sd"
-}
 local util_c s_n_ip_admit_ s_n_hospd_ s_icu_days_  /// 
  s_n_op_visits_ s_n_ed_
 
@@ -2742,7 +2896,7 @@ foreach t in p6m p12m p24m{
 }
 
 outreg, replay(tab_out_p6m) merge(tab_out_p12m) store(tab_out1)
-outreg using `logpath'/2_Spouse_sample_char, addtable ///
+outreg using `logpath'/3_Spouse_sample_char, addtable ///
 	replay(tab_out1) merge(tab_out_p24m) ///
 	ctitles("", "6m", "", "12m", "", "24m", "" \ ///
 		"", "N", "percent", "N", "percent", "N", "percent" \ ///
@@ -2752,5 +2906,46 @@ outreg using `logpath'/2_Spouse_sample_char, addtable ///
 	"6m prior to R's death.")
 
 
+
 *********************************************************
+log close
+
+
+H="katherine notes"
+/*This dataset is created in the header section "Variable setup in Stata"
+Requires both R and S to have FFS MC 6m prior to R's death*/
+
+capture log close
+
+clear all
+set mem 500m
+set more off
+
+//Server file paths
+local logpath E:\data\spouse_claims\logs
+local projdatapath E:\data\spouse_claims\data\int_data
+
+log using `logpath'\4-HRS_Spouse_claims_KO_log.txt, text replace
+
+cd `projdatapath'
+
+//this is where we change sample size, limit based on ffs medicare 6 months spouse
+//remove if... part if want to limit to S's with xwalk id
+
+use spouse_claims_v1.dta if (s_part_ab_6m==1 & s_hmo_d_6m==0)
+**************************************************************
+//decedent hospice use, 3+ days vs 0 days, missing if 0-2 day use
+tab r_hs_12m_gt3d , missing
+
+//to look at difference in date of death btw patient and spouse
+su s_r_dod_diff, detail  
+
+tab s_dod_hrs_claims, missing
+	
+//cross tabs spousal utilzation and hospice use Katherine's stuff
+	tabulate s_admit_ind_p24m r_hs_12m, chi2
+	tabulate s_admit_ind_p12m r_hs_12m, chi2
+	tabulate s_admit_ind_p6m r_hs_12m, chi2
+
+**************************************************************
 log close

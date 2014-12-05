@@ -11141,3 +11141,117 @@ estat ic
 */
 ***************************************************************
 log close
+
+
+H="**********************************"
+
+
+H="Propensity score matching on mortality"
+/*propensity score match on mortality
+group that meets criteria A
+*/
+
+capture log close
+
+clear all
+set more off
+
+local logpath E:\data\serious_ill\logs
+local datapath E:\data\serious_ill\final_data
+
+log using "`logpath'\20_ps_match_mortality_crit_a.txt", text replace
+
+cd `datapath'
+
+use n0_n1_p1_p2_x_criteria_a_v1.dta if core_year_n0<2010
+******************************************************************
+tab core_to_dod_1yr_n0, missing //mortality at 1 year
+tab core_to_dod_1yr_p1, missing //at p1 interview
+
+//no one with als=1 died within 1 year so cannot include in match variables list
+tab smi_als_ind_n0 core_to_dod_1yr_n0, missing
+
+//define matching variable list, drop if missing in any variables
+//als indicator, all die within 1 year, so cannot include in the list
+global matchvars age_at_core_n0 female_n0 re_white married_n0 networth_adj2010_n0 ///
+hs_deg adl_impair_core_n0 smi_dem_ind_n0 smi_cancer_ind_n0 smi_esrd_ind_n0 ///
+smi_chf_ind_n0 smi_copd_ind_n0 smi_diab_compl_ind_n0 ///
+smi_liver_ind_n0  smi_hip_ind_n0 srh_pf_n0 
+
+//n=4679 meet criteria A
+foreach v in $matchvars{
+sum `v', detail
+bys core_to_dod_1yr_n0: sum `v'
+drop if `v'==.
+}
+
+//n=4661 after drop missingness
+tab core_to_dod_1yr_n0, missing //mortality at 1 year
+
+******************************************************************
+//sort data, generate propensity score
+set seed 2000
+gen x=uniform()
+sort x
+
+//generate pscore variable hs_pscore
+pscore core_to_dod_1yr_n0 $matchvars, pscore(m1y_pscore) blockid(m1y_block) logit detail
+
+psgraph, treated(core_to_dod_1yr_n0) pscore(m1y_pscore)
+
+gen logitpscore=ln(m1y_pscore/(1-m1y_pscore))
+sum logitpscore
+
+sca cal_ps=r(sd)*0.02
+sca list cal_ps
+
+//rule of thumb 0.2*sd, we can use 0.02*sd
+psmatch2 core_to_dod_1yr_n0,outcome(tot_paid_by_mc_1yr_wi_n0) ///
+	pscore(m1y_pscore) radius caliper(.02181806) logit
+
+//graph including off common support information
+psgraph, treated(core_to_dod_1yr_n0) pscore(m1y_pscore)
+graph save `logpath'\ps_dist.gph, replace
+
+histogram m1y_pscore if _support==1, by(core_to_dod_1yr_n0) 
+
+//look at balance of matched vs unmatched samples using %bias (std diff)
+pstest $matchvars ,treated(core_to_dod_1yr_n0) both hist
+
+mat vr=J(16,6,.)
+//compare variance of covariates before and after matching
+local i=1
+foreach v in $matchvars  {
+sum `v' if core_to_dod_1yr_n0==1 //get variance treated before matching
+mat vr[`i',1]=r(Var)
+sum `v' if core_to_dod_1yr_n0==0 //get variance comparison before matching
+mat vr[`i',2]=r(Var)
+mat vr[`i',3]= vr[`i',1]/vr[`i',2] //ratio
+sum `v' if core_to_dod_1yr_n0==1 & _support==1 //get variance treated after matching
+mat vr[`i',4]=r(Var)
+sum `v' if core_to_dod_1yr_n0==0 [iweight=_weight] //get variance comparison after matching
+mat vr[`i',5]=r(Var)
+mat vr[`i',6]= (vr[`i',4]) / (vr[`i',5]) //ratio
+local i=`i'+1
+}
+
+mat rownames vr="Age" "Female" "White" "Married" "Net Worth" ///
+"HS Degree" "ADL Impairment" "Dementia" "Cancer" "ESRD" "CHF" ///
+"COPD" "Diabetes" "Liver disease" "Hip Fracture" "SRH Fair/Poor" 
+
+mat list vr
+
+******************************************************************
+//using this matching, 4 obs from the treatment group are dropped b/c they are off support
+//0 are dropped b/c not matched (weight=.)
+//_support ==1 if matched
+tab _support, missing
+tab _support if core_to_dod_1yr_n0==1, missing
+tab _support if core_to_dod_1yr_n0==0, missing
+tab _weight if core_to_dod_1yr_n0==1, missing
+sum _weight if core_to_dod_1yr_n0==0
+
+
+
+******************************************************************
+log close

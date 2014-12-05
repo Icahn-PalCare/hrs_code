@@ -470,6 +470,11 @@ frmttable using `logpath'\2010_sample_est , statmat(samp2) ///
 	"p1 ivw 90+ days from r's death") ///
 	sdec(0) addtable
 **************************************************
+//save a version of this dataset with the sample criteria variables created prior to dropping
+//observations that don't meet the criteria
+save  spouse_data_full_v1.dta, replace
+
+**************************************************
 //who are the observations that are dropped b/c of the choice of marital status variable??
 preserve
 
@@ -15825,10 +15830,6 @@ use spouse_data_sample_v3_august2014.dta
 tab rhs3d , missing
 tab support_3 rhs3d, missing
 
-//Run conditional logistic regression
-//need identifiers of which observations are "paired"
-
-
 ***********************************************************************
 ***********************************************************************
 //Table 3 - CESD score pre-post for matched sample
@@ -15839,11 +15840,14 @@ tab support_3 rhs3d, missing
 //local timevars days_p1_core_dod_lt6m days_p1_core_dod_6_12m days_p1_core_dod_12_18m ///
 //days_p1_core_dod_gt18mo
 
-local cesdcont s_cesd_tot_n1 s_cesd_tot_p1 /*s_cesdchange */
+local cesdcont s_days_n1_core_dead days_p1_core_dead ///
+ s_cesd_tot_n1 s_cesd_tot_p1 /*s_cesdchange */
 
 local scesdind s_cesd_tot_ge3_n1 ///
 s_cesd_tot_ge3_p1 s_cesdbetter /*s_cesdsame s_cesdworse */
 
+la var s_days_n1_core_dead "Days S pre-death interview to R death, mean"
+la var days_p1_core_dead "Days R death to S post-death interview, mean"
 la var s_cesd_tot_n1 "CESD score pre-death, mean"
 la var s_cesd_tot_p1 "CESD score post-death, mean"
 
@@ -15901,6 +15905,8 @@ ctitles("","Hopsice users","No hospice use","P-value") ///
 note("Hospice use defined as 3+ days in last year of life" \ ///
 "P-value for continuous variables from t-test, for binary variables from chi-sq")
 
+****************************************************************
+****************************************************************
 //check gender same sex couples
  tab  r_female  s_female, missing
 
@@ -15908,5 +15914,114 @@ note("Hospice use defined as 3+ days in last year of life" \ ///
 bys rhs3d: sum s_days_n1_core_dead  [iweight=weight_3]
 
 tab days_p1_core_dead [iweight=weight_3]
+****************************************************************
+****************************************************************
+//Check difference in pre-matching sample size if use alternative
+//variable construction for the married at death sample selection criteria
+clear all
+
+//need to recreate sample with new definition based on raw responses in exit interview
+//dataset is full spouse decedent dataset with sample criteria variables added
+//created in section "Define Sample"
+use spouse_data_full_v1.dta if n1core_ind==1 & r_xwalk_yes==1 & ins_ind==1 & ///
+ /*r_married_or_part_v2_x==1 &*/ sp1core_ind==1 & sn1core_ind==1 & ///
+ no_cc_12m_excl_cataract==0 & sudden_cause_death==0 & proxy_n1_or_p1==0 & cesd_miss_n1_p1==0
+
+tab r_married_x r_married_or_part_v2_x, missing
+
+//do variable cleaning necessary to recreate ds dropping obs with missingness in covariates
+//fill in missing gender for spouse gender variable
+tab s_female, missing
+//use spouse p1 interview to fill in missing gender
+replace s_female=s_female_p1 if s_female==.
+la var s_female "S Female"
+la def fem 0 "Male" 1 "Female"
+la val s_female r_female fem
+tab s_female, missing
+
+//s education
+gen s_educ = s_educ_n1
+replace s_educ = s_educ_n2 if (s_educ_n1==.)
+replace s_educ = s_educ_n3 if (s_educ_n1==. & s_educ_n2==.)
+label variable s_educ "S's Eduction, Highest Level, imputed from all interviews"
+label define s_educ 0 "No Formal Education" 1 "Grades 1-11" 2 "High School" 3 "Some College" 4 "College" ///
+      5 "Post College", modify
+label values s_educ s_educ 
+tab s_educ, missing
+
+//create s hs degree variable
+gen byte s_hseduc_n1_n3 = .
+replace s_hseduc_n1_n3=0 if inlist(s_educ,0,1)
+replace s_hseduc_n1_n3=1 if inlist(s_educ,2,3,4,5)
+la var s_hseduc_n1_n3 "S HS Degree using n1-n3 core, 1=yes"
+la def hs 0 "No HS degree" 1 "HS Degree"
+la val s_hseduc_n1_n3  hs
+tab s_hseduc_n1_n3, missing
+
+tab r_advdir_x , missing
+gen r_advdir_y = 0
+replace r_advdir_y = 1 if r_advdir_x ==1
+gen r_advdir_n = 0
+replace r_advdir_n = 1 if r_advdir_x ==0
+gen r_advdir_miss = 0
+replace r_advdir_miss = 1 if r_advdir_x ==2
+
+replace r_discuss_x=. if r_discuss_x==9
+tab r_discuss_x, missing
+
+//create dichotomous vars for comorbidity index categories
+gen byte s_hrs_comorb_none_n1 = .
+replace s_hrs_comorb_none_n1=1 if s_comor_c_hrs_n1==0
+replace s_hrs_comorb_none_n1=0 if s_comor_c_hrs_n1!=0 & s_comor_c_hrs_n1!=.
+la var s_hrs_comorb_none_n1 "Comorbidity index ind - none"
+
+gen byte s_hrs_comorb_mild_n1 = .
+replace s_hrs_comorb_mild_n1 =1 if s_comor_c_hrs_n1==1
+replace s_hrs_comorb_mild_n1 =0 if s_comor_c_hrs_n1!=1 & s_comor_c_hrs_n1!=.
+la var s_hrs_comorb_mild_n1 "Comorbidity index ind - mild 1-3"
+
+gen byte s_hrs_comorb_mod_n1 = .
+replace s_hrs_comorb_mod_n1=1 if s_comor_c_hrs_n1==2
+replace s_hrs_comorb_mod_n1=0 if s_comor_c_hrs_n1!=2 & s_comor_c_hrs_n1!=.
+la var s_hrs_comorb_mod_n1 "Comorbidity index ind - moderate 4-6"
+
+gen byte s_hrs_comorb_sev_n1 = .
+replace s_hrs_comorb_sev_n1=1 if s_comor_c_hrs_n1==3
+replace s_hrs_comorb_sev_n1=0 if s_comor_c_hrs_n1!=3 & s_comor_c_hrs_n1!=.
+la var s_hrs_comorb_sev_n1 "Comorbidity index ind - severe 7+"
+
+
+global matchvars cc_all_count_12m_2 cc_3_alzhdmta_n12mn0 cc_ami_isch_n12mn0 ///
+cc_8_chf_n12mn0 cc_9_diabetes_n12mn0 cc_6_chrnkidn_n12mn0 cc_7_copd_n12mn0 ///
+cc_16_strketia_n12mn0 cc_cncr_chronic_n12mn0 cc_4_atrialfb_n12mn0 ///
+cc_11_hipfrac_n12mn0 cc_13_depressn_n12mn0 cc_14_osteoprs_n12mn0 ///
+cc_15_ra_oa_n12mn0 ///
+ r_nw_lowest_n1 r_nw_midlow_n1 r_nw_midhigh_n1 ///
+r_nhres_n1 r_adl_stable_partial_n1n2 r_adl_stable_severe_n1n2 ///
+r_adl_change_i_m_n1n2 r_adl_change_m_s_n1n2 r_adl_change_i_s_n1n2 r_adl_change_n1n2_miss ///
+ r_medicaid_n1 r_champus_n1 r_medigap_n1 r_advdir_y r_advdir_miss r_discuss_x r_srh_pf_n1 ///
+s_age s_female s_white_e  s_hseduc_n1_n3 ///
+s_imprelig_vimp_n1 s_srh_pf_p1 ///
+ s_hrs_comorb_mild_n1 s_hrs_comorb_mod_n1 s_psych_overall_hrs_n1	
+
+//drop observations with missing covariates (24 obs)
+//n=1025
+foreach v of varlist $matchvars {
+tab `v', missing
+drop if `v'==.
+}
+
+sum s_core_year_n1
+tab r_married_x r_married_or_part_v2_x, missing
+
+gen orig_sample=0
+replace orig_sample=1 if r_married_x==1
+gen alt_sample=0
+replace alt_sample=1 if r_married_or_part_v2_x==1 
+tab orig_sample alt_sample
+
+//look at gender for these additional observations
+tab r_female_x s_female if (orig_sample==0 & alt_sample==1) , missing
+
 ****************************************************************
 log close

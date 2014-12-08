@@ -2238,24 +2238,26 @@ proc contents; run;
 H="Get S other Medicare utilization variables from claims"
 /*additional outcome variables
 
-Spouse - 6m 12m and 24m post R's death:
+Spouse - 6m 12m and 24m pre and post R's death:
 Hospital # visits
 Hospital nights
 # ED visits
 # OP visits*/
 
 /*****************************************************************************/
-/*get admissions and ip ed visits from ip claims 6, 12 and 24m post R's death*/
+/*get admissions and ip ed visits from ip claims 6, 12 and 24m pre R's death*/
 /*****************************************************************************/
-%macro admissions(days=,suffix=);
+%macro pre_admissions(days=,suffix=);
 
-/*pull list of ip claims from all medpar claims x days pre-interview*/
-data ip_meet_&days.;
+/*pull list of ip claims from all medpar claims x days pre-death*/
+data ip_meet_&suffix.;
 set spo_mc_i.mp_meet_&suffix.(where=(trim(left(SSLSSNF))~="N"));
+format admit_date date9.;
+format disch_date date9.;
 run;
 
-data ip_&days._2;
-set ip_meet_&days.;
+data ip_&suffix._2;
+set ip_meet_&suffix.;
 if icarecnt=. then icarecnt=0; /*medpar intensive care day count*/
 if CRNRYDAY=. then CRNRYDAY=0; /*medpar coronary day count*/
 icu_days=icarecnt+CRNRYDAY;
@@ -2271,7 +2273,84 @@ ind_ed_charge=0; /*ED charges as another indicator of ED use*/
 if ER_AMT>0 & ER_AMT~=. then ind_ed_charge=1;
 if ER_AMT=0 | ER_AMT=. then ind_ed_charge=0;
 
-/*truncate stays where the admit is more before R's death
+/*truncate stays where the admit is before x days pre- R's death
+or discharge is after R's death so can get accurate LOS*/
+if admit_date<r_dod_hrs_claims - &days. then do;
+	admit_date=r_dod_hrs_claims - &days.;
+	admit_trunc=1;
+	end;
+if r_dod_hrs_claims <disch_date then do;
+	disch_date=r_dod_hrs_claims;
+	disch_trunc=1;	
+	end;
+adj_los=disch_date-admit_date;
+if disch_date-admit_date=0 then adj_los=1;
+run;
+
+proc sort data=ip_&suffix._2;
+by BID_hrs_19 r_id;
+run;
+
+proc sql;
+create table ip_&suffix._3 as select distinct BID_hrs_19,r_id,
+/*total ICU days*/
+sum(icu_days) as s_icu_days_&suffix. label="total icu days &suffix.",
+/*count of IP admissions, all types*/
+count(*) as s_n_ip_admit_&suffix. label="total n of hospital admit &suffix.",
+/*total Hospital LOS*/
+sum(adj_los) as s_n_hospd_&suffix. label="total hospital days &suffix.",
+/*count of admissions with any ED charges*/
+count(case when ind_ed_charge=1 then ind_ed_charge else . end) as s_n_ED_ip_&suffix. 
+	label="total n of ED visits with subsequent admit &suffix."
+
+ from ip_&suffix._2 group by BID_hrs_19,r_id;
+quit;
+
+data ip_&suffix._4;
+set ip_&suffix._3;
+if s_icu_days_&suffix.>s_n_hospd_&suffix. then s_icu_days_&suffix.=s_n_hospd_&suffix.;
+run;
+
+proc freq; 
+table s_icu_days_&suffix. s_n_ip_admit_&suffix. s_n_hospd_&suffix.  s_n_ED_ip_&suffix.;
+run;
+
+proc sort data=ip_&suffix._4; by bid_hrs_19 r_id; run;
+
+%mend;
+
+%pre_admissions(days=183,suffix=6m);
+%pre_admissions(days=365,suffix=12m);
+%pre_admissions(days=730,suffix=24m);
+
+/*****************************************************************************/
+/*get admissions and ip ed visits from ip claims 6, 12 and 24m post R's death*/
+/*****************************************************************************/
+%macro post_admissions(days=,suffix=);
+
+/*pull list of ip claims from all medpar claims x days post-death*/
+data ip_meet_&suffix.;
+set spo_mc_i.mp_meet_&suffix.(where=(trim(left(SSLSSNF))~="N"));
+run;
+
+data ip_&suffix._2;
+set ip_meet_&suffix.;
+if icarecnt=. then icarecnt=0; /*medpar intensive care day count*/
+if CRNRYDAY=. then CRNRYDAY=0; /*medpar coronary day count*/
+icu_days=icarecnt+CRNRYDAY;
+em_urgent_admit=0; /*Urgent , emergent admissions from admission type*/
+if type_adm in (1,2) then em_urgent_admit=1;
+em_admit=0;
+if type_adm=1 then em_admit=1;
+urgent_admit=0;
+if type_adm=2 then urgent_admit=1;
+elect_admit=0;
+if type_adm=3 then elect_admit=1;
+ind_ed_charge=0; /*ED charges as another indicator of ED use*/
+if ER_AMT>0 & ER_AMT~=. then ind_ed_charge=1;
+if ER_AMT=0 | ER_AMT=. then ind_ed_charge=0;
+
+/*truncate stays where the admit is before R's death
 or discharge is after the x days after R's death so can get accurate LOS*/
 if admit_date<r_dod_hrs_claims then do;
 	admit_date=r_dod_hrs_claims;
@@ -2285,12 +2364,12 @@ adj_los=disch_date-admit_date;
 if disch_date-admit_date=0 then adj_los=1;
 run;
 
-proc sort data=ip_&days._2;
+proc sort data=ip_&suffix._2;
 by BID_hrs_19 r_id;
 run;
 
 proc sql;
-create table ip_&days._3 as select distinct BID_hrs_19,r_id,
+create table ip_&suffix._3 as select distinct BID_hrs_19,r_id,
 /*total ICU days*/
 sum(icu_days) as s_icu_days_&suffix. label="total icu days &suffix.",
 /*count of IP admissions, all types*/
@@ -2301,11 +2380,11 @@ sum(adj_los) as s_n_hospd_&suffix. label="total hospital days &suffix.",
 count(case when ind_ed_charge=1 then ind_ed_charge else . end) as s_n_ED_ip_&suffix. 
 	label="total n of ED visits with subsequent admit &suffix."
 
- from ip_&days._2 group by BID_hrs_19,r_id;
+ from ip_&suffix._2 group by BID_hrs_19,r_id;
 quit;
 
-data ip_&days._4;
-set ip_&days._3;
+data ip_&suffix._4;
+set ip_&suffix._3;
 if s_icu_days_&suffix.>s_n_hospd_&suffix. then s_icu_days_&suffix.=s_n_hospd_&suffix.;
 run;
 
@@ -2313,28 +2392,28 @@ proc freq;
 table s_icu_days_&suffix. s_n_ip_admit_&suffix. s_n_hospd_&suffix.  s_n_ED_ip_&suffix.;
 run;
 
-proc sort data=ip_&days._4; by bid_hrs_19 r_id; run;
+proc sort data=ip_&suffix._4; by bid_hrs_19 r_id; run;
 
 %mend;
 
-%admissions(days=183,suffix=p6m);
-%admissions(days=365,suffix=p12m);
-%admissions(days=730,suffix=p24m);
+%post_admissions(days=183,suffix=p6m);
+%post_admissions(days=365,suffix=p12m);
+%post_admissions(days=730,suffix=p24m);
 
 /*****************************************************************************/
-/*get outpatient visits and ed use from op claims 6, 12 and 24m post R's death*/
+/*get outpatient visits and ed use from op claims 6, 12 and 24m pre and post R's death*/
 /*****************************************************************************/
 %macro op(days=,suffix=);
 
-data op_meet_&days.;
+data op_meet_&suffix.;
 set spo_mc_i.op_meet_&suffix.(keep=bid_hrs_19 r_id admit_date disch_date 
 	r_dod_hrs_claims RVCNTR01-RVCNTR45);
 run;
 
-proc sort data=op_meet_&days.; by bid_hrs_19 r_id admit_date; run;
+proc sort data=op_meet_&suffix.; by bid_hrs_19 r_id admit_date; run;
 
-data ed_op_&days._1;
-set op_meet_&days.;
+data ed_op_&suffix._1;
+set op_meet_&suffix.;
 ed_op=0;
 array list RVCNTR01-RVCNTR45;
 do over list;
@@ -2348,20 +2427,24 @@ table ed_op;
 run;
 
 proc sql;
-create table ed_op_&days._2 as select distinct bid_hrs_19,r_id,
+create table ed_op_&suffix._2 as select distinct bid_hrs_19,r_id,
 count(case when ed_op=1 then ed_op else . end)
 	as s_n_ed_op_visits_&suffix. label="n of OP ED visits &suffix.",
 count(*) as s_n_op_visits_&suffix. label="n OP visits &suffix."
-	from ed_op_&days._1 group by bid_hrs_19,r_id;
+	from ed_op_&suffix._1 group by bid_hrs_19,r_id;
 quit;
 
 proc freq;
 table s_n_ed_op_visits_&suffix s_n_op_visits_&suffix;
 run;
 
-proc sort data=ed_op_&days._2; by bid_hrs_19 r_id; run;
+proc sort data=ed_op_&suffix._2; by bid_hrs_19 r_id; run;
 
 %mend;
+
+%op(days=183,suffix=6m);
+%op(days=365,suffix=12m);
+%op(days=730,suffix=24m);
 
 %op(days=183,suffix=p6m);
 %op(days=365,suffix=p12m);
@@ -2371,12 +2454,12 @@ proc sort data=ed_op_&days._2; by bid_hrs_19 r_id; run;
 /*merge IP and OP variables into main dataset*/
 /*****************************************************************************/
 data ip_all;
-merge ip_183_4 ip_365_4 ip_730_4;
+merge ip_6m_4 ip_12m_4 ip_24m_4 ip_p6m_4 ip_p12m_4 ip_p24m_4;
 by bid_hrs_19 r_id;
 run;
 
 data op_all;
-merge ed_op_183_2 ed_op_365_2 ed_op_730_2;
+merge ed_op_6m_2 ed_op_12m_2 ed_op_24m_2 ed_op_p6m_2 ed_op_p12m_2 ed_op_p24m_2;
 by bid_hrs_19 r_id;
 run;
 
@@ -2401,14 +2484,27 @@ op_all(rename=(r_id=r_id2)) b
 /*set to 0 if had ffs mc 6m prior to R's death*/
 data spo_mc_i.op_ip;
 set add_op;
-array list s_icu_days_p6m s_n_ip_admit_p6m s_n_hospd_p6m s_n_ED_ip_p6m 
+array list 
+s_icu_days_6m s_n_ip_admit_6m s_n_hospd_6m s_n_ED_ip_6m 
+s_icu_days_12m s_n_ip_admit_12m s_n_hospd_12m s_n_ED_ip_12m 
+s_icu_days_24m s_n_ip_admit_24m s_n_hospd_24m s_n_ED_ip_24m 
+s_icu_days_p6m s_n_ip_admit_p6m s_n_hospd_p6m s_n_ED_ip_p6m 
 s_icu_days_p12m s_n_ip_admit_p12m s_n_hospd_p12m s_n_ED_ip_p12m 
 s_icu_days_p24m s_n_ip_admit_p24m s_n_hospd_p24m s_n_ED_ip_p24m 
+s_n_ed_op_visits_6m s_n_op_visits_6m s_n_ed_op_visits_12m s_n_op_visits_12m
+s_n_ed_op_visits_24m s_n_op_visits_24m
 s_n_ed_op_visits_p6m s_n_op_visits_p6m s_n_ed_op_visits_p12m s_n_op_visits_p12m
 s_n_ed_op_visits_p24m s_n_op_visits_p24m;
 	do over list;
 	if list=. then list=0;
 	end;
+
+s_n_ed_6m=s_n_ED_ip_6m +s_n_ed_op_visits_6m;
+label s_n_ed_6m="S n ED Visits 6m, from IP or OP claims"; 
+s_n_ed_12m=s_n_ED_ip_12m +s_n_ed_op_visits_12m;
+label s_n_ed_12m="S n ED Visits 12m, from IP or OP claims"; 
+s_n_ed_24m=s_n_ED_ip_24m +s_n_ed_op_visits_24m;
+label s_n_ed_24m="S n ED Visits 24m, from IP or OP claims"; 
 s_n_ed_p6m=s_n_ED_ip_p6m +s_n_ed_op_visits_p6m;
 label s_n_ed_p6m="S n ED Visits p6m, from IP or OP claims"; 
 s_n_ed_p12m=s_n_ED_ip_p12m +s_n_ed_op_visits_p12m;
@@ -2959,25 +3055,25 @@ tab hs_los_12m r_hs_12m_gt3d , missing
 *********************************************************
 
 //create indicator variables for S any hospitalization, ICU use, and ED use
-foreach t in p6m p12m p24m{
+foreach t in 6m 12m 24m p6m p12m p24m{
 	gen s_icu_ind_`t'=1 if s_icu_days_`t'>0 & s_icu_days_`t'!=.
 	replace s_icu_ind_`t'=0 if s_icu_days_`t'==0
-	la var s_icu_ind_`t' "Any ICU use, n, %"
-	la var s_icu_days_`t' "ICU days, mean, sd"
+	la var s_icu_ind_`t' "S Any ICU use `t'"
+	la var s_icu_days_`t' "S ICU days `t'"
 	
 	gen s_admit_ind_`t'=1 if s_n_ip_admit_`t'>0 & s_n_ip_admit_`t'!=.
 	replace s_admit_ind_`t'=0 if s_n_ip_admit_`t'==0
-	la var s_admit_ind_`t' "Any Hospitalization, n, %"
-	la var s_n_ip_admit_`t' "Number hospitalizations, mean, sd"
+	la var s_admit_ind_`t' "S Any Hospitalization `t'"
+	la var s_n_ip_admit_`t' "S Number hospitalizations `t'"
 	
-	la var s_n_hospd_`t' "Hospital days, mean, sd"
+	la var s_n_hospd_`t' "S Hospital days `t'"
 	
 	gen s_ed_ind_`t'=1 if s_n_ed_`t'>0 & s_n_ed_`t'!=.
 	replace s_ed_ind_`t'=0 if s_n_ed_`t'==0
-	la var s_ed_ind_`t' "Any ED use, n, %"
-	la var  s_n_ed_`t' "Number ED visits, mean, sd"
+	la var s_ed_ind_`t' "S Any ED use `t'"
+	la var  s_n_ed_`t' "S Number ED visits `t'"
 	
-	la var s_n_op_visits_`t' "Number Outpatient visits, mean, sd"
+	la var s_n_op_visits_`t' "S Number Outpatient visits `t'"
 }
 ************************************************************
 //label / rename some R claims derived variables to make it clear
@@ -3018,6 +3114,24 @@ first_proc_date_excl_hd_6m int_any_6m days_1st_proc_death
 foreach v in `intpro'{
 	rename `v' r_`v'
 }
+
+la var r_xwalk_yes "R has Medicare claims xwalk id"
+la var r_birth_date_e "R DOB, from HRS"
+la var zip_exit_n "R zip code when died (exit year)"
+drop wage_index_2010
+la var state_n "R State residence when died (exit year)"
+la var wage_index_20102 "CMS Wage Index, by zip/state"
+la var r_hseduc "R High school+ education"
+la var s_hseduc "S High school+ education"
+la var s_claims_dob "S date of birth from Medicare claims"
+la var s_claims_dod "S date of death from Medicare claims"
+la var s_comorb_all_0d_n6m "Count of S Elix comorbidities 6m pre R's death"
+la var s_comorb_all_0d_n12m "Count of S Elix comorbidities 12m pre R's death"
+la var s_comorb_all_0d_n24m "Count of S Elix comorbidities 24m pre R's death"
+
+la var s_comorb_all_0d_p6m "Count of S Elix comorbidities 6m post R's death"
+la var s_comorb_all_0d_p12m "Count of S Elix comorbidities 12m post R's death"
+la var s_comorb_all_0d_p24m "Count of S Elix comorbidities 24m post R's death"
 	
 ************************************************************
 //save this dataset
@@ -3235,8 +3349,60 @@ outreg using `logpath'/3_Spouse_sample_char, addtable ///
 	"Spending values are adjusted for inflation to 2010$ and for 2010 CMS wage index")
 
 *********************************************************
+//S utilization before/ after R's death
+foreach t in 6m 12m 24m p6m p12m p24m{
+ la var s_n_ip_admit_`t' "Number hospitalizations, mean, sd"
+ la var s_n_hospd_`t' "Hospital days, mean, sd"
+ la var s_icu_days_`t' "ICU days, mean, sd" 
+ la var s_n_op_visits_`t' "Number outpatient visits, mean, sd"
+ la var s_n_ed_`t' "Number ED visits, mean, sd"
+ la var s_admit_ind_`t' "Any hospitalization, n, %"
+ la var s_icu_ind_`t' "Any ICU use, n, %"
+ la var s_ed_ind_`t' "Any ED use, n, %"
+}
 local util_c s_n_ip_admit_ s_n_hospd_ s_icu_days_  /// 
  s_n_op_visits_ s_n_ed_
+
+local util_i_pre /*s_died_*/ s_admit_ind_ s_icu_ind_ s_ed_ind_
+
+mat out=J(1,2,.)
+mat out_n=J(1,1,.)
+//Table for before R's death (sample by FFS MC 6, 12 or 24m pre death
+foreach t in 6m 12m 24m{
+	foreach v in `util_i_pre'{ //indicator variables, report n, %
+		sum `v'`t' if sample_`t'==1
+		mat out[1,1]=r(mean)*r(N) //n
+		mat out[1,2]=r(mean)*100 //pct
+		mat rownames out=`v'`t'
+		frmttable, statmat(out) append(tab_out_`t') store(tab_out_`t') ///
+			sdec(0,2) varlabels
+		}
+	
+	foreach v in `util_c'{ //cont variables, report mean,sd
+		sum `v'`t' if sample_`t'==1, detail
+		mat out[1,1]=r(mean) //mean
+		mat out[1,2]=r(sd) //sd
+		mat rownames out=`v'`t'
+		frmttable, statmat(out) append(tab_out_`t') store(tab_out_`t') ///
+			sdec(2,2) varlabels
+		}
+//last row - n for each column
+	sum r_exit_year_x if sample_`t'==1
+	mat out_n[1,1]=r(N)
+	mat rownames out_n="N"
+	frmttable, statmat(out_n) append(tab_out_`t') store(tab_out_`t') ///
+		sdec(0) 
+}
+
+outreg, replay(tab_out_6m) merge(tab_out_12m) store(tab_out1)
+outreg using `logpath'/3_Spouse_sample_char, addtable ///
+	replay(tab_out1) merge(tab_out_24m) ///
+	ctitles("", "6m", "", "12m", "", "24m", "" \ ///
+		"", "N", "percent", "N", "percent", "N", "percent" \ ///
+		"", "mean", "sd", "mean", "sd", "mean", "sd") ///
+	title("S Medicare utilization before R's death") ///
+	note("Sample limited to those S with FFS Medicare" \ ///
+	"6m, 12m, and 24m prior to R's death respectively.")
 
 local util_i s_died_ s_admit_ind_ s_icu_ind_ s_ed_ind_
 
@@ -3318,9 +3484,35 @@ su s_r_dod_diff, detail
 tab s_dod_hrs_claims, missing
 	
 //cross tabs spousal utilzation and hospice use Katherine's stuff
+//s utilization after r's death, by hospice use
 	tabulate s_admit_ind_p24m r_hs_12m, chi2
 	tabulate s_admit_ind_p12m r_hs_12m, chi2
 	tabulate s_admit_ind_p6m r_hs_12m, chi2
 
+//s utiliztaion before r's death, by hospice use
+	tabulate s_admit_ind_24m r_hs_12m, chi2
+	tabulate s_admit_ind_12m r_hs_12m, chi2
+	tabulate s_admit_ind_6m r_hs_12m, chi2
+
+//s medicare payments after r's death, by hospice use
+ttest s_tot_paid_by_mc_wi_p24m , by(r_hs_12m)
+ttest s_tot_paid_by_mc_wi_p12m , by(r_hs_12m)
+ttest s_tot_paid_by_mc_wi_p6m , by(r_hs_12m)
+
+//s medicare payments after r's death, by intensive procedures use	
+ttest s_tot_paid_by_mc_wi_p24m , by(r_int_any_6m)
+ttest s_tot_paid_by_mc_wi_p12m , by(r_int_any_6m)
+ttest s_tot_paid_by_mc_wi_p6m , by(r_int_any_6m)
+	
+//r medicare payments before r's death, by hospice use
+ttest r_tot_paid_by_mc_wi_24m , by(r_hs_12m)
+ttest r_tot_paid_by_mc_wi_12m , by(r_hs_12m)
+ttest r_tot_paid_by_mc_wi_6m , by(r_hs_12m)
+	
+//r medicare payments before r's death, by intensive procedure use
+ttest r_tot_paid_by_mc_wi_24m , by(r_int_any_6m)
+ttest r_tot_paid_by_mc_wi_12m , by(r_int_any_6m)
+ttest r_tot_paid_by_mc_wi_6m , by(r_int_any_6m)
+	
 **************************************************************
 log close

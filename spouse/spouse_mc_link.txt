@@ -2430,23 +2430,14 @@ quit;
 proc means n mean median min max; var s_icu: s_n_ip_admit: s_n_hospd: s_n_op_visits: 
 s_n_ed_: ;run;
 
-/*need to drop some variables because of Stata IC limit*/
 proc contents data=spo_mc_i.hrs_elix_cc_pay_out; run;
-
-data ltdvars;
-set spo_mc_i.hrs_elix_cc_pay_out;
-drop zip: s_comorb_: s_ZIP: s_STATEUSPS: s_PN_: r_ZIP: r_STATEUSPS: r_PN_: comorb_: 
-wage_index_2010;
-run;
-
-
 
 H="Get R Medicare Costs"
 /*get decedent medicare costs by claim type and total, adjusted for inflation
 to 2010$, 6m 12m and 24m before R's death
 
 Uses R claims lists from spouse_2010.txt code, generated in section 
-Create additional medicare use variables from claims
+"Create additional medicare use variables from claims"
 Saved under libname spo_int 'E:\data\spouse\int_data';
 
 Adds costs to the dataset spo_mc_i.hrs_elix_cc_pay_out
@@ -2456,23 +2447,29 @@ final dataset is xxxx*/
 /*claims lists, from spouse general data processing working folder*/
 libname spo_int 'E:\data\spouse\int_data';
 
-/*get bid list of decedents with death date and ffs mc 6m prior to death
-
-!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-
-
-This needs work*/
-data r_ins_bid;
-set spo_mc_i.hrs_elix_cc_pay_out;
-if r_xwalk_yes=1 & r_part_ab_6m=1 & r_hmo_d_6m=0 ;
-ind_dod_yes=0;
-if r_dod_hrs_claims~=. then ind_dod_yes=1;
-keep r_BID_hrs r_id s_BID_hrs r_dod_hrs_claims r_dod_use_claims ind_dod_yes;
+data r_dod;
+set spo_mc_i.hrs_elix_cc_pay_out(keep=r_BID_hrs r_id s_id s_BID_hrs r_death_date_e 
+	r_claims_dod r_xwalk_yes r_part_ab_6m r_hmo_d_6m);
+r_dod_hrs_claims = r_death_date_e;
+r_dod_use_claims=0;
+if r_death_date_e=. & r_claims_dod~=. then do;
+	r_dod_hrs_claims=r_claims_dod;
+	r_dod_use_claims=1;
+	end;
+r_dod_missing_yes=0;
+if r_dod_hrs_claims=. then r_dod_missing_yes=1;
+r_death_year=year(r_dod_hrs_claims);
+r_death_month=month(r_dod_hrs_claims);
 run;
 
-proc freq; table r_dod_use_claims ind_dod_yes; run;
+proc freq; table r_dod_use_claims r_dod_missing_yes; run;
 
+/*list of r's with xwalk and dod, same list that got claims list in spouse general code n=5897*/
+data r_dod_2;
+set r_dod;
+if r_xwalk_yes=1 ;
+if r_dod_missing_yes=0;
+run;
 
 /****************************************************************/
 /*medpar claims, time periods before R's death*******************/
@@ -2568,17 +2565,17 @@ sum(&source._paid_by_mc) as &source._paid_by_mc
 from &source._cost group by BID_HRS_19;
 quit;
 
-/*merge into a full bid list of those s's with ffs mc 6m or more*/
+/*merge into a full bid list of decedents with spouse id included*/
 proc sql;
 create table &source._&name. as select 
-a.s_bid_hrs,a.r_id,coalesce(b.&source._paid_by_mc,0) as s_&source._paid_by_mc_&name.
-from spo_mc_i.s_r_dod a
+a.r_id,a.r_bid_hrs,a.s_id,a.s_bid_hrs,coalesce(b.&source._paid_by_mc,0) as r_&source._paid_by_mc_&name.
+from r_dod_2 a
 left join
  &source._pay b
- on trim(left(a.s_BID_hrs))=trim(left(b.bid_hrs_19)) and a.r_id=b.r_id;
+ on trim(left(a.r_BID_hrs))=trim(left(b.bid_hrs_19));
  quit;
 
-proc sort data=&source._&name.; by s_BID_hrs r_id; run;
+proc sort data=&source._&name.; by r_BID_hrs s_id; run;
 
 %mend;
 
@@ -2590,6 +2587,153 @@ proc sort data=&source._&name.; by s_BID_hrs r_id; run;
 %mp(days_start=0,days_bef_death=(2*365.25),source=ip,equ=~,name=24m );
 
 
+/****************************************************************/
+/**other claims, time periods before R's death*******************/
+/****************************************************************/
+/*macro to calculate totals for the claims that are not in medpar files*/
+%macro all_other(source=,name=);
+
+/*just keep relevant variables*/
+data &source._meet;
+set spo_int.&source._meet_&name.(keep=admit_date disch_date BID_hrs_19 pmt_amt death_date);
+format admit_date disch_date date9.;
+run;
+
+/*Adjust for inflation*/
+data &source._meet2;
+set &source._meet;
+/*adjust to 2010 dollars*/
+if year(admit_date)>=2010 then rate=1;
+if year(admit_date)=2009 then rate=1.0350;
+if year(admit_date)=2008 then rate=1.06823;
+if year(admit_date)=2007 then rate=1.11347;
+if year(admit_date)=2006 then rate=1.17287;
+if year(admit_date)=2005 then rate=1.22119;
+if year(admit_date)=2004 then rate=1.27983;
+if year(admit_date)=2003 then rate=1.34381;
+if year(admit_date)=2002 then rate=1.40392;
+if year(admit_date)=2001 then rate=1.47492;
+if year(admit_date)=2000 then rate=1.54589;
+if year(admit_date)<=1999 then rate=1.61195;
+
+&source._paid_by_mc=rate*(pmt_amt);
+run;
+
+/*Calculate total mc payments by ID*/
+proc sql;
+create table &source._pay as select distinct BID_hrs_19,
+sum(&source._paid_by_mc) as &source._paid_by_mc
+from &source._meet2 group by BID_hrs_19;
+quit;
+
+/*merge into a full bid list of those decedents with xwalk id and dod*/
+proc sql;
+create table &source._&name. as select
+a.r_bid_hrs,a.r_id,a.s_id,a.s_bid_hrs,coalesce(b.&source._paid_by_mc,0) as r_&source._paid_by_mc_&name. 
+from r_dod_2 a
+left join
+ &source._pay b
+ on trim(left(a.r_BID_hrs))=trim(left(b.bid_hrs_19));
+ quit;
+
+ proc sort data=&source._&name ;
+ by r_BID_hrs s_id;
+ run;
+ %mend;
+
+ %all_other(source=op,name=6m);
+ %all_other(source=op,name=12m);
+ %all_other(source=op,name=24m);
+
+ %all_other(source=pb,name=6m);
+ %all_other(source=pb,name=12m);
+ %all_other(source=pb,name=24m);
+
+ %all_other(source=hh,name=6m);
+ %all_other(source=hh,name=12m);
+ %all_other(source=hh,name=24m);
+
+ %all_other(source=hs,name=6m);
+ %all_other(source=hs,name=12m);
+ %all_other(source=hs,name=24m);
+
+ %all_other(source=dm,name=6m);
+ %all_other(source=dm,name=12m);
+ %all_other(source=dm,name=24m);
+
+%macro merge(source=,su=,name=);
+data r_&source._&name.;
+merge &source._&su.6m &source._&su.12m &source._&su.24m;
+by r_BID_hrs r_id s_bid_hrs s_id;
+run;
+
+proc means n mean median min max; var r_&source._paid_by_mc_: ; run;
+%mend;
+
+%merge(source=ip,su=,name=bef);
+%merge(source=snf,su=,name=bef);
+%merge(source=op,su=,name=bef);
+%merge(source=pb,su=,name=bef);
+%merge(source=hh,su=,name=bef);
+%merge(source=hs,su=,name=bef);
+%merge(source=dm,su=,name=bef);
+
+/*now merge into single dataset of MC costs and get totals for each time window*/
+data r_mc_costs_all;
+merge r_ip_bef r_snf_bef r_op_bef r_pb_bef r_hh_bef r_hs_bef r_dm_bef ;
+by r_BID_hrs r_id s_bid_hrs s_id;
+run;
+
+%macro total(su=);
+data r_mc_costs_all;
+set r_mc_costs_all;
+r_tot_paid_by_mc_&su=r_ip_paid_by_mc_&su + r_snf_paid_by_mc_&su + r_op_paid_by_mc_&su + 
+r_pb_paid_by_mc_&su + r_hh_paid_by_mc_&su + r_hs_paid_by_mc_&su + r_dm_paid_by_mc_&su;
+run;
+%mend;
+
+%total(su=6m);
+%total(su=12m);
+%total(su=24m);
+
+/*save permanent dataset*/
+data spo_mc_i.r_mc_costs_all;
+set r_mc_costs_all;
+run;
+
+proc means n mean median min max; run;
+
+
+/****************************************************************/
+/**Merge into full s claims dataset           *******************/
+/****************************************************************/
+proc sql;
+create table spo_mc_i.hrs_elix_cc_pay_out_rpay(drop=r_BID_hrs2 r_id2 s_BID_hrs2 s_id2)
+as select * from
+spo_mc_i.hrs_elix_cc_pay_out a
+left join 
+spo_mc_i.r_mc_costs_all(rename=(r_BID_hrs=r_BID_hrs2) rename=(r_id=r_id2) 
+	rename=(s_bid_hrs=s_bid_hrs2) rename=(s_id=s_id2)) b
+on a.r_BID_hrs=b.r_BID_hrs2 & a.r_id=b.r_id2 & a.s_bid_hrs=b.s_bid_hrs2 & a.s_id=b.s_id2;
+quit;
+
+data check_r_mc;
+set spo_mc_i.hrs_elix_cc_pay_out_rpay;
+if r_xwalk_yes=1 & r_part_ab_6m=1 & r_hmo_d_6m=0 ;
+run;
+
+proc means; var r_tot_paid_by_mc_24m r_ip_paid_by_mc_24m r_op_paid_by_mc_24m;
+run;
+
+/****************************************************************/
+/**Export full ds to Stata                    *******************/
+/****************************************************************/
+proc contents data=spo_mc_i.hrs_elix_cc_pay_out_rpay; run;
+
+/*export to stata to get sample size estimate table*/
+proc export data=spo_mc_i.hrs_elix_cc_pay_out_rpay
+outfile="E:\data\spouse_claims\data\int_data\hrs_elix_cc_pay_out_rpay.dta" replace;
+run;
 
 
 H="Variable setup in Stata"
@@ -2611,7 +2755,7 @@ log using `logpath'\2-HRS_Spouse_claims_sample_char.txt, text replace
 
 cd `projdatapath'
 
-use hrs_elix_cc_pay_out.dta if (r_xwalk_yes==1 & r_part_ab_6m==1 & ///
+use hrs_elix_cc_pay_out_rpay.dta if (r_xwalk_yes==1 & r_part_ab_6m==1 & ///
 	r_hmo_d_6m==0 & r_married_x==1 & s_xwalk_yes==1)
 *********************************************************
 tab r_exit_year_x, missing
@@ -2627,6 +2771,7 @@ la var wage_index_missing "Wage index missing 1=yes"
 //n=3 missing hrr number
 sum hrrnum, detail
 
+//spouse medidicare spending variables
 local mcsp s_tot_paid_by_mc_ s_ip_paid_by_mc_ s_snf_paid_by_mc_ s_op_paid_by_mc_ ///
 s_pb_paid_by_mc_ s_hh_paid_by_mc_ s_hs_paid_by_mc_ s_dm_paid_by_mc_
 
@@ -2638,24 +2783,38 @@ foreach v in `mcsp'{
 	}
 }
 
-//label spending variables
+//decedent medicare spending variables
+local rmcsp r_tot_paid_by_mc_ r_ip_paid_by_mc_ r_snf_paid_by_mc_ r_op_paid_by_mc_ ///
+r_pb_paid_by_mc_ r_hh_paid_by_mc_ r_hs_paid_by_mc_ r_dm_paid_by_mc_
+
 foreach t in 6m 12m 24m {
-la var s_tot_paid_by_mc_`t' "S total MC spending `t' before R's death"
-la var s_tot_paid_by_mc_wi_`t' "S WI Adj total MC spending `t' before R's death"
-la var s_ip_paid_by_mc_`t' "S IP MC spending `t' before R's death"
-la var s_ip_paid_by_mc_wi_`t' "S WI Adj IP MC spending `t' before R's death"
-la var s_snf_paid_by_mc_`t' "S SNF MC spending `t' before R's death" 
-la var s_snf_paid_by_mc_wi_`t' "S WI Adj SNF MC spending `t' before R's death" 
-la var s_op_paid_by_mc_`t' "S OP MC spending `t' before R's death" 
-la var s_op_paid_by_mc_wi_`t' "S WI Adj OP MC spending `t' before R's death" 
-la var s_pb_paid_by_mc_`t' "S Carr. MC spending `t' before R's death" 
-la var s_pb_paid_by_mc_wi_`t' "S WI Adj Carr. MC spending `t' before R's death" 
-la var s_hh_paid_by_mc_`t' "S HH MC spending `t' before R's death" 
-la var s_hh_paid_by_mc_wi_`t' "S WI Adj HH MC spending `t' before R's death" 
-la var s_hs_paid_by_mc_`t' "S HS MC spending `t' before R's death"  
-la var s_hs_paid_by_mc_wi_`t' "S WI Adj HS MC spending `t' before R's death" 
-la var s_dm_paid_by_mc_`t' "S DME MC spending `t' before R's death" 
-la var s_dm_paid_by_mc_wi_`t' "S WI Adj DME MC spending `t' before R's death" 
+foreach v in `rmcsp'{
+	gen `v'wi_`t'=`v'`t'/wage_index_20102
+	sum `v'wi_`t', detail
+	sum `v'`t', detail
+	}
+}
+
+//label spending variables
+foreach d in s r {
+foreach t in 6m 12m 24m {
+la var `d'_tot_paid_by_mc_`t' "`d' total MC spending `t' before R's death"
+la var `d'_tot_paid_by_mc_wi_`t' "`d' WI Adj total MC spending `t' before R's death"
+la var `d'_ip_paid_by_mc_`t' "`d' IP MC spending `t' before R's death"
+la var `d'_ip_paid_by_mc_wi_`t' "`d' WI Adj IP MC spending `t' before R's death"
+la var `d'_snf_paid_by_mc_`t' "`d' SNF MC spending `t' before R's death" 
+la var `d'_snf_paid_by_mc_wi_`t' "`d' WI Adj SNF MC spending `t' before R's death" 
+la var `d'_op_paid_by_mc_`t' "`d' OP MC spending `t' before R's death" 
+la var `d'_op_paid_by_mc_wi_`t' "`d' WI Adj OP MC spending `t' before R's death" 
+la var `d'_pb_paid_by_mc_`t' "`d' Carr. MC spending `t' before R's death" 
+la var `d'_pb_paid_by_mc_wi_`t' "`d' WI Adj Carr. MC spending `t' before R's death" 
+la var `d'_hh_paid_by_mc_`t' "`d' HH MC spending `t' before R's death" 
+la var `d'_hh_paid_by_mc_wi_`t' "`d' WI Adj HH MC spending `t' before R's death" 
+la var `d'_hs_paid_by_mc_`t' "`d' HS MC spending `t' before R's death"  
+la var `d'_hs_paid_by_mc_wi_`t' "`d' WI Adj HS MC spending `t' before R's death" 
+la var `d'_dm_paid_by_mc_`t' "`d' DME MC spending `t' before R's death" 
+la var `d'_dm_paid_by_mc_wi_`t' "`d' WI Adj DME MC spending `t' before R's death" 
+}
 }
 
 foreach t in p6m p12m p24m {

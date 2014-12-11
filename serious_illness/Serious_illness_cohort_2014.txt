@@ -91,10 +91,15 @@ label core_to_death="Time from core ivw to death, years";
 if core_to_death<=1 and core_to_death~=. then core_to_dod_1yr=1;
 if core_to_death>1 or core_to_death=. then core_to_dod_1yr=0;
 label core_to_dod_1yr="Died within 1 year of core interview";
+
+if core_to_death<=0.5 and core_to_death~=. then core_to_dod_6m=1;
+if core_to_death>0.5 or core_to_death=. then core_to_dod_6m=0;
+label core_to_dod_6m="Died within 6 months of core interview";
+
 run;
 
 proc freq data=core_age_1;
-table age_ge_65 core_to_dod_1yr /missprint;
+table age_ge_65 core_to_dod_1yr*core_to_dod_6m /missprint;
 run;
 
 
@@ -4509,7 +4514,7 @@ proc freq; table part_ab_12m_aft*hmo_d_12m_aft /missprint; run;
 
 H="Step 8a - Determine outcomes after meet criteria"
 /*While still determining criteria, create variables looking at the 1 year
-after interview for all interviews (regardless of when meet criteria)
+after and 6 months after interview for all interviews (regardless of when meet criteria)
 
 Outcomes are:
 1. Urgent or emergency hospital admissions 1 year after meet critera
@@ -4532,7 +4537,7 @@ where age_ge_65=1 and xwalk_yes=1 and part_ab_12m=1 and hmo_d_12m=0
 and core_year in (2000,2002,2004,2006,2008,2010);
 quit;
 
-proc freq; table core_to_dod_1yr; run;
+proc freq; table core_to_dod_1yr  core_to_dod_6m; run;
 
 data age_ge_65_mc_ltd;
 set age_ge_65_mc(keep=bid_hrs c_ivw_date core_year);
@@ -4585,13 +4590,21 @@ quit;
 
 %mend;
 
-
+/*1 year claims lists*/
 %mp(days_start=0,days_after_core=365,source=mp );
 %other(days_start=0,days_after_core=365,source=op );
 %other(days_start=0,days_after_core=365,source=pb );
 %other(days_start=0,days_after_core=365,source=hh );
 %other(days_start=0,days_after_core=365,source=hs );
 %other(days_start=0,days_after_core=365,source=dm );
+
+/*6 months claims lists*/
+%mp(days_start=0,days_after_core=183,source=mp );
+%other(days_start=0,days_after_core=183,source=op );
+%other(days_start=0,days_after_core=183,source=pb );
+%other(days_start=0,days_after_core=183,source=hh );
+%other(days_start=0,days_after_core=183,source=hs );
+%other(days_start=0,days_after_core=183,source=dm );
 
 /**********************************************************************/
 /**********************************************************************/
@@ -4673,8 +4686,10 @@ run;
 
 %mend;
 
-%admissions(days=365,suffix=p12m);
+%admissions(days=365,suffix=p12m); /*1 year admisions details*/
+%admissions(days=183,suffix=p6m); /*6 months admisions details*/
 
+/*merge in new variables to full variable list*/
 proc sql;
 create table core_ids_admit_post_1 as select a.*,
 b.n_ip_admit_p12m,b.adm_trunc_ind_p12m,b.n_hospd_p12m,
@@ -4686,13 +4701,27 @@ ip_post_365_4 b
 on trim(left(a.bid_hrs))=trim(left(b.bid_hrs_19)) and a.core_year=b.core_year;
 quit;
 
+proc sql;
+create table core_ids_admit_post_2 as select a.*,
+b.n_ip_admit_p6m,b.adm_trunc_ind_p6m,b.n_hospd_p6m,
+b.n_em_urgent_admit_p6m,b.n_em_admit_p6m,
+b.n_urgent_admit_p6m,b.n_elect_admit_p6m,b.n_ED_ip_p6m
+from core_ids_admit_post_1 a
+left join
+ip_post_183_4 b 
+on trim(left(a.bid_hrs))=trim(left(b.bid_hrs_19)) and a.core_year=b.core_year;
+quit;
+
+
 /*Since dataset is just those with ffs mc 1 year preceeding the
 core interview, replace admit info with 0 if missing b/c there were no ip claims*/
- data core_ids_admit_post_2;
- set core_ids_admit_post_1;
+ data core_ids_admit_post_3;
+ set core_ids_admit_post_2;
  array list 
 	n_ip_admit_p12m n_hospd_p12m n_em_urgent_admit_p12m
-	n_em_admit_p12m n_urgent_admit_p12m n_elect_admit_p12m n_ED_ip_p12m;
+	n_em_admit_p12m n_urgent_admit_p12m n_elect_admit_p12m n_ED_ip_p12m
+	n_ip_admit_p6m n_hospd_p6m n_em_urgent_admit_p6m
+	n_em_admit_p6m n_urgent_admit_p6m n_elect_admit_p6m n_ED_ip_p6m;
  do over list;
  if list=. then list=0;
  end;
@@ -4701,39 +4730,70 @@ core interview, replace admit info with 0 if missing b/c there were no ip claims
  if n_ip_admit_p12m>0 & n_ip_admit_p12m~=. then ind_hosp_adm_p12m=1;
  label ind_hosp_adm_p12m="Indicator for any hospital admission 12m after core";
 
+ if n_ip_admit_p6m=0 then ind_hosp_adm_p6m=0;
+ if n_ip_admit_p6m>0 & n_ip_admit_p6m~=. then ind_hosp_adm_p6m=1;
+ label ind_hosp_adm_p6m="Indicator for any hospital admission 6m after core";
+
  if n_em_urgent_admit_p12m=0 then ind_em_ur_adm_p12m=0;
  if n_em_urgent_admit_p12m>0 & n_em_urgent_admit_p12m~=. then ind_em_ur_adm_p12m=1;
  label ind_em_ur_adm_p12m="Ind any urgent or emergent hospital admission 12m after core";
+
+ if n_em_urgent_admit_p6m=0 then ind_em_ur_adm_p6m=0;
+ if n_em_urgent_admit_p6m>0 & n_em_urgent_admit_p6m~=. then ind_em_ur_adm_p6m=1;
+ label ind_em_ur_adm_p6m="Ind any urgent or emergent hospital admission 6m after core";
 
  if n_em_admit_p12m=0 then ind_em_adm_p12m=0;
  if n_em_admit_p12m>0 & n_em_admit_p12m~=. then ind_em_adm_p12m=1;
  label ind_em_adm_p12m="Ind any emergency hospital admission 12m after core";
 
+ if n_em_admit_p6m=0 then ind_em_adm_p6m=0;
+ if n_em_admit_p6m>0 & n_em_admit_p6m~=. then ind_em_adm_p6m=1;
+ label ind_em_adm_p6m="Ind any emergency hospital admission 6m after core";
+
  if n_urgent_admit_p12m=0 then ind_ur_adm_p12m=0;
  if n_urgent_admit_p12m>0 & n_urgent_admit_p12m~=. then ind_ur_adm_p12m=1;
  label ind_ur_adm_p12m="Ind any urgent hospital admission 12m after core";
+
+ if n_urgent_admit_p6m=0 then ind_ur_adm_p6m=0;
+ if n_urgent_admit_p6m>0 & n_urgent_admit_p6m~=. then ind_ur_adm_p6m=1;
+ label ind_ur_adm_p6m="Ind any urgent hospital admission 6m after core";
 
  if n_elect_admit_p12m =0 then ind_elect_adm_p12m=0;
  if n_elect_admit_p12m >0 & n_elect_admit_p12m ~=. then ind_elect_adm_p12m=1;
  label ind_elect_adm_p12m="Ind any elective hospital admission 12m after core";
 
+ if n_elect_admit_p6m =0 then ind_elect_adm_p6m=0;
+ if n_elect_admit_p6m >0 & n_elect_admit_p6m ~=. then ind_elect_adm_p6m=1;
+ label ind_elect_adm_p6m="Ind any elective hospital admission 6m after core";
+
  if (n_ip_admit_p12m - n_elect_admit_p12m)=0 then ind_nonelect_adm_p12m=0;
  if (n_ip_admit_p12m - n_elect_admit_p12m)>0 & n_elect_admit_p12m~=. then ind_nonelect_adm_p12m=1;
  label ind_nonelect_adm_p12m="Ind any non-elective hospital admission 12m after core";
 
+ if (n_ip_admit_p6m - n_elect_admit_p6m)=0 then ind_nonelect_adm_p6m=0;
+ if (n_ip_admit_p6m - n_elect_admit_p6m)>0 & n_elect_admit_p6m~=. then ind_nonelect_adm_p6m=1;
+ label ind_nonelect_adm_p6m="Ind any non-elective hospital admission 6m after core";
+
  n_nonelect_adm_p12m=(n_ip_admit_p12m - n_elect_admit_p12m);
  label n_nonelect_adm_p12m="total n non-elective ip admit 12m after core";
+
+ n_nonelect_adm_p6m=(n_ip_admit_p6m - n_elect_admit_p6m);
+ label n_nonelect_adm_p6m="total n non-elective ip admit 6m after core";
 
  if n_ED_ip_p12m=0 then ind_ED_adm_p12m=0;
  if n_ED_ip_p12m>0 & n_ED_ip_p12m~=. then ind_ED_adm_p12m=1;
  label ind_ED_adm_p12m="Ind ED use with hospital admission 12m after core, from charges";
 
+ if n_ED_ip_p6m=0 then ind_ED_adm_p6m=0;
+ if n_ED_ip_p6m>0 & n_ED_ip_p6m~=. then ind_ED_adm_p6m=1;
+ label ind_ED_adm_p6m="Ind ED use with hospital admission 6m after core, from charges";
+
 run;
 
 proc freq;
-table n_ip_admit_p12m adm_trunc_ind_p12m n_hospd_p12m ind_hosp_adm_p12m n_em_urgent_admit_p12m ind_em_ur_adm_p12m
-	ind_em_adm_p12m ind_ur_adm_p12m ind_nonelect_adm_p12m n_nonelect_adm_p12m n_ED_ip_p12m ind_ED_adm_p12m 
-	ind_em_adm_p12m*ind_ED_adm_p12m /missprint;
+table n_ip_admit_p: adm_trunc_ind_p: n_hospd_p: ind_hosp_adm_p: n_em_urgent_admit_p: ind_em_ur_adm_p:
+	ind_em_adm_p: ind_ur_adm_p: ind_nonelect_adm_p: n_nonelect_adm_p: n_ED_ip_p: ind_ED_adm_p: 
+	ind_em_adm_p12m*ind_ED_adm_p12m ind_em_adm_p6m*ind_ED_adm_p6m /missprint;
 run;
 
 /**********************************************************************/
@@ -4749,49 +4809,66 @@ ivw_to_admit=admit_date-c_ivw_date;
 run;
 proc means; var ivw_to_admit;run;
 
+data hospice_check2;
+set sic_int.hs_meet_post_183;
+ivw_to_admit=admit_date-c_ivw_date;
+run;
+proc means; var ivw_to_admit;run;
+
+
 %macro hospice(days=,suffix=);
 
 proc sort data=sic_int.hs_meet_post_&days.;
-by bid_hrs_19;
+by bid_hrs_19 c_ivw_date admit_date;
 run;
 
-/*just keep 1 claim per beneficiary since only need indicator of hospice use*/
+/*just keep 1 claim per beneficiary-interview since only need indicator of hospice use*/
 data hs_meet_post_2_&days.;
 set sic_int.hs_meet_post_&days.;
-by bid_hrs_19;
-if first.bid_hrs_19;
+by bid_hrs_19 c_ivw_date;
+if first.c_ivw_date;
 hs_admit_&suffix.=1;
 label hs_admit_&suffix.="Hospice admission &suffix. after interview";
+format admit_date date9.;
 run;
 
 %mend;
 
 %hospice(days=365,suffix=p12m);
+%hospice(days=183,suffix=p6m);
 
-*merge hospice indicator with full dataset;
+*merge hospice indicators with full dataset;
 proc sql;
 create table core_ids_admit_hs_post_2 as select a.*,b.hs_admit_p12m from
-core_ids_admit_post_2 a left join
+core_ids_admit_post_3 a left join
 hs_meet_post_2_365 b
 on trim(left(a.bid_hrs))=trim(left(b.bid_hrs_19)) and a.core_year=b.core_year;
 quit;
 
-proc freq; table hs_admit_p12m; run;
+proc sql;
+create table core_ids_admit_hs_post_3 as select a.*,b.hs_admit_p6m from
+core_ids_admit_hs_post_2 a left join
+hs_meet_post_2_183 b
+on trim(left(a.bid_hrs))=trim(left(b.bid_hrs_19)) and a.core_year=b.core_year;
+quit;
+
+proc freq; table hs_admit_p6m*hs_admit_p12m /missprint; run;
 
 /*replace with 0 when have full info but no hospice claims
 core interview*/
-data core_ids_admit_hs_post_3 ;
-set core_ids_admit_hs_post_2 ;
+data core_ids_admit_hs_post_4 ;
+set core_ids_admit_hs_post_3 ;
 if hs_admit_p12m=. then hs_admit_p12m=0;
+if hs_admit_p6m=. then hs_admit_p6m=0;
 run;
-proc freq; table hs_admit_p12m; run;
+proc freq; table hs_admit_p6m*hs_admit_p12m; run;
 
 /*bring new outcomes variables into full interview dataset for those with ffs medicare */
 proc sql;
 create table sic_int.core_ids_init_outcomes(drop=bid_hrs2 core_year2)
 as select * from
 age_ge_65_mc a left join
-core_ids_admit_hs_post_3(rename=(bid_hrs=bid_hrs2) rename=(core_year=core_year2)) b
+core_ids_admit_hs_post_4(rename=(bid_hrs=bid_hrs2) rename=(core_year=core_year2)) b
 on a.bid_hrs=b.bid_hrs2 and a.core_year=b.core_year2;
 quit;
 
@@ -4799,7 +4876,7 @@ proc contents; run;
 
 proc freq; table core_year; run;
 
-proc freq; table hs_admit_p12m; run;
+proc freq; table hs_admit_p6m*hs_admit_p12m; run;
 
 proc freq;
 table n_ip_admit_p12m adm_trunc_ind_p12m n_hospd_p12m ind_hosp_adm_p12m n_em_urgent_admit_p12m ind_em_ur_adm_p12m
@@ -4810,7 +4887,8 @@ run;
 
 
 H="Step 8b - Get Medicare payments 1 year after interview"
-/*Add total Medicare payments from claims 1 year after interview*/
+/*Add total Medicare payments from claims 1 year after interview
+and 6m after interview*/
 
 /*Claims files from 2000-2010, claims pulled in previous section
 to get just claims that are within 1 year of the interview dates
@@ -4969,9 +5047,11 @@ left join
 %mend;
 
 /*Runs macro to get total for the SNF claims*/
-%mp(days_start=0,days_after_core=365,source=snf,equ=,name=1yr );
+%mp(days_start=0,days_after_core=365,source=snf,equ=,name=12m );
+%mp(days_start=0,days_after_core=183,source=snf,equ=,name=6m );
 /*Runs macro to get total for the inpatient (not SNF) claims*/
-%mp(days_start=0,days_after_core=365,source=ip,equ=~,name=1yr );
+%mp(days_start=0,days_after_core=365,source=ip,equ=~,name=12m );
+%mp(days_start=0,days_after_core=183,source=ip,equ=~,name=6m );
 
 /**********************************************************/
 /**********************************************************/
@@ -5027,42 +5107,56 @@ left join
 /* Run the macro over the mc claims files for 2 years prior to death*/
 /******************************************************************/
 
- %all_other(source=op,month_n=_1yr,days_start=0,days_after_core=365);
-  %all_other(source=pb,month_n=_1yr,days_start=0,days_after_core=365);
-   %all_other(source=hh,month_n=_1yr,days_start=0,days_after_core=365);
-    %all_other(source=hs,month_n=_1yr,days_start=0,days_after_core=365);
-     %all_other(source=dm,month_n=_1yr,days_start=0,days_after_core=365);
+ %all_other(source=op,month_n=_12m,days_start=0,days_after_core=365);
+  %all_other(source=pb,month_n=_12m,days_start=0,days_after_core=365);
+   %all_other(source=hh,month_n=_12m,days_start=0,days_after_core=365);
+    %all_other(source=hs,month_n=_12m,days_start=0,days_after_core=365);
+     %all_other(source=dm,month_n=_12m,days_start=0,days_after_core=365);
+
+ %all_other(source=op,month_n=_6m,days_start=0,days_after_core=183);
+  %all_other(source=pb,month_n=_6m,days_start=0,days_after_core=183);
+   %all_other(source=hh,month_n=_6m,days_start=0,days_after_core=183);
+    %all_other(source=hs,month_n=_6m,days_start=0,days_after_core=183);
+     %all_other(source=dm,month_n=_6m,days_start=0,days_after_core=183);
+
+/******************************************************************/
+/* Merge into single file, by id and interview */
+/******************************************************************/
+*first merge 12m and 6m spending into single dataset;
+data mc_costs_all;
+merge ip_12m snf_12m hh_12m_post hs_12m_post pb_12m_post op_12m_post dm_12m_post
+ ip_6m snf_6m hh_6m_post hs_6m_post pb_6m_post op_6m_post dm_6m_post;
+by BID_hrs core_year;
+run;
 
 /******************************************************************/
 /* Adjust for the wage index */
 /******************************************************************/
-data ip_1yr_post ;
-set ip_1yr ;
-run;
 
-data snf_1yr_post ;
-set snf_1yr ;
-run;
-
-%macro wage_ind(source=);
 *add wage index to the costs totals files;
 proc sql;
-create table &source._wi_1 as select a.*, b.wage_index_20102
-from &source._1yr_post a left join
+create table mc_costs_all_wi_1 as select a.*, b.wage_index_20102
+from mc_costs_all a left join
 sic_int.core_lmt_xwalk_2 b
 on a.BID_hrs=b.bid_hrs and a.core_year=b.core_year;
 quit;
 
 /*if wage index is missing, set to 1 and identify with an indicator variable*/
-data &source._wi_2;
-set &source._wi_1;
+data mc_costs_all_wi_2;
+set mc_costs_all_wi_1;
 if wage_index_20102=. then do;
 	wage_index_missing_yes = 1;
 	wage_index_20102 = 1;
 end;
-&source._paid_by_mc_1yr_wi = &source._paid_by_mc_1yr / wage_index_20102;
 run;
 
+proc freq; table wage_index_missing_yes; run;
+
+%macro wage_ind(source=);
+data mc_costs_all_wi_2;
+set mc_costs_all_wi_2;
+&source._paid_by_mc_12m_wi = &source._paid_by_mc_12m / wage_index_20102;
+&source._paid_by_mc_6m_wi = &source._paid_by_mc_6m / wage_index_20102;
 %mend;
 
 %wage_ind(source=ip);
@@ -5078,74 +5172,85 @@ run;
 /* Get totals across all claim types */
 /******************************************************************/
 
-*first merge into single dataset;
-data mc_costs_all;
-merge ip_wi_2 snf_wi_2 hh_wi_2 hs_wi_2 pb_wi_2 op_wi_2 dm_wi_2;
-by BID_hrs core_year;
-run;
-
-/*48 obs have missing wage index*/
-proc freq; table wage_index_missing_yes; run; 
-
-data sic_int.mc_costs_1yr;
-set mc_costs_all;
+data sic_int.mc_costs_12m_6m;
+set mc_costs_all_wi_2;
 /*total not adjusted for wage index*/
-tot_paid_by_mc_1yr=sum(of ip_paid_by_mc_1yr snf_paid_by_mc_1yr hh_paid_by_mc_1yr hs_paid_by_mc_1yr
-pb_paid_by_mc_1yr op_paid_by_mc_1yr dm_paid_by_mc_1yr);
+tot_paid_by_mc_12m=sum(of ip_paid_by_mc_12m snf_paid_by_mc_12m hh_paid_by_mc_12m hs_paid_by_mc_12m
+pb_paid_by_mc_12m op_paid_by_mc_12m dm_paid_by_mc_12m);
+
+tot_paid_by_mc_6m=sum(of ip_paid_by_mc_6m snf_paid_by_mc_6m hh_paid_by_mc_6m hs_paid_by_mc_6m
+pb_paid_by_mc_6m op_paid_by_mc_6m dm_paid_by_mc_6m);
 
 /*wage index adjusted*/
-tot_paid_by_mc_1yr_wi=sum(of ip_paid_by_mc_1yr_wi snf_paid_by_mc_1yr_wi hh_paid_by_mc_1yr_wi hs_paid_by_mc_1yr_wi
-pb_paid_by_mc_1yr_wi op_paid_by_mc_1yr_wi dm_paid_by_mc_1yr_wi);
+tot_paid_by_mc_12m_wi=sum(of ip_paid_by_mc_12m_wi snf_paid_by_mc_12m_wi hh_paid_by_mc_12m_wi hs_paid_by_mc_12m_wi
+pb_paid_by_mc_12m_wi op_paid_by_mc_12m_wi dm_paid_by_mc_12m_wi);
 
-/*total wage index adjusted*/
-label tot_paid_by_mc_1yr="Medicare payment total 1 year following interview"
-ip_paid_by_mc_1yr="IP Medicare payments 1 year following interview" 
-snf_paid_by_mc_1yr="SNF Medicare payments 1 year following interview"
-hh_paid_by_mc_1yr="Home health Medicare payments 1 year following interview" 
-hs_paid_by_mc_1yr="Hospice Medicare payments 1 year following interview"
-pb_paid_by_mc_1yr="Carrier Medicare payments 1 year following interview" 
-op_paid_by_mc_1yr="OP Medicare payments 1 year following interview" 
-dm_paid_by_mc_1yr="DME Medicare payments 1 year following interview"
+tot_paid_by_mc_6m_wi=sum(of ip_paid_by_mc_6m_wi snf_paid_by_mc_6m_wi hh_paid_by_mc_6m_wi hs_paid_by_mc_6m_wi
+pb_paid_by_mc_6m_wi op_paid_by_mc_6m_wi dm_paid_by_mc_6m_wi);
 
-tot_paid_by_mc_1yr_wi="WI adj Medicare payment total 1 year following interview"
-ip_paid_by_mc_1yr_wi="WI adj IP Medicare payments 1 year following interview" 
-snf_paid_by_mc_1yr_wi="WI adj SNF Medicare payments 1 year following interview"
-hh_paid_by_mc_1yr_wi="WI adj Home health Medicare payments 1 year following interview" 
-hs_paid_by_mc_1yr_wi="WI adj Hospice Medicare payments 1 year following interview"
-pb_paid_by_mc_1yr_wi="WI adj Carrier Medicare payments 1 year following interview" 
-op_paid_by_mc_1yr_wi="WI adj OP Medicare payments 1 year following interview" 
-dm_paid_by_mc_1yr_wi="WI adj DME Medicare payments 1 year following interview"
+/*label variables*/
+label tot_paid_by_mc_12m="Medicare payment total 1 year following interview"
+ip_paid_by_mc_12m="IP Medicare payments 1 year following interview" 
+snf_paid_by_mc_12m="SNF Medicare payments 1 year following interview"
+hh_paid_by_mc_12m="Home health Medicare payments 1 year following interview" 
+hs_paid_by_mc_12m="Hospice Medicare payments 1 year following interview"
+pb_paid_by_mc_12m="Carrier Medicare payments 1 year following interview" 
+op_paid_by_mc_12m="OP Medicare payments 1 year following interview" 
+dm_paid_by_mc_12m="DME Medicare payments 1 year following interview"
+
+tot_paid_by_mc_12m_wi="WI adj Medicare payment total 1 year following interview"
+ip_paid_by_mc_12m_wi="WI adj IP Medicare payments 1 year following interview" 
+snf_paid_by_mc_12m_wi="WI adj SNF Medicare payments 1 year following interview"
+hh_paid_by_mc_12m_wi="WI adj Home health Medicare payments 1 year following interview" 
+hs_paid_by_mc_12m_wi="WI adj Hospice Medicare payments 1 year following interview"
+pb_paid_by_mc_12m_wi="WI adj Carrier Medicare payments 1 year following interview" 
+op_paid_by_mc_12m_wi="WI adj OP Medicare payments 1 year following interview" 
+dm_paid_by_mc_12m_wi="WI adj DME Medicare payments 1 year following interview"
+;
+
+label tot_paid_by_mc_6m="Medicare payment total 6 months following interview"
+ip_paid_by_mc_6m="IP Medicare payments 6 months following interview" 
+snf_paid_by_mc_6m="SNF Medicare payments 6 months following interview"
+hh_paid_by_mc_6m="Home health Medicare payments 6 months following interview" 
+hs_paid_by_mc_6m="Hospice Medicare payments 6 months following interview"
+pb_paid_by_mc_6m="Carrier Medicare payments 6 months following interview" 
+op_paid_by_mc_6m="OP Medicare payments 6 months following interview" 
+dm_paid_by_mc_6m="DME Medicare payments 6 months following interview"
+
+tot_paid_by_mc_6m_wi="WI adj Medicare payment total 6 months following interview"
+ip_paid_by_mc_6m_wi="WI adj IP Medicare payments 6 months following interview" 
+snf_paid_by_mc_6m_wi="WI adj SNF Medicare payments 6 months following interview"
+hh_paid_by_mc_6m_wi="WI adj Home health Medicare payments 6 months following interview" 
+hs_paid_by_mc_6m_wi="WI adj Hospice Medicare payments 6 months following interview"
+pb_paid_by_mc_6m_wi="WI adj Carrier Medicare payments 6 months following interview" 
+op_paid_by_mc_6m_wi="WI adj OP Medicare payments 6 months following interview" 
+dm_paid_by_mc_6m_wi="WI adj DME Medicare payments 6 months following interview"
 ;
 run;
 
 proc sort data=sic_int.core_ids_init_outcomes; by bid_hrs core_year; run;
-proc sort data=sic_int.mc_costs_1yr; by bid_hrs core_year; run;
+proc sort data=sic_int.mc_costs_12m_6m; by bid_hrs core_year; run;
 
 
 *merge into overall dataset*;
 proc sql;
 create table sic_int.core_ids_init_outcomes_2(drop=bid_hrs2 id2 core_year2 wi) as select * from
 sic_int.core_ids_init_outcomes a left join
-sic_int.mc_costs_1yr(rename=(bid_hrs=bid_hrs2) rename=(id=id2) rename=(core_year=core_year2) rename=(wage_index_20102=wi)) b
+sic_int.mc_costs_12m_6m(rename=(bid_hrs=bid_hrs2) rename=(id=id2) rename=(core_year=core_year2) rename=(wage_index_20102=wi)) b
 on trim(left(a.bid_hrs))=trim(left(b.bid_hrs2)) and a.core_year=b.core_year2;
 quit;
 
 proc means; 
-var ip_paid_by_mc_1yr snf_paid_by_mc_1yr hh_paid_by_mc_1yr hs_paid_by_mc_1yr
-pb_paid_by_mc_1yr op_paid_by_mc_1yr dm_paid_by_mc_1yr tot_paid_by_mc_1yr;
+var ip_paid_by_mc_: snf_paid_by_mc_: hh_paid_by_mc_: hs_paid_by_mc_:
+pb_paid_by_mc_: op_paid_by_mc_: dm_paid_by_mc_: tot_paid_by_mc_:;
 run;
 
-proc means; 
-var ip_paid_by_mc_1yr_wi snf_paid_by_mc_1yr_wi hh_paid_by_mc_1yr_wi hs_paid_by_mc_1yr_wi
-pb_paid_by_mc_1yr_wi op_paid_by_mc_1yr_wi dm_paid_by_mc_1yr_wi tot_paid_by_mc_1yr_wi;
+proc means ; class part_ab_12m_aft; var ip_paid_by_mc_12m snf_paid_by_mc_12m hh_paid_by_mc_12m hs_paid_by_mc_12m
+pb_paid_by_mc_12m op_paid_by_mc_12m dm_paid_by_mc_12m tot_paid_by_mc_12m;
 run;
 
-proc means ; class part_ab_12m_aft; var ip_paid_by_mc_1yr snf_paid_by_mc_1yr hh_paid_by_mc_1yr hs_paid_by_mc_1yr
-pb_paid_by_mc_1yr op_paid_by_mc_1yr dm_paid_by_mc_1yr tot_paid_by_mc_1yr;
-run;
-
-proc means ; class hmo_d_12m_aft; var ip_paid_by_mc_1yr snf_paid_by_mc_1yr hh_paid_by_mc_1yr hs_paid_by_mc_1yr
-pb_paid_by_mc_1yr op_paid_by_mc_1yr dm_paid_by_mc_1yr tot_paid_by_mc_1yr;
+proc means ; class hmo_d_12m_aft; var ip_paid_by_mc_12m snf_paid_by_mc_12m hh_paid_by_mc_12m hs_paid_by_mc_12m
+pb_paid_by_mc_12m op_paid_by_mc_12m dm_paid_by_mc_12m tot_paid_by_mc_12m;
 run;
 
 
@@ -5487,38 +5592,37 @@ if ivw_meet_crit_c=1;
 run;
 
 
+
 ods rtf body="E:\data\serious_ill\logs\outcomes_first_look.rtf";
 title "Outcomes 1 year after initially meeting criteria A) Any serious medical illness and/or ADL Impair";
 proc freq data=criteria_a;
-table core_to_dod_1yr hs_admit_p12m ind_em_ur_adm_p12m;
+table core_to_dod_1yr core_to_dod_6m hs_admit_p12m hs_admit_p6m ind_em_ur_adm_p12m ind_em_ur_adm_p6m ;
 run;
 proc means data=criteria_a; 
-vars ip_paid_by_mc_1yr ip_paid_by_mc_1yr_wi snf_paid_by_mc_1yr snf_paid_by_mc_1yr_wi 
-hh_paid_by_mc_1yr hh_paid_by_mc_1yr_wi hs_paid_by_mc_1yr hs_paid_by_mc_1yr_wi
-pb_paid_by_mc_1yr pb_paid_by_mc_1yr_wi op_paid_by_mc_1yr op_paid_by_mc_1yr_wi 
-dm_paid_by_mc_1yr dm_paid_by_mc_1yr_wi tot_paid_by_mc_1yr tot_paid_by_mc_1yr_wi n_hospd_p12m; run;
+vars ip_paid_by_mc_: snf_paid_by_mc_: hh_paid_by_mc_: hs_paid_by_mc_: 
+pb_paid_by_mc_:  op_paid_by_mc_: 
+dm_paid_by_mc_:  tot_paid_by_mc_: n_hospd_p12m n_hospd_p6m; run;
 
 title "Outcomes 1 year after initially meeting criteria B) Any ser med illness and/or ADL Impair + SNF and/or Hospital.";
 proc freq data=criteria_b;
-table core_to_dod_1yr hs_admit_p12m ind_em_ur_adm_p12m;
+table core_to_dod_1yr core_to_dod_6m hs_admit_p12m hs_admit_p6m ind_em_ur_adm_p12m ind_em_ur_adm_p6m ;
 run;
 proc means data=criteria_b; 
-vars ip_paid_by_mc_1yr ip_paid_by_mc_1yr_wi snf_paid_by_mc_1yr snf_paid_by_mc_1yr_wi 
-hh_paid_by_mc_1yr hh_paid_by_mc_1yr_wi hs_paid_by_mc_1yr hs_paid_by_mc_1yr_wi
-pb_paid_by_mc_1yr pb_paid_by_mc_1yr_wi op_paid_by_mc_1yr op_paid_by_mc_1yr_wi 
-dm_paid_by_mc_1yr dm_paid_by_mc_1yr_wi tot_paid_by_mc_1yr tot_paid_by_mc_1yr_wi n_hospd_p12m; run;
+vars ip_paid_by_mc_: snf_paid_by_mc_: hh_paid_by_mc_: hs_paid_by_mc_: 
+pb_paid_by_mc_:  op_paid_by_mc_: 
+dm_paid_by_mc_:  tot_paid_by_mc_: n_hospd_p12m n_hospd_p6m; run;
 
 title "Outcomes 1 year after initially meeting criteria C) Any ser med illness and ADL Impair + SNF and/or Hospital.";
 proc freq data=criteria_c;
-table core_to_dod_1yr hs_admit_p12m ind_em_ur_adm_p12m;
+table core_to_dod_1yr core_to_dod_6m hs_admit_p12m hs_admit_p6m ind_em_ur_adm_p12m ind_em_ur_adm_p6m ;
 run;
 proc means data=criteria_c; 
-vars ip_paid_by_mc_1yr ip_paid_by_mc_1yr_wi snf_paid_by_mc_1yr snf_paid_by_mc_1yr_wi 
-hh_paid_by_mc_1yr hh_paid_by_mc_1yr_wi hs_paid_by_mc_1yr hs_paid_by_mc_1yr_wi
-pb_paid_by_mc_1yr pb_paid_by_mc_1yr_wi op_paid_by_mc_1yr op_paid_by_mc_1yr_wi 
-dm_paid_by_mc_1yr dm_paid_by_mc_1yr_wi tot_paid_by_mc_1yr tot_paid_by_mc_1yr_wi n_hospd_p12m; run;
+vars ip_paid_by_mc_: snf_paid_by_mc_: hh_paid_by_mc_: hs_paid_by_mc_: 
+pb_paid_by_mc_:  op_paid_by_mc_: 
+dm_paid_by_mc_:  tot_paid_by_mc_: n_hospd_p12m n_hospd_p6m; run;
 
 ods rtf close;
+
 
 /*export full dataset to Stata*/
 proc export data=sic_int.ivws_crit_1
@@ -5576,8 +5680,8 @@ tab cat_smi_adl adl_impair_core
 //table of outcomes, interview level (so R may be represented 5x)
 local outcome1 core_to_dod_1yr hs_admit_p12m ind_em_ur_adm_p12m
 
-local outcome2 ip_paid_by_mc_1yr_wi snf_paid_by_mc_1yr_wi hh_paid_by_mc_1yr_wi hs_paid_by_mc_1yr_wi ///
-pb_paid_by_mc_1yr_wi op_paid_by_mc_1yr_wi dm_paid_by_mc_1yr_wi tot_paid_by_mc_1yr_wi n_hospd_p12m
+local outcome2 ip_paid_by_mc_12m_wi snf_paid_by_mc_12m_wi hh_paid_by_mc_12m_wi hs_paid_by_mc_12m_wi ///
+pb_paid_by_mc_12m_wi op_paid_by_mc_12m_wi dm_paid_by_mc_12m_wi tot_paid_by_mc_12m_wi n_hospd_p12m
 
 mat table1=J(34,4,.)
 //first row, n for each category
@@ -5675,8 +5779,8 @@ sdec(0\2\2\2\2\2\2\0) replace
 //Criteria comparison
 *******************************************************************
 //table of outcomes, interview where R first meets criteria
-local outcome1 core_to_dod_1yr hs_admit_p12m ind_em_ur_adm_p12m ip_paid_by_mc_1yr_wi ///
-tot_paid_by_mc_1yr_wi
+local outcome1 core_to_dod_1yr hs_admit_p12m ind_em_ur_adm_p12m ip_paid_by_mc_12m_wi ///
+tot_paid_by_mc_12m_wi
 
 local compvars ivw_meet_crit_smi ivw_meet_crit_adl ivw_meet_crit_smiadl ivw_meet_crit_a ///
 ivw_meet_crit_smiadlnh ivw_meet_crit_smiadlho ivw_meet_crit_smiadlhonh ///
@@ -7366,14 +7470,13 @@ Code can be run on either criteria a or criteria b datasets*/
 capture log close
 
 clear all
-set mem 500m
 set more off
 /*Update 6/9/14 Removed HIV as a serious medical illness in the list*/
 
 
-//local crit a
+local crit a
 //local crit b
-local crit c
+//local crit c
 
 local logpath E:\data\serious_ill\logs
 local datapath E:\data\serious_ill\final_data
@@ -7455,8 +7558,8 @@ tab hiv_only , missing
 //table of outcomes
 local outcome1 core_to_dod_1yr_n0 hs_admit_p12m_n0 ind_em_ur_adm_p12m_n0
 
-local outcome2 ip_paid_by_mc_1yr_n0 snf_paid_by_mc_1yr_n0 hh_paid_by_mc_1yr_n0 hs_paid_by_mc_1yr_n0 ///
-pb_paid_by_mc_1yr_n0 op_paid_by_mc_1yr_n0 dm_paid_by_mc_1yr_n0 tot_paid_by_mc_1yr_n0 n_hospd_p12m_n0
+local outcome2 ip_paid_by_mc_12m_n0 snf_paid_by_mc_12m_n0 hh_paid_by_mc_12m_n0 hs_paid_by_mc_12m_n0 ///
+pb_paid_by_mc_12m_n0 op_paid_by_mc_12m_n0 dm_paid_by_mc_12m_n0 tot_paid_by_mc_12m_n0 n_hospd_p12m_n0
 
 mat hiv=J(34,2,.)
 //first row, n for each category
@@ -7664,8 +7767,8 @@ foreach v in ind_oa_sample ind_died_sample ind_meetp1_sample ind_nomeetp1_sample
 ***************************************************************
 //Look at 1 year n0 outcomes of those that meet 1st ivw and those that don't
 local outcome core_to_dod_1yr_n0 hs_admit_p12m_n0 ind_em_ur_adm_p12m_n0 ///
-ip_paid_by_mc_1yr_wi_n0 snf_paid_by_mc_1yr_wi_n0 hh_paid_by_mc_1yr_wi_n0 hs_paid_by_mc_1yr_wi_n0 ///
-pb_paid_by_mc_1yr_wi_n0 op_paid_by_mc_1yr_wi_n0 dm_paid_by_mc_1yr_wi_n0 tot_paid_by_mc_1yr_wi_n0 n_hospd_p12m_n0
+ip_paid_by_mc_12m_wi_n0 snf_paid_by_mc_12m_wi_n0 hh_paid_by_mc_12m_wi_n0 hs_paid_by_mc_12m_wi_n0 ///
+pb_paid_by_mc_12m_wi_n0 op_paid_by_mc_12m_wi_n0 dm_paid_by_mc_12m_wi_n0 tot_paid_by_mc_12m_wi_n0 n_hospd_p12m_n0
 
 mat meet_1st=J(13,8,.)
 	
@@ -8032,8 +8135,8 @@ replace comp_criteria_b =1 if (ser_med_illness==1 | adl_impair_core==1) & (smi_n
 tab comp_criteria_b
 ***************************************************************
 //table of outcomes, interview level (so R may be represented 4x)
-local outcome1 core_to_dod_1yr hs_admit_p12m ind_em_ur_adm_p12m ip_paid_by_mc_1yr_wi ///
-tot_paid_by_mc_1yr_wi
+local outcome1 core_to_dod_1yr hs_admit_p12m ind_em_ur_adm_p12m ip_paid_by_mc_12m_wi ///
+tot_paid_by_mc_12m_wi
 
 local compvars comp_none comp_smi comp_adl /*comp_nh comp_hos*/ comp_smi_adl comp_criteria_a ///
 comp_smi_nh comp_smi_hosp comp_adl_nh comp_adl_hosp comp_nh_hosp ///
@@ -8159,8 +8262,8 @@ sdec(0,2) addtable
 cd `datapath'
 
 local outcomes core_to_dod_1yr_p1 hs_admit_p12m_p1 ind_em_ur_adm_p12m_p1 ///
-ip_paid_by_mc_1yr_wi_p1 snf_paid_by_mc_1yr_wi_p1 hh_paid_by_mc_1yr_wi_p1 hs_paid_by_mc_1yr_wi_p1 ///
-pb_paid_by_mc_1yr_wi_p1 op_paid_by_mc_1yr_wi_p1 dm_paid_by_mc_1yr_wi_p1 tot_paid_by_mc_1yr_wi_p1 n_hospd_p12m_p1
+ip_paid_by_mc_12m_wi_p1 snf_paid_by_mc_12m_wi_p1 hh_paid_by_mc_12m_wi_p1 hs_paid_by_mc_12m_wi_p1 ///
+pb_paid_by_mc_12m_wi_p1 op_paid_by_mc_12m_wi_p1 dm_paid_by_mc_12m_wi_p1 tot_paid_by_mc_12m_wi_p1 n_hospd_p12m_p1
 
 mat p1_meet=J(13,8,.)
 
@@ -8296,7 +8399,6 @@ dataset prior to breaking out by interview timeline meeting criteria)
 capture log close
 
 clear all
-set mem 500m
 set more off
 
 local logpath E:\data\serious_ill\logs
@@ -8673,21 +8775,21 @@ la var hs_admit_p12m "Enrolled in hospice, n (%)"
 la var ind_em_ur_adm_p12m "Hospital admission, n (%)"
 la var n_hospd_p12m "Hospital nights, mean (sd)"
 
-la var ip_paid_by_mc_1yr_wi "Inpatient"
-la var snf_paid_by_mc_1yr_wi "SNF"
-la var hh_paid_by_mc_1yr_wi "Home health" 
-la var hs_paid_by_mc_1yr_wi "Hospice" 
-la var pb_paid_by_mc_1yr_wi "Carrier"
-la var op_paid_by_mc_1yr_wi "Outpatient" 
-la var dm_paid_by_mc_1yr_wi "DME"
-la var tot_paid_by_mc_1yr_wi "Total"
+la var ip_paid_by_mc_12m_wi "Inpatient"
+la var snf_paid_by_mc_12m_wi "SNF"
+la var hh_paid_by_mc_12m_wi "Home health" 
+la var hs_paid_by_mc_12m_wi "Hospice" 
+la var pb_paid_by_mc_12m_wi "Carrier"
+la var op_paid_by_mc_12m_wi "Outpatient" 
+la var dm_paid_by_mc_12m_wi "DME"
+la var tot_paid_by_mc_12m_wi "Total"
 
 local outcome1 core_to_dod_1yr hs_admit_p12m ind_em_ur_adm_p12m
 
 local outcome3 n_hospd_p12m
 
-local outcome2 ip_paid_by_mc_1yr_wi snf_paid_by_mc_1yr_wi hh_paid_by_mc_1yr_wi hs_paid_by_mc_1yr_wi ///
-pb_paid_by_mc_1yr_wi op_paid_by_mc_1yr_wi dm_paid_by_mc_1yr_wi tot_paid_by_mc_1yr_wi 
+local outcome2 ip_paid_by_mc_12m_wi snf_paid_by_mc_12m_wi hh_paid_by_mc_12m_wi hs_paid_by_mc_12m_wi ///
+pb_paid_by_mc_12m_wi op_paid_by_mc_12m_wi dm_paid_by_mc_12m_wi tot_paid_by_mc_12m_wi 
 
 mat table2_n=J(1,3,.)
 //row of n for each category
@@ -9038,20 +9140,20 @@ la var hs_admit_p12m_p1 "Enrolled in hospice, n (%)"
 la var ind_em_ur_adm_p12m_p1 "Hospital admission, n (%)"
 la var n_hospd_p12m_p1 "Hospital nights, mean (sd)"
 
-la var ip_paid_by_mc_1yr_wi_p1 "Inpatient"
-la var snf_paid_by_mc_1yr_wi_p1 "SNF"
-la var hh_paid_by_mc_1yr_wi_p1 "Home health" 
-la var hs_paid_by_mc_1yr_wi_p1 "Hospice" 
-la var pb_paid_by_mc_1yr_wi_p1 "Carrier"
-la var op_paid_by_mc_1yr_wi_p1 "Outpatient" 
-la var dm_paid_by_mc_1yr_wi_p1 "DME"
-la var tot_paid_by_mc_1yr_wi_p1 "Total"
+la var ip_paid_by_mc_12m_wi_p1 "Inpatient"
+la var snf_paid_by_mc_12m_wi_p1 "SNF"
+la var hh_paid_by_mc_12m_wi_p1 "Home health" 
+la var hs_paid_by_mc_12m_wi_p1 "Hospice" 
+la var pb_paid_by_mc_12m_wi_p1 "Carrier"
+la var op_paid_by_mc_12m_wi_p1 "Outpatient" 
+la var dm_paid_by_mc_12m_wi_p1 "DME"
+la var tot_paid_by_mc_12m_wi_p1 "Total"
 
 local outcome1 core_to_dod_1yr_p1 hs_admit_p12m_p1 ind_em_ur_adm_p12m_p1
 
-local outcome2 ip_paid_by_mc_1yr_wi_p1 snf_paid_by_mc_1yr_wi_p1 hh_paid_by_mc_1yr_wi_p1 ///
-hs_paid_by_mc_1yr_wi_p1 pb_paid_by_mc_1yr_wi_p1 op_paid_by_mc_1yr_wi_p1 ///
-dm_paid_by_mc_1yr_wi_p1 tot_paid_by_mc_1yr_wi_p1 
+local outcome2 ip_paid_by_mc_12m_wi_p1 snf_paid_by_mc_12m_wi_p1 hh_paid_by_mc_12m_wi_p1 ///
+hs_paid_by_mc_12m_wi_p1 pb_paid_by_mc_12m_wi_p1 op_paid_by_mc_12m_wi_p1 ///
+dm_paid_by_mc_12m_wi_p1 tot_paid_by_mc_12m_wi_p1 
 
 	mat p1_out_a=J(4,2,.)
 	local r=1
@@ -9139,20 +9241,20 @@ la var hs_admit_p12m_p1 "Enrolled in hospice, n (%)"
 la var ind_em_ur_adm_p12m_p1 "Hospital admission, n (%)"
 la var n_hospd_p12m_p1 "Hospital nights, mean (sd)"
 
-la var ip_paid_by_mc_1yr_wi_p1 "Inpatient"
-la var snf_paid_by_mc_1yr_wi_p1 "SNF"
-la var hh_paid_by_mc_1yr_wi_p1 "Home health" 
-la var hs_paid_by_mc_1yr_wi_p1 "Hospice" 
-la var pb_paid_by_mc_1yr_wi_p1 "Carrier"
-la var op_paid_by_mc_1yr_wi_p1 "Outpatient" 
-la var dm_paid_by_mc_1yr_wi_p1 "DME"
-la var tot_paid_by_mc_1yr_wi_p1 "Total"
+la var ip_paid_by_mc_12m_wi_p1 "Inpatient"
+la var snf_paid_by_mc_12m_wi_p1 "SNF"
+la var hh_paid_by_mc_12m_wi_p1 "Home health" 
+la var hs_paid_by_mc_12m_wi_p1 "Hospice" 
+la var pb_paid_by_mc_12m_wi_p1 "Carrier"
+la var op_paid_by_mc_12m_wi_p1 "Outpatient" 
+la var dm_paid_by_mc_12m_wi_p1 "DME"
+la var tot_paid_by_mc_12m_wi_p1 "Total"
 
 local outcome1 core_to_dod_1yr_p1 hs_admit_p12m_p1 ind_em_ur_adm_p12m_p1
 
-local outcome2 ip_paid_by_mc_1yr_wi_p1 snf_paid_by_mc_1yr_wi_p1 hh_paid_by_mc_1yr_wi_p1 ///
-hs_paid_by_mc_1yr_wi_p1 pb_paid_by_mc_1yr_wi_p1 op_paid_by_mc_1yr_wi_p1 ///
-dm_paid_by_mc_1yr_wi_p1 tot_paid_by_mc_1yr_wi_p1 
+local outcome2 ip_paid_by_mc_12m_wi_p1 snf_paid_by_mc_12m_wi_p1 hh_paid_by_mc_12m_wi_p1 ///
+hs_paid_by_mc_12m_wi_p1 pb_paid_by_mc_12m_wi_p1 op_paid_by_mc_12m_wi_p1 ///
+dm_paid_by_mc_12m_wi_p1 tot_paid_by_mc_12m_wi_p1 
 
 	//get n that have p1 interview, overall n
 	sum core_year_p1 if criteria_`crit'_p1==1
@@ -9212,14 +9314,14 @@ dm_paid_by_mc_1yr_wi_p1 tot_paid_by_mc_1yr_wi_p1
 	outreg, replay(t7_1a) append(t7_2) store(t7_a)
 	outreg, replay(t7_a) append(t7_3_`crit'_1) store(t7_b_`crit'_a)
 
-la var ip_paid_by_mc_1yr_wi_p1 "Inpatient"
-la var snf_paid_by_mc_1yr_wi_p1 "SNF"
-la var hh_paid_by_mc_1yr_wi_p1 "Home health" 
-la var hs_paid_by_mc_1yr_wi_p1 "Hospice" 
-la var pb_paid_by_mc_1yr_wi_p1 "Carrier"
-la var op_paid_by_mc_1yr_wi_p1 "Outpatient" 
-la var dm_paid_by_mc_1yr_wi_p1 "DME"
-la var tot_paid_by_mc_1yr_wi_p1 "Total"	
+la var ip_paid_by_mc_12m_wi_p1 "Inpatient"
+la var snf_paid_by_mc_12m_wi_p1 "SNF"
+la var hh_paid_by_mc_12m_wi_p1 "Home health" 
+la var hs_paid_by_mc_12m_wi_p1 "Hospice" 
+la var pb_paid_by_mc_12m_wi_p1 "Carrier"
+la var op_paid_by_mc_12m_wi_p1 "Outpatient" 
+la var dm_paid_by_mc_12m_wi_p1 "DME"
+la var tot_paid_by_mc_12m_wi_p1 "Total"	
 	
 	//section for those that don't meet criteria in p1	
 	//get n that have p1 interview, overall n
@@ -9315,7 +9417,6 @@ Creates 3 tables, one for each of the criteria*/
 capture log close
 
 clear all
-set mem 500m
 set more off
 
 local logpath E:\data\serious_ill\logs
@@ -9329,8 +9430,8 @@ cd `datapath'
 ****************************************************
 local outcome1 core_to_dod_1yr_n0 hs_admit_p12m_n0 ind_em_ur_adm_p12m_n0
 
-local outcome2 ip_paid_by_mc_1yr_wi_n0 snf_paid_by_mc_1yr_wi_n0 hh_paid_by_mc_1yr_wi_n0 hs_paid_by_mc_1yr_wi_n0 ///
-pb_paid_by_mc_1yr_wi_n0 op_paid_by_mc_1yr_wi_n0 dm_paid_by_mc_1yr_wi_n0 tot_paid_by_mc_1yr_wi_n0 n_hospd_p12m_n0
+local outcome2 ip_paid_by_mc_12m_wi_n0 snf_paid_by_mc_12m_wi_n0 hh_paid_by_mc_12m_wi_n0 hs_paid_by_mc_12m_wi_n0 ///
+pb_paid_by_mc_12m_wi_n0 op_paid_by_mc_12m_wi_n0 dm_paid_by_mc_12m_wi_n0 tot_paid_by_mc_12m_wi_n0 n_hospd_p12m_n0
 
 foreach crit in a b c{
 	clear
@@ -9739,17 +9840,17 @@ mat rownames tab1_1="N" "% of 2008 R's"
 frmttable, statmat(tab1_1) sdec(0\2) store(tab1_a)
 
 //identify top 5 and 10% of spenders in 2008, 1 year post
-sum tot_paid_by_mc_1yr_wi, detail
+sum tot_paid_by_mc_12m_wi, detail
 local top5pct=r(p95)
 local top10pct=r(p90)
 
 foreach i in 5 10{
 gen ind_top`i'pct=.
-replace ind_top`i'pct=1 if tot_paid_by_mc_1yr_wi>=`top`i'pct' & tot_paid_by_mc_1yr_wi!=.
-replace ind_top`i'pct=0 if tot_paid_by_mc_1yr_wi<`top`i'pct' & tot_paid_by_mc_1yr_wi!=.
+replace ind_top`i'pct=1 if tot_paid_by_mc_12m_wi>=`top`i'pct' & tot_paid_by_mc_12m_wi!=.
+replace ind_top`i'pct=0 if tot_paid_by_mc_12m_wi<`top`i'pct' & tot_paid_by_mc_12m_wi!=.
 tab ind_top`i'pct, missing
-sum tot_paid_by_mc_1yr_wi if ind_top`i'pct==1
-sum tot_paid_by_mc_1yr_wi if ind_top`i'pct==0
+sum tot_paid_by_mc_12m_wi if ind_top`i'pct==1
+sum tot_paid_by_mc_12m_wi if ind_top`i'pct==0
 la var ind_top`i'pct "Top `i'% Medicare spending"
 }
 
@@ -9797,7 +9898,7 @@ outreg using `logpath'\sic_Tables_11_2008_wave_crit_a_b_c, ///
 	replace
 
 //quick look at distribution of total medicare spending	
-sum tot_paid_by_mc_1yr_wi, detail
+sum tot_paid_by_mc_12m_wi, detail
 return list
 
 mat mc=J(8,1,.)
@@ -9816,8 +9917,8 @@ frmttable using `logpath'\sic_Tables_11_2008_wave_crit_a_b_c, statmat(mc) ///
 	addtable
 	
 //who are the top 5% of spenders??
-local cvars ip_paid_by_mc_1yr_wi snf_paid_by_mc_1yr_wi hh_paid_by_mc_1yr_wi hs_paid_by_mc_1yr_wi ///
-pb_paid_by_mc_1yr_wi op_paid_by_mc_1yr_wi dm_paid_by_mc_1yr_wi tot_paid_by_mc_1yr_wi ///
+local cvars ip_paid_by_mc_12m_wi snf_paid_by_mc_12m_wi hh_paid_by_mc_12m_wi hs_paid_by_mc_12m_wi ///
+pb_paid_by_mc_12m_wi op_paid_by_mc_12m_wi dm_paid_by_mc_12m_wi tot_paid_by_mc_12m_wi ///
 age_at_core networth_adj2010
 
 local ivars female black white hisp ///
@@ -9831,14 +9932,14 @@ mat tab1 = J(32,4,.)
 mat tab1n = J(1,4,.)
 
 	//assign variable names for use in the tables
-la var ip_paid_by_mc_1yr_wi "Inpatient"
-la var snf_paid_by_mc_1yr_wi "SNF"
-la var hh_paid_by_mc_1yr_wi "Home health" 
-la var hs_paid_by_mc_1yr_wi "Hospice" 
-la var pb_paid_by_mc_1yr_wi "Carrier"
-la var op_paid_by_mc_1yr_wi "Outpatient" 
-la var dm_paid_by_mc_1yr_wi "DME"
-la var tot_paid_by_mc_1yr_wi "Total"	
+la var ip_paid_by_mc_12m_wi "Inpatient"
+la var snf_paid_by_mc_12m_wi "SNF"
+la var hh_paid_by_mc_12m_wi "Home health" 
+la var hs_paid_by_mc_12m_wi "Hospice" 
+la var pb_paid_by_mc_12m_wi "Carrier"
+la var op_paid_by_mc_12m_wi "Outpatient" 
+la var dm_paid_by_mc_12m_wi "DME"
+la var tot_paid_by_mc_12m_wi "Total"	
 	
 label var age_at_core "Age, mean (SD)"
 label var networth_adj2010 "Net worth, mean (SD)"
@@ -9937,22 +10038,22 @@ local outcome1 core_to_dod_1yr hs_admit_p12m ind_em_ur_adm_p12m
 
 local outcome3 n_hospd_p12m
 
-local outcome2 ip_paid_by_mc_1yr_wi snf_paid_by_mc_1yr_wi hh_paid_by_mc_1yr_wi hs_paid_by_mc_1yr_wi ///
-pb_paid_by_mc_1yr_wi op_paid_by_mc_1yr_wi dm_paid_by_mc_1yr_wi tot_paid_by_mc_1yr_wi
+local outcome2 ip_paid_by_mc_12m_wi snf_paid_by_mc_12m_wi hh_paid_by_mc_12m_wi hs_paid_by_mc_12m_wi ///
+pb_paid_by_mc_12m_wi op_paid_by_mc_12m_wi dm_paid_by_mc_12m_wi tot_paid_by_mc_12m_wi
 
 la var core_to_dod_1yr "Died, n (%)"
 la var hs_admit_p12m "Enrolled in hospice, n (%)"
 la var ind_em_ur_adm_p12m "Hospital admission, n (%)"
 la var n_hospd_p12m "Hospital nights, mean (sd)"
 
-la var ip_paid_by_mc_1yr_wi "Inpatient"
-la var snf_paid_by_mc_1yr_wi "SNF"
-la var hh_paid_by_mc_1yr_wi "Home health" 
-la var hs_paid_by_mc_1yr_wi "Hospice" 
-la var pb_paid_by_mc_1yr_wi "Carrier"
-la var op_paid_by_mc_1yr_wi "Outpatient" 
-la var dm_paid_by_mc_1yr_wi "DME"
-la var tot_paid_by_mc_1yr_wi "Total"
+la var ip_paid_by_mc_12m_wi "Inpatient"
+la var snf_paid_by_mc_12m_wi "SNF"
+la var hh_paid_by_mc_12m_wi "Home health" 
+la var hs_paid_by_mc_12m_wi "Hospice" 
+la var pb_paid_by_mc_12m_wi "Carrier"
+la var op_paid_by_mc_12m_wi "Outpatient" 
+la var dm_paid_by_mc_12m_wi "DME"
+la var tot_paid_by_mc_12m_wi "Total"
 
 mat table2_n=J(1,4,.)
 //row of n for each category
@@ -10627,7 +10728,6 @@ where first meet criteria*/
 capture log close
 
 clear all
-set mem 500m
 set more off
 
 local logpath E:\data\serious_ill\logs
@@ -10643,7 +10743,7 @@ use n0_n1_p1_p2_x_criteria_a_v1.dta if core_year_n0<2010
 sum n_hospd_p12m_n0, detail
 histogram n_hospd_p12m_n0, freq
 
-sum tot_paid_by_mc_1yr_wi_n0, detail
+sum tot_paid_by_mc_12m_wi_n0, detail
 
 gen int hospd = min(n_hospd_p12m_n0,30)
 sum hospd, detail  
@@ -10657,7 +10757,7 @@ ytitle(percent)
 
 restore
 
-kdensity tot_paid_by_mc_1yr_wi_n0 if tot_paid_by_mc_1yr_wi_n0<400000, ///
+kdensity tot_paid_by_mc_12m_wi_n0 if tot_paid_by_mc_12m_wi_n0<400000, ///
 ytitle(density) subtitle("Density of Medicare payments, 1 year after meeting Criteria A")
 
 ****************************************************************
@@ -10670,7 +10770,6 @@ H="Initial try of fmm model for costs and hosp"
 capture log close
 
 clear all
-set mem 500m
 set more off
 
 local logpath E:\data\serious_ill\logs
@@ -10685,7 +10784,7 @@ cd `datapath'
 use n0_n1_p1_p2_x_criteria_a_v1.dta if core_year_n0<2010
 ***************************************************************
 la var n_hospd_p12m_n0 "Hospital nights"
-la var tot_paid_by_mc_1yr_wi_n0 "Total MC spending"
+la var tot_paid_by_mc_12m_wi_n0 "Total MC spending"
 
 gen hs_deg = 0 if educ_level_hs!=.
 replace hs_deg = 1 if educ_level_hs==1 | educ_level_somcol==1 | educ_level_col==1
@@ -10718,8 +10817,8 @@ sum n_hospd_p12m_n0, detail
 histogram n_hospd_p12m_n0, freq
 graph save `logpath'\hospd_a_hist, replace
 
-sum tot_paid_by_mc_1yr_wi_n0, detail
-kdensity tot_paid_by_mc_1yr_wi_n0 , ///
+sum tot_paid_by_mc_12m_wi_n0, detail
+kdensity tot_paid_by_mc_12m_wi_n0, ///
 ytitle(density) subtitle("Density of Medicare payments, 1 year after Criteria A interview")
 graph save `logpath'\mc_paid_a_kdensity, replace
 
@@ -10781,13 +10880,13 @@ note("{&pi}{sub:1}=`:di %4.2f `=`e(pi1_est)''', {&pi}{sub:2}=`:di %4.2f `=`e(pi2
 */
 ***************************************************************
 //looking at costs
-sum tot_paid_by_mc_1yr_wi_n0, detail
-glm tot_paid_by_mc_1yr_wi_n0 `cvars' `ivars', family(gamma) vce(robust)
+sum tot_paid_by_mc_12m_wi_n0, detail
+glm tot_paid_by_mc_12m_wi_n0 `cvars' `ivars', family(gamma) vce(robust)
 glm , eform
 
 //2 comp fmm
 ** does not run, get error that initial values are not feasible
-//fmm tot_paid_by_mc_1yr_wi_n0 `cvars' `ivars', components(2) ///
+//fmm tot_paid_by_mc_12m_wi_n0 `cvars' `ivars', components(2) ///
 //	mixtureof(gamma) search(on) diff vce(robust)
 	
 	
@@ -10803,7 +10902,6 @@ saves estimates from hospital nights 2 and 3 component fmm models*/
 
 capture log close
 clear all
-set mem 500m
 set more off
 
 local logpath E:\data\serious_ill\logs
@@ -10897,9 +10995,9 @@ drop if `v'==.
 //now look at outcomes for the sample to be used for fmm
 ***************************************************************
 //look at distribution of total medicare payments
-sum tot_paid_by_mc_1yr_wi_n0 , detail
+sum tot_paid_by_mc_12m_wi_n0 , detail
 
-kdensity tot_paid_by_mc_1yr_wi_n0 , ///
+kdensity tot_paid_by_mc_12m_wi_n0 , ///
 ytitle(density) subtitle("Density of Medicare payments, 1 year after 2008 core interview")
 graph save `logpath'\mc_paid_kdensity, replace
 
@@ -10920,12 +11018,12 @@ local da_quint d_eol_spend_quint1 d_eol_spend_quint2 d_eol_spend_quint3 ///
 d_eol_spend_quint4
 
 //total medicare payments - run base glm model
-glm tot_paid_by_mc_1yr_wi_n0 `cvars' `ivars' `da_quint', family(gamma) vce(robust)
+glm tot_paid_by_mc_12m_wi_n0 `cvars' `ivars' `da_quint', family(gamma) vce(robust)
 glm , eform
 
 //2 comp fmm
 ** does not run, get error that initial values are not feasible
-//fmm tot_paid_by_mc_1yr_wi_n0 `cvars' `ivars', components(2) ///
+//fmm tot_paid_by_mc_12m_wi_n0 `cvars' `ivars', components(2) ///
 //	mixtureof(gamma) search(on) diff vce(robust)
 
 ********************************************************************
@@ -10954,7 +11052,6 @@ for the 2008 sample in the previous section*/
 
 capture log close
 clear all
-set mem 500m
 set more off
 
 local logpath E:\data\serious_ill\logs

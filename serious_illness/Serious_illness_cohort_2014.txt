@@ -11303,7 +11303,7 @@ sca cal_ps=r(sd)*0.02
 sca list cal_ps
 
 //rule of thumb 0.2*sd, we can use 0.02*sd
-psmatch2 core_to_dod_1yr_n0,outcome(tot_paid_by_mc_1yr_wi_n0) ///
+psmatch2 core_to_dod_1yr_n0,outcome(tot_paid_by_mc_6m_wi_n0) ///
 	pscore(m1y_pscore) radius caliper(.02181806) logit
 
 //graph including off common support information
@@ -11354,7 +11354,234 @@ histogram core_to_death_n0 if core_to_dod_1yr_n0==1
 
 gen core_to_dod_1_2yr_n0=1 if core_to_death_n0<2 & core_to_death_n0>=1
 tab core_to_dod_1_2yr_n0, missing
+******************************************************************
+//save the dataset
+rename _weight ps_weight
+rename _suppor ps_common_support
+
+save n0_n1_p1_p2_x_criteria_a_v1_psmatch.dta, replace
 
 
 ******************************************************************
+log close
+
+
+H="Univariate and glm for psmatched sample"
+/*using propensity score matched sample on mortality
+from previous section, look at outcomes for
+group that meets criteria a
+*/
+
+capture log close
+
+clear all
+set more off
+
+local logpath E:\data\serious_ill\logs
+local datapath E:\data\serious_ill\final_data
+
+log using "`logpath'\21_ps_matched_outcomes1_crit_a.txt", text replace
+
+cd `datapath'
+
+use n0_n1_p1_p2_x_criteria_a_v1_psmatch.dta
+***************************************************************
+//look at those that died 1st 6 months, their utilization is truncated
+tab core_to_dod_6m_n0 core_to_dod_1yr_n0, missing
+
+***************************************************************
+//table 1 compare pre-post matched samples
+//on covariates used in matching
+
+***************************************************************
+//table 2 look at 6m outcomes pre-post matched samples
+//show pvalues since looking at outcomes??
+
+la var core_to_dod_1yr_n0 "Died, n (%)"
+la var hs_admit_p6m_n0 "Enrolled in hospice, n (%)"
+la var ind_em_ur_adm_p6m_n0 "Hospital admission, n (%)"
+la var n_hospd_p6m_n0 "Hospital nights, mean (sd)"
+
+la var ip_paid_by_mc_6m_wi_n0 "Inpatient"
+la var snf_paid_by_mc_6m_wi_n0 "SNF"
+la var hh_paid_by_mc_6m_wi_n0 "Home health" 
+la var hs_paid_by_mc_6m_wi_n0 "Hospice" 
+la var pb_paid_by_mc_6m_wi_n0 "Carrier"
+la var op_paid_by_mc_6m_wi_n0 "Outpatient" 
+la var dm_paid_by_mc_6m_wi_n0 "DME"
+la var tot_paid_by_mc_6m_wi_n0 "Total Medicare payments"
+
+local ivars ind_em_ur_adm_p6m_n0
+
+local cvars n_hospd_p6m_n0 tot_paid_by_mc_6m_wi_n0 ip_paid_by_mc_6m_wi_n0 ///
+snf_paid_by_mc_6m_wi_n0 hh_paid_by_mc_6m_wi_n0 hs_paid_by_mc_6m_wi_n0 ///
+pb_paid_by_mc_6m_wi_n0 op_paid_by_mc_6m_wi_n0 dm_paid_by_mc_6m_wi_n0
+
+//columns 1,2, before matching, 6m outcomes those that died vs didn't
+mat t2=J(1,6,.)
+foreach v in `ivars' { //indicator variables
+local c=1
+	foreach i in 1 0{
+		sum `v' if core_to_dod_1yr_n0==`i'
+		mat t2[1,`c']=r(mean)*r(N) //n
+		mat t2[1,`c'+1]=r(mean)*100 //percent
+		local c = `c'+2
+	}
+	tab `v' core_to_dod_1yr_n0, chi2 //p-values
+	mat t2[1,5]=r(p)
+	
+	mat rownames t2=`v'
+	frmttable, statmat(t2) varlabels sdec(0,0,3\2,2,2) substat(1) store(t2_1)
+	
+	outreg, replay(t2_2) append(t2_1) store(t2_2)
+}
+
+foreach v in `cvars' { //continuous variables
+local c=1
+	foreach i in 1 0{
+		sum `v' if core_to_dod_1yr_n0==`i'
+		mat t2[1,`c']=r(mean) //mean
+		mat t2[1,`c'+1]=r(sd) //sd
+		local c = `c'+2
+	}
+	ttest `v', by(core_to_dod_1yr_n0) //p-values
+	mat t2[1,5]=r(p)
+	
+	mat rownames t2=`v'
+	frmttable, statmat(t2) varlabels sdec(0,0,3\0,0,0) substat(1) store(t2_1)
+	
+	outreg, replay(t2_2) append(t2_1) store(t2_2)
+}
+
+//last row, n for each group
+mat t2_n=J(1,2,.)
+tab core_to_dod_1yr_n0, matcell(t2n)
+mat t2_n[1,1]=t2n[2,1]
+mat t2_n[1,2]=t2n[1,1]
+mat rownames t2_n="N"
+frmttable, statmat(t2_n) store(t2_n) sdec(0)
+
+outreg, replay(t2_2) append(t2_n) store(t2_3) ///
+title("Criteria A Utilization Outcomes, by 1 year Mortality") ///
+ctitles("","Died 1 year","Alive 1 year","p-value") ///
+note("Utilization for 6 months after interview" \ ///
+"Sample limited to survey respondents first interview that meet Criteria A:" \ ///
+"at least one serious medical illness and/or ADL impairment" \ ///
+"Medicare spending in 2010$, wage index adjusted.")
+
+//now columns using propensity score matched sample
+mat t2=J(1,6,.)
+foreach v in `ivars' { //indicator variables
+local c=1
+	foreach i in 1 0{
+		sum `v' if core_to_dod_1yr_n0==`i' [iweight=ps_weight]
+		mat t2[1,`c']=r(mean)*r(N) //n
+		mat t2[1,`c'+1]=r(mean)*100 //percent
+		local c = `c'+2
+	}
+	logit core_to_dod_1yr_n0 `v' [iweight=ps_weight] //p-values
+	test `v'
+	mat t2[1,5]=r(p)
+	
+	mat rownames t2=`v'
+	frmttable, statmat(t2) varlabels sdec(0,0,3\2,2,2) substat(1) store(t2m_1)
+	
+	outreg, replay(t2m_2) append(t2m_1) store(t2m_2)
+}
+
+foreach v in `cvars' { //continuous variables
+local c=1
+	foreach i in 1 0{
+		sum `v' if core_to_dod_1yr_n0==`i' [iweight=ps_weight]
+		mat t2[1,`c']=r(mean) //mean
+		mat t2[1,`c'+1]=r(sd) //sd
+		local c = `c'+2
+	}
+	logit core_to_dod_1yr_n0 `v' [iweight=ps_weight] //p-values
+	test `v'
+	mat t2[1,5]=r(p)
+	
+	mat rownames t2=`v'
+	frmttable, statmat(t2) varlabels sdec(0,0,3\0,0,0) substat(1) store(t2m_1)
+	
+	outreg, replay(t2m_2) append(t2m_1) store(t2m_2)
+}
+
+//last row, n for each group
+mat t2_n=J(1,2,.)
+tab core_to_dod_1yr_n0 if ps_weight~=., matcell(t2n)
+mat t2_n[1,1]=t2n[2,1]
+mat t2_n[1,2]=t2n[1,1]
+mat rownames t2_n="N"
+frmttable, statmat(t2_n) store(t2_n) sdec(0)
+
+outreg, replay(t2m_2) append(t2_n) store(t2m_3) 
+
+outreg using `logpath'/21_ps_matched_outcomes, replace replay(t2_3) merge(t2m_3) ///
+title("Criteria A Utilization Outcomes, by 1 year Mortality" \ ///
+"Comparing unmatched and matched samples") ///
+ctitles("","Raw sample","","","Matched sample","","" \  ///
+"","Died 1 year","Alive 1 year","p-value","Died 1 year","Alive 1 year","p-value") ///
+note("Utilization for 6 months after interview" \ ///
+"Sample limited to survey respondents first interview that meet Criteria A:" \ ///
+"at least one serious medical illness and/or ADL impairment" \ ///
+"Matched sample is propensity score matched for risk of mortality at 1 year" \ ///
+"Medicare spending in 2010$, wage index adjusted." \ ///
+"P-values for continuous variables from t-test, for binary variables from chi-squared statistic")
+***************************************************************
+//multivariate analysis, ps-matched sample using glm model
+gen relig_vimp_n0=1 if imprelig_n0==1
+replace relig_vimp_n0=0 if inlist(imprelig_n0,2,3,4)
+tab relig_vimp_n0 imprelig_n0, missing
+
+sum networth_adj2010_n0, detail
+replace networth_adj2010_n0=networth_adj2010_n0/10000
+
+local matchvars age_at_core_n0 female_n0 re_white married_n0 networth_adj2010_n0 ///loca
+hs_deg adl_impair_core_n0 smi_dem_ind_n0 smi_cancer_ind_n0 smi_esrd_ind_n0 ///
+smi_chf_ind_n0 smi_copd_ind_n0 smi_diab_compl_ind_n0 ///
+smi_liver_ind_n0  smi_hip_ind_n0 srh_pf_n0 
+
+local addvars nhres_n0 rel_nb_n0 relig_vimp_n0 medicaid_n0 champus_n0 ///
+medigap_n0 hospital_care_intensity_n0 hospital_beds_n0 specialists_n0
+
+la var networth_adj2010_n0 "Net worth /$10,000"
+la var adl_impair_core_n0 "ADL Impairment"
+la var smi_dem_ind_n0 "Dementia"
+la var smi_cancer_ind_n0 "Metastatic Cancer"
+la var smi_esrd_ind_n0 "End stage renal disease" 
+la var smi_chf_ind_n0 "CHF with hospitalization" 
+la var smi_copd_ind_n0 "COPD" 
+la var smi_diab_compl_ind_n0 "Diabetes with complications"
+la var smi_liver_ind_n0 "Advanced liver disease"
+la var smi_hip_ind_n0 "Hip fracture"
+la var relig_vimp_n0 "Religion very important"
+la var hospital_care_intensity_n0 "Hospital care intensity index, HRR"
+la var hospital_beds_n0 "Hospital beds/1000 residents, HRR"
+la var specialists_n0 "Specialists /100,000 residents, HRR"
+
+//glm outcome=spending
+glm tot_paid_by_mc_6m_wi_n0 `matchvars' `addvars' [iweight=ps_weight], ///
+	fam(gamma) link(log)
+	
+glm, eform
+
+outreg , stats(e_b e_ci) store(tab3) varlabels ///
+title("Criteria A 6 month utilization, GLM regression" \ ///
+"using sample propensity score matched on 1 year mortality") ///
+ctitle("","Total Medicare spending") ///
+note("6 month Medicare spending for those R's that meet Criteria A" \ ///
+"Generalized linear model. For Medicare Costs: gamma distribution and log link" \ ///
+"For hospital nights: Poisson distribution, log link" \ ///
+"Exponentiated coefficents (rate ratios) and 95% confidence intervals reported.")
+
+//glm outcome=hospital nights
+glm n_hospd_p6m_n0 `matchvars' `addvars' [iweight=ps_weight], ///
+	fam(poisson) link(log)
+outreg using `logpath'/21_ps_matched_outcomes, addtable varlabels ///
+stats(e_b e_ci) merge(tab3) ///
+ctitle("","Hospital nights")
+
+***************************************************************
+
 log close

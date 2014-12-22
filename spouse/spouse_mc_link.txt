@@ -229,7 +229,27 @@ if indexc(buyin_12m,"0","1","2","A","B")=0 then part_ab_12m=1;
 end;
 if length(hmo_12m)=12 then do;
 if index(hmo_12m,"000000000000") then hmo_d_12m=0;
-if index(hmo_12m,"00000000000")=0 then hmo_d_12m=1;
+if index(hmo_12m,"000000000000")=0 then hmo_d_12m=1;
+end;
+
+/*create 18 month variables*/
+if length(buyin_2y_r)>17 then buyin_18m_r=substr(trim(left(buyin_2y_r)),1,18);
+if length(hmo_2y_r)>17 then hmo_18m_r=substr(trim(left(hmo_2y_r)),1,18);
+
+if length(buyin_2y_r)<18 then buyin_18m_r="";
+if length(hmo_2y_r)<18 then hmo_18m_r="";
+
+buyin_18m=reverse(trim(buyin_18m_r));
+hmo_18m=reverse(trim(hmo_18m_r));
+
+/*create indicator variable for mc coverage 18 mo. 0=no, 1=yes*/
+if length(buyin_18m)=18 then do;
+if indexc(buyin_18m,"0","1","2","A","B") then part_ab_18m=0;
+if indexc(buyin_18m,"0","1","2","A","B")=0 then part_ab_18m=1;
+end;
+if length(hmo_18m)=18 then do;
+if index(hmo_18m,"000000000000000000") then hmo_d_18m=0;
+if index(hmo_18m,"000000000000000000")=0 then hmo_d_18m=1;
 end;
 
 /*create 24 month variables*/
@@ -258,16 +278,17 @@ label part_ab_6m = "S MC Parts A and B 6m pre R's death";
 label hmo_d_6m = "S HMO 6m pre R's death";
 label part_ab_12m = "S MC Parts A and B 12m pre R's death";
 label hmo_d_12m = "S HMO 12m pre R's death";
+label part_ab_18m = "S MC Parts A and B 18m pre R's death";
+label hmo_d_18m = "S HMO 18m pre R's death";
 label part_ab_24m = "S MC Parts A and B 24m pre R's death";
 label hmo_d_24m = "S HMO 24m pre R's death";
-
 
 run;
 
 /*36 observations don't have full denominator data re insurance status
 either died Before July 2000 or are missing year -1 dn file*/
 proc freq;
-table part_ab_6m*hmo_d_6m part_ab_12m*hmo_d_12m part_ab_24m*hmo_d_24m;
+table part_ab_6m*hmo_d_6m part_ab_12m*hmo_d_12m part_ab_18m*hmo_d_18m part_ab_24m*hmo_d_24m;
 run;
 
 data zzzztest;
@@ -324,6 +345,7 @@ create table spo_mc_i.r_sp_ins as select
 a.*, b.r_dod_hrs_claims , b.r_dod_use_claims , 
 b.part_ab_6m as s_part_ab_6m , b.hmo_d_6m as s_hmo_d_6m , 
 b.part_ab_12m as s_part_ab_12m , b.hmo_d_12m as s_hmo_d_12m ,
+b.part_ab_18m as s_part_ab_18m , b.hmo_d_18m as s_hmo_d_18m ,
 b.part_ab_24m as s_part_ab_24m , b.hmo_d_24m as s_hmo_d_24m ,
 b.s_claims_dob, b.s_claims_dod
 from 
@@ -333,7 +355,8 @@ on a.r_id=b.r_id;
 quit;
 
 proc freq;
-table s_part_ab_6m*s_hmo_d_6m s_part_ab_12m*s_hmo_d_12m s_part_ab_24m*s_hmo_d_24m;
+table s_part_ab_6m*s_hmo_d_6m s_part_ab_12m*s_hmo_d_12m 
+	s_part_ab_18m*s_hmo_d_18m s_part_ab_24m*s_hmo_d_24m;
 run;
 
 
@@ -3084,7 +3107,7 @@ sum hrrnum, detail
 local mcsp s_tot_paid_by_mc_ s_ip_paid_by_mc_ s_snf_paid_by_mc_ s_op_paid_by_mc_ ///
 s_pb_paid_by_mc_ s_hh_paid_by_mc_ s_hs_paid_by_mc_ s_dm_paid_by_mc_
 
-foreach t in 6m 12m 18m 24m p6m p12m p24m p24m{
+foreach t in 6m 12m 18m 24m p6m p12m p18m p24m{
 foreach v in `mcsp'{
 	gen `v'wi_`t'=`v'`t'/wage_index_20102
 	sum `v'wi_`t', detail
@@ -3171,10 +3194,12 @@ la var r_s_dm_paid_by_mc_wi_`t' "R&S WI Adj DME MC spend `t' before R's death"
 //set sample variables
 gen sample_n6m = 1 if s_part_ab_6m==1 & s_hmo_d_6m==0
 gen sample_n12m = 1 if s_part_ab_12m==1 & s_hmo_d_12m==0
+gen sample_n18m = 1 if s_part_ab_18m==1 & s_hmo_d_18m==0
 gen sample_n24m = 1 if s_part_ab_24m==1 & s_hmo_d_24m==0
 
 la var sample_n6m "S FFS MC 6m pre R's death 1=yes"
 la var sample_n12m "S FFS MC 12m pre R's death 1=yes"
+la var sample_n18m "S FFS MC 18m pre R's death 1=yes"
 la var sample_n24m "S FFS MC 24m pre R's death 1=yes"
 
 //count of chronic conditions in each time period
@@ -3228,20 +3253,24 @@ tab s_r_dod_diff if s_r_dod_diff<0 & sample_n6m==1
 **in this sample where S has ffs mc 6m pre R's death, its just n=1 with this problem
 **need to look into this further, for now, assign as died w/i 6m
 
-//S died within 6, 12, 24m of R's death
+//S died within 6, 12, 18, 24m of R's death
 gen s_died_p6m=0
 replace s_died_p6m=1 if s_r_dod_diff<183 & s_r_dod_diff~=.
 gen s_died_p12m=0
 replace s_died_p12m=1 if s_r_dod_diff<365 & s_r_dod_diff~=.
+gen s_died_p18m=0
+replace s_died_p18m=1 if s_r_dod_diff<548 & s_r_dod_diff~=.
 gen s_died_p24m=0
 replace s_died_p24m=1 if s_r_dod_diff<730 & s_r_dod_diff~=.
 
 la var s_died_p6m "S died within 6m of R's death"
 la var s_died_p12m "S died within 12m of R's death"
+la var s_died_p18m "S died within 18m of R's death"
 la var s_died_p24m "S died within 24m of R's death"
 
 tab s_died_p6m, missing
 tab s_died_p12m, missing
+tab s_died_p18m, missing
 tab s_died_p24m, missing
 
 *******************************************
@@ -3269,7 +3298,7 @@ tab hs_los_12m r_hs_12m_gt3d , missing
 
 //create indicator variables for S any hospitalization, hosp due to mental illness,
 //ICU use, and ED use
-foreach t in 6m 12m 24m p6m p12m p24m{
+foreach t in 6m 12m 18m 24m p6m p12m p18m p24m{
 	gen s_icu_ind_`t'=1 if s_icu_days_`t'>0 & s_icu_days_`t'!=.
 	replace s_icu_ind_`t'=0 if s_icu_days_`t'==0
 	la var s_icu_ind_`t' "S Any ICU use `t'"
@@ -3293,6 +3322,39 @@ foreach t in 6m 12m 24m p6m p12m p24m{
 	replace s_admit_mental_ill_ind_`t'=0 if s_n_mental_ill_ip_`t'==0
 	la var s_admit_mental_ill_ind_`t' "S Any mental illness hospital admit `t'"
 }
+
+**************************************************************************
+//create variables for s spending, utilization in 6-12m, 12m-18m, 18m-24m windows
+//for plotting spending over time
+
+foreach v in s_tot_paid_by_mc_wi_ s_ip_paid_by_mc_wi_ s_op_paid_by_mc_wi_ s_n_ip_admit_ s_n_hospd_ s_n_op_visits_{
+	gen `v'6m12m = `v'12m-`v'6m
+	gen `v'12m18m = `v'18m-`v'12m
+	gen `v'18m24m = `v'24m-`v'18m
+
+	gen `v'p6mp12m = `v'p12m-`v'p6m
+	gen `v'p12mp18m = `v'p18m-`v'p12m
+	gen `v'p18mp24m = `v'p24m-`v'p18m
+	}
+
+foreach t in 6m12m 12m18m 18m24m{
+la var s_tot_paid_by_mc_wi_`t' "S Total MC payments `t' before R's death" 
+la var s_ip_paid_by_mc_wi_`t' "S IP MC payments `t' before R's death" 
+la var s_op_paid_by_mc_wi_`t' "S OP MC payments `t' before R's death" 
+la var s_n_ip_admit_`t' "S Hospital admissions `t' before R's death" 
+la var s_n_hospd_`t' "S Hospital nights `t' before R's death" 
+la var s_n_op_visits_`t' "S OP visits `t' before R's death" 
+}
+
+foreach t in p6mp12m p12mp18m p18mp24m{
+la var s_tot_paid_by_mc_wi_`t' "S Total MC payments `t' after R's death" 
+la var s_ip_paid_by_mc_wi_`t' "S IP MC payments `t' after R's death" 
+la var s_op_paid_by_mc_wi_`t' "S OP MC payments `t' after R's death" 
+la var s_n_ip_admit_`t' "S Hospital admissions `t' after R's death" 
+la var s_n_hospd_`t' "S Hospital nights `t' after R's death" 
+la var s_n_op_visits_`t' "S OP visits `t' after R's death" 
+}
+
 ************************************************************
 //label / rename some R claims derived variables to make it clear
 //what they are and that they apply to R and not S
@@ -3393,6 +3455,7 @@ tab r_part_ab_6m r_hmo_d_6m, missing
 //samples for looking at CC's after R's death just require FFS MC for S 6m pre-death
 gen sample_p6m = 1
 gen sample_p12m = 1
+gen sample_p18m = 1
 gen sample_p24m = 1
 
 local cclist s_cc_ami_isch_ s_cc_alzheim_ s_cc_4_atrialfb_ s_cc_6_chrnkidn_ ///
@@ -3448,32 +3511,32 @@ outreg using `logpath'/3_Spouse_sample_char, addtable ///
 *********************************************************
 //tables of S Medicare spending
 //label medicare payments variables
-foreach t in 6m 12m 24m p6m p12m p24m{
+foreach t in 6m 12m 18m 24m p6m p12m p18m p24m{
 la var  s_tot_paid_by_mc_wi_`t' "S Total Medicare Payments, all types"
 }
-foreach t in 6m 12m 24m p6m p12m p24m{
+foreach t in 6m 12m 18m 24m p6m p12m p18m p24m{
 la var  s_ip_paid_by_mc_wi_`t' "S Inpatient"
 }
-foreach t in 6m 12m 24m p6m p12m p24m{
+foreach t in 6m 12m 18m 24m p6m p12m p18m p24m{
 la var  s_snf_paid_by_mc_wi_`t' "S Skilled Nursing Facility"
 }
-foreach t in 6m 12m 24m p6m p12m p24m{
+foreach t in 6m 12m 18m 24m p6m p12m p18m p24m{
 la var  s_op_paid_by_mc_wi_`t' "S Outpatient"
 }
-foreach t in 6m 12m 24m p6m p12m p24m{
+foreach t in 6m 12m 18m 24m p6m p12m p18m p24m{
 la var  s_pb_paid_by_mc_wi_`t' "S Carrier"
 }
-foreach t in 6m 12m 24m p6m p12m p24m{
+foreach t in 6m 12m 18m 24m p6m p12m p18m p24m{
 la var  s_hh_paid_by_mc_wi_`t' "S Home health"
 }
-foreach t in 6m 12m 24m p6m p12m p24m{
+foreach t in 6m 12m 18m 24m p6m p12m p18m p24m{
 la var  s_hs_paid_by_mc_wi_`t' "S Hospice"
 }
-foreach t in 6m 12m 24m p6m p12m p24m{
+foreach t in 6m 12m 18m 24m p6m p12m p18m p24m{
 la var  s_dm_paid_by_mc_wi_`t' "S Durable medical equipment"
 }
 
-foreach t in 6m 12m 24m {
+foreach t in 6m 12m 18m 24m {
 la var  r_tot_paid_by_mc_wi_`t' "R Total Medicare Payments, all types"
 la var  r_s_tot_paid_by_mc_wi_`t' "R&S Total Medicare Payments, all types"
 la var  r_ip_paid_by_mc_wi_`t' "R Inpatient"
@@ -3496,6 +3559,7 @@ la var  r_s_dm_paid_by_mc_wi_`t' "R&S Durable medical equipment"
 //sample variables with naming that matches the spending variable suffixes
 gen sample_6m = sample_n6m
 gen sample_12m = sample_n12m
+gen sample_18m = sample_n18m
 gen sample_24m = sample_n24m
 
 local mcsp s_tot_paid_by_mc_wi s_ip_paid_by_mc_wi s_snf_paid_by_mc_wi s_op_paid_by_mc_wi ///
@@ -3505,7 +3569,7 @@ mat mc=J(1,2,.)
 mat mc_n=J(1,1,.)
 //looking at periods before R's death, sample restriction by S FFS MC
 //then periods after R's death, same sample R&S have FFS MC 6m before death
-foreach t in 6m 12m 24m p6m p12m p24m{
+foreach t in 6m 12m 18m 24m p6m p12m p18m p24m{
 	foreach v in `mcsp'{
 		sum `v'_`t' if sample_`t'==1, detail
 		mat mc[1,1]=r(mean) //mean
@@ -3530,7 +3594,7 @@ r_s_tot_paid_by_mc_wi r_s_ip_paid_by_mc_wi r_s_snf_paid_by_mc_wi r_s_op_paid_by_
 r_s_pb_paid_by_mc_wi r_s_hh_paid_by_mc_wi r_s_hs_paid_by_mc_wi r_s_dm_paid_by_mc_wi
 
 mat mc_rs=J(1,2,.)
-foreach t in 6m 12m 24m{
+foreach t in 6m 12m 18m 24m{
 	foreach v in `mcsprs'{
 		sum `v'_`t' if sample_`t'==1, detail
 		mat mc_rs[1,1]=r(mean) //mean
@@ -3542,25 +3606,28 @@ foreach t in 6m 12m 24m{
 	}
 
 outreg, replay(tab_mc_6m) merge(tab_mc_12m) store(tab_mc1)
-outreg, replay(tab_mc1) merge(tab_mc_24m) store(tab_mc2) //s spending all combined
+outreg, replay(tab_mc1) merge(tab_mc_18m) store(tab_mc2)
+outreg, replay(tab_mc2) merge(tab_mc_24m) store(tab_mc3) //s spending all combined
 
-outreg, replay(tab_mc_rs_6m) merge(tab_mc_rs_12m) store(tab_mc3)
-outreg, replay(tab_mc3) merge(tab_mc_rs_24m) store(tab_mc4) //r&s combined
+outreg, replay(tab_mc_rs_6m) merge(tab_mc_rs_12m) store(tab_mc4)
+outreg, replay(tab_mc4) merge(tab_mc_rs_18m) store(tab_mc5)
+outreg, replay(tab_mc5) merge(tab_mc_rs_24m) store(tab_mc6) //r&s combined
 
 outreg using `logpath'/3_Spouse_sample_char, addtable ///
-	replay(tab_mc2) append(tab_mc4) ///
-	ctitles("", "6m", "", "12m", "", "24m", "" \ ///
-		"", "mean", "median", "mean", "median", "mean", "median") ///
+	replay(tab_mc3) append(tab_mc6) ///
+	ctitles("", "6m", "", "12m", "","18m","", "24m", "" \ ///
+		"", "mean", "median", "mean", "median","mean", "median", "mean", "median") ///
 	title("S & R Medicare Payments before R's death") ///
 	note("Sample limited to those S with FFS Medicare" \ ///
-	"6m, 12m, and 24m prior to R's death respectively." \ ///
+	"6m, 12m, 18m, and 24m prior to R's death respectively." \ ///
 	"Spending values are adjusted for inflation to 2010$ and for 2010 CMS wage index")
 
 outreg, replay(tab_mc_p6m) merge(tab_mc_p12m) store(tab_mc2)
+outreg, replay(tab_mc2) merge(tab_mc_p18m) store(tab_mc3)
 outreg using `logpath'/3_Spouse_sample_char, addtable ///
-	replay(tab_mc2) merge(tab_mc_p24m) ///
-	ctitles("", "6m", "", "12m", "", "24m", "" \ ///
-		"", "mean", "median", "mean", "median", "mean", "median") ///
+	replay(tab_mc3) merge(tab_mc_p24m) ///
+	ctitles("", "6m", "", "12m", "","18m","", "24m", "" \ ///
+		"", "mean", "median", "mean", "median", "mean", "median","mean", "median") ///
 	title("S Medicare Payments after R's death") ///
 	note("Sample limited to those S with FFS Medicare 6m prior" \ ///
 	"to R's death for all columns" \ ///
@@ -3568,7 +3635,7 @@ outreg using `logpath'/3_Spouse_sample_char, addtable ///
 
 *********************************************************
 //S utilization before/ after R's death
-foreach t in 6m 12m 24m p6m p12m p24m{
+foreach t in 6m 12m 18m 24m p6m p12m p18m p24m{
  la var s_n_ip_admit_`t' "Number hospitalizations, mean, sd"
  la var s_n_mental_ill_ip_`t' "Number hospital. due to mental illness, mean, sd"
  la var s_n_hospd_`t' "Hospital days, mean, sd"
@@ -3588,7 +3655,7 @@ local util_i_pre /*s_died_*/ s_admit_ind_ s_admit_mental_ill_ind_ s_icu_ind_ s_e
 mat out=J(1,2,.)
 mat out_n=J(1,1,.)
 //Table for before R's death (sample by FFS MC 6, 12 or 24m pre death
-foreach t in 6m 12m 24m{
+foreach t in 6m 12m 18m 24m{
 	foreach v in `util_i_pre'{ //indicator variables, report n, %
 		sum `v'`t' if sample_`t'==1
 		mat out[1,1]=r(mean)*r(N) //n
@@ -3615,21 +3682,22 @@ foreach t in 6m 12m 24m{
 }
 
 outreg, replay(tab_out_6m) merge(tab_out_12m) store(tab_out1)
+outreg, replay(tab_out1) merge(tab_out_18m) store(tab_out2)
 outreg using `logpath'/3_Spouse_sample_char, addtable ///
-	replay(tab_out1) merge(tab_out_24m) ///
-	ctitles("", "6m", "", "12m", "", "24m", "" \ ///
-		"", "N", "percent", "N", "percent", "N", "percent" \ ///
-		"", "mean", "sd", "mean", "sd", "mean", "sd") ///
+	replay(tab_out2) merge(tab_out_24m) ///
+	ctitles("", "6m", "", "12m", "","18m","", "24m", "" \ ///
+		"", "N", "percent", "N", "percent","N", "percent", "N", "percent" \ ///
+		"", "mean", "sd", "mean", "sd", "mean", "sd", "mean", "sd") ///
 	title("S Medicare utilization before R's death") ///
 	note("Sample limited to those S with FFS Medicare" \ ///
-	"6m, 12m, and 24m prior to R's death respectively.")
+	"6m, 12m, 18m, and 24m prior to R's death respectively.")
 
 local util_i s_died_ s_admit_ind_ s_admit_mental_ill_ind_ s_icu_ind_ s_ed_ind_
 
 mat out=J(1,2,.)
 mat out_n=J(1,1,.)
 //all periods after R's death, same sample R&S have FFS MC 6m before death
-foreach t in p6m p12m p24m{
+foreach t in p6m p12m p18m p24m{
 	label var s_died_`t' "S died, n, %"
 	foreach v in `util_i'{ //indicator variables, report n, %
 		sum `v'`t'
@@ -3657,11 +3725,12 @@ foreach t in p6m p12m p24m{
 }
 
 outreg, replay(tab_out_p6m) merge(tab_out_p12m) store(tab_out1)
+outreg, replay(tab_out1) merge(tab_out_p18m) store(tab_out2)
 outreg using `logpath'\3_Spouse_sample_char, addtable ///
-	replay(tab_out1) merge(tab_out_p24m) ///
-	ctitles("", "6m", "", "12m", "", "24m", "" \ ///
-		"", "N", "percent", "N", "percent", "N", "percent" \ ///
-		"", "mean", "sd", "mean", "sd", "mean", "sd") ///
+	replay(tab_out2) merge(tab_out_p24m) ///
+	ctitles("", "6m", "", "12m", "","18m","", "24m", "" \ ///
+		"", "N", "percent", "N", "percent", "N", "percent", "N", "percent" \ ///
+		"", "mean", "sd", "mean", "sd", "mean", "sd", "mean", "sd") ///
 	title("S Medicare utilization after R's death") ///
 	note("Sample limited to those S with FFS Medicare" \ ///
 	"6m prior to R's death.")
@@ -3669,6 +3738,199 @@ outreg using `logpath'\3_Spouse_sample_char, addtable ///
 
 
 *********************************************************
+log close
+
+
+H="Plot s spending/utilization over time"
+/*General data setup for the spouse dataset
+Limited to decedents with FFS MC 6m prior to death, married at time of death,
+with spouse mc id*/
+
+capture log close
+
+clear all
+set mem 500m
+set more off
+
+//Server file paths
+local logpath E:\data\spouse_claims\logs
+local projdatapath E:\data\spouse_claims\data\int_data
+
+log using `logpath'\3a-HRS_Spouse_claims_plot_util_over_time.txt, text replace
+
+cd `projdatapath'
+
+use spouse_claims_v1.dta if (s_part_ab_6m==1 & s_hmo_d_6m==0)
+*******************************************************************
+cd `logpath'\graphs\
+//look at S total mc spending over time, before and after r's death
+//preserve
+
+**User note - can change these to change sample criteria for plots
+//only plot for those dyads where the spouse is alive the full 24m post r's death
+keep if s_died_p24m==0
+//only plot for those dyads where S has FFS MC 24m pre R's death
+keep if sample_n24m==1
+
+keep s_id s_tot_paid_by_mc_wi_* s_ip_paid_by_mc_wi_* s_op_paid_by_mc_wi_* ///
+ s_n_ip_admit_* s_n_hospd_* s_n_op_visits_*
+
+//rename variables to have numerical suffixes for time periods
+capture program drop renamenum
+program define renamenum
+	args old new
+	
+	rename s_tot_paid_by_mc_wi_`old' s_tot_paid_by_mc_wi_`new'
+	rename s_ip_paid_by_mc_wi_`old' s_ip_paid_by_mc_wi_`new'
+	rename s_op_paid_by_mc_wi_`old' s_op_paid_by_mc_wi_`new' 
+	rename s_n_ip_admit_`old' s_n_ip_admit_`new'
+	rename s_n_hospd_`old' s_n_hospd_`new'
+	rename s_n_op_visits_`old' s_n_op_visits_`new'
+	end
+	
+renamenum 18m24m 1	
+renamenum 12m18m 2
+renamenum 6m12m 3
+renamenum 6m 4
+renamenum p6m 5	
+renamenum p6mp12m 6
+renamenum p12mp18m 7	
+renamenum p18mp24m 8	
+
+local varlist s_tot_paid_by_mc_wi_ s_ip_paid_by_mc_wi_ ///
+	s_op_paid_by_mc_wi_ s_n_ip_admit_ s_n_hospd_ s_n_op_visits_ 
+	
+reshape long `varlist' , ///
+	i(s_id) j(t)
+
+collapse (mean) `varlist' ///
+	(median) medtot_mc_pmt=s_tot_paid_by_mc_wi_ ///
+	med_ip_mc_pmt=s_ip_paid_by_mc_wi_ ///
+	med_op_mc_pmt=s_op_paid_by_mc_wi_ ///
+	med_ip_admit=s_n_ip_admit_ ///
+	med_ip_nights=s_n_hospd_ ///
+	med_op_visits=s_n_op_visits_ ///
+	, by(t)
+
+la def t 1 "18-24" 2 "12-18" 3"6-12" 4"0-6" 5"0-6" 6"6-12" 7"12-18" 8"18-24"
+la val t t
+
+*******************************************************************
+//Total Medicare payments, all claim types
+la var s_tot_paid_by_mc_wi_ "S Medicare payments (mean)"
+la var medtot_mc_pmt "S Medicare payments (median)"
+la var t "Months before/after spouse's death"
+graph twoway connected s_tot_paid_by_mc_wi_ t ///
+	|| lfit s_tot_paid_by_mc_wi_ t , ///
+	xline(4.5) xlabel(1 2 3 4 5 6 7 8, valuelabel) ///
+	subtitle("Surviving spouse's Medicare payments (all types)")
+graph save tot_mc_mean.gph, replace
+graph export tot_mc_mean.pdf, replace
+	
+graph twoway connected medtot_mc_pmt t ///
+	|| lfit medtot_mc_pmt t , ///
+	xline(4.5) xlabel(1 2 3 4 5 6 7 8, valuelabel) ///
+	subtitle("Surviving spouse's Medicare payments (all types)")
+graph save tot_mc_med.gph, replace
+graph export tot_mc_med.pdf, replace
+
+graph combine tot_mc_mean.gph tot_mc_med.gph, ///
+	note("Limited to spouses that survived to 24m post R's death, payments WI adjusted in 2010$")
+graph save tot_mc.gph, replace
+graph export tot_mc.pdf, replace
+
+*******************************************************************
+//Inpatient claims Medicare payments
+la var s_ip_paid_by_mc_wi_ "S Inpatient Medicare (mean)"
+la var med_ip_mc_pmt "S Inpatient Medicare (median)"
+graph twoway connected s_ip_paid_by_mc_wi_ t ///
+	|| lfit s_ip_paid_by_mc_wi_ t , ///
+	xline(4.5) xlabel(1 2 3 4 5 6 7 8, valuelabel) ///
+	subtitle("Surviving spouse's Inpatient Medicare payments ")
+graph save ip_mc_mean.gph, replace
+graph export ip_mc_mean.pdf, replace
+	
+graph twoway connected med_ip_mc_pmt t ///
+	|| lfit med_ip_mc_pmt t , ///
+	xline(4.5) xlabel(1 2 3 4 5 6 7 8, valuelabel) ///
+	subtitle("Surviving spouse's Inpatient Medicare payments ")
+graph save ip_mc_med.gph, replace
+graph export ip_mc_med.pdf, replace
+
+graph combine ip_mc_mean.gph ip_mc_med.gph, ///
+	note("Limited to spouses that survived to 24m post R's death, payments WI adjusted in 2010$")
+graph save ip_mc.gph, replace
+graph export ip_mc.pdf, replace
+
+*******************************************************************
+//Outpatient claims Medicare payments
+la var s_op_paid_by_mc_wi_ "S Outpatient Medicare (mean)"
+la var med_op_mc_pmt "S Outpatient Medicare (median)"
+graph twoway connected s_op_paid_by_mc_wi_ t ///
+	|| lfit s_op_paid_by_mc_wi_ t , ///
+	xline(4.5) xlabel(1 2 3 4 5 6 7 8, valuelabel) ///
+	subtitle("Surviving spouse's Outpatient Medicare payments ")
+graph save op_mc_mean.gph, replace
+graph export op_mc_mean.pdf, replace
+	
+graph twoway connected med_op_mc_pmt t ///
+	|| lfit med_op_mc_pmt t , ///
+	xline(4.5) xlabel(1 2 3 4 5 6 7 8, valuelabel) ///
+	subtitle("Surviving spouse's Outpatient Medicare payments ")
+graph save op_mc_med.gph, replace
+graph export op_mc_med.pdf, replace
+
+graph combine op_mc_mean.gph op_mc_med.gph, ///
+	note("Limited to spouses that survived to 24m post R's death, payments WI adjusted in 2010$")
+graph save op_mc.gph, replace
+graph export op_mc.pdf, replace
+
+*******************************************************************
+//Hospitalizations
+la var s_n_ip_admit_ "S Inpatient Admissions (mean)"
+la var med_ip_admit "S Inpatient Admissions (median)"
+graph twoway connected s_n_ip_admit_ t ///
+	|| lfit s_n_ip_admit_ t , ///
+	xline(4.5) xlabel(1 2 3 4 5 6 7 8, valuelabel) ///
+	subtitle("Surviving spouse's Hospital Admissions ")
+graph save n_admit_mean.gph, replace
+graph export n_admit_mean.pdf, replace
+	
+graph twoway connected med_ip_admit t ///
+	|| lfit med_ip_admit t , ///
+	xline(4.5) xlabel(1 2 3 4 5 6 7 8, valuelabel) ///
+	subtitle("Surviving spouse's Hospital Admissions ")
+graph save n_admit_med.gph, replace
+graph export n_admit_med.pdf, replace
+
+graph combine n_admit_mean.gph n_admit_med.gph, ///
+	note("Limited to spouses that survived to 24m post R's death, payments WI adjusted in 2010$")
+graph save n_admit.gph, replace
+graph export n_admit.pdf, replace
+
+*******************************************************************
+//Outpatient visits
+la var s_n_op_visits_ "S Outpatient Visits (mean)"
+la var med_op_visits "S Outpatient Visits (median)"
+graph twoway connected s_n_op_visits_ t ///
+	|| lfit s_n_op_visits_ t , ///
+	xline(4.5) xlabel(1 2 3 4 5 6 7 8, valuelabel) ///
+	subtitle("Surviving spouse's outpatient visits ")
+graph save n_op_vis_mean.gph, replace
+graph export n_op_vis_mean.pdf, replace
+	
+graph twoway connected med_op_visits t ///
+	|| lfit med_op_visits t , ///
+	xline(4.5) xlabel(1 2 3 4 5 6 7 8, valuelabel) ///
+	subtitle("Surviving spouse's outpatient visits ")
+graph save n_op_vis_med.gph, replace
+graph export n_op_vis_med.pdf, replace
+
+graph combine n_op_vis_mean.gph n_op_vis_med.gph, ///
+	note("Limited to spouses that survived to 24m post R's death, payments WI adjusted in 2010$")
+graph save n_op_vis.gph, replace
+graph export n_op_vis.pdf, replace
+*******************************************************************
 log close
 
 

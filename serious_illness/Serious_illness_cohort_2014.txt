@@ -793,6 +793,12 @@ proc freq;
 table xwalk_yes*core_year /missprint;
 run;
 
+/*export this dataset to Stata for a check of the demo differences
+R link to MC claims vs no*/
+proc export data=core_xwalk_1
+outfile="E:\data\serious_ill\int_data\core_xwalk_1.dta" replace;
+run;
+
 /*just get information needed to grab claims, drop rest of interview data
 So pulls all interviews for r's with the mc linkage
 91386 interviews have linkage*/
@@ -10613,16 +10619,115 @@ log using "`logpath'\11b_demo_check_MC_link.txt", text replace
 cd `datapath2'
 
 /*needs work, this datset doesn't have those observations without the mc xwalk
-need to find the one that makes the most sense to use!! */
-use ivws_crit_1.dta if core_year==2008 & age_ge_65==1
+need to find the one that makes the most sense to use!! 
 
-tab core_year, missing
+Dataset created in the "Process Claims Relative to Core Interview Date section*/
+use core_xwalk_1.dta 
 
-foreach c in smi a b c {
-tab criteria_`c', missing
+//backfill education from 2004 or earlier
+tab core_year educ,missing
+
+sort id core_year
+by id (core_year): carryforward educ , gen(educ1)
+
+tab core_year educ1, missing
+
+gen byte hseduc1=0 if educ1<=1
+replace hseduc1=1 if educ1>1  & educ1 <.
+tab hseduc1 if core_year==2008, missing
+
+keep if core_year==2008
+tab core_year, missing matcell(r1) //n with 2008 core
+
+tab age_ge_65, missing matcell(r2) //n 2008+age 65+
+
+//output n's to a table
+mat ntable=J(2,1,.)
+mat ntable[1,1]=r1[1,1]
+mat ntable[2,1]=r2[2,1]
+mat list ntable
+
+frmttable using `logpath'\11b_2008_demo_mc_link_check, statmat(ntable) ///
+title("2008 Core interviews") ///
+ctitle("","n") ///
+rtitle("2008 Core interviews" \ "Age 65+ at interview") ///
+sdec(0) replace
+
+tab xwalk_yes if age_ge_65==1, missing
+
+***********************************************************************
+//set up demo variables to use in table
+//create categorical variable for the race/ethnicity variables
+gen race_cat = .
+replace race_cat=1 if white==1
+replace race_cat=2 if black==1
+replace race_cat=4 if other_na_api_race==1
+replace race_cat=3 if hisp_eth==1
+la var race_cat "Race/ethnicity - categorical"
+la def race_cat 1 "White, non-Hispanic" 2 "Black" 3 "Hispanic" 4 "Other"
+la val race_cat race_cat
+tab race_cat race, missing
+
+tab married, missing
+
+***********************************************************************
+//table comparing demographic characteristics by allowing xwalk vs not
+mat demo=J(13,3,.)
+
+//first row, n of linked vs not linked sample
+tab xwalk_yes if age_ge_65==1, missing matcell(d1)
+mat demo[1,1]=d1[2,1] //non-linked n
+mat demo[1,2]=d1[1,1] //linked n
+
+mat list demo
+local j=1
+foreach i in 1 0 {
+sum age_at_core if xwalk_yes==`i' & age_ge_65==1, detail //age
+mat demo[2,`j']=r(mean)
+mat demo[3,`j']=r(sd)
+
+local r=4
+foreach v in female hseduc1 married white black hisp_eth other_na_api_race {
+sum `v' if xwalk_yes==`i' & age_ge_65==1, detail
+mat demo[`r',`j']=r(mean)
+local r=`r'+1 //rows 4-10
 }
 
-tab xwalk_yes, missing
+sum networth_adj2010 if xwalk_yes==`i' & age_ge_65==1, detail //age
+mat demo[11,`j']=r(mean)
+mat demo[12,`j']=r(p50)
+mat demo[13,`j']=r(sd)
+
+local j=`j'+1
+}
+
+//pvalues
+ttest age_at_core if age_ge_65==1, by(xwalk_yes)
+mat demo[2,3]=r(p) //p value from t-test
+local r=4
+foreach v in female hseduc1 married {
+tab `v' xwalk_yes if age_ge_65==1, row chi
+mat demo[`r',3]=r(p) //p value from chisq test
+local r = `r'+1 //rows 4-6
+}
+tab race_cat xwalk_yes if age_ge_65==1, row chi
+mat demo[7,3]=r(p) //p value from chisq test
+ttest networth_adj2010 if age_ge_65==1, by(xwalk_yes)
+mat demo[11,3]=r(p) //p value from t-test
+
+mat rownames demo="n" "Age, mean" "SD" "Female" "HS Degree" "Married c1" ///
+"Non-Hispanic White" "Black" "Hispanic" "Other" "Net worth, mean" "Median" "SD"
+
+mat list demo
+
+frmttable using `logpath'\11b_2008_demo_mc_link_check, statmat(demo) ///
+title("Mean comparison of those with Medicare linkage or not") ///
+ctitle("","With Medicare Link","No Medicare Link","P-value") ///
+note("P values from t tests for continuous variables and" \ ///
+"and chi squared statistics for categorical variables") ///
+sdec(2,2,3) addtable
+
+
 
 log close
 

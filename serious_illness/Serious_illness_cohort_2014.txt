@@ -10670,9 +10670,14 @@ tab race_cat race, missing
 
 tab married, missing
 
+tab medicaid,missing
+tab adl_independent_core,missing
+tab adl_partial_core,missing 
+tab adl_severe_core,missing
+tab adl_cat_core, missing
 ***********************************************************************
 //table comparing demographic characteristics by allowing xwalk vs not
-mat demo=J(13,3,.)
+mat demo=J(17,3,.)
 
 //first row, n of linked vs not linked sample
 tab xwalk_yes if age_ge_65==1, missing matcell(d1)
@@ -10698,6 +10703,13 @@ mat demo[11,`j']=r(mean)
 mat demo[12,`j']=r(p50)
 mat demo[13,`j']=r(sd)
 
+local r=14
+foreach v in medicaid adl_independent_core adl_partial_core adl_severe_core {
+sum `v' if xwalk_yes==`i' & age_ge_65==1, detail
+mat demo[`r',`j']=r(mean)
+local r=`r'+1 //rows 4-10
+}
+
 local j=`j'+1
 }
 
@@ -10715,8 +10727,15 @@ mat demo[7,3]=r(p) //p value from chisq test
 ttest networth_adj2010 if age_ge_65==1, by(xwalk_yes)
 mat demo[11,3]=r(p) //p value from t-test
 
-mat rownames demo="n" "Age, mean" "SD" "Female" "HS Degree" "Married c1" ///
-"Non-Hispanic White" "Black" "Hispanic" "Other" "Net worth, mean" "Median" "SD"
+tab medicaid xwalk_yes if age_ge_65==1, row chi
+mat demo[14,3]=r(p) //p value from chisq test
+
+tab adl_cat_core xwalk_yes if age_ge_65==1, row chi
+mat demo[15,3]=r(p) //p value from chisq test
+
+mat rownames demo="n" "Age, mean" "SD" "Female" "HS Degree" "Married" ///
+"Non-Hispanic White" "Black" "Hispanic" "Other" "Net worth, mean" "Median" "SD" ///
+"Medicaid, self-report" "ADL - Independent" "Partial dependence" "Severe dependence"
 
 mat list demo
 
@@ -10729,6 +10748,152 @@ sdec(2,2,3) addtable
 
 
 
+log close
+
+
+H="Check n0 p1 change in status by criteria"
+//looking at n0/p1 conflicts
+
+capture log close
+
+clear all
+set more off
+
+local logpath E:\data\serious_ill\logs
+log using `logpath'\11c_n0p1_check_log.txt, text replace
+
+cd E:\data\serious_ill\final_data
+/*
+use n0_n1_p1_p2_x_criteria_a_v1.dta if core_year_n0<2010,clear
+tab falls_hrs_n0, missing
+//start with cancer group n=126 that have yes in n0, no in p1
+tab smi_cancer_ind_n0 smi_cancer_ind_p1, missing
+
+//check elix
+tab comorb_17_0_1yr_n0 comorb_17_0_1yr_p1 if smi_cancer_ind_n0==1 & smi_cancer_ind_p1==0
+tab comorb_18_0_1yr_n0 comorb_18_0_1yr_p1 if smi_cancer_ind_n0==1 & smi_cancer_ind_p1==0
+tab comorb_19_0_1yr_n0 comorb_19_0_1yr_p1 if smi_cancer_ind_n0==1 & smi_cancer_ind_p1==0
+
+//check chronic conditions
+tab cc_cncr_chronic_1yr_n0 cc_cncr_chronic_1yr_p1 if smi_cancer_ind_n0==1 & smi_cancer_ind_p1==0
+
+gen cancer_cc_and_elix_p1=1 if comorb_17_0_1yr_p1==1 | comorb_18_0_1yr_p1==1 | comorb_19_0_1yr_p1==1 | cc_cncr_chronic_1yr_p1==1
+replace cancer_cc_and_elix_p1=0 if comorb_17_0_1yr_p1==0 & comorb_18_0_1yr_p1==0 & comorb_19_0_1yr_p1==0 & cc_cncr_chronic_1yr_p1==0
+
+tab cancer_cc_and_elix_p1 if smi_cancer_ind_n0==1 & smi_cancer_ind_p1==0
+
+*******************************************************************************
+//look at ADL change = impaired n0 but not in p1 n=383
+tab adl_impair_core_n0 adl_impair_core_p1, matcell(t1) missing
+
+**most had help with only one of the adl items in the n0 interview
+tab adl_index_core_n0 adl_index_core_p1 if adl_ind_core_n_n0==0 & adl_ind_core_n_p1==1, missing
+**had helper listed in the n0 interview but not in the p1 interview
+tab adl_help_ind_n0 adl_help_ind_p1 if adl_ind_core_n_n0==0 & adl_ind_core_n_p1==1, missing
+**hours per month help received, from helper file
+sum adl_hlp_freq_imp_mo_n0  if adl_ind_core_n_n0==0 & adl_ind_core_n_p1==1
+sum adl_hlp_freq_imp_mo_p1  if adl_ind_core_n_n0==0 & adl_ind_core_n_p1==1
+
+//self report nursing home
+tab nhres_n0 ind_snf_use_12m_n0 if adl_ind_core_n_n0==0 & adl_ind_core_n_p1==1, missing
+tab nhres_p1 ind_snf_use_12m_p1 if adl_ind_core_n_n0==0 & adl_ind_core_n_p1==1, missing
+
+//hospital admission
+**self report since last core interview
+tab hosp_last_2yr_n0 hosp_last_2yr_p1 if adl_ind_core_n_n0==0 & adl_ind_core_n_p1==1, missing
+**from claims
+tab ind_hosp_adm_12m_n0 ind_hosp_adm_12m_p1 if adl_ind_core_n_n0==0 & adl_ind_core_n_p1==1, missing
+
+//if adl difficulty reported, what happens to the changes??
+gen adl_diff_index_n0=adl_diff_dr_n0 + adl_diff_wk_n0 + adl_diff_bh_n0 + ///
+ adl_diff_e_n0 + adl_diff_tx_n0 + adl_diff_t_n0
+gen adl_diff_index_p1=adl_diff_dr_p1 + adl_diff_wk_p1 + adl_diff_bh_p1 + ///
+ adl_diff_e_p1 + adl_diff_tx_p1 + adl_diff_t_p1
+ 
+gen adl_diff_yes_n0=1 if adl_diff_index_n0>0 & adl_diff_index_n0~=.
+replace adl_diff_yes_n0=0 if adl_diff_index_n0==0
+gen adl_diff_yes_p1=1 if adl_diff_index_p1>0 & adl_diff_index_p1~=.
+replace adl_diff_yes_p1=0 if adl_diff_index_p1==0
+
+tab adl_diff_yes_n0 adl_diff_yes_p1 if adl_ind_core_n_n0==0 & adl_ind_core_n_p1==1, missing
+
+//do they have illness?
+tab ser_med_illness_n0 ser_med_illness_p1 if adl_ind_core_n_n0==0 & adl_ind_core_n_p1==1, missing
+// Why are some missing in p1??? - because they don't have the p1 interview
+tab xwalk_yes_p1 ser_med_illness_p1,missing
+tab ser_med_illness_p1 core_year_p1 if adl_ind_core_n_n0==0 & adl_ind_core_n_p1==1 ///
+& ind_p1_interview==1 & part_ab_12m_p1==1 & hmo_d_12m_p1==0,missing
+*/
+***********************************************************************
+//tabulation
+local fullp1 ind_p1_interview==1 & part_ab_12m_p1==1 & hmo_d_12m_p1==0
+
+foreach c in smi a b c {
+use n0_n1_p1_p2_x_criteria_`c'_v1.dta if core_year_n0<2010, clear
+
+//if adl difficulty reported, what happens to the changes??
+gen adl_diff_index_n0=adl_diff_dr_n0 + adl_diff_wk_n0 + adl_diff_bh_n0 + ///
+ adl_diff_e_n0 + adl_diff_tx_n0 + adl_diff_t_n0
+gen adl_diff_index_p1=adl_diff_dr_p1 + adl_diff_wk_p1 + adl_diff_bh_p1 + ///
+ adl_diff_e_p1 + adl_diff_tx_p1 + adl_diff_t_p1
+ 
+gen adl_diff_yes_n0=1 if adl_diff_index_n0>0 & adl_diff_index_n0~=.
+replace adl_diff_yes_n0=0 if adl_diff_index_n0==0
+gen adl_diff_yes_p1=1 if adl_diff_index_p1>0 & adl_diff_index_p1~=.
+replace adl_diff_yes_p1=0 if adl_diff_index_p1==0
+
+//overall n that are alive at p1, complete p1 interview (this matches Tables 7 log, Table 6
+tab core_year_n0 if `fullp1', missing 
+//functional status
+tab adl_impair_core_n0  if `fullp1', missing //n that meets n0 with p1 follow up
+tab adl_impair_core_p1 if adl_impair_core_n0 & `fullp1', matcell(adl) missing
+
+mat t1=J(9,2,.)
+mat t1[1,1]=r(N)
+mat t1[2,1]=adl[1,1]
+mat t1[2,2]=t1[2,1]/t1[1,1]*100
+mat list t1
+
+//now of this group that meets n0, not p1, why?
+//r2: change from receiving help to having difficulty but not receiving help
+//r3,4,5: what about hip fracture n0, could explain if getting better
+//r6,7: falls n0 and p1
+local r=3
+foreach v in adl_diff_yes_p1 smi_hip_ind_n0 hip_frac_hrs_n0 cc_11_hipfrac_1yr_n0 falls_hrs_n0 falls_hrs_p1 {
+tab `v' if adl_impair_core_n0 & adl_impair_core_p1==0 & `fullp1', matcell(adl) missing
+mat t1[`r',1]=adl[2,1]
+mat t1[`r',2]=t1[`r',1]/t1[2,1]*100
+local r = `r'+1
+
+//unknown reason
+tab core_year_n0 if adl_diff_yes_p1==0 & smi_hip_ind_n0==0 & hip_frac_hrs_n0==0 & ///
+ cc_11_hipfrac_1yr_n0==0 & falls_hrs_n0==0 & falls_hrs_p1==0 & ///
+ adl_impair_core_n0 & adl_impair_core_p1==0 & `fullp1'
+mat t1[`r',1]=r(N)
+mat t1[`r',2]=t1[`r',1]/t1[2,1]*100
+}
+
+mat rownames t1="ADL Impaired n0 with full p1 ivw" "ADL Impaired n0, not p1" "Receive help n0, diff only p1" ///
+"Hip fracture n0 per SMI def" "Hip fracture n0 self report" /// 
+"Hip fracture chronic cond" "Fall n0 per self report"  "Fall p1 per self report" ///
+"Unknown, none of above"
+
+mat list t1
+
+frmttable, statmat(t1) sdec(0,1) store(adl1_`c') ///
+ctitles("" "Criteria `c'" "" \ "" "n" "%")
+}
+
+outreg, replay(adl1_smi) merge(adl1_a) store(adl1)
+outreg, replay(adl1) merge(adl1_b) store(adl2)
+outreg using `logpath'\11c_sic_n0p1check, replay(adl2) merge(adl1_c) landscape ///
+title("Table 1 - ADL Functional Limitiations change") replace ///
+note("Serious illness = Any serious medical illness" \ ///
+"Criteria A = Any serious medical illness and/or ADL impairment" \ ///
+"Criteria B = Criteria A and Urgent / Emergent hospitalization and/or NH resident" \ ///
+"Criteria C = Medical illness and ADL Impairment and hospitalization and/or NH resident")
+
+***********************************************************************
 log close
 
 

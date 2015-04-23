@@ -11,10 +11,14 @@ Defines a different sample though, since p1 interview is not required of the spo
 Aim is to look at spousal factors that affect a decedents decision
 to enroll in hospice
 
+April 2015 Notes:
+Tried version where outcome=7+ days hospice use vs 0-6 days, logs archived Apr 22 2015
+Then updated to outcome=7+ days vs 0 days (drop 1-6 day LOS observations)
+
 H="Define sample"
 /*This switches to Stata using data dataset exported in previous section*/
 
-/*Full decedent sample (2002-2010 exit interviews( is restricted to:
+/*Full decedent sample (2002-2010 exit interviews) is restricted to:
 1. Decedents with n1 core interview
 2. With medicare xwalk id
 3. With FFS medicare last 6 months of life
@@ -746,12 +750,19 @@ la var s_tics_dem_n1 "S n1 TICS - Demented (0-4)"
 la var s_tics_miss_n1 "S n1 TICS - Missing"
 
 ***************************************************************************
-//indicator for 7+ days of hospice use (vs 0-6 days)
+//indicator for 7+ days of hospice use (vs 0 days)
 tab r_hs_12m, missing
 gen r_hs_ge7d=1 if hs_los_12m>=7 & hs_los_12m~=.
-replace r_hs_ge7d=0 if hs_los_12m<7  & hs_los_12m~=.
-la var r_hs_ge7d "Hospice use 7+ days (vs 0-6 days)"
+replace r_hs_ge7d=0 if hs_los_12m==0 & hs_los_12m~=.
+la var r_hs_ge7d "Hospice use 7+ days (vs 0 days)"
 tab  hs_los_12m r_hs_ge7d, missing
+***************************************************************************
+//interview timing spouse n1 to r's death
+gen s_days_n1_core_dead =  r_death_date_e - s_c_ivw_date_n1 
+label var s_days_n1_core_dead "Days from S n1 interview to R's death"
+gen s_months_n1_core_dead = s_days_n1_core_dead/30.5
+label var s_months_n1_core_dead "Months from S n1 interview to R's death"
+sum s_months_n1_core_dead, detail
 
 save `projdatapath'\spouse_factors_data_sample_v1.dta, replace
 
@@ -796,7 +807,7 @@ tab `v', missing
 ***************************************************************************
 ////look at sample hospice use
 //excluding observations with sudden death
-mat tab2=J(5,4,.)
+mat tab2=J(6,4,.)
 
 tab r_exit_year, missing //get overall sample n
 mat tab2[1,1]=r(N)
@@ -813,30 +824,37 @@ mat tab2[3,2]=r(min)
 mat tab2[3,3]=r(max)
 mat tab2[3,4]=r(p50)
 
+//used hospice 1-6 days only
+sum r_exit_year_x if r_hs_ge7d==.
+mat tab2[4,1]=r(N)
+
 //used hospice 7+ days
 sum r_hs_ge7d
-mat tab2[4,1]=r(mean)*r(N) //n
-mat tab2[4,2]=r(mean)*100 //%
+mat tab2[5,1]=r(mean)*r(N) //n
+mat tab2[5,2]=r(mean)*100 //%
 
 //of those that used hospice 7+ days, LOS?
 //of those that used hospice, what is LOS in last year of life?
 sum hs_los_12m if r_hs_ge7d==1, detail
-mat tab2[5,1]=r(mean)
-mat tab2[5,2]=r(min)
-mat tab2[5,3]=r(max)
-mat tab2[5,4]=r(p50)
+mat tab2[6,1]=r(mean)
+mat tab2[6,2]=r(min)
+mat tab2[6,3]=r(max)
+mat tab2[6,4]=r(p50)
 
 frmttable using `logpath'\2_sample_hospice_use , statmat(tab2) ///
 	title("Hospice use, spouse factors sample") ///
 	rtitle("N" \ "Used Hospice 1+ days in last year of life n, %" \ ///
 	"Of those that used hospice 1+ day, LOS mean, min, max, median" \ ///
+	"Used Hospice 1-6 days, dropped from sample for next rows" \ ///
 	"Used Hospice 7+ days in last year of life n, %" \ ///
 	"Of those that used hospice 7+ day, LOS mean, min, max, median" ) ///
+	note("7+ days vs 0 days (dropping 1-6 days hospice use observations") ///
 	sdec(1) replace
 
 
 ***************************************************************************
 log close
+
 
 H="Create means table of Spouse Characteristics"
 /*This Stata code outputs univariate comparison tables comparing the hospice
@@ -1368,7 +1386,7 @@ and split by gender
 Use comments to run a second version - with sudden death exclusion removed
 Saved to folder within logs sudd_death_incl
 
-Runs Table 1,2 2x, once with 1+ day hospice use definition, once with 7+ day definnition
+Runs Table 1,2 2x, once with 1+ day hospice use definition, once with 7+ day definition
 */
 
 
@@ -2165,7 +2183,10 @@ pwcorr `xvars',star(10) sig
 
 pwcorr r_hseduc_n1_n3 r_networth_adj2010_n1 r_nw_quart_n1 
 
-
+pwcorr s_age r_age
+pwcorr s_white_e r_white_e
+pwcorr s_female r_female
+pwcorr s_hseduc_n1_n3 r_hseduc_n1_n3 
 *************************************************************************************
 log close
 
@@ -2200,7 +2221,7 @@ cc_cncr_chronic_n12mn0 cc_4_atrialfb_n12mn0 cc_11_hipfrac_n12mn0 ///
 cc_13_depressn_n12mn0 cc_14_osteoprs_n12mn0 cc_15_ra_oa_n12mn0 urban_ind
 
 local rvars2 r_age comorb_all_0d_n12m ip_los_24m hci_index ///
-hospital_beds specialists s_age
+hospital_beds specialists s_age s_months_n1_core_dead
 
 la var r_hseduc_n1_n3 "R HS degree, n (%)"
 la var r_ed_ind1 "R no formal educ, n (%)" 
@@ -2242,17 +2263,20 @@ la var hci_index "Hospital care intensity index, mean (SD)"
 la var hospital_beds "Hospital beds/1000 res, mean (SD)"
 la var specialists "Specialists/100,000 res, mean (SD)"
 la var s_age "S age at R's death, years, mean (SD)"
+la var s_months_n1_core_dead "Time S ivw to R death, months, mean (SD)"
 *******************************************************************************
 //s variables
 local svars s_srh_pf_n1  ///
 s_psych_hrs_n1 s_cesd_tot_ge3_n1 s_adl_impair_n1 s_iadl_impair_n1 ///
-s_hrs_comorb_mild_n1 s_hrs_comorb_mod_n1 
+ s_adl_diff_impair_n1 s_iadl_diff_impair_n1 s_hrs_comorb_mild_n1 s_hrs_comorb_mod_n1 
 
 la var s_srh_pf_n1  "S SRH Poor/fair, n (%)"
 la var s_psych_hrs_n1 "S Psychiatric condition, n (%)" 
 la var s_cesd_tot_ge3_n1 "S CESD depressed, n (%)"
 la var s_adl_impair_n1 "S ADL impair, n (%)"
 la var s_iadl_impair_n1 "S IADL impair, n (%)"
+la var s_adl_diff_impair_n1 "S ADL difficulty, n (%)"
+la var s_iadl_diff_impair_n1 "S IADL difficulty, n (%)" 
 la var s_hrs_comorb_mild_n1 "S Comorbidities mild 1-3, n (%)"
 la var s_hrs_comorb_mod_n1 "S Comorb. moderate 4-6, n (%)"
 
@@ -2336,7 +2360,9 @@ log close
 
 
 H="Table - additional details for presentation"
-/*additional tables for presentation*/
+/*additional tables for presentation
+
+4/23/15 - This includes Table 2 in the draft, the log contains p-values reported in the text*/
 
 capture log close
 
@@ -2373,7 +2399,7 @@ foreach g in r s{
 
 }
 *******************************************************************
-//table percent hospice use by r/s education levels
+//Table 2 - percent hospice use by r/s education levels
 
 mat t1=J(3,3,.)
 
@@ -2397,6 +2423,19 @@ statmat(t1) replace ///
 title("Percent hospice use by R and S education levels") ///
 ctitles("","Spouse","","" \ "Decedent","< HS educ","HS educ",">HS educ") ///
 rtitles("< HS educ"\"HS educ"\">HS educ")
+
+//p-values for numbers in this table
+//for R less than HS degree, does spouse education level matter?
+tab r_hs_12m s_ed_3cat if r_ed_3cat==1, chi2
+
+
+//for R=HS degree, S LT HS Degree less hospice use than S HS degree
+tab r_hs_12m s_ed_3cat if r_ed_3cat==2 & inlist(s_ed_3cat,1,2), chi2
+
+//for R>HS Degree, S LT HS vs S GT HS
+tab r_hs_12m s_ed_3cat if r_ed_3cat==3 & inlist(s_ed_3cat,1,3), chi2
+
+
 *******************************************************************
 
 //table percent hospice use by r/s age levels
@@ -5257,7 +5296,7 @@ local bic1:display %5.2f `bic'
 
 outreg, ///
 	stats(e_b e_ci p) nosubstat ///
-	title("7+ days vs 0-6 days hospice use" \ ///
+	title("7+ days vs 0 days hospice use" \ ///
 	"Table 2 - Spousal and Decedent Factors of Hospice Enrollment") ///	
 	ctitles("" "(1) Decedent factors only" "" "" \ "" "OR" "95% CI" "P-value") ///
 	varlabels keep(`dvars_only') starlevels(10 5 1) summstat(r2_p \ ll \ N) ///

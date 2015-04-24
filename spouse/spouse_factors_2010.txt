@@ -756,6 +756,19 @@ gen r_hs_ge7d=1 if hs_los_12m>=7 & hs_los_12m~=.
 replace r_hs_ge7d=0 if hs_los_12m==0 & hs_los_12m~=.
 la var r_hs_ge7d "Hospice use 7+ days (vs 0 days)"
 tab  hs_los_12m r_hs_ge7d, missing
+
+//indicator for 7+ days vs 1-6 days (0 days is missing)
+gen r_hs_7vs_1to6=1 if r_hs_ge7d==1
+replace r_hs_7vs_1to6=0 if 0<hs_los_12m & hs_los_12m<7
+la var r_hs_7vs_1to6 "Hospice users 7+ days (vs 1-6 days)"
+tab hs_los_12m r_hs_7vs_1to6, missing
+
+//indicator for 3+ days vs 1-2 days (0 days is missing)
+gen r_hs_3vs_1to2=1 if hs_los_12m>2 & hs_los_12m~=.
+replace r_hs_3vs_1to2=0 if 0<hs_los_12m & hs_los_12m<3
+la var r_hs_3vs_1to2 "Hospice users 3+ days (vs 1-2 days)"
+tab hs_los_12m r_hs_3vs_1to2, missing
+
 ***************************************************************************
 //interview timing spouse n1 to r's death
 gen s_days_n1_core_dead =  r_death_date_e - s_c_ivw_date_n1 
@@ -1386,7 +1399,12 @@ and split by gender
 Use comments to run a second version - with sudden death exclusion removed
 Saved to folder within logs sudd_death_incl
 
-Runs Table 1,2 2x, once with 1+ day hospice use definition, once with 7+ day definition
+Runs Table 1,2 multiple times to check univariate comparison with multiple hospice
+use definitions:
+1. 1+ day hospice use vs 0 days
+2. 7+ days hospice use vs 0 days (omit 1-6 days)
+3. 7+ days vs 1-6 days (limited to hospice users)
+4. 3+ days vs 1-2 days (limited to hospice users)
 */
 
 
@@ -1456,7 +1474,7 @@ la var hci_index "Hospital care intensity index"
 la var hospital_beds "Hospital beds/1000 res"
 la var specialists "Specialists/100,000 res"
 
-foreach hsi in r_hs_12m r_hs_ge7d {
+foreach hsi in r_hs_12m r_hs_ge7d r_hs_7vs_1to6 r_hs_3vs_1to2 {
 mat resp=J(38,4,.)
 //col 1 = hospice users, col 2 = non-users, col 3 = p-values
 //col 4 = missing count of n's
@@ -1615,10 +1633,14 @@ tab  s_iadl_impair_n1 s_iadl_diff_impair_n1, missing
 
 //note s_adl_impair_n1 s_iadl_impair_n1 are from the questions
 //asking does S receive help with the adl / iadl tasks
-foreach hsi in r_hs_12m r_hs_ge7d {
+foreach hsi in r_hs_12m r_hs_ge7d  r_hs_7vs_1to6 r_hs_3vs_1to2 {
 mat sp=J(17,4,.)
 //col 1 = hospice users, col 2 = non-users, col 3 = p-values
 //col 4 = missing count of n's
+
+sum `hsi'
+local n_oa=r(N)
+display 
 
 //cols 1,2
 local c = 1
@@ -1673,8 +1695,17 @@ note("Hospice use defined as `hsi'." \ ///
 "with at least 1 activity.") ///
 sdec(2,2,3,0) store(s_1)
 
+mat s_n=J(1,2,.)
+tab `hsi', missing matcell(d1)
+mat s_n[1,1]=d1[2,1] //hospice n
+mat s_n[1,2]=d1[1,1] //non-hospice users n
+mat rownames s_n="N"
+frmttable, statmat(s_n) store(s_n) sdec(0) ///
+ctitle("","Hospice users","Non-hospice users" \ ///
+"","%","%") 
+
 outreg using `logpath'\4a_spofactors_univ_compar_tables_`hsi',  ///
-replay(s_1) append(r_n) addtable
+replay(s_1) append(s_n) addtable
 }
 *******************************************************************
 //Now tables split by gender
@@ -5140,7 +5171,7 @@ local bic1:display %5.2f `bic'
 
 outreg, ///
 	stats(e_b e_ci p) nosubstat ///
-	title("Table 2 - Spousal and Decedent Factors of Hospice Enrollment") ///	
+	title("Table 3 - Spousal and Decedent Factors of Hospice Enrollment") ///	
 	ctitles("" "(1) Decedent factors only" "" "" \ "" "OR" "95% CI" "P-value") ///
 	varlabels keep(`dvars_only') starlevels(10 5 1) summstat(r2_p \ ll \ N) ///
 	summtitles("Pseudo r-2" \ "Log likelihood" \ "N") ///
@@ -5202,7 +5233,7 @@ logit r_hs_12m `xvars1' `xvars2_s' if r_female==1, or vce(cluster hrrnum)
 
 outreg , ///
 	stats(e_b e_ci p) nosubstat ///
-	title("Table 3 - Factors of Hospice Enrollment, Sample split by Gender") ///	
+	title("Table 4 - Factors of Hospice Enrollment, Sample split by Gender") ///	
 	ctitles("" "(3) Decedent=Female" "" "" \ "" "OR" "95% CI" "P-value") ///
 	note("Base categories are spouse no comorbidities per HRS survey," \ ///
 	"and S and R have same education level." \ ///
@@ -5215,7 +5246,7 @@ logit r_hs_12m `xvars1' `xvars2_s' if r_female==0, or vce(cluster hrrnum)
 
 outreg using `logpath'/10-spfactors_logit_ltd_vars_201410_v4, ///
 	stats(e_b e_ci p) nosubstat ///
-	title("Table 3 - Factors of Hospice Enrollment, Sample split by Gender") ///	
+	title("Table 4 - Factors of Hospice Enrollment, Sample split by Gender") ///	
 	ctitles("" "(4) Decedent=Male" "" "" \ "" "OR" "95% CI" "P-value") ///
 	note("Base categories are spouse no comorbidities per HRS survey," \ ///
 	"and S and R have same education level." \ ///
@@ -5227,7 +5258,7 @@ outreg using `logpath'/10-spfactors_logit_ltd_vars_201410_v4, ///
 log close
 
 
-H="Analysis, same as prev section but 7+ day definition"
+H="Analysis, same as prev section but change hospice use criteria"
 *************
 /*This Stata code runs an initial logistic regression, outputs
 table to the file logs\10-spfactors_logit_ltd_vars_201410_v4.doc
@@ -5242,7 +5273,13 @@ to hospice use in the univariate) and count of cc's
 However, alzheimers is dropped bc correlated with nursing home resident
 
 
-**Updated 11/12/14 to add net worth quartile controls */
+**Updated 11/12/14 to add net worth quartile controls 
+
+Runs 3 versions:
+1. 7+ days hospice use vs 0 days (omit 1-6 days)
+2. 7+ days vs 1-6 days (limited to hospice users)
+3. 3+ days vs 1-2 days (limited to hospice users)
+*/
 
 capture log close
 
@@ -5286,7 +5323,9 @@ la var hci_index "Hospital Care Intensity Index"
 la var hospital_beds "No. Hospital Beds/1000 residents"
 la var specialists "No. Specialists/100,000 residents"
 
-logit r_hs_ge7d `dvars_only' , or vce(cluster hrrnum)
+foreach hsi in r_hs_ge7d r_hs_7vs_1to6 r_hs_3vs_1to2 {
+
+logit `hsi' `dvars_only' , or vce(cluster hrrnum)
 
 estat ic
 mat ic=r(S)
@@ -5298,8 +5337,8 @@ local bic1:display %5.2f `bic'
 
 outreg, ///
 	stats(e_b e_ci p) nosubstat ///
-	title("7+ days vs 0 days hospice use" \ ///
-	"Table 2 - Spousal and Decedent Factors of Hospice Enrollment") ///	
+	title("`hsi' days hospice use" \ ///
+	"Table 3 - Spousal and Decedent Factors of Hospice Enrollment") ///	
 	ctitles("" "(1) Decedent factors only" "" "" \ "" "OR" "95% CI" "P-value") ///
 	varlabels keep(`dvars_only') starlevels(10 5 1) summstat(r2_p \ ll \ N) ///
 	summtitles("Pseudo r-2" \ "Log likelihood" \ "N") ///
@@ -5324,7 +5363,7 @@ la var s_hrs_comorb_mild_n1 "S Comorbidity - mild 1-3"
 la var s_hrs_comorb_mod_n1 "S Comorbidity - moderate 4-6" 
 
 *****************************************************************
-logit r_hs_ge7d `xvars1' `xvars2', or vce(cluster hrrnum)
+logit `hsi' `xvars1' `xvars2', or vce(cluster hrrnum)
 
 estat ic
 mat ic=r(S)
@@ -5334,7 +5373,7 @@ local aic1:display %5.2f `aic'
 local bic=ic[1,6]
 local bic1:display %5.2f `bic'
 
-outreg using `logpath'/10-spfactors_logit_ltd_vars_201410_v7_7days, ///
+outreg using `logpath'/10-spfactors_logit_ltd_vars_201410_v7_`hsi', ///
 	stats(e_b e_ci p) nosubstat ///
 	ctitles("" "(2) Decedent and spouse factors" "" "" \ "" "OR" "95% CI" "P-value") ///
 	note("Base categories are spouse no comorbidities per HRS survey," \ ///
@@ -5345,43 +5384,7 @@ outreg using `logpath'/10-spfactors_logit_ltd_vars_201410_v7_7days, ///
 	addrows("Degrees of Freedom AIC/BIC calc", "`dof'" \ ///
 	  "AIC", "`aic1'" \ "BIC", "`bic1'") ///
 	merge(tab1) landscape replace
-*****************************************************************
-/*
-//Table 3, split by gender
-local xvars1 ind_s_r_educ2 ind_s_r_educ3 r_hseduc_n1_n3 ///
-r_nw_lowest_n1 r_nw_midlow_n1 r_nw_midhigh_n1 ///
-s_srh_pf_n1 s_hrs_comorb_mild_n1 s_hrs_comorb_mod_n1 
+}
 
-local xvars2_s ind_r_age_cat2 ind_r_age_cat3 r_white_e r_nhres_n1 ///
-r_advdir_x cc_6_chrnkidn_n12mn0 cc_12_ischmcht_n12mn0 cc_8_chf_n12mn0 ///
-cc_9_diabetes_n12mn0 cc_7_copd_n12mn0 cc_cncr_chronic_n12mn0  ///
-cc_13_depressn_n12mn0 cc_14_osteoprs_n12mn0  specialists	
-
-//First S=male / R=Female
-logit r_hs_12m `xvars1' `xvars2_s' if r_female==1, or vce(cluster hrrnum)
-
-outreg , ///
-	stats(e_b e_ci p) nosubstat ///
-	title("Table 3 - Factors of Hospice Enrollment, Sample split by Gender") ///	
-	ctitles("" "(3) Decedent=Female" "" "" \ "" "OR" "95% CI" "P-value") ///
-	note("Base categories are spouse no comorbidities per HRS survey," \ ///
-	"and S and R have same education level." \ ///
-	"Standard errors are clustered by HRR.") ///
-	varlabels starlevels(10 5 1)  summstat(N) ///
-	store(tab2) landscape
-*****************************************************************
-//2nd column S=female / R=Male
-logit r_hs_12m `xvars1' `xvars2_s' if r_female==0, or vce(cluster hrrnum)
-
-outreg using `logpath'/10-spfactors_logit_ltd_vars_201410_v4, ///
-	stats(e_b e_ci p) nosubstat ///
-	title("Table 3 - Factors of Hospice Enrollment, Sample split by Gender") ///	
-	ctitles("" "(4) Decedent=Male" "" "" \ "" "OR" "95% CI" "P-value") ///
-	note("Base categories are spouse no comorbidities per HRS survey," \ ///
-	"and S and R have same education level." \ ///
-	"Robust standard errors are clustered by HRR.") ///
-	varlabels starlevels(10 5 1)  summstat(N) ///
-	merge(tab2) landscape addtable
-*/
 *****************************************************************
 log close

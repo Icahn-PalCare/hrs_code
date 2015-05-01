@@ -12703,7 +12703,8 @@ H="**********************************"
 
 H="Propensity score matching on mortality"
 /*propensity score match on mortality
-group that meets criteria A
+group that meets criteria A or medical illness only
+use comments to switch between criteria
 */
 
 capture log close
@@ -12711,14 +12712,20 @@ capture log close
 clear all
 set more off
 
+//local crit a
+local crit smi
 local logpath E:\data\serious_ill\logs
 local datapath E:\data\serious_ill\final_data
 
-log using "`logpath'\20_ps_match_mortality_crit_a.txt", text replace
+log using "`logpath'\20_ps_match_mortality_crit_`crit'.txt", text replace
 
 cd `datapath'
 
-use n0_n1_p1_p2_x_criteria_a_v1.dta if core_year_n0<2010
+use n0_n1_p1_p2_x_criteria_`crit'_v1.dta if core_year_n0<2010
+******************************************************************
+
+******************************************************************
+di "Criteria `crit' dataset"
 ******************************************************************
 tab core_to_dod_1yr_n0, missing //mortality at 1 year
 tab core_to_dod_1yr_p1, missing //at p1 interview
@@ -12726,21 +12733,38 @@ tab core_to_dod_1yr_p1, missing //at p1 interview
 //no one with als=1 died within 1 year so cannot include in match variables list
 tab smi_als_ind_n0 core_to_dod_1yr_n0, missing
 
+//look at adl change variables, note if missing n1 interview, assigned to stable category
+//based on adl status in period n0
+tab adl_stable_ind_n0n1 adl_improved_n0n1 , missing //base case = independent,stable or improved
+tab adl_stable_partial_n0n1, missing
+tab adl_stable_severe_n0n1, missing
+tab adl_change_i_m_n0n1, missing 
+tab adl_change_i_s_n0n1, missing 
+tab adl_change_m_s_n0n1, missing 
+foreach v in adl_change_i_m_n0n1 adl_change_i_s_n0n1 adl_change_m_s_n0n1 {
+replace `v'=0 if adl_stable_ind_n0n1==1 | adl_stable_partial_n0n1==1 | adl_stable_severe_n0n1==1
+tab `v',missing
+} 
+
 //define matching variable list, drop if missing in any variables
 //als indicator, all die within 1 year, so cannot include in the list
 global matchvars age_at_core_n0 female_n0 re_white married_n0 networth_adj2010_n0 ///
-hs_deg adl_impair_core_n0 smi_dem_ind_n0 smi_cancer_ind_n0 smi_esrd_ind_n0 ///
+hs_deg adl_stable_partial_n0n1 adl_stable_severe_n0n1 adl_change_i_m_n0n1 ///
+ adl_change_i_s_n0n1 adl_change_m_s_n0n1 ///
+ smi_dem_ind_n0 smi_cancer_ind_n0 smi_esrd_ind_n0 ///
 smi_chf_ind_n0 smi_copd_ind_n0 smi_diab_compl_ind_n0 ///
 smi_liver_ind_n0  smi_hip_ind_n0 srh_pf_n0 
 
-//n=4679 meet criteria A
+//n=4408 meet criteria A
+//n=3596 meet Condition only criteria
 foreach v in $matchvars{
 sum `v', detail
 bys core_to_dod_1yr_n0: sum `v'
 drop if `v'==.
 }
 
-//n=4661 after drop missingness
+//n=4374 after drop missingness - Criteria A
+//n=3578 after drop missingness - Condition Only criteria
 tab core_to_dod_1yr_n0, missing //mortality at 1 year
 
 ******************************************************************
@@ -12760,20 +12784,22 @@ sum logitpscore
 sca cal_ps=r(sd)*0.02
 sca list cal_ps
 
-//rule of thumb 0.2*sd, we can use 0.02*sd
+//rule of thumb 0.2*sd, we can use 0.02*sd, manually change this depending on which dataset used
+//psmatch2 core_to_dod_1yr_n0,outcome(tot_paid_by_mc_6m_wi_n0) ///
+//	pscore(m1y_pscore) radius caliper(.02081047) logit //criteria A caliper
 psmatch2 core_to_dod_1yr_n0,outcome(tot_paid_by_mc_6m_wi_n0) ///
-	pscore(m1y_pscore) radius caliper(.02181806) logit
+	pscore(m1y_pscore) radius caliper(.02178898) logit //criteria condition only caliper
 
 //graph including off common support information
 psgraph, treated(core_to_dod_1yr_n0) pscore(m1y_pscore)
-graph save `logpath'\ps_dist.gph, replace
+graph save `logpath'\ps_dist_crit_`crit'.gph, replace
 
 histogram m1y_pscore if _support==1, by(core_to_dod_1yr_n0) 
 
 //look at balance of matched vs unmatched samples using %bias (std diff)
 pstest $matchvars ,treated(core_to_dod_1yr_n0) both hist
 
-mat vr=J(16,6,.)
+mat vr=J(20,6,.)
 //compare variance of covariates before and after matching
 local i=1
 foreach v in $matchvars  {
@@ -12791,13 +12817,15 @@ local i=`i'+1
 }
 
 mat rownames vr="Age" "Female" "White" "Married" "Net Worth" ///
-"HS Degree" "ADL Impairment" "Dementia" "Cancer" "ESRD" "CHF" ///
+"HS Degree" "ADL Stable, Moderate" "ADL Stable, Severe" ///
+"ADL Ind to Moderate" "ADL Ind to Severe" "ADL Mod to Severe" ///
+ "Dementia" "Cancer" "ESRD" "CHF" ///
 "COPD" "Diabetes" "Liver disease" "Hip Fracture" "SRH Fair/Poor" 
 
 mat list vr
 
 ******************************************************************
-//using this matching, 4 obs from the treatment group are dropped b/c they are off support
+//using this matching, 7 obs from the treatment group are dropped b/c they are off support
 //0 are dropped b/c not matched (weight=.)
 //_support ==1 if matched
 tab _support, missing
@@ -12807,7 +12835,7 @@ tab _weight if core_to_dod_1yr_n0==1, missing
 sum _weight if core_to_dod_1yr_n0==0
 
 //thinking about how those that died will have truncated 1 year lookback for outcomes...
-tab core_to_death_n0 if core_to_dod_1yr_n0==1
+sum core_to_death_n0 if core_to_dod_1yr_n0==1, detail
 histogram core_to_death_n0 if core_to_dod_1yr_n0==1
 
 gen core_to_dod_1_2yr_n0=1 if core_to_death_n0<2 & core_to_death_n0>=1
@@ -12815,9 +12843,9 @@ tab core_to_dod_1_2yr_n0, missing
 ******************************************************************
 //save the dataset
 rename _weight ps_weight
-rename _suppor ps_common_support
+rename _support ps_common_support
 
-save n0_n1_p1_p2_x_criteria_a_v1_psmatch.dta, replace
+save n0_n1_p1_p2_x_criteria_`crit'_v1_psmatch.dta, replace
 
 
 ******************************************************************
@@ -12827,7 +12855,7 @@ log close
 H="Univariate and glm for psmatched sample"
 /*using propensity score matched sample on mortality
 from previous section, look at outcomes for
-group that meets criteria a
+group that meets criteria a and condition only, use comments to set dataset
 */
 
 capture log close
@@ -12835,14 +12863,18 @@ capture log close
 clear all
 set more off
 
+local crit a
+local cdesc "Serious medical illness and/or ADL impairment"
+//local crit smi
+//local cdesc "Serious medical condition only"
 local logpath E:\data\serious_ill\logs
 local datapath E:\data\serious_ill\final_data
 
-log using "`logpath'\21_ps_matched_outcomes1_crit_a.txt", text replace
+log using "`logpath'\21_ps_matched_outcomes1_crit_`crit'.txt", text replace
 
 cd `datapath'
 
-use n0_n1_p1_p2_x_criteria_a_v1_psmatch.dta
+use n0_n1_p1_p2_x_criteria_`crit'_v1_psmatch.dta
 ***************************************************************
 //look at those that died 1st 6 months, their utilization is truncated
 tab core_to_dod_6m_n0 core_to_dod_1yr_n0, missing
@@ -12920,7 +12952,7 @@ mat rownames t2_n="N"
 frmttable, statmat(t2_n) store(t2_n) sdec(0)
 
 outreg, replay(t2_2) append(t2_n) store(t2_3) ///
-title("Criteria A Utilization Outcomes, by 1 year Mortality") ///
+title("Criteria `crit' Utilization Outcomes, by 1 year Mortality") ///
 ctitles("","Died 1 year","Alive 1 year","p-value") ///
 note("Utilization for 6 months after interview" \ ///
 "Sample limited to survey respondents first interview that meet Criteria A:" \ ///
@@ -12975,19 +13007,20 @@ frmttable, statmat(t2_n) store(t2_n) sdec(0)
 
 outreg, replay(t2m_2) append(t2_n) store(t2m_3) 
 
-outreg using `logpath'/21_ps_matched_outcomes, replace replay(t2_3) merge(t2m_3) ///
-title("Criteria A Utilization Outcomes, by 1 year Mortality" \ ///
+outreg using `logpath'/21_ps_matched_outcomes_`crit', replace replay(t2_3) merge(t2m_3) ///
+title("Criteria `crit' Utilization Outcomes, by 1 year Mortality" \ ///
 "Comparing unmatched and matched samples") ///
 ctitles("","Raw sample","","","Matched sample","","" \  ///
 "","Died 1 year","Alive 1 year","p-value","Died 1 year","Alive 1 year","p-value") ///
 note("Utilization for 6 months after interview" \ ///
-"Sample limited to survey respondents first interview that meet Criteria A:" \ ///
-"at least one serious medical illness and/or ADL impairment" \ ///
+"Sample limited to survey respondents first interview that meet Criteria `crit':" \ ///
+`cdesc' \ ///
 "Matched sample is propensity score matched for risk of mortality at 1 year" \ ///
 "Medicare spending in 2010$, wage index adjusted." \ ///
 "P-values for continuous variables from t-test, for binary variables from chi-squared statistic")
 ***************************************************************
 //multivariate analysis, ps-matched sample using glm model
+//2 versions, (1) excluding mortality on RHS, (2) including mortality
 gen relig_vimp_n0=1 if imprelig_n0==1
 replace relig_vimp_n0=0 if inlist(imprelig_n0,2,3,4)
 tab relig_vimp_n0 imprelig_n0, missing
@@ -12995,8 +13028,21 @@ tab relig_vimp_n0 imprelig_n0, missing
 sum networth_adj2010_n0, detail
 replace networth_adj2010_n0=networth_adj2010_n0/10000
 
-local matchvars age_at_core_n0 female_n0 re_white married_n0 networth_adj2010_n0 ///loca
-hs_deg adl_impair_core_n0 smi_dem_ind_n0 smi_cancer_ind_n0 smi_esrd_ind_n0 ///
+//want to cluster at eol spending quintiles
+sum tot_eol_spending_hrr_n0 , detail
+sca sp_20=r(p20)
+sca sp_40=r(p40)
+sca sp_60=r(p60)
+sca sp_80=r(p80)
+xtile eol_spend_hrr_quint = tot_eol_spending_hrr_n0 , nquantiles(5)
+la var eol_spend_hrr_quint "EOL Spending at HRR Quintiles 1=low, 5=high"
+tab eol_spend_hrr_quint, missing
+bys eol_spend_hrr_quint : sum tot_eol_spending_hrr_n0
+
+local matchvars age_at_core_n0 female_n0 re_white married_n0 networth_adj2010_n0 ///
+hs_deg adl_stable_partial_n0n1 adl_stable_severe_n0n1 adl_change_i_m_n0n1 ///
+ adl_change_i_s_n0n1 adl_change_m_s_n0n1 ///
+ smi_dem_ind_n0 smi_cancer_ind_n0 smi_esrd_ind_n0 ///
 smi_chf_ind_n0 smi_copd_ind_n0 smi_diab_compl_ind_n0 ///
 smi_liver_ind_n0  smi_hip_ind_n0 srh_pf_n0 
 
@@ -13004,7 +13050,6 @@ local addvars nhres_n0 rel_nb_n0 relig_vimp_n0 medicaid_n0 champus_n0 ///
 medigap_n0 hospital_care_intensity_n0 hospital_beds_n0 specialists_n0
 
 la var networth_adj2010_n0 "Net worth /$10,000"
-la var adl_impair_core_n0 "ADL Impairment"
 la var smi_dem_ind_n0 "Dementia"
 la var smi_cancer_ind_n0 "Metastatic Cancer"
 la var smi_esrd_ind_n0 "End stage renal disease" 
@@ -13018,26 +13063,61 @@ la var hospital_care_intensity_n0 "Hospital care intensity index, HRR"
 la var hospital_beds_n0 "Hospital beds/1000 residents, HRR"
 la var specialists_n0 "Specialists /100,000 residents, HRR"
 
-//glm outcome=spending
+la var adl_stable_partial_n0n1 "ADL Stable, Partial Impairment"
+la var adl_stable_severe_n0n1 "ADL Stable, Severe Impairment"
+la var adl_change_i_m_n0n1 "ADL Independ to Partial Impair"
+la var adl_change_i_s_n0n1 "ADL Independ to Severe Impair"
+la var adl_change_m_s_n0n1 "ADL Partial to Severe Impair"
+
+la var core_to_dod_1yr_n0 "Died within 1 year of interview"
+
+***************************************************************
+//glm outcome=spending, excluding mortality
 glm tot_paid_by_mc_6m_wi_n0 `matchvars' `addvars' [iweight=ps_weight], ///
-	fam(gamma) link(log) vce(cluster hrrnum_n0)
+	fam(gamma) link(log) vce(cluster eol_spend_hrr_quint)
 	
 glm, eform
 
 outreg , stats(e_b e_ci) store(tab3) varlabels ///
-title("Criteria A 6 month utilization, GLM regression" \ ///
-"using sample propensity score matched on 1 year mortality") ///
+title("Criteria `crit' 6 month utilization, GLM regression" \ ///
+"using sample propensity score matched on 1 year mortality" \ ///
+"Excluding mortality from RHS") ///
 ctitle("","Total Medicare spending") ///
-note("6 month Medicare spending for those R's that meet Criteria A" \ ///
+note("6 month Medicare spending for those R's that meet Criteria `crit'" \ ///
 "Generalized linear model. For Medicare Costs: gamma distribution and log link" \ ///
 "For hospital nights: Poisson distribution, log link" \ ///
-"Exponentiated coefficents (rate ratios) and 95% confidence intervals reported." \ ///
-"Robust standard errors are clustered at the HRR level")
+"Exponentiated coefficients (rate ratios) and 95% confidence intervals reported." \ ///
+"Robust standard errors are clustered by 2yr EOL MC Spending Quintiles")
 
 //glm outcome=hospital nights
 glm n_hospd_p6m_n0 `matchvars' `addvars' [iweight=ps_weight], ///
-	fam(poisson) link(log)  vce(cluster hrrnum_n0)
-outreg using `logpath'/21_ps_matched_outcomes, addtable varlabels ///
+	fam(poisson) link(log)  vce(cluster eol_spend_hrr_quint)
+outreg using `logpath'/21_ps_matched_outcomes_`crit', addtable varlabels ///
+stats(e_b e_ci) merge(tab3) ///
+ctitle("","Hospital nights")
+
+***************************************************************
+//glm outcome=spending, including mortality
+glm tot_paid_by_mc_6m_wi_n0 `matchvars' `addvars' core_to_dod_1yr_n0 [iweight=ps_weight], ///
+	fam(gamma) link(log) vce(cluster eol_spend_hrr_quint)
+	
+glm, eform
+
+outreg , stats(e_b e_ci) store(tab3) varlabels ///
+title("Criteria `crit' 6 month utilization, GLM regression" \ ///
+"using sample propensity score matched on 1 year mortality" \ ///
+"Including mortality on RHS") ///
+ctitle("","Total Medicare spending") ///
+note("6 month Medicare spending for those R's that meet Criteria `crit'" \ ///
+"Generalized linear model. For Medicare Costs: gamma distribution and log link" \ ///
+"For hospital nights: Poisson distribution, log link" \ ///
+"Exponentiated coefficients (rate ratios) and 95% confidence intervals reported." \ ///
+"Robust standard errors are clustered by 2yr EOL MC Spending Quintiles")
+
+//glm outcome=hospital nights
+glm n_hospd_p6m_n0 `matchvars' `addvars' core_to_dod_1yr_n0 [iweight=ps_weight], ///
+	fam(poisson) link(log)  vce(cluster eol_spend_hrr_quint)
+outreg using `logpath'/21_ps_matched_outcomes_`crit', addtable varlabels ///
 stats(e_b e_ci) merge(tab3) ///
 ctitle("","Hospital nights")
 

@@ -1422,11 +1422,11 @@ run;
 /*keep overall state average price, drop those for metro areas*/
 data private_nh_rate_1;
 set private_nh_rate;
-if state_usps_code~=' ';
+if state_usps_code~=' ' or State='NATIONAL AVERAGE';
 run;
 
 data private_nh_rate_2(keep=state_usps_code avg_private_rm_rate avg_semi_rm_rate);
-set private_nh_rate_1(rename=(i=priv_rate f=semi_rate));
+set private_nh_rate_1(rename=(Private_Average=priv_rate Semi_Private_Average=semi_rate));
 format priv_rate 3.;
 format semi_rate 3.;
 avg_private_rm_rate=priv_rate+0;
@@ -1434,6 +1434,8 @@ avg_semi_rm_rate=semi_rate+0;
 
 label avg_private_rm_rate='Private room avg rate';
 label avg_semi_rm_rate='Semi-private room avg rate';
+
+if State='NATIONAL AVERAGE' then state_usps_code='natl average';
 
 run;
 
@@ -1444,7 +1446,6 @@ proc import
 datafile='E:\data\hrs_oop_2010\ref_data\nh_costs_by_state\medicaid_to_import.xls'
 out=medicaid_nh_rate dbms=xls replace;
 run;
-
 
 /*proc import datafile='H:\OOP\data\nh_costs_by_state\medicaid_to_import.xls'
 out=medicaid_nh_rate dbms=xls replace;
@@ -1468,6 +1469,7 @@ if year=2001 then medicaid_rate=1.47492*rate_per_night;
 if year=2000 then medicaid_rate=1.54589*rate_per_night;
 if year<=1999 then medicaid_rate=1.61195*rate_per_night;
 label medicaid_rate='Medicaid rate per night, adj to 2010 prices';
+if usps_code='' then usps_code='natl average';
 run;
 
 proc sort data=medicaid_nh_rate_1; by usps_code; run;
@@ -1489,7 +1491,7 @@ run;
 
 data hhaide_rate_1;
 set hhaide_rate;
-if state_usps_code~=' ';
+if state_usps_code~=' ' or State='NATIONAL AVERAGE';
 run;
 
 data hhaide_rate_2(keep=state_usps_code avg_hh_aide_rate );
@@ -1498,6 +1500,8 @@ format HHAIDE_AVG 3.;
 avg_hh_aide_rate=HHAIDE_AVG+0;
 
 label avg_hh_aide_rate='Home health aide avg rate per hour';
+
+if State='NATIONAL AVERAGE' then state_usps_code='natl average';
 
 run;
 
@@ -1660,11 +1664,35 @@ proc means; var avg_private_rm_rate medicaid_rate avg_hh_aide_rate; run;
 Drop this R in the next step*/
 data zzzmissprice; set oop_add_price; if avg_private_rm_rate=.; run;
 
+/*bring in national average to all observations as well, use as a sensitivity analysis later*/
+data nation_prices;
+set nh_hh_rates;
+if state_usps_code='natl average';
+rename avg_private_rm_rate=national_priv_rm_rate;
+rename medicaid_rate=national_medicaid_rate;
+rename avg_hh_aide_rate=national_hh_aide_rate;
+run;
+
+data oop_add_price_2;
+set oop_add_price;
+i='natl average';
+run;
+
+proc sql;
+create table oop_add_price_3 as select a.*,b.national_priv_rm_rate,b.national_medicaid_rate,b.national_hh_aide_rate
+from oop_add_price_2 a left join
+nation_prices b
+on a.i=b.state_usps_code;
+quit;
+
 /******************************************************/
 /*Need to divide oop nh payments by rate (either medicaid or private)
 and then get a number of nights, these are oop reported nights
 
-Then any nights left get assigned to medicaid or private insurance payer*/
+Then any nights left get assigned to medicaid or private insurance payer
+
+2 versions of this imputation are done, 1 with state level prices, and another ( natl_ prefix )
+using the national average prices for a sensitivity check */
 /******************************************************/
 
 /******************************************************/
@@ -1674,23 +1702,28 @@ Then remaining nights get assigned additional costs
 for the interview time period*/
 /******************************************************/
 
-proc freq data=oop_add_price ; table nh_pmt_imp*md_cov /missprint; run;
+proc freq data=oop_add_price_3 ; table nh_pmt_imp*md_cov /missprint; run;
 
 /*first get nights associated with the OOP costs reported in the interviews*/
 data oop_nh_costs_1;
-set oop_add_price;
+set oop_add_price_3;
 if avg_private_rm_rate~=.;
 /*if there are no nursing home nights that aren't paid by medicare, then set oop nights=0
 If missing medicaid coverage, assume medicaid coverage and use the lower medicaid price
 */
-if nh_pmt_imp=0 then oop_nh_nights=0;
+if nh_pmt_imp=0 then do;
+	oop_nh_nights=0;
+	natl_oop_nh_nights=0;
+	end;
 /*if there are some non medicare nights and report medicaid coverage, use medicaid price*/
 if nh_pmt_imp=1 and (md_cov=1 or md_cov=.) then do;
 	oop_nh_nights=floor(NH_OOP/medicaid_rate);
+	natl_oop_nh_nights=floor(NH_OOP/national_medicaid_rate);
 	end;
 /*if there are some non medicare nights and do not report medicaid coverage, use private price*/
 if nh_pmt_imp=1 and md_cov=0 then do;
 	oop_nh_nights=floor(NH_OOP/avg_private_rm_rate);
+	natl_oop_nh_nights=floor(NH_OOP/national_priv_rm_rate);
 	end;
 /*check calculated oop nights vs self reported nights not paid by medicare
 	reset oop nights to total not medicare nights if calculated oop nights
@@ -1699,18 +1732,38 @@ if oop_nh_nights>nh_ni_not_mc then do;
 	oop_nh_nights_adj=1;
 	oop_nh_nights=nh_ni_not_mc;
 	end;
-
+if natl_oop_nh_nights>nh_ni_not_mc then do;
+	natl_oop_nh_nights_adj=1;
+	natl_oop_nh_nights=nh_ni_not_mc;
+	end;
 /*variable for nursing home nights not covered by Medicare or OOP reported spending
 	If number of nights computed for OOP is greater than the self reported nights, then set this to zero*/
 if nh_ni_not_mc<=oop_nh_nights and oop_nh_nights~=. then other_nh_nights=0;
 if nh_ni_not_mc>oop_nh_nights then other_nh_nights=floor(nh_ni_not_mc-oop_nh_nights);
 
-label oop_nh_nights="Imputed nh nights paid OOP, ivw pd";
-label oop_nh_nights_adj="OOP nights set to balance of self report nights-MC paid nights";
-label other_nh_nights="Imputed nh nights not medicare or OOP, ivw pd";
+if nh_ni_not_mc<=natl_oop_nh_nights and natl_oop_nh_nights~=. then natl_other_nh_nights=0;
+if nh_ni_not_mc>natl_oop_nh_nights then natl_other_nh_nights=floor(nh_ni_not_mc-natl_oop_nh_nights);
+
+label oop_nh_nights="Imputed nh nights paid OOP, ivw pd (state prices)";
+label oop_nh_nights_adj="OOP nights set to balance of self report nights-MC paid nights (state prices)";
+label other_nh_nights="Imputed nh nights not medicare or OOP, ivw pd (state prices)";
+
+label natl_oop_nh_nights="Imputed nh nights paid OOP, ivw pd (natl prices)";
+label natl_oop_nh_nights_adj="OOP nights set to balance of self report nights-MC paid nights (natl prices)";
+label natl_other_nh_nights="Imputed nh nights not medicare or OOP, ivw pd (natl prices)";
+
+drop i;
 run;	
 
-proc freq; table oop_nh_nights oop_nh_nights_adj other_nh_nights; run;
+proc freq; table oop_nh_nights oop_nh_nights_adj other_nh_nights 
+ natl_oop_nh_nights natl_oop_nh_nights_adj natl_other_nh_nights ; 
+run;
+
+proc freq; table oop_nh_nights_adj*natl_oop_nh_nights_adj /missprint; run;
+
+proc means; vars oop_nh_nights oop_nh_nights_adj other_nh_nights 
+ natl_oop_nh_nights natl_oop_nh_nights_adj natl_other_nh_nights; 
+run;
 
 /*look at obs that had to have oop nights adjusted down*/
 data zzz_oop_nights_adj;
@@ -1730,6 +1783,11 @@ nh_cost_medicaid=0;
 nh_cost_private=0;
 end;
 
+if natl_other_nh_nights=0 then do;
+natl_nh_cost_medicaid=0;
+natl_nh_cost_private=0;
+end;
+
 if other_nh_nights>0 then do;
 	if md_cov=1 | md_cov=. then do;
 		nh_cost_medicaid=other_nh_nights*medicaid_rate;
@@ -1741,15 +1799,29 @@ if other_nh_nights>0 then do;
 		end;
 end;
 
-label nh_cost_medicaid="Imputed medicaid paid nh payments, ivw pd";
-label nh_cost_private="Imputed private ins paid nh payments, ivw pd";
+if natl_other_nh_nights>0 then do;
+	if md_cov=1 | md_cov=. then do;
+		natl_nh_cost_medicaid=natl_other_nh_nights*national_medicaid_rate;
+		natl_nh_cost_private=0;
+		end;
+	if md_cov=0 then do;
+		natl_nh_cost_private=natl_other_nh_nights*national_priv_rm_rate;
+		natl_nh_cost_medicaid=0;
+		end;
+end;
+
+label nh_cost_medicaid="Imputed medicaid paid nh payments, ivw pd (state prices)";
+label nh_cost_private="Imputed private ins paid nh payments, ivw pd (state prices)";
+
+label natl_nh_cost_medicaid="Imputed medicaid paid nh payments, ivw pd (national prices)";
+label natl_nh_cost_private="Imputed private ins paid nh payments, ivw pd (national prices)";
 
 run;
 	
-proc means; var nh_nights nh_ni_not_mc oop_nh_nights other_nh_nights snf_stay_all_ivw ;
+proc means; var nh_nights nh_ni_not_mc oop_nh_nights other_nh_nights snf_stay_all_ivw natl_other_nh_nights;
 run;
 
-proc means; var nh_OOP nh_cost_medicaid nh_cost_private; 
+proc means; var nh_OOP nh_cost_medicaid nh_cost_private natl_nh_cost_medicaid natl_nh_cost_private; 
 run;
 
 proc contents; run;
@@ -4948,6 +5020,17 @@ tab miss_ins, missing
 
 tab exit_year_x if miss_ins==1, missing
 tab death_year_e exit_year_x if miss_ins==1, missing
+
+//who does not have parts a,b coverage
+gen no_ab=1 if inlist(exit_year_x,2006, 2008, 2010) & ///
+ age_at_death_e>=70 & age!=. & xwalk_yes==1 & part_ab_5y==0
+replace no_ab=0 if exit_year_x==2000 | exit_year_x==2002 | exit_year_x==2004
+replace no_ab=0 if age_at_death_e<70
+replace no_ab=0 if xwalk_yes~=1
+tab no_ab, missing
+
+tab hmo_5y if no_ab==1, missing
+
 *******************************************************
 
 tab part_ab_2y hmo_2y, missing

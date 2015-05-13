@@ -8048,6 +8048,13 @@ foreach v in `demo'{
 tab `v', missing
 }
 
+//Comorbidities (Elixhauser) for all 4 disease groups, 50% cutoff for Dementia
+//4+ elixhauser comorbidities, not useful, too many comorbid conditions in this sample
+gen el_ge4_2yr=1 if comorb_all_0d_n24m>3 & comorb_all_0d_n24m~=.
+replace el_ge4_2yr=0 if comorb_all_0d_n24m<4
+tab el_ge4_2yr, missing
+la var el_ge4_2yr "4+ Elix comorbidities"
+
 **************************************************
 //save the dataset at this point, create tables by quintile in the next header section
 drop resid*
@@ -8058,6 +8065,113 @@ drop pct_24m_*
 
 save oop_mc_sample_adj_age_etc.dta, replace
 ********************************************************************
+log close
+
+
+H="Add household weights"
+/* Program to create a cross-wave variable for Household-level weight
+   Household weight is the last valid data reported - 
+   (if household weight coded 0 due to residence in a nursing home or
+    death or dropped from study, use data from prior wave) */
+
+LIBNAME weightsR 'e:\data\hrs_tracking_2012\trk2012\';
+LIBNAME weights 'e:\data\hrs_tracking_2012\';
+
+/*proc contents data= weightsR.trk2012TR_R;
+run;
+proc freq data= weightsR.trk2012TR_R;
+tables NWGTHH NWHY0RWT /missing;
+run;
+proc print data= weightsR.trk2012TR_R;
+var NWGTHH MWGTHH LWGTHH KWGTHH JWGTHH HWGTHH GWGTHH;
+run;
+*/
+
+DATA weights.Household_weights_2012;
+SET weightsR.trk2012TR_R;
+
+* create weight and wave variables;
+HH_WEIGHT=. ;
+HH_WAVE=. ;
+
+array weight(12) AWGTHH BWGTHH CWGTHH DWGTHH EWGTHH FWGTHH GWGTHH HWGTHH JWGTHH KWGTHH LWGTHH MWGTHH ;
+array wave(12) (1992, 1993, 1994, 1995, 1996, 1998, 2000, 2002, 2004, 2006, 2008, 2010);
+
+do i=1 to 12 ;
+   if weight(i)>0 then do;
+      HH_WEIGHT=weight(i);
+      HH_WAVE=wave(i);
+	  end;
+   end;
+
+PN_N1=PN;
+HHID_N1= HHID;
+
+* keep only weights and demographic variables;
+*keep PN HHID PN_N1 HHID_N1 HH_WEIGHT HH_WAVE  ;
+run;
+
+
+/*
+proc freq data= weights.Household_weights_2012;
+tables HH_WEIGHT HH_WAVE /missing;
+run;
+
+proc print data= weights.Household_weights_2012;
+var HH_WEIGHT MWGTHH LWGTHH KWGTHH JWGTHH HWGTHH GWGTHH;
+run;
+*/
+
+
+
+/* *******************************************************************************************
+   *******************************************************************************************
+   match subjects in the OOPS paper/project to get household
+   weights for this sample */;
+
+* export tracker - Household weights file to STATA;
+proc export data= weights.Household_weights_2012
+outfile="e:\data\hrs_tracking_2012\Household_weights_2012.dta"
+replace;
+run;
+
+/*move to STATA;
+capture log close
+set more off 
+
+
+local logpath E:\data\hrs_oop_2010\logs
+local datapath E:\data\hrs_oop_2010\final_data
+
+log using "`logpath'\merge_HHWeight.txt", text replace
+
+cd `datapath'
+
+use oop_mc_sample_adj_age_etc.dta
+
+merge 1:1 pn_n1 hhid_n1 using E:\data\hrs_tracking_2012\household_weights_2012.dta 
+
+gen hh_n1_match =.
+  replace hh_n1_match =1 if core_year_n1 == hh_wave
+  replace hh_n1_match =2 if core_year_n1 > hh_wave
+  replace hh_n1_match =3 if core_year_n1 < hh_wave
+  replace hh_n1_match =. if hh_wave ==.
+  
+drop if _merge==2
+drop _merge
+
+label variable hh_weight "Household weight - most recent up to 2010"
+label variable hh_wave "Year or most recent household weight - up to 2010"
+label variable hh_n1_match "Core year n1 matches year of household weight"
+label define match 1 "n1 = HHW year" 2 "n1 later than HHW year" 3 "n1 earlier than HHW year"
+label values hh_n1_match match 
+
+tab hh_n1_match, missing
+
+sum hh_weight if hh_weight>0, detail
+
+save oop_mc_sample_adj_age_HHW.dta, replace
+
 log close
 
 
@@ -11545,11 +11659,13 @@ All statistics are 5 year EOL spending
 
 Spending adjusted for inflation, wage index, and discounted
 (not age,sex, race risk adjusted)
+
+Run into problem using svyset , pweights because some stratum only have 1 sampling unit represented
+so for tabulations here, just use pweights, is this OK?
 */
 
 capture log close
 clear all
-set mem 500m
 set more off
 
 local logpath E:\data\hrs_oop_2010\logs
@@ -11561,11 +11677,26 @@ log using `logpath'\17-mc_oop_5yr_adjust_wi_demo-LOG.txt, text replace
 
 cd `datapath'
 
-use oop_mc_sample_adj_age_etc.dta
+use oop_mc_sample_adj_age_HHW.dta
 **************************************************
-sum oop_to_fin_wealth, detail
+//set up for HRS complex survey design
+//Reference Chapter 8 "Getting started with HRS" user guide
+tab stratum secu, missing
+sum hh_weight, detail
+
+svyset secu [pweight=hh_weight], strata(stratum)
+
+svy : mean oop_to_fin_wealth
 sum oop_to_fin_wealth
 sum oop_to_fin_wealth if nw_adj_ratio==1, detail
+
+svy : mean age_at_death_e
+estat sd
+
+mean age_at_death_e [pw=hh_weight]
+estat sd
+return list
+ereturn list
 
 **********************************************************************
 **********************************************************************
@@ -11600,6 +11731,7 @@ la var prob_dementia_n2n1 "Dementia probability, mean (sd)+"
 la var adl_independent_core_n2n1 "Independent in ADLs, %+"
 la var srh_pf_n2n1 "Self Rated Health fair/poor, %+"
 la var smoke_curr_n2n1 "Currently smokes, %+"
+la var el_ge4_2yr "4 or more comorbid conditions, %"
 
 la var d_total_costs_60m_wi "Total payments, all types, mean"
 la var d_tot_gov_pay_60m_wi "Total government payments, mean"
@@ -11614,7 +11746,7 @@ gender_marital_cat3 gender_marital_cat4 medicaid_60m medicaid_x
 
 local cvars2 prob_dementia_n2n1 
 
-local ivars2 adl_independent_core_n2n1 srh_pf_n2n1 smoke_curr_n2n1 
+local ivars2 adl_independent_core_n2n1 srh_pf_n2n1 smoke_curr_n2n1 el_ge4_2yr
 
 local cvars3 d_total_costs_60m_wi d_tot_gov_pay_60m_wi d_tot_paid_by_mc_60m_wi  ///
 d_total_oop_60m_wi d_inf_care_costs_60m_wi 
@@ -11637,7 +11769,7 @@ foreach v in `cvars1'{
 	mat tab1_1=J(1,8,.)
 	local c=1	
 		foreach d in pr_dem_gt50 cancer_grp heartdis_grp other_grp {
-			sum `v' if `d'==1, detail
+			sum `v' if `d'==1 [aw=hh_weight], detail //used sum command b/c had stratum w single psu
 			mat tab1_1[1,`c']=r(mean) //mean
 			mat tab1_1[1,`c'+1]=r(sd) //standard deviation
 			local c = `c'+2
@@ -11657,7 +11789,7 @@ foreach v in `ivars1'{
 	mat tab1_1=J(1,4,.)
 	local c=1	
 		foreach d in pr_dem_gt50 cancer_grp heartdis_grp other_grp {
-			sum `v' if `d'==1, detail
+			sum `v' if `d'==1 [aw=hh_weight], detail
 			mat tab1_1[1,`c']=r(mean)*100 //percent
 			local c = `c'+1
 			}	
@@ -11676,7 +11808,7 @@ foreach v in `cvars2'{
 	mat tab1_1=J(1,8,.)
 	local c=1	
 		foreach d in pr_dem_gt50 cancer_grp heartdis_grp other_grp {
-			sum `v' if `d'==1, detail
+			sum `v' if `d'==1 [aw=hh_weight], detail
 			mat tab1_1[1,`c']=r(mean) //mean
 			mat tab1_1[1,`c'+1]=r(sd) //standard deviation
 			local c = `c'+2
@@ -11696,7 +11828,7 @@ foreach v in `ivars2'{
 	mat tab1_1=J(1,4,.)
 	local c=1	
 		foreach d in pr_dem_gt50 cancer_grp heartdis_grp other_grp {
-			sum `v' if `d'==1, detail
+			sum `v' if `d'==1 [aw=hh_weight], detail
 			mat tab1_1[1,`c']=r(mean)*100 //percent
 			local c = `c'+1
 			}	
@@ -11715,7 +11847,7 @@ foreach v in `cvars3'{
 	mat tab1_1=J(1,4,.)
 	local c=1	
 		foreach d in pr_dem_gt50 cancer_grp heartdis_grp other_grp {
-			sum `v' if `d'==1, detail
+			sum `v' if `d'==1 [aw=hh_weight], detail
 			mat tab1_1[1,`c']=r(mean) //mean
 			local c = `c'+1
 			}	
@@ -11736,7 +11868,8 @@ note("Dementia group has Probability>0.5 of dementia, Cancer, Heart disease and"
 "Other disease groups from National Death Index cause of death." \ ///
 "Total wealth (H#ATOTB) from Rand imputed data." \ ///
 "+ Self report in HRS survey approximately 5 years before death." \ ///
-"* Denotes significantly different (p<.01) for dementia decedents compared to all other decedents.")
+"* Denotes significantly different (p<.01) for dementia decedents compared to all other decedents." \ ///
+"Most recent HRS Household sample weights used.")
 
 **********************************************************************
 **********************************************************************
@@ -11756,21 +11889,26 @@ mat rownames t1a_n="N"
 //save as formatted table
 frmttable , statmat(t1a_n) store(tab1a_n) sdec(0)
 
+label def dem 0 nodem 1 dem
+la val pr_dem_gt50 dem
+
 //continuous variables 1
 foreach v in `cvars1'{
 	mat tab1a_1=J(1,6,.)
 	local c=1	
 		foreach i in 1 0 {
-			sum `v' if pr_dem_gt50==`i', detail
+			sum `v' if pr_dem_gt50==`i' [aw=hh_weight], detail
 			mat tab1a_1[1,`c']=r(mean) //mean
 			mat tab1a_1[1,`c'+1]=r(sd) //standard deviation
 			local c = `c'+2
 			}	
 	local c=5
-	ttest `v', by(pr_dem_gt50)
+	logit pr_dem_gt50 `v' [pw=hh_weight]
+	test `v'
+
 	mat tab1a_1[1,`c']=r(p) //p-value from ttest
 	
-	mat rownames tab1a_1= `v'
+	mat rownames tab1a_1=`v'
 	
 	frmttable , statmat(tab1a_1) store(tab1a_1) varlabels ///
 	sdec(2) substat(1)
@@ -11785,7 +11923,7 @@ foreach v in `ivars1'{
 	mat tab1a_1=J(1,2,.)
 	local c=1	
 		foreach i in 1 0 {
-			sum `v' if pr_dem_gt50==`i', detail
+			sum `v' if pr_dem_gt50==`i' [aw=hh_weight], detail
 			mat tab1a_1[1,`c']=r(mean)*100 //percent
 			local c = `c'+1
 			}
@@ -11803,14 +11941,18 @@ foreach v in `ivars1'{
 mat tab1a_1=J(8,1,.)
 local r=1
 foreach v in black educ_lt_hs gender_marital{
-	tab `v' pr_dem_gt50, chi2
+	logit pr_dem_gt50 `v' [pw=hh_weight]
+	test `v'
+	
 	mat tab1a_1[`r',1]=r(p) //pvalue
 	local r = `r'+1
 	}
 
 local r=7
 foreach v in medicaid_60m medicaid_x{
-	tab `v' pr_dem_gt50, chi2
+	logit pr_dem_gt50 `v' [pw=hh_weight]
+	test `v'
+	
 	mat tab1a_1[`r',1]=r(p) //pvalue
 	local r = `r'+1
 	}
@@ -11828,13 +11970,14 @@ foreach v in `cvars2'{
 	mat tab1a_1=J(1,6,.)
 	local c=1	
 		foreach i in 1 0 {
-			sum `v' if pr_dem_gt50==`i', detail
+			sum `v' if pr_dem_gt50==`i' [aw=hh_weight], detail
 			mat tab1a_1[1,`c']=r(mean) //mean
 			mat tab1a_1[1,`c'+1]=r(sd) //standard deviation
 			local c = `c'+2
 			}	
 	local c=5
-	ttest `v', by(pr_dem_gt50)
+	logit pr_dem_gt50 `v' [pw=hh_weight]
+	test `v'
 	mat tab1a_1[1,`c']=r(p) //p-value from ttest
 
 	mat rownames tab1a_1= `v'
@@ -11852,11 +11995,12 @@ foreach v in `ivars2'{
 	mat tab1a_1=J(1,3,.)
 	local c=1	
 		foreach i in 1 0 {
-			sum `v' if pr_dem_gt50==`i', detail
+			sum `v' if pr_dem_gt50==`i' [aw=hh_weight], detail
 			mat tab1a_1[1,`c']=r(mean)*100 //percent
 			local c = `c'+1
 			}
-		tab `v' pr_dem_gt50, chi2
+	logit pr_dem_gt50 `v' [pw=hh_weight]
+		test `v'
 		mat tab1a_1[1,`c']=r(p) //pvalue
 		
 	mat rownames tab1a_1= `v'
@@ -11874,7 +12018,7 @@ foreach v in `cvars3'{
 	mat tab1a_1=J(1,2,.)
 	local c=1	
 		foreach i in 1 0 {
-			sum `v' if pr_dem_gt50==`i', detail
+			sum `v' if pr_dem_gt50==`i' [aw=hh_weight], detail
 			mat tab1a_1[1,`c']=r(mean) //mean
 			local c = `c'+1
 			}	
@@ -11888,7 +12032,8 @@ foreach v in `cvars3'{
 
 foreach v in `cvars3'{
 	mat tab1a_1=J(1,1,.)
-	ttest `v', by(pr_dem_gt50)
+	logit pr_dem_gt50 `v' [pw=hh_weight]
+	test `v'
 	mat tab1a_1=r(p) //pvalue from ttest
 	mat rownames tab1a_1=`v'
 	
@@ -11908,7 +12053,8 @@ title("Table 1a - Sample characteristics by disease group") ///
 ctitles("" "Dementia" "Other diseases" "P-value") ///
 note("Dementia group has Probability>0.5 of dementia, other has Probability <0.5" \ ///
 "Total wealth (H#ATOTB) from Rand imputed data." \ ///
-"+ Self report in HRS survey approximately 5 years before death.")	
+"+ Self report in HRS survey approximately 5 years before death." \ ///
+"Most recent HRS household weights used.")	
 
 **********************************************************************
 **********************************************************************
@@ -11950,7 +12096,7 @@ frmttable , statmat(t2_n) sdec(0) store(t2_a)
 mat t2_1=J(1,10,.)
 local c=1
 foreach v in `sp_cat'{
-	sum `v' if pr_dem_gt50==`i', detail
+	sum `v' if pr_dem_gt50==`i' [aw=hh_weight], detail
 	mat t2_1[1,`c']=r(mean)
 	mat t2_1[1,`c'+1]=r(p50)
 	local c = `c'+2
@@ -11962,7 +12108,7 @@ merge(t2_a) store(t2_b)
 
 //add oop/wealth ratio, median only
 mat t2_2=J(1,1,.)
-sum oop_to_fin_wealth if pr_dem_gt50==`i', detail
+sum oop_to_fin_wealth if pr_dem_gt50==`i' [aw=hh_weight], detail
 mat t2_2[1,1]=r(p50)*100
 
 frmttable , statmat(t2_2) sdec(2) merge(t2_b) store(t2_c_`i')
@@ -11970,7 +12116,7 @@ frmttable , statmat(t2_2) sdec(2) merge(t2_b) store(t2_c_`i')
 //now by demo characteristics
 foreach d in `demo'{
 	mat t2_n=J(1,1,.)
-	sum adj_total_costs_60m_wi if pr_dem_gt50==`i' & `d'==1
+	sum adj_total_costs_60m_wi if pr_dem_gt50==`i' & `d'==1 [aw=hh_weight]
 	mat t2_n[1,1]=r(N)
 
 	mat rownames t2_n=`d'
@@ -11979,7 +12125,7 @@ foreach d in `demo'{
 mat t2_1=J(1,10,.)
 local c=1
 foreach v in `sp_cat'{
-	sum `v' if pr_dem_gt50==`i' & `d'==1, detail
+	sum `v' if pr_dem_gt50==`i' & `d'==1 [aw=hh_weight], detail
 	mat t2_1[1,`c']=r(mean)
 	mat t2_1[1,`c'+1]=r(p50)
 	local c = `c'+2
@@ -11991,7 +12137,7 @@ merge(t2_d) store(t2_e)
 
 //add oop/wealth ratio, median only
 mat t2_2=J(1,1,.)
-sum oop_to_fin_wealth if pr_dem_gt50==`i' & `d'==1, detail
+sum oop_to_fin_wealth if pr_dem_gt50==`i' & `d'==1 [aw=hh_weight], detail
 mat t2_2[1,1]=r(p50)*100
 
 frmttable , statmat(t2_2) sdec(2) merge(t2_e) store(t2_f)
@@ -13284,10 +13430,7 @@ ctitles("" "Dementia P>70%" "" "Cancer" "" "Heart disease" "" "Other disease" ""
 **********************************************************************************
 //Comorbidities (Elixhauser) for all 4 disease groups, 50% cutoff for Dementia
 //4+ elixhauser comorbidities, not useful, too many comorbid conditions in this sample
-gen el_ge4_2yr=1 if comorb_all_0d_n24m>3 & comorb_all_0d_n24m~=.
-replace el_ge4_2yr=0 if comorb_all_0d_n24m<4
 tab el_ge4_2yr, missing
-la var el_ge4_2yr "4+ Elix comorbidities"
 la var adl_independent_x "ADL Independent, exit ivw"
 la var adl_independent_core_n1 "ADL Independent, n1 core ivw"
 la var adl_independent_core_n2 "ADL Independent, n2 core ivw"
@@ -13610,7 +13753,10 @@ log using `logpath'\22-appendix_Table2_adjustedmodel-LOG.txt, text replace
 cd `datapath'
 
 //this dataset is already limited to ffs, full info last 5 years of life
-use oop_mc_sample_adj_age_etc.dta
+use oop_mc_sample_adj_age_HHW.dta
+
+//set for survey design
+svyset secu [pweight=hh_weight], strata(stratum)
 
 gen educ_3cat=0 if educ_lt_hs==1
 replace educ_3cat=1 if educ_hsdeg==1 |educ_some_coll==1
@@ -13636,15 +13782,18 @@ local sp_cat d_total_costs_60m_wi d_tot_gov_pay_60m_wi ///
 
 //total social costs
 //check gamma vs poisson distribution, just on total social costs, dementia group
-glm d_total_costs_60m_wi `xvars' if pr_dem_gt50==1, family(gamma) link(log)
-glm d_total_costs_60m_wi `xvars' if pr_dem_gt50==1, family(poisson) link(log)
+svy: glm d_total_costs_60m_wi `xvars' /*if pr_dem_gt50==1*/, family(gamma) link(log)
+//svy: glm d_total_costs_60m_wi `xvars' /*if pr_dem_gt50==1*/, family(poisson) link(log)
 
-foreach d in 1 0{
+glm d_total_costs_60m_wi `xvars' if pr_dem_gt50==1 [pw=hh_weight], family(gamma) link(log)
+
+/*
+//foreach d in 1 0{
 
 foreach v in `sp_cat'{
-glm `v' `xvars' if pr_dem_gt50==`d', family(gamma) link(log)
+svy: glm `v' `xvars' /*(if pr_dem_gt50==`d'*/, family(gamma) link(log)
 
-margins, dydx(*)
+svy: margins, dydx(*)
 
 outreg, stats(b_dfdx p_dfdx ci_dfdx) merge(d_`d'_1) store(d_`d'_1) varlabels
 
@@ -13657,7 +13806,8 @@ ctitles("","Total","Medicare","Implicit","OOP","Wealth" \ ///
 "","Social","and","Costs of","Expend","" \ ///
 "","Costs","Medicaid","Care","","") ///
 rtitles( `rtitles' ) ///
-note("Distribution=gamma; link=log")
+note("Distribution=gamma; link=log" \ ///
+"Uses HRS weighting")
 
 outreg using E:\data\hrs_oop_2010\logs\22_marginal_effects, ///
 replay(d_0_1) addtable landscape ///
@@ -13666,8 +13816,10 @@ ctitles("","Total","Medicare","Implicit","OOP","Wealth" \ ///
 "","Social","and","Costs of","Expend","" \ ///
 "","Costs","Medicaid","Care","","") ///
 rtitles( `rtitles' ) ///
-note("Distribution=gamma; link=log")
+note("Distribution=gamma; link=log" \ ///
+"Uses HRS weighting")
 **************************************************************************
+/*
 //now bootstrap se's
 foreach d in 1 0{
 
@@ -13697,7 +13849,7 @@ ctitles("","Total","Medicare","Implicit","OOP","Wealth" \ ///
 "","Costs","Medicaid","Care","","") ///
 rtitles( `rtitles' ) ///
 note("Distribution=gamma; link=log", SE's bootstrapped 1000 replications")
-
+*/
 
 **************************************************************************
 log close

@@ -331,7 +331,7 @@ run;
 
 
 H="Pull core interviews"
-/*Get r's n1 and n2 core interviews*/
+/*Get r's n1 and n2 core interviews with dementia probability from Hurd dataset*/
 
 libname hrs_cln 'E:\data\hrs_cleaned';
 libname oop_int 'E:\data\hrs_oop_2010\int_data';
@@ -1516,6 +1516,19 @@ nh_rates a left join
 hhaide_rate_2 b
 on a.state_usps_code=b.state_usps_code;
 quit;
+
+/*get prices into an output file for reference in the paper*/
+data rates_mean; set nh_hh_rates ; if state_usps_code~='natl average';
+run;
+data rates_national; set nh_hh_rates ; if state_usps_code='natl average';
+run;
+
+ods rtf body=" E:\data\hrs_oop_2010\logs\prices_for_imputations.rtf" ;
+proc means data=rates_mean; run;
+
+proc print data=rates_national; run;
+ods rtf close;
+
 
 /******************************************************/
 /*Get state of residence for each interview time period,
@@ -11816,9 +11829,10 @@ use oop_mc_sample_adj_age_HHW.dta
 **************************************************
 //set up for HRS complex survey design
 //Reference Chapter 8 "Getting started with HRS" user guide
+//this section not used, just use aweights in tables in paper
 tab stratum secu, missing
 sum hh_weight, detail
-
+/*
 svyset secu [pweight=hh_weight], strata(stratum)
 
 svy : mean oop_to_fin_wealth
@@ -11832,6 +11846,7 @@ mean age_at_death_e [pw=hh_weight]
 estat sd
 return list
 ereturn list
+*/
 
 **********************************************************************
 **********************************************************************
@@ -11847,6 +11862,13 @@ foreach v in `get_n2'{
 	sum `v'_n2n1
 }
 
+**************************************************
+//two dementia probabilities in dataset now
+sum prob_dementia_n2n1, detail
+sum prob_dem_n1n2, detail
+//use the n1n2 variable, gets more observations since uses interview
+//closest to r's death with data available
+
 //assign variable labels so can auto fill in the row descriptions
 //assign variable names so can use varlabels when make all tables
 la var age_at_death_e "Age at death, mean (sd)"
@@ -11861,7 +11883,7 @@ la var gender_marital_cat4 "Male, unmarried at death, %"
 la var medicaid_60m "Medicaid 5y pre-death, %"
 la var medicaid_x "Medicaid at death?, %"
 
-la var prob_dementia_n2n1 "Dementia probability, mean (sd)+"
+la var prob_dem_n1n2 "Dementia probability, mean (sd)++"
 
 la var adl_independent_core_n2n1 "Independent in ADLs, %+"
 la var srh_pf_n2n1 "Self Rated Health fair/poor, %+"
@@ -11879,7 +11901,7 @@ local cvars1 age_at_death_e
 local ivars1 black educ_lt_hs gender_marital_cat1 gender_marital_cat2 ///
 gender_marital_cat3 gender_marital_cat4 medicaid_60m medicaid_x 
 
-local cvars2 prob_dementia_n2n1 
+local cvars2 prob_dem_n1n2 
 
 local ivars2 adl_independent_core_n2n1 srh_pf_n2n1 smoke_curr_n2n1 el_ge4_2yr
 
@@ -12003,6 +12025,7 @@ note("Dementia group has Probability>0.5 of dementia, Cancer, Heart disease and"
 "Other disease groups from National Death Index cause of death." \ ///
 "Total wealth (H#ATOTB) from Rand imputed data." \ ///
 "+ Self report in HRS survey approximately 5 years before death." \ ///
+"++ Self report in HRS survey, core interview before death." \ ///
 "* Denotes significantly different (p<.01) for dementia decedents compared to all other decedents." \ ///
 "Most recent HRS Household sample weights used.")
 
@@ -12093,7 +12116,7 @@ foreach v in medicaid_60m medicaid_x{
 	}
 mat rownames tab1a_1=`ivars'
 	
-frmttable, statmat(tab1a_1) store(tab1a_5) sdec(2)
+frmttable, statmat(tab1a_1) store(tab1a_5) sdec(3)
 //adds column to means table
 outreg, replay(tab1a_4) merge(tab1a_5) store(table1a_2)
 	
@@ -12101,6 +12124,8 @@ outreg, replay(tab1a_4) merge(tab1a_5) store(table1a_2)
 outreg, replay(table1a_1) append(table1a_2) store(table1a_3)	
 
 //continuous variables 2
+//need alternate method to get p-value, can't do logit because probability dementia
+//used to create dementia disease groups
 foreach v in `cvars2'{
 	mat tab1a_1=J(1,6,.)
 	local c=1	
@@ -12111,14 +12136,16 @@ foreach v in `cvars2'{
 			local c = `c'+2
 			}	
 	local c=5
-	logit pr_dem_gt50 `v' [pw=hh_weight]
-	test `v'
+	svyset [pw=hh_weight]
+	
+	svy: mean `v', over(pr_dem_gt50) 
+	test [`v']nodem=[`v']dem
 	mat tab1a_1[1,`c']=r(p) //p-value from ttest
 
 	mat rownames tab1a_1= `v'
 	
 	frmttable , statmat(tab1a_1) store(tab1a_5) varlabels ///
-	sdec(2) substat(1)
+	sdec(3) substat(1)
 	
 	outreg, replay(tab1a_6) append(tab1a_5) store(tab1a_6)
 	}
@@ -12141,7 +12168,7 @@ foreach v in `ivars2'{
 	mat rownames tab1a_1= `v'
 	
 	frmttable , statmat(tab1a_1) store(tab1a_7) varlabels ///
-	sdec(2)
+	sdec(3)
 	
 	outreg, replay(tab1a_8) append(tab1a_7) store(tab1a_8)
 	}
@@ -12173,7 +12200,7 @@ foreach v in `cvars3'{
 	mat rownames tab1a_1=`v'
 	
 	frmttable , statmat(tab1a_1) store(tab1a_11) varlabels ///
-	sdec(2)
+	sdec(3)
 	
 	outreg, replay(tab1a_12) append(tab1a_11) store(tab1a_12)
 	}
@@ -13965,7 +13992,7 @@ drop if `v'==.
 svy: glm d_total_costs_60m_wi `xvars' /*if pr_dem_gt50==1*/, family(gamma) link(log)
 //svy: glm d_total_costs_60m_wi `xvars' /*if pr_dem_gt50==1*/, family(poisson) link(log)
 
-glm d_total_costs_60m_wi `xvars' if pr_dem_gt50==1 [pw=hh_weight], family(gamma) link(log)
+glm d_total_costs_60m_wi `xvars' if pr_dem_gt50==1 [aw=hh_weight], family(gamma) link(log)
 predict yhat if e(sample) , mu
 sum yhat [aw=hh_weight], detail
 sum d_total_costs_60m_wi if pr_dem_gt50==1 [aw=hh_weight], detail
@@ -13974,7 +14001,7 @@ drop yhat
 foreach d in 1 0{
 
 foreach v in `sp_cat'{
-glm `v' `xvars' if pr_dem_gt50==`d' [pw=hh_weight] , family(gamma) link(log)
+glm `v' `xvars' if pr_dem_gt50==`d' [aw=hh_weight] , family(gamma) link(log)
 
 predict yhat if e(sample) , mu //predicted spending
 sum yhat [aw=hh_weight], detail
@@ -14007,13 +14034,17 @@ rtitles( `rtitles' ) ///
 note("Distribution=gamma; link=log" \ ///
 "Uses HRS weighting")
 **************************************************************************
-/*
+
 //now bootstrap se's
 foreach d in 1 0{
 
 foreach v in `sp_cat'{
-glm `v' `xvars' if pr_dem_gt50==`d', family(gamma) link(log) vce(bootstrap, r(1000))
+glm `v' `xvars' if pr_dem_gt50==`d' , family(gamma) link(log) vce(bootstrap, r(1000))
 
+predict yhat if e(sample) , mu //predicted spending
+sum yhat [aw=hh_weight], detail
+
+drop yhat
 margins, dydx(*)
 
 outreg, stats(b_dfdx p_dfdx ci_dfdx) merge(d_`d'_1) store(d_`d'_1) varlabels
@@ -14037,7 +14068,7 @@ ctitles("","Total","Medicare","Implicit","OOP","Wealth" \ ///
 "","Costs","Medicaid","Care","","") ///
 rtitles( `rtitles' ) ///
 note("Distribution=gamma; link=log", SE's bootstrapped 1000 replications")
-*/
+
 
 **************************************************************************
 log close

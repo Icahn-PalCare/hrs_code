@@ -12766,8 +12766,152 @@ outreg using E:\data\hrs_oop_2010\logs\17a_table2, replay(t2_g) landscape addtab
 	"Imputed 3rd party payments for nursing home costs included in Total Social" \ ///
 	"Costs but not listed here so spending columns do not add up to total cost column." \ ///
 	"Uses HRS household weights.")
+**************************************************
+//additional demo char by disease group, for text
 
+la var networth_adj2010_60m "Total wealth 5y pre-death" 
+la var medicaid_60m "Medicaid 5y pre-death (%)"
+la var medicaid_x "Medicaid at death? (%)"
+la var married_x "Married at death"
 
+//part 1 - first row n each group
+mat t1_n=J(1,4,.)
+local c = 1
+foreach v in pr_dem_gt50 cancer_grp heartdis_grp other_grp {
+	tab `v', missing matcell(r1)
+	mat t1_n[1,`c']=r1[2,1]
+	local c = `c'+1
+}
+mat rownames t1_n="N"
+
+//save as formatted table
+frmttable , statmat(t1_n) store(tab1_n) sdec(0)
+
+//continuous variables 1
+local cvars networth_adj2010_60m
+foreach v in `cvars'{
+	mat tab1_1=J(1,12,.)
+	local c=1	
+		foreach d in pr_dem_gt50 cancer_grp heartdis_grp other_grp {
+			sum `v' if `d'==1 [aw=hh_weight], detail 
+			mat tab1_1[1,`c']=r(mean) //mean
+			mat tab1_1[1,`c'+1]=r(sd) //standard deviation
+			mat tab1_1[1,`c'+2]=r(p50) //median
+			local c = `c'+3
+			}	
+	mat rownames tab1_1= `v'
+	
+	frmttable , statmat(tab1_1) store(tab1_1) varlabels ///
+	sdec(2) substat(2)
+	
+	outreg, replay(tab1_2) append(tab1_1) store(tab1_2)
+	}
+//adds to n table
+outreg, replay(tab1_n) append(tab1_2) store(table1_1)	
+
+//indicator variables 1
+local ivars medicaid_60m medicaid_x married_x 
+foreach v in `ivars'{
+	mat tab1_1=J(1,4,.)
+	local c=1	
+		foreach d in pr_dem_gt50 cancer_grp heartdis_grp other_grp {
+			sum `v' if `d'==1 [aw=hh_weight], detail
+			mat tab1_1[1,`c']=r(mean)*100 //percent
+			local c = `c'+1
+			}	
+	mat rownames tab1_1= `v'
+	
+	frmttable , statmat(tab1_1) store(tab1_3) varlabels ///
+	sdec(2)
+	
+	outreg, replay(tab1_4) append(tab1_3) store(tab1_4)
+	}
+//adds to main table
+outreg using E:\data\hrs_oop_2010\logs\17a_table2, ///
+replay(table1_1) append(tab1_4) store(table1_2)	addtable ///
+title("Demo characteristics for text") ///
+ctitles("" "Dementia" "Cancer" "Heart disease" "Other")
+
+**************************************************
+//medicare and medicaid separately for dementia vs other groups
+
+//ratio fin wealth to oop
+sum finwealth_adj2010_60m, detail
+gen ratio_finwealth_adj=finwealth_adj2010_60m
+replace ratio_finwealth_adj=1 if finwealth_adj2010_60m<=0
+gen oop_to_wlth_excl_housing = d_total_oop_60m_wi/ratio_finwealth_adj
+la var oop_to_wlth_excl_housing "OOP/Financial wealth (excl housing), median"
+sum oop_to_wlth_excl_housing, detail
+sum oop_to_fin_wealth , detail
+
+la var d_tot_paid_by_mc_60m_wi "Medicare payments, mean (sd)" 
+la var d_nh_cost_medicaid_60m_wi "Medicaid payements"
+la var d_total_oop_60m_wi "Out of pocket expenses" 
+la var d_inf_care_costs_60m_wi "Imputed informal care costs"
+
+local cvars d_tot_paid_by_mc_60m_wi d_nh_cost_medicaid_60m_wi ///
+ d_total_oop_60m_wi d_inf_care_costs_60m_wi 
+ 
+//part 1 - first row n each group
+mat t1a_n=J(1,2,.)
+local c = 1
+foreach i in 1 0 {
+	sum d_total_costs_60m_wi if pr_dem_gt50==`i', detail
+	mat t1a_n[1,`c']=r(N)
+	local c = `c'+1
+}
+mat rownames t1a_n="N"
+
+//save as formatted table
+frmttable , statmat(t1a_n) store(tab1a_n) sdec(0)
+
+label def dem 0 nodem 1 dem
+la val pr_dem_gt50 dem
+
+//continuous variables 1
+foreach v in `cvars'{
+	mat tab1a_1=J(1,6,.)
+	local c=1	
+		foreach i in 1 0 {
+			sum `v' if pr_dem_gt50==`i' [aw=hh_weight], detail
+			mat tab1a_1[1,`c']=r(mean) //mean
+			mat tab1a_1[1,`c'+1]=r(sd) //standard deviation
+			local c = `c'+2
+			}	
+	local c=5
+	logit pr_dem_gt50 `v' [pw=hh_weight]
+	test `v'
+
+	mat tab1a_1[1,`c']=r(p) //p-value from ttest
+	
+	mat rownames tab1a_1=`v'
+	
+	frmttable , statmat(tab1a_1) store(tab1a_1) varlabels ///
+	sdec(2) substat(1)
+	
+	outreg, replay(tab1a_2) append(tab1a_1) store(tab1a_2)
+	}
+//adds to n table
+outreg , ///
+ replay(tab1a_n) append(tab1a_2) store(table1a_1)  ///
+ ctitles("" "Dementia" "Other diseases" "P-value") ///
+ title("Spending breakdown for text")
+
+//add oop/financial wealth median
+mat tab1a_r=J(1,3,.)
+local c=1	
+foreach i in 1 0 {
+	sum oop_to_wlth_excl_housing if pr_dem_gt50==`i' [aw=hh_weight], detail
+	mat tab1a_r[1,`c']=r(p50)
+	local c = `c'+1
+	}
+mat rownames tab1a_r=oop_to_wlth_excl_housing
+frmttable, statmat(tab1a_r) store(tab1a_r) varlabels sdec(2)
+
+outreg using E:\data\hrs_oop_2010\logs\17a_table2, ///
+ replay(table1a_1) append(tab1a_r) store(table1a_2) addtable ///
+ ctitles("" "Dementia" "Other diseases" "P-value") ///
+ title("Spending breakdown for text")
 ***********************************************************
 log close
 

@@ -13843,7 +13843,17 @@ note("Elixhauser comorbidities from ICD-9 diagnosis codes last 2 years of life, 
  "Replace cells < 10 observations = NR, delete last row of this table") ///
  addtable landscape
 }
+*************************************************************************
+**** Timing of dementia probability variable  ******************
+*************************************************************************
+sum prob_dem_n1n2 , detail
 
+gen prob_dem_m_to_death = .
+replace prob_dem_m_to_death = months_x if dem_miss_n1==0 //if from n1 ivw, use n1 date
+replace prob_dem_m_to_death = months_xn1 if dem_miss_n1==1 & dem_miss_n2==0 //if from n2, use n2 date
+sum prob_dem_m_to_death [aw=hh_weight], detail
+
+tab proxy_core_n1 core_year_n1 if dem_miss_n1==1 & dem_miss_n2==0 , missing
 *************************************************************************
 log close
 
@@ -14088,19 +14098,17 @@ H="Adjustment model"
 capture log close
 clear all
 set more off
+set scheme s1color
 
 local logpath E:\data\hrs_oop_2010\logs
 local datapath E:\data\hrs_oop_2010\final_data
 
-log using `logpath'\22-appendix_Table2_adjustedmodel-LOG.txt, text replace
+log using `logpath'\22new-appendix_Table2_adjustedmodel-LOG.txt, text replace
 
 cd `datapath'
 
 //this dataset is already limited to ffs, full info last 5 years of life
 use oop_mc_sample_adj_age_HHW.dta
-
-//set for survey design
-svyset secu [pweight=hh_weight], strata(stratum)
 
 gen educ_3cat=0 if educ_lt_hs==1
 replace educ_3cat=1 if educ_hsdeg==1 |educ_some_coll==1
@@ -14129,18 +14137,8 @@ foreach v in age_at_death_cat race_eth_cat female_x married_x educ_3cat {
 tab `v',missing
 drop if `v'==.
 }
-  
-//total social costs
-//check gamma vs poisson distribution, just on total social costs, dementia group
-svy: glm d_total_costs_60m_wi `xvars' /*if pr_dem_gt50==1*/, family(gamma) link(log)
-//svy: glm d_total_costs_60m_wi `xvars' /*if pr_dem_gt50==1*/, family(poisson) link(log)
 
-glm d_total_costs_60m_wi `xvars' if pr_dem_gt50==1 [aw=hh_weight], family(gamma) link(log)
-predict yhat if e(sample) , mu
-sum yhat [aw=hh_weight], detail
-sum d_total_costs_60m_wi if pr_dem_gt50==1 [aw=hh_weight], detail
-drop yhat
-
+//run glm, predict spending, create table of marginal effects
 foreach d in 1 0{
 
 foreach v in `sp_cat'{
@@ -14153,7 +14151,7 @@ drop yhat
 
 margins , dydx(*) //marginal effects at the averages
 
-outreg, stats(b_dfdx p_dfdx ci_dfdx) merge(d_`d'_1) store(d_`d'_1) varlabels
+outreg, stats(b_dfdx p_dfdx ci_dfdx) merge(d_`d'_1) store(d_`d'_1) varlabels bdec(0)
 
 }
 }
@@ -14165,7 +14163,8 @@ ctitles("","Total","Medicare","Implicit","OOP","Wealth" \ ///
 "","Costs","Medicaid","Care","","") ///
 rtitles( `rtitles' ) ///
 note("Distribution=gamma; link=log" \ ///
-"Uses HRS weighting")
+"Uses HRS weighting") ///
+
 
 outreg using E:\data\hrs_oop_2010\logs\22_marginal_effects, ///
 replay(d_0_1) addtable landscape ///
@@ -14177,12 +14176,83 @@ rtitles( `rtitles' ) ///
 note("Distribution=gamma; link=log" \ ///
 "Uses HRS weighting")
 **************************************************************************
+//predict residuals for the total costs, plot by demo characteristics
+cd `logpath'
+foreach d in 1 0{
+glm d_total_costs_60m_wi `xvars' if pr_dem_gt50==`d' [aw=hh_weight] , family(gamma) link(log)
+predict resid_`d' if e(sample) , deviance
+
+scatter resid_`d' age_at_death_e , ///
+subtitle("Dementia=`d' adusted model")
+graph save `logpath'\resid_age_`d'.gph, replace
+
+scatter resid_`d' race_eth_cat , ///
+subtitle("Residuals vs Race-ethnicity")
+graph save `logpath'\resid_race_`d'.gph, replace
+
+scatter resid_`d' female_x , ///
+subtitle("Residuals vs Gender") xlabel(0 1)
+graph save `logpath'\resid_sex_`d'.gph, replace
+
+scatter resid_`d' married_x , ///
+subtitle("Residuals vs Married") xlabel(0 1)
+graph save `logpath'\resid_mar_`d'.gph, replace
+
+scatter resid_`d' educ_3cat , ///
+subtitle("Residuals vs Education") xlabel(0 1 2)
+graph save `logpath'\resid_ed_`d'.gph, replace
+}
+
+//now combine plots into single figures
+graph combine resid_age_1.gph resid_age_0.gph, ///
+title("Residuals vs Age at death")
+
+graph save `logpath'\resid_age_comb.gph, replace
+graph export `logpath'\resid_age_comb.pdf, replace
+
+graph combine resid_race_1.gph resid_sex_1.gph resid_mar_1.gph resid_ed_1.gph, ///
+title("Residuals vs demo char, Dementia sub-group")
+graph save `logpath'\resid_demo_dem.gph, replace
+graph export `logpath'\resid_demo_dem.pdf, replace
+
+graph combine resid_race_0.gph resid_sex_0.gph resid_mar_0.gph resid_ed_0.gph, ///
+title("Residuals vs demo char, No Dementia sub-group")
+graph save `logpath'\resid_demo_nodem.gph, replace
+graph export `logpath'\resid_demo_nodem.pdf, replace
+
+/*capture program drop rplot
+program define rplot
+args d i label var varname
+scatter resid_`d' if `var'==`i', ///
+subtitle("Dementia adjusted model, `varname'=`label'")
+graph save resid_race`i'_`d'.gph, replace
+end program
+
+cd `logpath'
+
+rplot 1 1 Black race_eth_cat Race
+rplot 1 2 White race_eth_cat Race*/
+
+**************************************************************************
+//bootstrap just looking at total spending, comparing means
+mat mean_check=J(4,2,.)
+
+//bootstrap, r(1000): mean d_total_costs_60m_wi if pr_dem_gt50==1
+tabstat d_total_costs_60m_wi if pr_dem_gt50==1, statistics(mean semean)
+mat mean1=e(b)
+mat mean_check[1,1]=mean1[1,1]
+mat list mean_check
+
+bootstrap, r(1000): mean d_total_costs_60m_wi if pr_dem_gt50==0
+mean d_total_costs_60m_wi if pr_dem_gt50==0
+
+//add table of means, se's bootstrap and not
+
 
 //now bootstrap se's
 foreach d in 1 0{
 
-foreach v in `sp_cat'{
-glm `v' `xvars' if pr_dem_gt50==`d' , family(gamma) link(log) vce(bootstrap, r(1000))
+glm d_total_costs_60m_wi `xvars' if pr_dem_gt50==`d' , family(gamma) link(log) vce(bootstrap, r(1000))
 
 predict yhat if e(sample) , mu //predicted spending
 sum yhat [aw=hh_weight], detail
@@ -14190,27 +14260,25 @@ sum yhat [aw=hh_weight], detail
 drop yhat
 margins, dydx(*)
 
-outreg, stats(b_dfdx p_dfdx ci_dfdx) merge(d_`d'_1) store(d_`d'_1) varlabels
+outreg, stats(b_dfdx p_dfdx ci_dfdx) merge(d_`d'_1) store(d_`d'_1) varlabels bdec(0)
 
 }
-}
+
 outreg using E:\data\hrs_oop_2010\logs\22_marginal_effects, ///
-replay(d_1_1) replace landscape ///
+replay(d_1_1) addtable landscape  ///
 title("Marginal effects, Prob Dementia > 50% sub-group") ///
-ctitles("","Total","Medicare","Implicit","OOP","Wealth" \ ///
-"","Social","and","Costs of","Expend","" \ ///
-"","Costs","Medicaid","Care","","") ///
+ctitles("","Total Social Costs") ///
 rtitles( `rtitles' ) ///
 note("Distribution=gamma; link=log, SE's bootstrapped 1000 replications")
 
 outreg using E:\data\hrs_oop_2010\logs\22_marginal_effects, ///
-replay(d_0_1) addtable landscape ///
+replay(d_0_1) addtable landscape  ///
 title("Marginal effects, Prof Dementia < 50% sub-group") ///
-ctitles("","Total","Medicare","Implicit","OOP","Wealth" \ ///
-"","Social","and","Costs of","Expend","" \ ///
-"","Costs","Medicaid","Care","","") ///
+ctitles("","Total Social Costs") ///
 rtitles( `rtitles' ) ///
-note("Distribution=gamma; link=log", SE's bootstrapped 1000 replications")
+note("Distribution=gamma; link=log, SE's bootstrapped 1000 replications")
+
+
 
 
 **************************************************************************

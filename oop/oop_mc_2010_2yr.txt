@@ -6061,6 +6061,174 @@ tab educ educ_lt_hs , missing
 tab educ educ_hsdeg , missing
 tab educ educ_some_coll , missing
 tab educ educ_coll , missing
+
+***************************************************************************
+//self report of comorbid conditions from interviews
+local cond stroke_hrs_n dm_hrs_n heart_hrs_n htn_hrs_n lung_hrs_n ///
+cancer_hrs_n psych_hrs_n arth_hrs_n
+foreach v in `cond'{
+gen `v'2n1=`v'2
+replace `v'2n1=`v'1 if `v'2==. & `v'1~=.
+tab `v'2n1, missing
+}
+
+la var stroke_hrs_n2n1 "Stroke"
+la var dm_hrs_n2n1 "Diabetes"
+la var heart_hrs_n2n1 "Heart disease"
+la var htn_hrs_n2n1 "Hypertension"
+la var lung_hrs_n2n1 "Lung disease"
+la var cancer_hrs_n2n1 "Cancer"
+la var psych_hrs_n2n1 "Psych cond"
+la var arth_hrs_n2n1 "Arthritis"
+
+gen sr_comorb_cnt = stroke_hrs_n2n1 + dm_hrs_n2n1 + heart_hrs_n2n1 + htn_hrs_n2n1 + lung_hrs_n2n1 + ///
+cancer_hrs_n2n1 + psych_hrs_n2n1 + arth_hrs_n2n1
+gen sr_comorb_ge4 = 1 if sr_comorb_cnt >3
+replace sr_comorb_ge4 = 0 if sr_comorb_cnt <4
+replace sr_comorb_ge4=. if sr_comorb_cnt==.
+tab sr_comorb_ge4, missing
+la var sr_comorb_ge4 "4+ self report comorbidities"
+
+********************************************************************
+//clean up medicaid self report, once report medicaid, continue to report it
+//this step overwrites those that have conflicting report of medicaid 
+forvalues i = 1/3{
+replace medicaid_x = 1 if medicaid_n`i'==1
+}
+
+forvalues i = 2/3{
+replace medicaid_n1 = 1 if medicaid_n`i'==1
+}
+
+replace medicaid_n2 = 1 if medicaid_n3==1
+
+tab medicaid_x, missing
+
+********************************************************************
+//additional variables to look at ~5 years prior to death vs at death
+local varins medicaid champus medigap married
+local varwlth  networth_adj2010 finwealth_adj2010 
+foreach v in `varins'{
+tab `v'_n3, missing
+tab `v'_n2 if `v'_n3==., missing
+tab `v'_x, missing
+}
+
+//basic algorithm for assigning survey responses at 60m before death
+//uses first core interview within the 5 years prior to death
+//if months_x >= 60 use n1 ivw
+//if months_x + months_n1 >= 60 use n2 ivw
+//if still missing use n3 response
+//then backfill with n2 or n1 responses if still missing
+
+sum months_x
+gen months_xn1 = months_x+months_n1
+sum months_xn1
+gen months_xn2 = months_x+months_n1+months_n2
+sum months_xn2
+
+foreach v in `varins' `varwlth' {
+gen `v'_60m = `v'_n1 if months_x>=60 & months_x!=.
+replace `v'_60m = `v'_n2 if `v'_60m==. & (months_xn1)>=60 & months_xn1!=.
+replace `v'_60m = `v'_n3 if `v'_60m==. 
+sum `v'_60m, detail
+
+//if still missing, assign n2 or n1 response, does this help?
+replace `v'_60m = `v'_n2 if `v'_60m==. 
+replace `v'_60m = `v'_n1 if `v'_60m==. 
+sum `v'_60m, detail
+}
+
+la var medicaid_60m "Medicaid at 5yr before death"
+la var champus_60m "VA ins coverage at 5yr before death"
+la var medigap_60m "Medigap (private ins) at 5yr before death"
+la var married_60m "Married at 5yr before death"
+la var networth_adj2010_60m "Net worth at 5yr before death"
+la var finwealth_adj2010_60m "Financial wealth at 5yr before death"
+
+//interview used for 5 year before death
+gen ivw_60m = "n1" if months_x>=60 & months_x!=.
+replace ivw_60m = "n2" if ivw_60m=="" & (months_xn1)>=60 & months_xn1!=.
+replace ivw_60m = "n3" if ivw_60m==""
+tab ivw_60m, missing
+
+//change in medicaid status 5 year before death to death
+tab medicaid_60m medicaid_x, missing
+
+gen medicaid_60m_x = .
+replace medicaid_60m_x=1 if medicaid_60m==1
+replace medicaid_60m_x=2 if medicaid_60m==0 & medicaid_x==1
+replace medicaid_60m_x=3 if medicaid_60m==0 & medicaid_x==0
+
+la var medicaid_60m_x "Medicaid status change 5yr to death"
+la def mc 1"Medicaid 5 years prior to death" 2"Enrolled in Medicaid in last 5 years" ///
+3"No Medicaid at death"
+la val medicaid_60m_x mc
+tab medicaid_60m_x , missing
+
+//create indicators
+tab medicaid_60m_x,gen(mcaid_change)
+la var mcaid_change1 "Medicaid at 5y pre-death"
+la var mcaid_change2 "Enrolled in Medicaid during 5y pre-death"
+la var mcaid_change3 "No Medicaid last 5y of life"
+
+forvalues i = 1/3{
+tab mcaid_change`i',missing
+}
+
+//Looking at reported insurance at 60m
+gen insurance_cat = .
+replace insurance_cat = 1 if medicaid_60m==1 & champus_60m==0 & medigap_60m==0
+replace insurance_cat = 2 if medicaid_60m==1 & champus_60m==1 & medigap_60m==0
+replace insurance_cat = 3 if medicaid_60m==1 & champus_60m==0 & medigap_60m==1
+replace insurance_cat = 4 if medicaid_60m==1 & champus_60m==1 & medigap_60m==1
+replace insurance_cat = 5 if medicaid_60m==0 & champus_60m==1 & medigap_60m==0
+replace insurance_cat = 6 if medicaid_60m==0 & champus_60m==1 & medigap_60m==1
+replace insurance_cat = 7 if medicaid_60m==0 & champus_60m==0 & medigap_60m==1
+replace insurance_cat = 8 if medicaid_60m==0 & champus_60m==0 & medigap_60m==0
+la var insurance_cat "Self report insurance, categorical, at 5yr pre-death"
+la def insurance_cat 1"Medicaid only" 2"Medicaid+VA" 3"Medicaid+Medigap" ///
+4"Medicaid+VA+Medigap" 5"VA only" 6"VA+Medigap" 7"Medigap only" 8"None"
+la val insurance_cat insurance_cat 
+tab insurance_cat , missing
+
+********************************************************************
+//additional variables to look at ~2 years prior to death vs at death
+//basic algorithm for assigning survey responses at 24m before death
+//uses first core interview within the 2 years prior to death
+//if months_x >= 24 use n1 ivw
+//if months_x < 24 use the n2 ivw
+//if still missing, fill in with either the n2 or n1 response
+
+foreach v in `varins' `varwlth' {
+gen `v'_24m = `v'_n1 if months_x>=24 & months_x!=.
+replace `v'_24m = `v'_n2 if `v'_24m==. & (months_x)<24 
+sum `v'_24m, detail
+
+//if still missing, assign n2 or n1 response, does this help?
+replace `v'_24m = `v'_n2 if `v'_24m==. 
+replace `v'_24m = `v'_n1 if `v'_24m==. 
+sum `v'_24m, detail
+}
+
+la var medicaid_24m "Medicaid at 2yr before death"
+la var champus_24m "VA ins coverage at 2yr before death"
+la var medigap_24m "Medigap (private ins) at 2yr before death"
+la var married_24m "Married at 2yr before death"
+la var networth_adj2010_24m "Net worth at 2yr before death"
+la var finwealth_adj2010_24m "Financial wealth at 2yr before death"
+
+//interview used for 2 year before death
+gen ivw_24m = "n1" if months_x>=24 & months_x!=.
+replace ivw_24m = "n2" if ivw_24m==""  & (months_x)<24 
+tab ivw_24m, missing
+tab ivw_60m ivw_24m, missing
+
+//change in medicaid status 2 year before death to death
+tab medicaid_24m medicaid_x, missing
+**************************************************
+
+
 ***************************************************************************
 //create spending category for total government spending
 gen tot_gov_pay_24m = tot_paid_by_mc_24m + nh_cost_medicaid_24m 
@@ -6138,18 +6306,18 @@ doctor_oop_24m rx_oop_24m insurance_costs_24m other_oop_24m  ///
 nh_cost_medicaid_24m nh_cost_private_24m inf_care_costs_24m ///
 ip_paid_by_mc_24m snf_paid_by_mc_24m hh_paid_by_mc_24m ///
 hs_paid_by_mc_24m pb_paid_by_mc_24m op_paid_by_mc_24m dm_paid_by_mc_24m ///
-natl_nh_cost_medicaid_24m natl_nh_cost_private_24m natl_inf_care_costs_24m
+natl_nh_cost_medicaid_24m natl_nh_cost_private_24m natl_inf_care_costs_24m 
 
 local adj_wi_60m helper_oop_60m hospital_oop_60m nh_oop_60m ///
 doctor_oop_60m rx_oop_60m insurance_costs_60m other_oop_60m  ///
 nh_cost_medicaid_60m nh_cost_private_60m inf_care_costs_60m ///
 ip_paid_by_mc_60m snf_paid_by_mc_60m hh_paid_by_mc_60m ///
 hs_paid_by_mc_60m pb_paid_by_mc_60m op_paid_by_mc_60m dm_paid_by_mc_60m ///
-natl_nh_cost_medicaid_60m natl_nh_cost_private_60m natl_inf_care_costs_60m 
+natl_nh_cost_medicaid_60m natl_nh_cost_private_60m natl_inf_care_costs_60m
 
 
 //for 2 year sample, no discounting
-foreach v in `adj_wi_24m '{
+foreach v in `adj_wi_24m' networth_adj2010_24m finwealth_adj2010_24m {
 	egen mean_`v'=mean(`v') if ind_sample_2yr==1
 	reg `v' c.wage_index_20102 if ind_sample_2yr==1
 	predict resid_`v' if ind_sample_2yr==1, residual
@@ -6175,7 +6343,7 @@ foreach v in `adj_wi_24m '{
 }
 
 //for 5 year sample, no discounting
-foreach v in `adj_wi_60m '{
+foreach v in `adj_wi_60m' networth_adj2010_60m finwealth_adj2010_60m {
 	egen mean_`v'=mean(`v') if ind_sample_5yr==1
 	reg `v' c.wage_index_20102 if ind_sample_5yr==1
 	predict resid_`v' if ind_sample_5yr==1, residual
@@ -6201,7 +6369,31 @@ foreach v in `adj_wi_60m '{
 }
 
 foreach i in 24 60{
-//no discounting
+//Just discounting totals, no wage index adjustment done
+gen d_total_oop_`i'm = d_helper_oop_`i'm + d_hospital_oop_`i'm + d_nh_oop_`i'm + ///
+	d_doctor_oop_`i'm + d_rx_oop_`i'm + d_insurance_costs_`i'm + d_other_oop_`i'm
+
+gen d_tot_paid_by_mc_`i'm=d_ip_paid_by_mc_`i'm + d_snf_paid_by_mc_`i'm + d_hh_paid_by_mc_`i'm + ///
+	d_hs_paid_by_mc_`i'm + d_pb_paid_by_mc_`i'm + d_op_paid_by_mc_`i'm + d_dm_paid_by_mc_`i'm
+
+gen d_total_nh_costs_`i'm = d_snf_paid_by_mc_`i'm + d_nh_oop_`i'm + d_nh_cost_medicaid_`i'm + ///
+d_nh_cost_private_`i'm 
+
+gen d_tot_gov_pay_`i'm = d_tot_paid_by_mc_`i'm + d_nh_cost_medicaid_`i'm 
+
+gen d_total_costs_`i'm = d_tot_paid_by_mc_`i'm + d_total_oop_`i'm + d_nh_cost_medicaid_`i'm + ///
+d_nh_cost_private_`i'm + d_inf_care_costs_`i'm 
+
+gen d_natl_total_nh_costs_`i'm =d_snf_paid_by_mc_`i'm + d_nh_oop_`i'm + d_natl_nh_cost_medicaid_`i'm + ///
+d_natl_nh_cost_private_`i'm 
+
+gen d_natl_tot_gov_pay_`i'm = d_tot_paid_by_mc_`i'm + d_natl_nh_cost_medicaid_`i'm 
+
+gen d_natl_total_costs_`i'm = d_tot_paid_by_mc_`i'm + d_total_oop_`i'm + d_natl_nh_cost_medicaid_`i'm + ///
+d_natl_nh_cost_private_`i'm + d_natl_inf_care_costs_`i'm 
+
+
+//no discounting, just wage index adjustment
 gen total_oop_`i'm_wi = helper_oop_`i'm_wi + hospital_oop_`i'm_wi + nh_oop_`i'm_wi + ///
 	doctor_oop_`i'm_wi + rx_oop_`i'm_wi + insurance_costs_`i'm_wi + other_oop_`i'm_wi
 
@@ -6224,7 +6416,7 @@ gen natl_tot_gov_pay_`i'm_wi = tot_paid_by_mc_`i'm_wi + natl_nh_cost_medicaid_`i
 gen natl_total_costs_`i'm_wi = tot_paid_by_mc_`i'm_wi + total_oop_`i'm_wi + natl_nh_cost_medicaid_`i'm_wi + ///
 natl_nh_cost_private_`i'm_wi + natl_inf_care_costs_`i'm_wi 
 
-//discounting
+//discounting and wage index adjustment
 gen d_total_oop_`i'm_wi = d_helper_oop_`i'm_wi + d_hospital_oop_`i'm_wi + d_nh_oop_`i'm_wi + ///
 	d_doctor_oop_`i'm_wi + d_rx_oop_`i'm_wi + d_insurance_costs_`i'm_wi + d_other_oop_`i'm_wi
 
@@ -6280,6 +6472,11 @@ la var dm_paid_by_mc_60m_wi "Wage index adj. DME mc payments in last 5 years of 
 
 la var tot_gov_pay_24m_wi "WI adj Government spending 2yr EOL, Medicare+Medicaid NH"
 la var tot_gov_pay_60m_wi "WI adj Government spending 5yr EOL, Medicare+Medicaid NH"
+
+la var networth_adj2010_24m_wi "WI adj Net worth (including house) 2yr" 
+la var finwealth_adj2010_24m_wi "WI adj Financial wealth (excl house) 2yr"
+la var networth_adj2010_60m_wi "WI adj Net worth (including house) 5yr" 
+la var finwealth_adj2010_60m_wi "WI adj Financial wealth (excl house) 5yr"
 
 la var d_tot_paid_by_mc_24m_wi "Total WI adj & disc. mc payments in last 2 years of life"
 la var d_ip_paid_by_mc_24m_wi "WI adj & disc. Inpatient mc payments in last 2 years of life"
@@ -8009,165 +8206,29 @@ sum total_nh_costs_`i'm_wi, detail
 sum fadj_total_costs_`i'm_wi, detail
 sum total_costs_`i'm_wi, detail
 }
-********************************************************************
-//clean up medicaid self report, once report medicaid, continue to report it
-//this step overwrites those that have conflicting report of medicaid 
-forvalues i = 1/3{
-replace medicaid_x = 1 if medicaid_n`i'==1
-}
 
-forvalues i = 2/3{
-replace medicaid_n1 = 1 if medicaid_n`i'==1
-}
-
-replace medicaid_n2 = 1 if medicaid_n3==1
-
-tab medicaid_x, missing
-
-********************************************************************
-//additional variables to look at ~5 years prior to death vs at death
-local varins medicaid champus medigap married
-local varwlth  networth_adj2010 finwealth_adj2010 
-foreach v in `varins'{
-tab `v'_n3, missing
-tab `v'_n2 if `v'_n3==., missing
-tab `v'_x, missing
-}
-
-//basic algorithm for assigning survey responses at 60m before death
-//uses first core interview within the 5 years prior to death
-//if months_x >= 60 use n1 ivw
-//if months_x + months_n1 >= 60 use n2 ivw
-//if still missing use n3 response
-//then backfill with n2 or n1 responses if still missing
-
-sum months_x
-gen months_xn1 = months_x+months_n1
-sum months_xn1
-gen months_xn2 = months_x+months_n1+months_n2
-sum months_xn2
-
-foreach v in `varins' `varwlth' {
-gen `v'_60m = `v'_n1 if months_x>=60 & months_x!=.
-replace `v'_60m = `v'_n2 if `v'_60m==. & (months_xn1)>=60 & months_xn1!=.
-replace `v'_60m = `v'_n3 if `v'_60m==. 
-sum `v'_60m, detail
-
-//if still missing, assign n2 or n1 response, does this help?
-replace `v'_60m = `v'_n2 if `v'_60m==. 
-replace `v'_60m = `v'_n1 if `v'_60m==. 
-sum `v'_60m, detail
-}
-
-la var medicaid_60m "Medicaid at 5yr before death"
-la var champus_60m "VA ins coverage at 5yr before death"
-la var medigap_60m "Medigap (private ins) at 5yr before death"
-la var married_60m "Married at 5yr before death"
-la var networth_adj2010_60m "Net worth at 5yr before death"
-la var finwealth_adj2010_60m "Financial wealth at 5yr before death"
-
-//interview used for 5 year before death
-gen ivw_60m = "n1" if months_x>=60 & months_x!=.
-replace ivw_60m = "n2" if ivw_60m=="" & (months_xn1)>=60 & months_xn1!=.
-replace ivw_60m = "n3" if ivw_60m==""
-tab ivw_60m, missing
-
-//change in medicaid status 5 year before death to death
-tab medicaid_60m medicaid_x, missing
-
-gen medicaid_60m_x = .
-replace medicaid_60m_x=1 if medicaid_60m==1
-replace medicaid_60m_x=2 if medicaid_60m==0 & medicaid_x==1
-replace medicaid_60m_x=3 if medicaid_60m==0 & medicaid_x==0
-
-la var medicaid_60m_x "Medicaid status change 5yr to death"
-la def mc 1"Medicaid 5 years prior to death" 2"Enrolled in Medicaid in last 5 years" ///
-3"No Medicaid at death"
-la val medicaid_60m_x mc
-tab medicaid_60m_x , missing
-
-//create indicators
-tab medicaid_60m_x,gen(mcaid_change)
-la var mcaid_change1 "Medicaid at 5y pre-death"
-la var mcaid_change2 "Enrolled in Medicaid during 5y pre-death"
-la var mcaid_change3 "No Medicaid last 5y of life"
-
-forvalues i = 1/3{
-tab mcaid_change`i',missing
-}
-
-//Looking at reported insurance at 60m
-gen insurance_cat = .
-replace insurance_cat = 1 if medicaid_60m==1 & champus_60m==0 & medigap_60m==0
-replace insurance_cat = 2 if medicaid_60m==1 & champus_60m==1 & medigap_60m==0
-replace insurance_cat = 3 if medicaid_60m==1 & champus_60m==0 & medigap_60m==1
-replace insurance_cat = 4 if medicaid_60m==1 & champus_60m==1 & medigap_60m==1
-replace insurance_cat = 5 if medicaid_60m==0 & champus_60m==1 & medigap_60m==0
-replace insurance_cat = 6 if medicaid_60m==0 & champus_60m==1 & medigap_60m==1
-replace insurance_cat = 7 if medicaid_60m==0 & champus_60m==0 & medigap_60m==1
-replace insurance_cat = 8 if medicaid_60m==0 & champus_60m==0 & medigap_60m==0
-la var insurance_cat "Self report insurance, categorical, at 5yr pre-death"
-la def insurance_cat 1"Medicaid only" 2"Medicaid+VA" 3"Medicaid+Medigap" ///
-4"Medicaid+VA+Medigap" 5"VA only" 6"VA+Medigap" 7"Medigap only" 8"None"
-la val insurance_cat insurance_cat 
-tab insurance_cat , missing
-
-********************************************************************
-//additional variables to look at ~2 years prior to death vs at death
-//basic algorithm for assigning survey responses at 24m before death
-//uses first core interview within the 2 years prior to death
-//if months_x >= 24 use n1 ivw
-//if months_x < 24 use the n2 ivw
-//if still missing, fill in with either the n2 or n1 response
-
-foreach v in `varins' `varwlth' {
-gen `v'_24m = `v'_n1 if months_x>=24 & months_x!=.
-replace `v'_24m = `v'_n2 if `v'_24m==. & (months_x)<24 
-sum `v'_24m, detail
-
-//if still missing, assign n2 or n1 response, does this help?
-replace `v'_24m = `v'_n2 if `v'_24m==. 
-replace `v'_24m = `v'_n1 if `v'_24m==. 
-sum `v'_24m, detail
-}
-
-la var medicaid_24m "Medicaid at 2yr before death"
-la var champus_24m "VA ins coverage at 2yr before death"
-la var medigap_24m "Medigap (private ins) at 2yr before death"
-la var married_24m "Married at 2yr before death"
-la var networth_adj2010_24m "Net worth at 2yr before death"
-la var finwealth_adj2010_24m "Financial wealth at 2yr before death"
-
-//interview used for 2 year before death
-gen ivw_24m = "n1" if months_x>=24 & months_x!=.
-replace ivw_24m = "n2" if ivw_24m==""  & (months_x)<24 
-tab ivw_24m, missing
-tab ivw_60m ivw_24m, missing
-
-//change in medicaid status 2 year before death to death
-tab medicaid_24m medicaid_x, missing
-**************************************************
+*************************************************************************
 //gen ratio of oop to total wealth
 sum d_total_oop_60m_wi, detail
-sum networth_adj2010_60m, detail
-sum networth_adj2010_60m if d_total_oop_60m_wi<0, detail
-sum networth_adj2010_60m if networth_adj2010_60m<0, detail
-sum networth_adj2010_60m if networth_adj2010_60m==0, detail
+sum networth_adj2010_60m_wi, detail
+sum networth_adj2010_60m_wi if d_total_oop_60m_wi<0, detail
+sum networth_adj2010_60m_wi if networth_adj2010_60m_wi<0, detail
+sum networth_adj2010_60m_wi if networth_adj2010_60m_wi==0, detail
 
-sum d_total_oop_60m_wi if networth_adj2010_60m<0, detail
+sum d_total_oop_60m_wi if networth_adj2010_60m_wi<0, detail
 
-gen ratio_networth_adj2010_60m=networth_adj2010_60m
-replace ratio_networth_adj2010_60m=1 if networth_adj2010_60m<=0
-gen nw_adj_ratio=1 if networth_adj2010_60m<=0
-replace nw_adj_ratio=0 if networth_adj2010_60m>0
-tab nw_adj_ratio, missing
+gen ratio_networth_adj2010_60m_wi=networth_adj2010_60m_wi
+replace ratio_networth_adj2010_60m_wi=1 if networth_adj2010_60m_wi<=0
+gen nw_adj_ratio_wi=1 if networth_adj2010_60m_wi<=0
+replace nw_adj_ratio_wi=0 if networth_adj2010_60m_wi>0
+tab nw_adj_ratio_wi, missing
 
-gen oop_to_fin_wealth = d_total_oop_60m_wi/ratio_networth_adj2010_60m
+gen oop_to_fin_wealth_wi = d_total_oop_60m_wi/ratio_networth_adj2010_60m_wi
 
-la var oop_to_fin_wealth "Ratio OOP/Total wealth 5y pre-death (median %)"
-sum oop_to_fin_wealth, detail
-sum oop_to_fin_wealth
-sum oop_to_fin_wealth if nw_adj_ratio==1, detail
+la var oop_to_fin_wealth_wi "Ratio OOP/Total wealth 5y pre-death (median %)"
+sum oop_to_fin_wealth_wi, detail
+sum oop_to_fin_wealth_wi
+sum oop_to_fin_wealth_wi if nw_adj_ratio_wi==1, detail
 **************************************************
 //additional demographic categorical variables for tables
 
@@ -11807,8 +11868,6 @@ All statistics are 5 year EOL spending
 Spending adjusted for inflation, wage index, and discounted
 (not age,sex, race risk adjusted)
 
-Run into problem using svyset , pweights because some stratum only have 1 sampling unit represented
-so for tabulations here, just use pweights, is this OK?
 */
 
 capture log close
@@ -11846,6 +11905,16 @@ estat sd
 return list
 ereturn list
 */
+**************************************************
+//look at net worth vs wage index
+**************************************************
+sum networth_adj2010_60m, detail
+sca nw99=r(p99)
+scatter networth_adj2010_60m wage_index_20102 if networth_adj2010_60m<nw99 || ///
+ lfit networth_adj2010_60m wage_index_20102 if networth_adj2010_60m<nw99
+
+sum networth_adj2010_60m if black==1, detail
+sum networth_adj2010_60m_wi if black==1, detail
 
 **********************************************************************
 **********************************************************************
@@ -11887,7 +11956,7 @@ la var prob_dem_n1n2 "Dementia probability, mean (sd)++"
 la var adl_independent_core_n2n1 "Independent in ADLs, %+"
 la var srh_pf_n2n1 "Self Rated Health fair/poor, %+"
 la var smoke_curr_n2n1 "Currently smokes, %+"
-la var el_ge4_2yr "4 or more comorbid conditions, %"
+la var sr_comorb_ge4 "Self report 4+ comorbid conditions, %"
 
 la var d_total_costs_60m_wi "Total payments, all types, mean"
 la var d_tot_gov_pay_60m_wi "Total government payments, mean"
@@ -11902,7 +11971,7 @@ gender_marital_cat3 gender_marital_cat4 medicaid_60m medicaid_x
 
 local cvars2 prob_dem_n1n2 
 
-local ivars2 adl_independent_core_n2n1 srh_pf_n2n1 smoke_curr_n2n1 el_ge4_2yr
+local ivars2 adl_independent_core_n2n1 srh_pf_n2n1 smoke_curr_n2n1 sr_comorb_ge4 
 
 local cvars3 d_total_costs_60m_wi d_tot_gov_pay_60m_wi d_tot_paid_by_mc_60m_wi  ///
 d_total_oop_60m_wi d_inf_care_costs_60m_wi 
@@ -12224,7 +12293,7 @@ note("Dementia group has Probability>0.5 of dementia, other has Probability <0.5
 **********************************************************************
 //spending categories to check
 local sp_cat d_total_costs_60m_wi d_tot_gov_pay_60m_wi ///
-  d_inf_care_costs_60m_wi d_total_oop_60m_wi networth_adj2010_60m 
+  d_inf_care_costs_60m_wi d_total_oop_60m_wi networth_adj2010_60m_wi 
 
 local demo black non_black educ_lt_hs educ_hs_plus ///
 gender_marital_cat1 gender_marital_cat2 gender_marital_cat3 gender_marital_cat4
@@ -12269,7 +12338,7 @@ merge(t2_a) store(t2_b)
 
 //add oop/wealth ratio, median only
 mat t2_2=J(1,1,.)
-sum oop_to_fin_wealth if pr_dem_gt50==`i' [aw=hh_weight], detail
+sum oop_to_fin_wealth_wi if pr_dem_gt50==`i' [aw=hh_weight], detail
 mat t2_2[1,1]=r(p50)*100
 
 frmttable , statmat(t2_2) sdec(2) merge(t2_b) store(t2_c_`i')
@@ -12298,7 +12367,7 @@ merge(t2_d) store(t2_e)
 
 //add oop/wealth ratio, median only
 mat t2_2=J(1,1,.)
-sum oop_to_fin_wealth if pr_dem_gt50==`i' & `d'==1 [aw=hh_weight], detail
+sum oop_to_fin_wealth_wi if pr_dem_gt50==`i' & `d'==1 [aw=hh_weight], detail
 mat t2_2[1,1]=r(p50)*100
 
 frmttable , statmat(t2_2) sdec(2) merge(t2_e) store(t2_f)
@@ -12318,7 +12387,7 @@ outreg using E:\data\hrs_oop_2010\logs\17_tables_nov2014, ///
 	replay(t2_g_0)  addtable ///
 	note("Spending is adjusted to 2010$ for inflation and the CMS Wage Index and" \ ///
 	"discounted to 5 years before death." \ ///
-	"Total wealth (H#ATOTB) from Rand imputed data." \ ///
+	"Total wealth (H#ATOTB) from Rand imputed data, adjusted for inflation and wage index." \ ///
 	"Imputed 3rd party payments for nursing home costs included in Total Social" \ ///
 	"Costs but not listed here so spending columns do not add up to total cost column.")
 
@@ -12338,7 +12407,7 @@ d_nh_cost_private_60m_wi d_total_nh_costs_60m_wi nh_nights_60m ///
 los_snf_paid_by_mc_ivw_60m oop_nh_nights_60m other_nh_nights_60m  ///
 d_inf_care_costs_60m_wi hlphrs_s_60m ///
 s_months_used_60m hlphrs_u_60m u_months_used_60m hlphrs_informal_60m ///
-hlpmonths_inf_60m ip_los_60m networth_adj2010_60m networth_adj2010_n1
+hlpmonths_inf_60m ip_los_60m networth_adj2010_60m_wi networth_adj2010_n1
 
 local spvars2 medicaid_60m medicaid_x champus_60m champus_x ///
 medigap_60m medigap_x married_60m married_x
@@ -12396,7 +12465,7 @@ la var medigap_x "Medigap at death (%)"
 la var married_60m "Married 5y pre-death (%)"
 la var married_x "Married at death (%)" 
 
-la var oop_to_fin_wealth "Ratio OOP/Total wealth 5y pre-death (median %)"
+la var oop_to_fin_wealth_wi "Ratio OOP/Total wealth 5y pre-death (median %)"
 
 ***********************************************************
 //part 1 by race, education groups
@@ -12434,7 +12503,7 @@ foreach i in 1 0{
 	local c=1
 	mat t3_1=J(3,6,.)
 	foreach d in `demo'{		
-		sum oop_to_fin_wealth if pr_dem_gt50==`i' & `d'==1 [aw=hh_weight], detail
+		sum oop_to_fin_wealth_wi if pr_dem_gt50==`i' & `d'==1 [aw=hh_weight], detail
 		mat t3_1[1,`c']=r(p50)
 		mat t3_1[2,`c']=r(p25)
 		mat t3_1[3,`c']=r(p75)
@@ -12513,7 +12582,7 @@ foreach i in 1 0{
 	local c=1
 	mat t3_1=J(3,4,.)
 	foreach d in `sexmarital'{		
-		sum oop_to_fin_wealth if pr_dem_gt50==`i' & `d'==1 [aw=hh_weight], detail
+		sum oop_to_fin_wealth_wi if pr_dem_gt50==`i' & `d'==1 [aw=hh_weight], detail
 		mat t3_1[1,`c']=r(p50)
 		mat t3_1[2,`c']=r(p25)
 		mat t3_1[3,`c']=r(p75)
@@ -12590,7 +12659,7 @@ foreach v in `spvars1'{
 local c=1
 mat t3_1=J(3,2,.)
 foreach i in 1 0{		
-	sum oop_to_fin_wealth if pr_dem_gt50==`i' [aw=hh_weight], detail
+	sum oop_to_fin_wealth_wi if pr_dem_gt50==`i' [aw=hh_weight], detail
 	mat t3_1[1,`c']=r(p50)
 	mat t3_1[2,`c']=r(p25)
 	mat t3_1[3,`c']=r(p75)
@@ -12617,6 +12686,855 @@ outreg, replay(t4_a) append(t4_b) store(table3a)
 outreg, replay(table3a) append(t3_c) store(table3b)
 
 outreg using E:\data\hrs_oop_2010\logs\17_tables_nov2014, ///
+ replay(table3b) append(t4_d) addtable ///
+ title("Table 3, Part3 - detailed table by dementia") ///
+ ctitles("","Dementia","Other Disease") ///
+ note("Uses HRS household weights")
+
+
+************************************************************************
+log close
+
+
+H="Tables, exlcuding wage index"
+/*Creates paper Tables 1 and 2 and a detailed master table for 
+additional statistics for the text
+
+****Another version, without doing the wage index adjustment for anything
+
+Table 1 - Demo, spending by the 4 disease groups
+Note, p values used for significance *'s in this table come from table 1a,
+ need to be manually filled in when this table is generated!
+Table 1a - Demo and spending by dementia vs not
+Table 2 - Dementia vs not, by demo char, spending categories
+Table 3 - Detailed master table dementia vs not
+All statistics are 5 year EOL spending 
+
+Spending adjusted for inflation, wage index, and discounted
+(not age,sex, race risk adjusted)
+
+*/
+
+capture log close
+clear all
+set more off
+
+local logpath E:\data\hrs_oop_2010\logs
+local datapath E:\data\hrs_oop_2010\final_data
+//local logpath H:\OOP\local_logs
+//local datapath C:\Users\gorger01\Desktop\oop
+
+log using `logpath'\17b-mc_oop_5yr_NO_WI_ADJ-LOG.txt, text replace
+
+cd `datapath'
+
+use oop_mc_sample_adj_age_HHW.dta
+**************************************************
+//set up for HRS complex survey design
+//Reference Chapter 8 "Getting started with HRS" user guide
+//this section not used, just use aweights in tables in paper
+tab stratum secu, missing
+sum hh_weight, detail
+/*
+svyset secu [pweight=hh_weight], strata(stratum)
+
+svy : mean oop_to_fin_wealth
+sum oop_to_fin_wealth
+sum oop_to_fin_wealth if nw_adj_ratio==1, detail
+
+svy : mean age_at_death_e
+estat sd
+
+mean age_at_death_e [pw=hh_weight]
+estat sd
+return list
+ereturn list
+*/
+**************************************************
+//get oop/wealth ratio, without wi adjustments
+**************************************************
+//get oop/wealth ratio, without wi adjustments
+gen ratio_networth_adj2010_60m=networth_adj2010_60m
+replace ratio_networth_adj2010_60m=1 if networth_adj2010_60m<=0
+gen nw_adj_ratio=1 if networth_adj2010_60m<=0
+replace nw_adj_ratio=0 if networth_adj2010_60m>0
+tab nw_adj_ratio, missing
+
+gen oop_to_fin_wealth = d_total_oop_60m/ratio_networth_adj2010_60m
+
+la var oop_to_fin_wealth "Ratio OOP/Total wealth 5y pre-death (median %)"
+sum oop_to_fin_wealth, detail
+
+**********************************************************************
+**********************************************************************
+//Table 1 - Characteristics of sample, by disease groups
+**********************************************************************
+**********************************************************************
+//get n2 variables, filled in with n1 if n2 is missing
+//this approximates status 5 years before death
+local get_n2 adl_independent_core srh_pf smoke_curr prob_dementia
+foreach v in `get_n2'{
+	gen `v'_n2n1 = `v'_n2
+	replace `v'_n2n1 = `v'_n1 if `v'_n2==.
+	sum `v'_n2n1
+}
+
+**************************************************
+//two dementia probabilities in dataset now
+sum prob_dementia_n2n1, detail
+sum prob_dem_n1n2, detail
+//use the n1n2 variable, gets more observations since uses interview
+//closest to r's death with data available
+
+//assign variable labels so can auto fill in the row descriptions
+//assign variable names so can use varlabels when make all tables
+la var age_at_death_e "Age at death, mean (sd)"
+
+la var black "Black, %"
+la var educ_lt_hs "< High school, %"
+la var gender_marital_cat1 "Female, married at death, %"
+la var gender_marital_cat2 "Female, unmarried at death, %"
+la var gender_marital_cat3 "Male, married at death, %"
+la var gender_marital_cat4 "Male, unmarried at death, %"
+
+la var medicaid_60m "Medicaid 5y pre-death, %"
+la var medicaid_x "Medicaid at death?, %"
+
+la var prob_dem_n1n2 "Dementia probability, mean (sd)++"
+
+la var adl_independent_core_n2n1 "Independent in ADLs, %+"
+la var srh_pf_n2n1 "Self Rated Health fair/poor, %+"
+la var smoke_curr_n2n1 "Currently smokes, %+"
+la var sr_comorb_ge4 "Self report 4+ comorbid conditions, %"
+
+la var d_total_costs_60m "Total payments, all types, mean"
+la var d_tot_gov_pay_60m "Total government payments, mean"
+la var d_tot_paid_by_mc_60m "Medicare payments, mean" 
+la var d_total_oop_60m "Out of pocket expenses, mean" 
+la var d_inf_care_costs_60m "Imputed informal care costs, mean"
+
+local cvars1 age_at_death_e 
+
+local ivars1 black educ_lt_hs gender_marital_cat1 gender_marital_cat2 ///
+gender_marital_cat3 gender_marital_cat4 medicaid_60m medicaid_x 
+
+local cvars2 prob_dem_n1n2 
+
+local ivars2 adl_independent_core_n2n1 srh_pf_n2n1 smoke_curr_n2n1 sr_comorb_ge4 
+
+local cvars3 d_total_costs_60m d_tot_gov_pay_60m d_tot_paid_by_mc_60m  ///
+d_total_oop_60m d_inf_care_costs_60m
+
+//part 1 - first row n each group
+mat t1_n=J(1,4,.)
+local c = 1
+foreach v in pr_dem_gt50 cancer_grp heartdis_grp other_grp {
+	tab `v', missing matcell(r1)
+	mat t1_n[1,`c']=r1[2,1]
+	local c = `c'+1
+}
+mat rownames t1_n="N"
+
+//save as formatted table
+frmttable , statmat(t1_n) store(tab1_n) sdec(0)
+
+//continuous variables 1
+foreach v in `cvars1'{
+	mat tab1_1=J(1,8,.)
+	local c=1	
+		foreach d in pr_dem_gt50 cancer_grp heartdis_grp other_grp {
+			sum `v' if `d'==1 [aw=hh_weight], detail //used sum command b/c had stratum w single psu
+			mat tab1_1[1,`c']=r(mean) //mean
+			mat tab1_1[1,`c'+1]=r(sd) //standard deviation
+			local c = `c'+2
+			}	
+	mat rownames tab1_1= `v'
+	
+	frmttable , statmat(tab1_1) store(tab1_1) varlabels ///
+	sdec(2) substat(1)
+	
+	outreg, replay(tab1_2) append(tab1_1) store(tab1_2)
+	}
+//adds to n table
+outreg, replay(tab1_n) append(tab1_2) store(table1_1)	
+
+//indicator variables 1
+foreach v in `ivars1'{
+	mat tab1_1=J(1,4,.)
+	local c=1	
+		foreach d in pr_dem_gt50 cancer_grp heartdis_grp other_grp {
+			sum `v' if `d'==1 [aw=hh_weight], detail
+			mat tab1_1[1,`c']=r(mean)*100 //percent
+			local c = `c'+1
+			}	
+	mat rownames tab1_1= `v'
+	
+	frmttable , statmat(tab1_1) store(tab1_3) varlabels ///
+	sdec(2)
+	
+	outreg, replay(tab1_4) append(tab1_3) store(tab1_4)
+	}
+//adds to main table
+outreg, replay(table1_1) append(tab1_4) store(table1_2)	
+
+//continuous variables 2
+foreach v in `cvars2'{
+	mat tab1_1=J(1,8,.)
+	local c=1	
+		foreach d in pr_dem_gt50 cancer_grp heartdis_grp other_grp {
+			sum `v' if `d'==1 [aw=hh_weight], detail
+			mat tab1_1[1,`c']=r(mean) //mean
+			mat tab1_1[1,`c'+1]=r(sd) //standard deviation
+			local c = `c'+2
+			}	
+	mat rownames tab1_1= `v'
+	
+	frmttable , statmat(tab1_1) store(tab1_5) varlabels ///
+	sdec(2) substat(1)
+	
+	outreg, replay(tab1_6) append(tab1_5) store(tab1_6)
+	}
+//adds to table
+outreg, replay(table1_2) append(tab1_6) store(table1_3)	
+
+//indicator variables 2
+foreach v in `ivars2'{
+	mat tab1_1=J(1,4,.)
+	local c=1	
+		foreach d in pr_dem_gt50 cancer_grp heartdis_grp other_grp {
+			sum `v' if `d'==1 [aw=hh_weight], detail
+			mat tab1_1[1,`c']=r(mean)*100 //percent
+			local c = `c'+1
+			}	
+	mat rownames tab1_1= `v'
+	
+	frmttable , statmat(tab1_1) store(tab1_7) varlabels ///
+	sdec(2)
+	
+	outreg, replay(tab1_8) append(tab1_7) store(tab1_8)
+	}
+//adds to main table
+outreg, replay(table1_3) append(tab1_8) store(table1_4)	
+
+//continuous variables 3, payments, no places after decimal, no std dev
+foreach v in `cvars3'{
+	mat tab1_1=J(1,4,.)
+	local c=1	
+		foreach d in pr_dem_gt50 cancer_grp heartdis_grp other_grp {
+			sum `v' if `d'==1 [aw=hh_weight], detail
+			mat tab1_1[1,`c']=r(mean) //mean
+			local c = `c'+1
+			}	
+	mat rownames tab1_1= `v'
+	
+	frmttable , statmat(tab1_1) store(tab1_9) varlabels ///
+	sdec(0)
+	
+	outreg, replay(tab1_10) append(tab1_9) store(tab1_10)
+	}
+	
+//adds to main table
+outreg using E:\data\hrs_oop_2010\logs\17b_tables_NO_WI_ADJ, ///
+replay(table1_4) append(tab1_10) replace ///
+title("Table 1 - Sample characteristics by disease group, No WI Adjustments") ///
+ctitles("" "Dementia"  "Cancer" "Heart disease" "Other") ///
+note("Dementia group has Probability>0.5 of dementia, Cancer, Heart disease and" \ ///
+"Other disease groups from National Death Index cause of death." \ ///
+"Total wealth (H#ATOTB) from Rand imputed data." \ ///
+"+ Self report in HRS survey approximately 5 years before death." \ ///
+"++ Self report in HRS survey, core interview before death." \ ///
+"* Denotes significantly different (p<.01) for dementia decedents compared to all other decedents." \ ///
+"Most recent HRS Household sample weights used.")
+
+**********************************************************************
+**********************************************************************
+//Table 1a - Spending by dementia / demo char, dementia vs other diseases
+**********************************************************************
+**********************************************************************
+//part 1 - first row n each group
+mat t1a_n=J(1,2,.)
+local c = 1
+foreach i in 1 0 {
+	sum d_total_costs_60m if pr_dem_gt50==`i', detail
+	mat t1a_n[1,`c']=r(N)
+	local c = `c'+1
+}
+mat rownames t1a_n="N"
+
+//save as formatted table
+frmttable , statmat(t1a_n) store(tab1a_n) sdec(0)
+
+label def dem 0 nodem 1 dem
+la val pr_dem_gt50 dem
+
+//continuous variables 1
+foreach v in `cvars1'{
+	mat tab1a_1=J(1,6,.)
+	local c=1	
+		foreach i in 1 0 {
+			sum `v' if pr_dem_gt50==`i' [aw=hh_weight], detail
+			mat tab1a_1[1,`c']=r(mean) //mean
+			mat tab1a_1[1,`c'+1]=r(sd) //standard deviation
+			local c = `c'+2
+			}	
+	local c=5
+	logit pr_dem_gt50 `v' [pw=hh_weight]
+	test `v'
+
+	mat tab1a_1[1,`c']=r(p) //p-value from ttest
+	
+	mat rownames tab1a_1=`v'
+	
+	frmttable , statmat(tab1a_1) store(tab1a_1) varlabels ///
+	sdec(2) substat(1)
+	
+	outreg, replay(tab1a_2) append(tab1a_1) store(tab1a_2)
+	}
+//adds to n table
+outreg, replay(tab1a_n) append(tab1a_2) store(table1a_1)	
+
+//indicator variables 1
+foreach v in `ivars1'{
+	mat tab1a_1=J(1,2,.)
+	local c=1	
+		foreach i in 1 0 {
+			sum `v' if pr_dem_gt50==`i' [aw=hh_weight], detail
+			mat tab1a_1[1,`c']=r(mean)*100 //percent
+			local c = `c'+1
+			}
+	
+	mat rownames tab1a_1= `v'
+	
+	frmttable , statmat(tab1a_1) store(tab1a_3) varlabels ///
+	sdec(2)
+	
+	outreg, replay(tab1a_4) append(tab1a_3) store(tab1a_4)
+	}
+
+//get pvalues - note variable list updated here b/c of marital status, mult categories
+** User note: If variable list changes in ivars1 then need to update this section!
+mat tab1a_1=J(8,1,.)
+local r=1
+foreach v in black educ_lt_hs gender_marital{
+	logit pr_dem_gt50 `v' [pw=hh_weight]
+	test `v'
+	
+	mat tab1a_1[`r',1]=r(p) //pvalue
+	local r = `r'+1
+	}
+
+local r=7
+foreach v in medicaid_60m medicaid_x{
+	logit pr_dem_gt50 `v' [pw=hh_weight]
+	test `v'
+	
+	mat tab1a_1[`r',1]=r(p) //pvalue
+	local r = `r'+1
+	}
+mat rownames tab1a_1=`ivars'
+	
+frmttable, statmat(tab1a_1) store(tab1a_5) sdec(3)
+//adds column to means table
+outreg, replay(tab1a_4) merge(tab1a_5) store(table1a_2)
+	
+//adds to main table
+outreg, replay(table1a_1) append(table1a_2) store(table1a_3)	
+
+//continuous variables 2
+//need alternate method to get p-value, can't do logit because probability dementia
+//used to create dementia disease groups
+foreach v in `cvars2'{
+	mat tab1a_1=J(1,6,.)
+	local c=1	
+		foreach i in 1 0 {
+			sum `v' if pr_dem_gt50==`i' [aw=hh_weight], detail
+			mat tab1a_1[1,`c']=r(mean) //mean
+			mat tab1a_1[1,`c'+1]=r(sd) //standard deviation
+			local c = `c'+2
+			}	
+	local c=5
+	svyset [pw=hh_weight]
+	
+	svy: mean `v', over(pr_dem_gt50) 
+	test [`v']nodem=[`v']dem
+	mat tab1a_1[1,`c']=r(p) //p-value from ttest
+
+	mat rownames tab1a_1= `v'
+	
+	frmttable , statmat(tab1a_1) store(tab1a_5) varlabels ///
+	sdec(3) substat(1)
+	
+	outreg, replay(tab1a_6) append(tab1a_5) store(tab1a_6)
+	}
+//adds to table
+outreg, replay(table1a_3) append(tab1a_6) store(table1a_4)	
+
+//indicator variables 2
+foreach v in `ivars2'{
+	mat tab1a_1=J(1,3,.)
+	local c=1	
+		foreach i in 1 0 {
+			sum `v' if pr_dem_gt50==`i' [aw=hh_weight], detail
+			mat tab1a_1[1,`c']=r(mean)*100 //percent
+			local c = `c'+1
+			}
+	logit pr_dem_gt50 `v' [pw=hh_weight]
+		test `v'
+		mat tab1a_1[1,`c']=r(p) //pvalue
+		
+	mat rownames tab1a_1= `v'
+	
+	frmttable , statmat(tab1a_1) store(tab1a_7) varlabels ///
+	sdec(3)
+	
+	outreg, replay(tab1a_8) append(tab1a_7) store(tab1a_8)
+	}
+//adds to main table
+outreg, replay(table1a_4) append(tab1a_8) store(table1a_5)	
+
+//continuous variables 3
+foreach v in `cvars3'{
+	mat tab1a_1=J(1,2,.)
+	local c=1	
+		foreach i in 1 0 {
+			sum `v' if pr_dem_gt50==`i' [aw=hh_weight], detail
+			mat tab1a_1[1,`c']=r(mean) //mean
+			local c = `c'+1
+			}	
+	mat rownames tab1a_1= `v'
+	
+	frmttable , statmat(tab1a_1) store(tab1a_9) varlabels ///
+	sdec(0)
+	
+	outreg, replay(tab1a_10) append(tab1a_9) store(tab1a_10)
+	}
+
+foreach v in `cvars3'{
+	mat tab1a_1=J(1,1,.)
+	logit pr_dem_gt50 `v' [pw=hh_weight]
+	test `v'
+	mat tab1a_1=r(p) //pvalue from ttest
+	mat rownames tab1a_1=`v'
+	
+	frmttable , statmat(tab1a_1) store(tab1a_11) varlabels ///
+	sdec(3)
+	
+	outreg, replay(tab1a_12) append(tab1a_11) store(tab1a_12)
+	}
+	
+//combine the p values column with the means table
+outreg, replay(tab1a_10) merge(tab1a_12) store(table1a_6)
+
+//adds to main table
+outreg using E:\data\hrs_oop_2010\logs\17b_tables_NO_WI_ADJ, ///
+replay(table1a_5) append(table1a_6) addtable ///
+title("Table 1a - Sample characteristics by disease group, No WI Adjustment") ///
+ctitles("" "Dementia" "Other diseases" "P-value") ///
+note("Dementia group has Probability>0.5 of dementia, other has Probability <0.5" \ ///
+"Total wealth (H#ATOTB) from Rand imputed data." \ ///
+"+ Self report in HRS survey approximately 5 years before death." \ ///
+"Most recent HRS household weights used.")	
+
+**********************************************************************
+**********************************************************************
+//Table 2 - Spending by dementia / demo char
+**********************************************************************
+**********************************************************************
+//spending categories to check
+local sp_cat d_total_costs_60m d_tot_gov_pay_60m ///
+  d_inf_care_costs_60m d_total_oop_60m networth_adj2010_60m 
+
+local demo black non_black educ_lt_hs educ_hs_plus ///
+gender_marital_cat1 gender_marital_cat2 gender_marital_cat3 gender_marital_cat4
+
+foreach v in `demo'{
+tab `v', missing
+}
+
+la var black "Black"
+la var non_black "Non-Black"
+la var educ_lt_hs "< High school"
+la var educ_hs_plus "High school degree +"
+la var gender_marital_cat1 "Female, married"
+la var gender_marital_cat2 "Female, not married"
+la var gender_marital_cat3 "Male, married"
+la var gender_marital_cat4 "Male, not married"
+
+**************************************************
+//first row of table, overall sample spending
+frmttable, clear
+
+foreach i in 1 0{
+
+mat t2_n=J(1,1,.)
+sum adj_total_costs_60m if pr_dem_gt50==`i'
+mat t2_n[1,1]=r(N)
+
+frmttable , statmat(t2_n) sdec(0) store(t2_a) 
+
+mat t2_1=J(1,10,.)
+local c=1
+foreach v in `sp_cat'{
+	sum `v' if pr_dem_gt50==`i' [aw=hh_weight], detail
+	mat t2_1[1,`c']=r(mean)
+	mat t2_1[1,`c'+1]=r(p50)
+	local c = `c'+2
+}
+
+frmttable , statmat(t2_1) sdec(0) substat(1) ///
+rtitles("Overall sample, dementia=`i'") ///
+merge(t2_a) store(t2_b)
+
+//add oop/wealth ratio, median only
+mat t2_2=J(1,1,.)
+sum oop_to_fin_wealth if pr_dem_gt50==`i' [aw=hh_weight], detail
+mat t2_2[1,1]=r(p50)*100
+
+frmttable , statmat(t2_2) sdec(2) merge(t2_b) store(t2_c_`i')
+
+//now by demo characteristics
+foreach d in `demo'{
+	mat t2_n=J(1,1,.)
+	sum adj_total_costs_60m if pr_dem_gt50==`i' & `d'==1 [aw=hh_weight]
+	mat t2_n[1,1]=r(N)
+
+	mat rownames t2_n=`d'
+	frmttable, statmat(t2_n) sdec(0) varlabels store(t2_d) 
+
+mat t2_1=J(1,10,.)
+local c=1
+foreach v in `sp_cat'{
+	sum `v' if pr_dem_gt50==`i' & `d'==1 [aw=hh_weight], detail
+	mat t2_1[1,`c']=r(mean)
+	mat t2_1[1,`c'+1]=r(p50)
+	local c = `c'+2
+}
+
+mat rownames t2_1=`d'
+frmttable , statmat(t2_1) sdec(0) substat(1) varlabels ///
+merge(t2_d) store(t2_e) 
+
+//add oop/wealth ratio, median only
+mat t2_2=J(1,1,.)
+sum oop_to_fin_wealth if pr_dem_gt50==`i' & `d'==1 [aw=hh_weight], detail
+mat t2_2[1,1]=r(p50)*100
+
+frmttable , statmat(t2_2) sdec(2) merge(t2_e) store(t2_f)
+
+outreg , replay(t2_g_`i') append(t2_f) store(t2_g_`i') 
+}
+
+}
+	
+outreg using E:\data\hrs_oop_2010\logs\17b_tables_NO_WI_ADJ, ///
+	replay(t2_c_1)  addtable
+outreg using E:\data\hrs_oop_2010\logs\17b_tables_NO_WI_ADJ, ///
+	replay(t2_g_1)  addtable
+outreg using E:\data\hrs_oop_2010\logs\17b_tables_NO_WI_ADJ, ///
+	replay(t2_c_0)  addtable
+outreg using E:\data\hrs_oop_2010\logs\17b_tables_NO_WI_ADJ, ///
+	replay(t2_g_0)  addtable ///
+	note("Spending is adjusted to 2010$ for inflation and" \ ///
+	"discounted to 5 years before death. No wage index adjustment in this version" \ ///
+	"Total wealth (H#ATOTB) from Rand imputed data, adjusted for inflation." \ ///
+	"Imputed 3rd party payments for nursing home costs included in Total Social" \ ///
+	"Costs but not listed here so spending columns do not add up to total cost column.")
+
+**************************************************
+**************************************************
+//Table 3 - Master detailed table split by demo, dementia
+**************************************************
+**************************************************
+//Part 1 - by race, education categories
+local demo white black hisp_eth other_re educ_lt_hs educ_hs_plus 
+
+local spvars1 age_at_death_e d_total_costs_60m d_tot_gov_pay_60m ///
+d_tot_paid_by_mc_60m d_ip_paid_by_mc_60m d_snf_paid_by_mc_60m ///
+d_nh_cost_medicaid_60m d_total_oop_60m ///
+d_nh_oop_60m d_helper_oop_60m  ///
+d_nh_cost_private_60m d_total_nh_costs_60m nh_nights_60m ///
+los_snf_paid_by_mc_ivw_60m oop_nh_nights_60m other_nh_nights_60m  ///
+d_inf_care_costs_60m hlphrs_s_60m ///
+s_months_used_60m hlphrs_u_60m u_months_used_60m hlphrs_informal_60m ///
+hlpmonths_inf_60m ip_los_60m networth_adj2010_60m networth_adj2010_n1
+
+local spvars2 medicaid_60m medicaid_x champus_60m champus_x ///
+medigap_60m medigap_x married_60m married_x
+
+//look at helper variables, missing if no helper info, set to 0
+local help1 hlphrs_s_60m s_months_used_60m hlphrs_u_60m u_months_used_60m
+foreach v in `help1'{
+replace `v'=0 if `v'==.
+sum `v', detail
+}
+
+gen hlphrs_informal_60m=hlphrs_s_60m+hlphrs_u_60m
+gen n_informal_60m=n_s_60m+n_u_60m
+gen hlpmonths_inf_60m=s_months_used_60m+u_months_used_60m
+sum hlphrs_informal_60m, detail
+sum hlpmonths_inf_60m, detail
+
+la var age_at_death_e "Age at death"
+la var d_total_costs_60m "Total payments, all types"
+la var d_tot_gov_pay_60m "Total government payments"
+la var d_tot_paid_by_mc_60m "Total Medicare payments"
+la var d_ip_paid_by_mc_60m "Medicare IP" 
+la var d_snf_paid_by_mc_60m "Medicare SNF"
+la var d_nh_cost_medicaid_60m "Medicaid NH payments"
+la var d_total_oop_60m "OOP Total" 
+la var d_nh_oop_60m "OOP NH"
+la var d_helper_oop_60m "OOP Helper"
+
+la var d_nh_cost_private_60m "Private payer NH Payments"
+la var d_total_nh_costs_60m "Total NH costs, all payers" 
+
+la var nh_nights_60m "Total NH nights, SR or claims"
+
+la var los_snf_paid_by_mc_ivw_60m "Medicare paid NH Nights"
+la var oop_nh_nights_60m "OOP paid NH nights"
+la var other_nh_nights_60m "Medicaid or Private paid NH Nights"
+
+la var d_inf_care_costs_60m "Imputed informal care costs"
+la var hlphrs_s_60m "S helper hours/month"
+la var s_months_used_60m "S helper, months attributed"
+la var hlphrs_u_60m "Other unpaid hours/mo"
+la var u_months_used_60m "Other unpaid helper, months attr"
+la var hlphrs_informal_60m "Informal helpers hours/month"
+la var hlpmonths_inf_60m "Informal helpers months"
+
+la var ip_los_60m "IP Hospital nights"
+la var networth_adj2010_60m "Total wealth 5y pre-death" 
+la var networth_adj2010_n1 "Total wealth n1 ivw"
+la var medicaid_60m "Medicaid 5y pre-death (%)"
+la var medicaid_x "Medicaid at death? (%)"
+la var champus_60m  "VA ins 5y pre-death (%)"
+la var champus_x "VA ins at death (%)"
+la var medigap_60m "Medigap 5y pre-death (%)"
+la var medigap_x "Medigap at death (%)"
+la var married_60m "Married 5y pre-death (%)"
+la var married_x "Married at death (%)" 
+
+la var oop_to_fin_wealth "Ratio OOP/Total wealth 5y pre-death (median %)"
+
+***********************************************************
+//part 1 by race, education groups
+frmttable, clear
+
+foreach i in 1 0{
+
+//first row each section - get n's each demo group
+	local c = 1
+	mat t3_n=J(1,6,.)
+	foreach d in `demo'{
+		sum adj_total_costs_60m if pr_dem_gt50==`i' & `d'==1
+		mat t3_n[1,`c']=r(N)
+		local c = `c'+1
+	}
+	mat rownames t3_n="N Probability Dementia=`i'"
+	frmttable , statmat(t3_n) sdec(0) store(t3_a_`i')
+ 
+ //now get spending by demo / dementia group, all categories
+ //continuous variables get mean, median
+	foreach v in `spvars1'{
+		local c=1
+		mat t3_1=J(1,12,.)
+			foreach d in `demo'{
+				sum `v' if pr_dem_gt50==`i' & `d'==1 [aw=hh_weight], detail
+				mat t3_1[1,`c']=r(mean)
+				mat t3_1[1,`c'+1]=r(p50)
+				local c = `c'+2
+			} //ends loop to fill in all 6 columns by demo grp
+		mat rownames t3_1=`v'
+		frmttable , statmat(t3_1) sdec(0) substat(1) store(t3_a) varlabels
+		outreg, replay(t3_b`i') append(t3_a) store(t3_b`i')
+		} //ends row loop
+//get oop/wealth ratio, median, 25, 75%
+	local c=1
+	mat t3_1=J(3,6,.)
+	foreach d in `demo'{		
+		sum oop_to_fin_wealth if pr_dem_gt50==`i' & `d'==1 [aw=hh_weight], detail
+		mat t3_1[1,`c']=r(p50)
+		mat t3_1[2,`c']=r(p25)
+		mat t3_1[3,`c']=r(p75)
+		local c = `c'+1
+		}
+	mat rownames t3_1="OOP/Wealth, median" "25th %" "75th %"
+	frmttable , statmat(t3_1) sdec(2) store(t3_c`i')
+
+//now indicator variables for the groups, get percent
+	foreach v in `spvars2'{
+		local c=1
+		mat t3_1=J(1,6,.)
+			foreach d in `demo'{
+				sum `v' if pr_dem_gt50==`i' & `d'==1 [aw=hh_weight], detail
+				mat t3_1[1,`c']=r(mean)*100
+				local c = `c'+1
+			} //ends loop to fill in all 6 columns by demo grp
+		mat rownames t3_1=`v'
+		frmttable , statmat(t3_1) sdec(2) store(t3_c) varlabels
+		outreg, replay(t3_d`i') append(t3_c) store(t3_d`i')
+		} //ends row loop
+		
+} //ends loop over dementia = 1,0
+ 
+outreg, replay(t3_a_1) append(t3_b1) store(table3a)
+outreg, replay(table3a) append(t3_c1) store(table3b)
+outreg, replay(table3b) append(t3_d1) store(table3c)
+
+outreg, replay(table3c) append(t3_a_0) store(table3d)
+outreg, replay(table3d) append(t3_b0) store(table3e)
+outreg, replay(table3e) append(t3_c0) store(table3f)
+ 
+outreg using E:\data\hrs_oop_2010\logs\17b_tables_NO_WI_ADJ, ///
+ replay(table3f) append(t3_d0) addtable ///
+ title("Table 3, Part 1 - detailed table by dementia, demo groups") ///
+ ctitles("","White","Black","Hispanic","Other","< HS Educ","HS Deg +") ///
+ note("Uses HRS household weighting")
+
+***********************************************************
+//part 2 by sex,marital status groups
+frmttable, clear
+outreg, clear
+
+local sexmarital gender_marital_cat1 gender_marital_cat2 gender_marital_cat3 ///
+gender_marital_cat4
+
+foreach i in 1 0{
+
+//first row each section - get n's each demo group
+	local c = 1
+	mat t3_n=J(1,4,.)
+	foreach d in `sexmarital'{
+		sum adj_total_costs_60m if pr_dem_gt50==`i' & `d'==1
+		mat t3_n[1,`c']=r(N)
+		local c = `c'+1
+	}
+	mat rownames t3_n="N Probability Dementia=`i'"
+	frmttable , statmat(t3_n) sdec(0) store(t3_a_`i')
+ 
+ //now get spending by demo / dementia group, all categories
+ //continuous variables get mean, median
+	foreach v in `spvars1'{
+		local c=1
+		mat t3_1=J(1,8,.)
+			foreach d in `sexmarital'{
+				sum `v' if pr_dem_gt50==`i' & `d'==1 [aw=hh_weight], detail
+				mat t3_1[1,`c']=r(mean)
+				mat t3_1[1,`c'+1]=r(p50)
+				local c = `c'+2
+			} //ends loop to fill in all 4 columns by demo grp
+		mat rownames t3_1=`v'
+		frmttable , statmat(t3_1) sdec(0) substat(1) store(t3_a) varlabels
+		outreg, replay(t4_b`i') append(t3_a) store(t4_b`i')
+		} //ends row loop
+//get oop/wealth ratio, median, 25, 75%
+	local c=1
+	mat t3_1=J(3,4,.)
+	foreach d in `sexmarital'{		
+		sum oop_to_fin_wealth if pr_dem_gt50==`i' & `d'==1 [aw=hh_weight], detail
+		mat t3_1[1,`c']=r(p50)
+		mat t3_1[2,`c']=r(p25)
+		mat t3_1[3,`c']=r(p75)
+		local c = `c'+1
+		}
+	mat rownames t3_1="OOP/Wealth, median" "25th %" "75th %"
+	frmttable , statmat(t3_1) sdec(2) store(t3_c`i')
+
+//now indicator variables for the groups, get percent
+	foreach v in `spvars2'{
+		local c=1
+		mat t3_1=J(1,4,.)
+			foreach d in `sexmarital'{
+				sum `v' if pr_dem_gt50==`i' & `d'==1 [aw=hh_weight], detail
+				mat t3_1[1,`c']=r(mean)*100
+				local c = `c'+1
+			} //ends loop to fill in all 4 columns by demo grp
+		mat rownames t3_1=`v'
+		frmttable , statmat(t3_1) sdec(2) store(t3_c) varlabels
+		outreg, replay(t4_d`i') append(t3_c) store(t4_d`i')
+		} //ends row loop
+		
+} //ends loop over dementia = 1,0
+ 
+outreg, replay(t3_a_1) append(t4_b1) store(table3a)
+outreg, replay(table3a) append(t3_c1) store(table3b)
+outreg, replay(table3b) append(t4_d1) store(table3c)
+
+outreg, replay(table3c) append(t3_a_0) store(table3d)
+outreg, replay(table3d) append(t4_b0) store(table3e)
+outreg, replay(table3e) append(t3_c0) store(table3f)
+ 
+outreg using E:\data\hrs_oop_2010\logs\17b_tables_NO_WI_ADJ, ///
+ replay(table3f) append(t4_d0) addtable ///
+ title("Table 3, Part 2 - detailed table by dementia, demo groups") ///
+ ctitles("","Female","","Male","" \ ///
+ "","Married","Not married","Married","Not married") ///
+ note("Marital status at time of death" \ ///
+ "Uses HRS household weights")
+**************************************************
+***********************************************************
+//part 3 for overall sample
+//table format changed, now col 1 = dementia, col 2 = not dementia
+frmttable, clear
+outreg, clear
+
+//first row each section - get n's dementia vs not dementia group
+local c = 1
+mat t3_n=J(1,2,.)
+foreach i in 1 0 {
+	sum adj_total_costs_60m if pr_dem_gt50==`i'
+	mat t3_n[1,`c']=r(N)
+	local c = `c'+1
+	}
+mat rownames t3_n="N"
+frmttable , statmat(t3_n) sdec(0) store(t4_a)
+ 
+ //now get spending by dementia group, all categories
+ //continuous variables get mean, median
+foreach v in `spvars1'{
+	local c=1
+	mat t3_1=J(1,4,.)
+		foreach i in 1 0 {
+			sum `v' if pr_dem_gt50==`i' [aw=hh_weight], detail
+			mat t3_1[1,`c']=r(mean)
+			mat t3_1[1,`c'+1]=r(p50)
+			local c = `c'+2
+		} //ends loop to fill in each column by dementia status
+		mat rownames t3_1=`v'
+		frmttable , statmat(t3_1) sdec(0) substat(1) store(t3_a) varlabels
+		outreg, replay(t4_b) append(t3_a) store(t4_b)
+	} //ends row loop
+//get oop/wealth ratio, median, 25, 75%
+local c=1
+mat t3_1=J(3,2,.)
+foreach i in 1 0{		
+	sum oop_to_fin_wealth if pr_dem_gt50==`i' [aw=hh_weight], detail
+	mat t3_1[1,`c']=r(p50)
+	mat t3_1[2,`c']=r(p25)
+	mat t3_1[3,`c']=r(p75)
+	local c = `c'+1
+	}
+mat rownames t3_1="OOP/Wealth, median" "25th %" "75th %"
+frmttable , statmat(t3_1) sdec(2) store(t3_c)
+
+//now indicator variables for the groups, get percent
+foreach v in `spvars2'{
+	local c=1
+	mat t3_1=J(1,2,.)
+	foreach i in 1 0{
+		sum `v' if pr_dem_gt50==`i' [aw=hh_weight], detail
+		mat t3_1[1,`c']=r(mean)*100
+		local c = `c'+1
+		} //ends loop to fill in all 2 columns by dementia
+	mat rownames t3_1=`v'
+	frmttable , statmat(t3_1) sdec(2) store(t3_c) varlabels
+	outreg, replay(t4_d) append(t3_c) store(t4_d)
+	} //ends row loop
+		
+outreg, replay(t4_a) append(t4_b) store(table3a)
+outreg, replay(table3a) append(t3_c) store(table3b)
+
+outreg using E:\data\hrs_oop_2010\logs\17b_tables_NO_WI_ADJ, ///
  replay(table3b) append(t4_d) addtable ///
  title("Table 3, Part3 - detailed table by dementia") ///
  ctitles("","Dementia","Other Disease") ///
@@ -13766,8 +14684,6 @@ ctitles("" "Dementia P>70%" "Cancer" "Heart disease" "Other disease" \ ///
 local cond stroke_hrs_n dm_hrs_n heart_hrs_n htn_hrs_n lung_hrs_n ///
 cancer_hrs_n psych_hrs_n arth_hrs_n
 foreach v in `cond'{
-gen `v'2n1=`v'2
-replace `v'2n1=`v'1 if `v'2==. & `v'1~=.
 tab `v'2n1, missing
 }
 
@@ -13780,12 +14696,7 @@ la var cancer_hrs_n2n1 "Cancer"
 la var psych_hrs_n2n1 "Psych cond"
 la var arth_hrs_n2n1 "Arthritis"
 
-gen sr_comorb_cnt = stroke_hrs_n2n1 + dm_hrs_n2n1 + heart_hrs_n2n1 + htn_hrs_n2n1 + lung_hrs_n2n1 + ///
-cancer_hrs_n2n1 + psych_hrs_n2n1 + arth_hrs_n2n1
-gen sr_comorb_ge4 = 1 if sr_comorb_cnt >3
-replace sr_comorb_ge4 = 0 if sr_comorb_cnt <4
-replace sr_comorb_ge4=. if sr_comorb_cnt==.
-tab sr_comorb_ge4, missing
+tab sr_comorb_cnt sr_comorb_ge4, missing
 la var sr_comorb_ge4 "4+ self report comorbidities"
 
 tab el_ge4_2yr, missing

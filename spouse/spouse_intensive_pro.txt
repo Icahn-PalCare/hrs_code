@@ -691,6 +691,22 @@ cc_20_cncrlung_n12mn6m + cc_21_cncrendm_n12mn6m
 la var cc_all_count_6m12m_2 "Count of cc's, 6-12m pre-death, excludes cataract and glaucoma"
 tab cc_all_count_6m12m_2 , missing
 
+//categorical spouse primary helper, duration'
+tab r_adl_sp_helper_x r_iadl_sp_helper_x, missing
+gen r_s_help_dur_cat = 0 if r_adl_sp_helper_x==0 & r_iadl_sp_helper_x==0
+replace r_s_help_dur_cat = 1 if r_adl_sp_helper_x==1 | r_iadl_sp_helper_x==1
+replace r_s_help_dur_cat = 2 if (r_adl_sp_helper_x==1 | r_iadl_sp_helper_x==1) ///
+ & ( r_adl_sp_helper_n1==1 | r_iadl_sp_helper_n1==1)
+la def help 0 "S not primary helper x" 1 "S primary helper x only" 2 "S primary helper x+n1"
+la val r_s_help_dur_cat help
+tab r_s_help_dur_cat, missing
+
+tab r_s_help_dur_cat, gen(r_s_help_dur_ind) missing
+
+la var r_s_help_dur_ind1 "S not prim helper exit"
+la var r_s_help_dur_ind2 "S prim helper exit only"
+la var r_s_help_dur_ind3 "S prim helper exit and n1"
+
 *************************************************
 //hospice , intensive procedures timing variables
 gen proc_to_hs_enrol = hs_enrol_dt - first_proc_date_excl_hd_6m 
@@ -1517,6 +1533,7 @@ cd `datapath'
 //use sample with full ces-d information
 use spouse_intens_data_cleaned.dta if cesd_miss_n1_p1==0
 *******************************************************************
+
 //where r&s highly correlated, use s
 local rvars r_nw_midlow_n1 r_nw_midhigh_n1 r_nw_highest_n1 ///
 r_nhres_n1n2 r_srh_pf_n1n2 r_advdir_x r_adl_impair_n1n2 ///
@@ -1543,6 +1560,22 @@ tab int_any_of5_6m , missing
 
 //save this dataset with no missing variables
 save spouse_intens_data_ps_set.dta, replace
+*******************************************************************
+//look at some additional variables
+*******************************************************************
+label define decmaker 0 "N/A No EOL care decision made" 1 "Patient" ///
+      2 "Spouse or Partner or Exit Int Proxy" ///
+      3 "Child/Child-in-law/Grandchild" 4 "Other Relative" 5 "Friend" ///
+      6 "Physician/Health Care Provider" 7 "Minister/Rabbi/Priest" ///
+      8 "Other" 9 "Don't Know/Refused", modify
+label values r_decmaker_x decmaker
+
+tab r_decmaker_x, missing
+tab r_eoldec_x, missing
+tab r_dexp_x, missing
+tab r_capacity_x, missing
+tab r_s_help_dur_cat, missing
+
 *******************************************************************
 //propensity score generation
 
@@ -1613,6 +1646,7 @@ sum _weight if int_any_of5_6m==0 //n=28 control dropped, no weight assigned
 rename _weight ip_weight
 
 save spouse_intens_data_ps_matched.dta, replace
+//use  spouse_intens_data_ps_matched.dta
 *******************************************************************
 //run the doubly robust models
 la var int_any_of5_6m "Intensive procedure used"
@@ -1626,7 +1660,7 @@ la var s_hrs_comorb_mild_n1 "S Mild comorb."
 la var s_hrs_comorb_mod_n1 "S Moderate comorb."
 la var s_psych_overall_hrs_n1n2 "S Psych condition"
 
-logit s_cesdbetter int_any_of5_6m `rvars' `svars' [iw=ip_weight], or
+logit s_cesdbetter int_any_of5_6m `rvars' `svars' [pw=ip_weight], or
 outreg, ///
 title("Impact of intensive procedure on spousal depression" \ ///
 "Propensity matched sample") ///
@@ -1634,80 +1668,19 @@ varlabels stats(e_b e_ci p)  ///
 ctitles("","(1) Any improvement" ) ///
 starlevels(10 5 1) store(res1) summstat(N)
 
-logit s_cesd_ge3better int_any_of5_6m `rvars' `svars' [iw=ip_weight], or
+logit s_cesd_ge3better int_any_of5_6m `rvars' `svars' [pw=ip_weight], or
 outreg using `logpath'\6_dr_est_results_ps_matched, replace ///
 merge(res1) varlabels stats(e_b e_ci p) ///
 ctitles("","(2) Clinical improvement") ///
 summstat(N)
 
-regress s_cesdchange int_any_of5_6m `rvars' `svars' [iw=ip_weight]
+regress s_cesdchange int_any_of5_6m `rvars' `svars' [pw=ip_weight]
 outreg using `logpath'\6_dr_est_results_ps_matched, ///
 merge(res1) replace  varlabels stats(b ci p) ///
 ctitles("","(3) Raw change in CES-D score") ///
-summstat(N) landscape
-*******************************************************************
-//quick look at matched sample, outcomes univariate comparison
-la var s_cesd_tot_ge3_p1 "S Depressed CESD 3+, p1 core"
-la var s_cesd_tot_ge3_p1 "S CES-D Score, p1 core"
-
-mat t2_2m=J(3,4,.)
-
-local r = 1
-foreach v in s_cesd_tot_ge3_n1n2 s_cesd_tot_ge3_p1 s_cesdbetter { //indicator variables
-	local c = 1
-	foreach d in 1 0 {
-		sum `v' if int_any_of5_6m ==`d' [iweight=ip_weight]
-		mat t2_2m[`r',`c']=r(mean)*100
-		local c = `c'+1		
-	}
-	mat t2_2m[`r',3]=(t2_2m[`r',1]/100-t2_2m[`r',2]/100)/sqrt((t2_2m[`r',1]/100* ///
-		(1-t2_2m[`r',1]/100)+t2_2m[`r',2]/100*(1-t2_2m[`r',2]/100))/2)
-		
-	logit int_any_of5_6m `v' [iw=ip_weight]
-	test `v'
-	mat t2_2m[`r',4] = r(p)
-	
-	local r = `r'+1
-}
-mat rownames t2_2m=s_cesd_tot_ge3_n1n2 s_cesd_tot_ge3_p1 s_cesdbetter 
-frmttable, statmat(t2_2m) varlabels ///
-	sdec(2) store(tab2_2m) 
-
-mat t2_3m=J(3,6,.)
-local r = 1
-foreach v in s_cesd_tot_n1n2 s_cesd_tot_p1 s_cesdchange  { //continuous variables
-	local c = 1
-	foreach d in 1 0 {
-		sum `v' if int_any_of5_6m ==`d' [iweight=ip_weight]
-		mat t2_3m[`r',`c']=r(mean)
-		mat t2_3m[`r',`c'+1]=r(sd)
-		local c = `c'+2	
-	}
-	mat t2_3m[`r',5]=(t2_3m[`r',1]-t2_3m[`r',3])/sqrt((t2_3m[`r',2]^2+t2_3m[`r',4]^2)/2) 
-	
-	logit int_any_of5_6m `v' [iw=ip_weight]
-	test `v'
-	mat t2_3m[`r',6] = r(p)
-	
-	local r = `r'+1
-}
-mat rownames t2_3m=s_cesd_tot_n1n2 s_cesd_tot_p1 s_cesdchange 
-
-mat dmat=(0,1,0,1,0,0)
-mat ann=(1,1,0,0\1,1,0,0\1,1,0,0)
-mat list dmat
-mat list ann
-
-mat list t2_3m
-
-frmttable, statmat(t2_3m) varlabels ///
-	sdec(2) doubles(dmat) ///
-	dbldiv(" (") annotate(ann) asymbol(")") ///
-	store(tab2_3m) 
-
-outreg using `logpath'\6_dr_est_results_ps_matched, ///
-replay(tab2_2m) append(tab2_3m) addtable ///
-ctitles("" "Intensive procedure" "No procedure" "Std Diff." "p-value")
+summstat(N) landscape ///
+note("Weighting down control observations, 1 control for each treatment, " \ ///
+"for OLS regression on change score results in the reported N") 
 
 *******************************************************************
 log close
@@ -2379,7 +2352,7 @@ log using "`logpath'\9-Spouse_intensive_bar_chart.txt", text replace
 cd `datapath'
 
 //use sample with full ces-d information
-use spouse_intens_data_ps_set.dta
+use spouse_intens_data_ps_matched.dta
 ***************************************************************
 //set time variables
 gen s_days_n_core_dead = s_days_n1_core_dead if s_ind_n1_wi_6m_dead==0
@@ -2412,15 +2385,17 @@ gen cesd_8=s_cesd_tot_p1 if days_p1_core_dod_cat==2
 gen cesd_9=s_cesd_tot_p1 if days_p1_core_dod_cat==3
 gen cesd_10=s_cesd_tot_p1 if days_p1_core_dod_cat==4
 
-
 //drop variables don't need
-keep r_id cesd_* int_any_of5_6m
+keep r_id cesd_* int_any_of5_6m ip_weight
 drop cesd_miss*
 
 //restructure dataset, 2 rows per person, one before death, one after death
 reshape long cesd_, i(r_id) j(time)
 
-collapse  cesd_, by(time int_any_of5_6m)
+save cesd_bar_graph.dta, replace
+*****************************************************************
+//do pre-match graph
+collapse cesd_, by(time int_any_of5_6m)
 
 //again restructure so have one obs per time, but two mean cesd
 preserve
@@ -2437,16 +2412,71 @@ graph bar cesd_ cesd_int,  over(time, relabel(1 "24+" 2 "18-24m" 3 "12-18" ///
 	4 "6-12" 5 "R's death" 6 "0-6" 7"6-12" 8"12-18" 9"18-24" 10"24+" )) ///
 	legend(label(1 No intensive procedure) label(2 Intensive procedure)) ///
 	ytitle("Mean CES-D score") ///
-	title("Spouse Mean CES-D score by time of interview") ///
+	title("Spouse Mean CES-D score by time of interview, not matched") ///
 	subtitle("Months before & after R's death")
 	
-graph save `logpath'/mean_cesd_bar_6m, replace
+graph save `logpath'/mean_cesd_bar_6m_not_matched, replace
+
+*****************************************************************
+//now post-match graph
+use cesd_bar_graph.dta, clear
+
+collapse cesd_ [pw=ip_weight], by(time int_any_of5_6m)
+
+preserve //again restructure so have one obs per time, but two mean cesd
+keep if int_any_of5_6m==1
+rename cesd_ cesd_int
+save int_1.dta, replace
+restore
+
+keep if int_any_of5_6m==0
+
+merge 1:1 time using int_1.dta
+
+graph bar cesd_ cesd_int,  over(time, relabel(1 "24+" 2 "18-24m" 3 "12-18" ///
+	4 "6-12" 5 "R's death" 6 "0-6" 7"6-12" 8"12-18" 9"18-24" 10"24+" )) ///
+	legend(label(1 No intensive procedure) label(2 Intensive procedure)) ///
+	ytitle("Mean CES-D score") ///
+	title("Spouse Mean CES-D score by time of interview, matched") ///
+	subtitle("Months before & after R's death")
+	
+graph save `logpath'/mean_cesd_bar_6m_matched, replace
+***************************************************************
+
+//a simple figure, this time mean before vs after by intense procedure groups
+use spouse_intens_data_ps_matched.dta, clear
+
+collapse s_cesd_tot_n1n2 s_cesd_tot_p1 [pw=ip_weight], by(int_any_of5_6m)
+
+rename s_cesd_tot_n1n2 cesd1
+rename s_cesd_tot_p1 cesd2
+
+reshape long cesd, i(int_any_of5_6m) j(time)
+
+la var int_any_of5_6m "Intensive procedure last 6m of life"
+la def int_any_of5_6m 0 "No intensive procedure" 1"Intensive procedure"
+la val int_any_of5_6m int_any_of5_6m
+
+scatter cesd time, by(int_any_of5_6m) connect(direct) ///
+ytitle("Mean CES-D Score") ///
+xtitle("Interview relative to R's death") ///
+xlabel(1 "Before" 2 "After") ///
+xscale(range(.75 2.25))
+
+graph save `logpath'/mean_cesd_by_proced_matched, replace
 
 ***************************************************************
 log close
 
 
 H="Create Tables 1 and 2"
+/*creates 3 tables:
+Table 1: Overall sample characteristics, not matched
+Table 2: Not matched / matched char by intensive procedure use, shows std differences
+to demonstrate propensity score matched sample is well matched on all included covariates
+Table 3: CES-D score before/after by intensive procedure use, matched and not matched
+*/
+
 capture log close
 
 clear all
@@ -2582,7 +2612,8 @@ s_medicaid_n1 s_adl_independent_core_n1n2 s_srh_pf_n1n2 s_imprelig_vimp_n1 ///
 s_cancer_hrs_n1 s_lung_hrs_n1 s_heart_hrs_n1 s_chf_hrs_n1 ///
 s_stroke_hrs_n1 s_memory_hrs_n1 s_htn_hrs_n1 s_dm_hrs_n1 ///
 s_hrs_comorb_none_n1 s_hrs_comorb_mild_n1 s_hrs_comorb_mod_n1 ///
-s_psych_overall_hrs_n1n2 s_smoke_curr_n1 s_vig_phy_act_n1 s_prim_cg
+s_psych_overall_hrs_n1n2 s_smoke_curr_n1 s_vig_phy_act_n1 s_prim_cg ///
+s_cesd_tot_ge3_n1n2 s_cesd_tot_ge3_p1 s_cesdbetter s_cesd_ge3better 
 
 la var s_age "Age at spouse's death, years, mean (SD)"
 la var s_female "Female, %"
@@ -2607,9 +2638,14 @@ la var s_psych_overall_hrs_n1n2 "Psychological problems, %**"
 la var s_smoke_curr_n1 "Currently smoker, %"
 la var s_vig_phy_act_n1 "Vigorous physical activity, %"
 la var s_prim_cg "Spouse primary caregiver, %"
+la var s_cesd_tot_ge3_n1n2 "S Depressed CESD 3+, pre-death, %**"
+la var s_cesd_tot_ge3_p1 "S Depressed CESD 3+, post-death, %"
+la var s_cesdbetter "S CES-D Improved n1 to p1,%"
+la var s_cesd_ge3better "Clinical improvement n1 to p1,%"
 
 la var s_cesd_tot_n1n2 "CESD score pre-death, mean(SD)**"
 la var s_cesd_tot_p1 "CESD score post-death, mean(SD)"
+la var s_cesdchange "Change CES-D Score n1 to p1, mean(SD)"
 
 mat schar_1=J(1,2,.)
 
@@ -2628,7 +2664,7 @@ frmttable, statmat(schar_1) varlabels ///
 	dbldiv(" (") annotate(ann) asymbol(")") ///
 	store(tab1_1) 	
 
-mat schar_2=J(22,1,.)
+mat schar_2=J(26,1,.)
 local r = 1
 foreach v in `svars'{
 	sum `v'
@@ -2641,21 +2677,21 @@ mat rownames schar_2 = `svars'
 frmttable, statmat(schar_2) varlabels ///
 	sdec(2) store(tab1_2) 	  
 
-mat schar_3=J(2,2,.)
+mat schar_3=J(3,2,.)
 
 local r = 1
-foreach v in s_cesd_tot_n1n2 s_cesd_tot_p1 {
-	sum `v', detail //cc's count
+foreach v in s_cesd_tot_n1n2 s_cesd_tot_p1 s_cesdchange {
+	sum `v', detail //ces-d scores
 	mat schar_3[`r',1]=r(mean)
 	mat schar_3[`r',2]=r(sd)
 	local r = `r'+1
 	}
 
-mat rownames schar_3=s_cesd_tot_n1n2 s_cesd_tot_p1
+mat rownames schar_3=s_cesd_tot_n1n2 s_cesd_tot_p1 s_cesdchange
 
 //save the table in frmttable	
 mat dmat=(0,1)
-mat ann=J(2,1,1)
+mat ann=J(3,1,1)
 
 frmttable, statmat(schar_3) varlabels ///
 	sdec(2) doubles(dmat) ///
@@ -2897,7 +2933,143 @@ outreg using "`logpath'\10_spo_ip_tab1and2", ///
     "Intensive procedure %","No procedure %","Standardized Difference") ///
  landscape addtable
 
+*******************************************************************
+*******************************************************************
+//Table 3 - CES-D score pre/post death by intense procedures use
+*******************************************************************
+**************************************************************
+la var s_cesd_tot_ge3_n1n2 "S Depressed CESD 3+, pre-death,%"
+la var s_cesd_tot_ge3_p1 "S Depressed CESD 3+, post-death,%"
+la var s_cesdbetter "S CES-D Improved n1 to p1,%"
+la var s_cesd_ge3better "Clinical improvement n1 to p1,%"
+la var s_cesd_tot_n1n2 "S CES-D Score, pre-death, mean(sd)"
+la var s_cesd_tot_p1 "S CES-D Score, post-death, mean(sd)"
+la var s_cesdchange "Change CES-D Score n1 to p1, mean(sd)"
 
+local ivars s_cesd_tot_ge3_n1n2 s_cesd_tot_ge3_p1 s_cesdbetter s_cesd_ge3better 
+local cvars s_cesd_tot_n1n2 s_cesd_tot_p1 s_cesdchange
+
+//part 1 - prior to matching
+mat t2_2m=J(4,4,.)
+
+local r = 1
+foreach v in `ivars' { //indicator variables
+	local c = 1
+	foreach d in 1 0 {
+		sum `v' if int_any_of5_6m ==`d'
+		mat t2_2m[`r',`c']=r(mean)*100
+		local c = `c'+1		
+	}
+	mat t2_2m[`r',3]=(t2_2m[`r',1]/100-t2_2m[`r',2]/100)/sqrt((t2_2m[`r',1]/100* ///
+		(1-t2_2m[`r',1]/100)+t2_2m[`r',2]/100*(1-t2_2m[`r',2]/100))/2)
+		
+	logit int_any_of5_6m `v'
+	test `v'
+	mat t2_2m[`r',4] = r(p)
+	
+	local r = `r'+1
+}
+mat rownames t2_2m= `ivars' 
+frmttable, statmat(t2_2m) varlabels ///
+	sdec(2) store(tab2_2m) 
+
+mat t2_3m=J(3,6,.)
+local r = 1
+foreach v in `cvars'  { //continuous variables
+	local c = 1
+	foreach d in 1 0 {
+		sum `v' if int_any_of5_6m ==`d' 
+		mat t2_3m[`r',`c']=r(mean)
+		mat t2_3m[`r',`c'+1]=r(sd)
+		local c = `c'+2	
+	}
+	mat t2_3m[`r',5]=(t2_3m[`r',1]-t2_3m[`r',3])/sqrt((t2_3m[`r',2]^2+t2_3m[`r',4]^2)/2) 
+	
+	logit int_any_of5_6m `v'
+	test `v'
+	mat t2_3m[`r',6] = r(p)
+	
+	local r = `r'+1
+}
+mat rownames t2_3m=`cvars' 
+
+mat dmat=(0,1,0,1,0,0)
+mat ann=(1,1,0,0\1,1,0,0\1,1,0,0)
+mat list dmat
+mat list ann
+
+mat list t2_3m
+
+frmttable, statmat(t2_3m) varlabels ///
+	sdec(2) doubles(dmat) ///
+	dbldiv(" (") annotate(ann) asymbol(")") ///
+	store(tab2_3m) 
+
+outreg using `logpath'\10_spo_ip_tab1and2, ///
+replay(tab2_2m) append(tab2_3m) addtable ///
+title("Table 3a: Spouse CES-D score details, sample before matching") ///
+ctitles("" "Intensive procedure" "No procedure" "Std Diff." "p-value")
+
+//Part 2 - after matching
+mat t2_2m=J(4,4,.)
+
+local r = 1
+foreach v in `ivars' { //indicator variables
+	local c = 1
+	foreach d in 1 0 {
+		sum `v' if int_any_of5_6m ==`d' [iweight=ip_weight]
+		mat t2_2m[`r',`c']=r(mean)*100
+		local c = `c'+1		
+	}
+	mat t2_2m[`r',3]=(t2_2m[`r',1]/100-t2_2m[`r',2]/100)/sqrt((t2_2m[`r',1]/100* ///
+		(1-t2_2m[`r',1]/100)+t2_2m[`r',2]/100*(1-t2_2m[`r',2]/100))/2)
+		
+	logit int_any_of5_6m `v' [iw=ip_weight]
+	test `v'
+	mat t2_2m[`r',4] = r(p)
+	
+	local r = `r'+1
+}
+mat rownames t2_2m=`ivars'
+frmttable, statmat(t2_2m) varlabels ///
+	sdec(2) store(tab2_2m) 
+
+mat t2_3m=J(3,6,.)
+local r = 1
+foreach v in `cvars'  { //continuous variables
+	local c = 1
+	foreach d in 1 0 {
+		sum `v' if int_any_of5_6m ==`d' [iweight=ip_weight]
+		mat t2_3m[`r',`c']=r(mean)
+		mat t2_3m[`r',`c'+1]=r(sd)
+		local c = `c'+2	
+	}
+	mat t2_3m[`r',5]=(t2_3m[`r',1]-t2_3m[`r',3])/sqrt((t2_3m[`r',2]^2+t2_3m[`r',4]^2)/2) 
+	
+	logit int_any_of5_6m `v' [iw=ip_weight]
+	test `v'
+	mat t2_3m[`r',6] = r(p)
+	
+	local r = `r'+1
+}
+mat rownames t2_3m=`cvars' 
+
+mat dmat=(0,1,0,1,0,0)
+mat ann=(1,1,0,0\1,1,0,0\1,1,0,0)
+mat list dmat
+mat list ann
+
+mat list t2_3m
+
+frmttable, statmat(t2_3m) varlabels ///
+	sdec(2) doubles(dmat) ///
+	dbldiv(" (") annotate(ann) asymbol(")") ///
+	store(tab2_3m) 
+
+outreg using `logpath'\10_spo_ip_tab1and2, ///
+replay(tab2_2m) append(tab2_3m) addtable ///
+title("Table 3b: Spouse CES-D score details, matched sample") ///
+ctitles("" "Intensive procedure" "No procedure" "Std Diff." "p-value")
 
 ***************************************************************
 log close

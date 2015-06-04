@@ -701,7 +701,7 @@ la def help 0 "S not primary helper x" 1 "S primary helper x only" 2 "S primary 
 la val r_s_help_dur_cat help
 tab r_s_help_dur_cat, missing
 
-tab r_s_help_dur_cat, gen(r_s_help_dur_ind) missing
+tab r_s_help_dur_cat, gen(r_s_help_dur_ind)
 
 la var r_s_help_dur_ind1 "S not prim helper exit"
 la var r_s_help_dur_ind2 "S prim helper exit only"
@@ -2978,7 +2978,7 @@ local r = 1
 foreach v in `cvars'  { //continuous variables
 	local c = 1
 	foreach d in 1 0 {
-		sum `v' if int_any_of5_6m ==`d' 
+		sum `v' if int_any_of5_6m ==`d', detail 
 		mat t2_3m[`r',`c']=r(mean)
 		mat t2_3m[`r',`c'+1]=r(sd)
 		local c = `c'+2	
@@ -3103,3 +3103,135 @@ Table 3 - Results
 Think about how to split
 Full sample / Excluding Hospice
 Primary caregiver spouses including / excluding hospice users
+
+H="********************************"
+
+
+H="PS match - additional variables"
+capture log close
+
+clear all
+set more off
+
+local logpath E:\data\spouse_intensive\logs
+local datapath E:\data\spouse_intensive\data
+
+log using "`logpath'\11-Spouse_intensive_ps_newvars.txt", text replace
+
+cd `datapath'
+
+use spouse_intens_data_ps_set.dta
+
+//additional variables for matching
+foreach v in r_dexp_x r_s_help_dur_cat {
+tab `v', missing
+drop if `v'==.
+}
+
+//where r&s highly correlated, use s
+local rvars r_nw_midlow_n1 r_nw_midhigh_n1 r_nw_highest_n1 ///
+r_nhres_n1n2 r_srh_pf_n1n2 r_advdir_x r_dexp_x  r_adl_impair_n1n2 ///
+cc_3_alzhdmta_n12mn6m cc_6_chrnkidn_n12mn6m cc_ami_isch_n12mn6m ///
+cc_8_chf_n12mn6m cc_9_diabetes_n12mn6m cc_7_copd_n12mn6m ///
+cc_16_strketia_n12mn6m cc_cncr_chronic_n12mn6m cc_15_ra_oa_n12mn6m ///
+cc_13_depressn_n12mn0 cc_all_count_6m12m_2
+
+local svars s_age s_female s_white_e ///
+s_hseduc_n1_n3 s_srh_pf_n1n2 s_imprelig_vimp_n1  ///
+s_hrs_comorb_mild_n1 s_hrs_comorb_mod_n1 s_psych_overall_hrs_n1n2 ///
+r_s_help_dur_ind2 r_s_help_dur_ind3 days_p1_core_dod_6_12m days_p1_core_dod_12_18m ///
+days_p1_core_dod_18_24m days_p1_core_dod_gt2yr
+
+tab int_any_of5_6m , missing
+*******************************************************************
+//propensity score generation
+
+//first sort data randomly
+set seed 2000
+gen x=uniform()
+sort x
+
+//generate pscore variable hs_pscore
+pscore int_any_of5_6m `rvars' `svars', pscore(ip_pscore) blockid(ip_block) logit detail
+
+psgraph, treated(int_any_of5_6m) pscore(ip_pscore)
+
+*******************************************************************
+//implement radius matching
+gen logitpscore=ln(ip_pscore/(1-ip_pscore))
+sum logitpscore
+
+sca cal_ps1=r(sd)*0.02
+sca list cal_ps1
+
+//rule of thumb 0.2*sd, try 0.02* sd
+psmatch2  int_any_of5_6m,outcome(s_cesdbetter) pscore(ip_pscore) radius caliper(.0121083) logit
+//note this creates varaible _weight
+
+*******************************************************************
+//look at balance of propensity score across variables
+psgraph, treated(int_any_of5_6m) pscore(ip_pscore)
+
+pstest `rvars' `svars' ,treated(int_any_of5_6m) both hist
+
+//look at quantile-quantile plots for continuous variables
+foreach v in r_age cc_all_count_6m12m_2{
+gen `v'_treated = `v' if int_any_of5_6m==1 & _support==1
+gen `v'_comparison = `v' if int_any_of5_6m==0 & _support==1
+qqplot `v'_treated `v'_comparison
+graph save `logpath'/qqplot_`v', replace
+}
+
+mat vr=J(34,6,.)
+//compare variance of covariates before and after matching
+local i=1
+foreach v in `rvars' `svars'  {
+sum `v' if int_any_of5_6m==1 //get variance treated before matching
+mat vr[`i',1]=r(Var)
+sum `v' if int_any_of5_6m==0 //get variance comparison before matching
+mat vr[`i',2]=r(Var)
+mat vr[`i',3]= vr[`i',1]/vr[`i',2] //ratio
+sum `v' if int_any_of5_6m==1 & _support==1 //get variance treated after matching
+mat vr[`i',4]=r(Var)
+sum `v' if int_any_of5_6m==0 [iweight=_weight] //get variance comparison after matching
+mat vr[`i',5]=r(Var)
+mat vr[`i',6]= (vr[`i',4]) / (vr[`i',5]) //ratio
+local i=`i'+1
+}
+
+mat rownames vr=`rvars' `svars'
+
+mat list vr
+
+//what gets dropped from sample using this match?
+tab _support, missing
+tab _support if int_any_of5_6m==1, missing //n=1 treated dropped, off comm support
+tab _support if int_any_of5_6m==0, missing
+tab _weight if int_any_of5_6m==1, missing
+sum _weight if int_any_of5_6m==0 //n=3 control dropped, no weight assigned
+
+rename _weight ip_weight
+
+//save spouse_intens_data_ps_matched.dta, replace
+//use  spouse_intens_data_ps_matched.dta
+*******************************************************************
+//run the doubly robust models
+la var int_any_of5_6m "Intensive procedure used"
+la var r_nhres_n1n2 "R Nursing home resident"
+la var r_srh_pf_n1n2 "R SRH Fair/Poor"
+la var r_adl_impair_n1n2 "R ADL Impaired"
+la var cc_all_count_6m12m_2 "R # Chronic conditions"
+la var s_hseduc_n1_n3 "S HS Degree"
+la var s_srh_pf_n1n2 "S SRH Fair/Poor"
+la var s_hrs_comorb_mild_n1 "S Mild comorb."
+la var s_hrs_comorb_mod_n1 "S Moderate comorb."
+la var s_psych_overall_hrs_n1n2 "S Psych condition"
+
+regress s_cesdchange int_any_of5_6m `rvars' `svars' [pw=ip_weight]
+outreg using `logpath'\11_dr_est_results_ps_matched_newvars, ///
+ replace  varlabels stats(b ci p) ///
+ctitles("","Raw change in CES-D score") ///
+summstat(N) landscape
+
+*******************************************************************
+log close

@@ -187,11 +187,11 @@ run;
 /*******************************************************************/
 /*******************************************************************/
 
-proc contents data=hrs_cln.restricted_v2012;
+proc contents data=hrs_cln.restr_tracker_v2012;
 run;
 
 data restricted;
-set hrs_cln.restricted_v2012;
+set hrs_cln.restr_tracker_v2012;
 run;
 
 proc sort data=exit_xwalk_3 nodupkey;
@@ -318,43 +318,37 @@ use x = wave number (1998=wave 1, 2000=wave2, etc) to get the
 specific wave spouse id b/c rand is a xwave dataset*/
 data exit_02_to_12_sp_2;
 set exit_02_to_12_sp_1;
+missing M;
 x=(r_EXIT_YEAR_x-1992)/2+1;
 sp_id_var=('s'||trim(left(x))||"HHIDPN");
 *the spouse id at the exit interview year,or n1 core;
-sp_id = vvaluex('s'||trim(left(x))||"HHIDPN") ;
-*spouse id has special missing codes 0 and M so replace to . if no spouse or if spouse id is missing;
-if sp_id=0 | sp_id='           M' | sp_id=. then sp_id='';
-if sp_id =. then sp_id = vvaluex('s'||trim(left(x-1))||"HHIDPN") ;
-if sp_id=0 | sp_id='           M' | sp_id=. then sp_id='';
+if ~missing(vvaluex('s'||trim(left(x))||"HHIDPN")) then sp_id = vvaluex('s'||trim(left(x))||"HHIDPN")+0 ;
+if sp_id =. & ~missing(vvaluex('s'||trim(left(x-1))||"HHIDPN")) then
+	sp_id = vvaluex('s'||trim(left(x-1))||"HHIDPN")+0 ;
 label sp_id ="spouse hrs id from resp's exit year or the wave before exit year";
 run;
+
 proc freq data=exit_02_to_12_sp_2; table sp_id /missprint; run;
 
-data missspid;
-set exit_02_to_12_sp_2;
-if sp_id='           M';
-run;
-
-
-proc freq; table x sp_id_var /missprint; run;
+proc freq; table x*sp_id_var /missprint; run;
 
 /**********************************************************/
 /******* Get spouse medicare id from xwalk file   *********/
 /**********************************************************/
-libname xwalk 'E:\data\cms_DUA_25000_2010';
+libname medi 'E:\data\cms_DUA_24548_2012';
 
 data crosswalk_1_sp;
-set xwalk.cmsxref2010;
-keep bid_hrs_19 hhid pn;
+set medi.cmsxref2012;
+keep bid_hrs_21 hhid pn;
 run;
 
 /*get 2 variables bid_hrs = claims id, id=HRS id*/
 data crosswalk_2_sp;
 set crosswalk_1_sp;
-bid_hrs=bid_hrs_19;
+bid_hrs=bid_hrs_21;
 id=trim(hhid)||trim(pn);
 drop hhid pn;
-drop bid_hrs_19;
+drop bid_hrs_21;
 run;
 
 /*convert id from xwalk to numeric variable type*/
@@ -373,17 +367,17 @@ run;
 /* bring in mc xwalk id if in xwalk file
 sp_bid = . if missing from xwalk file */
 proc sql;
-create table exit_02_to_10_sp_3 as
+create table exit_02_to_12_sp_3 as
 select a.*,b.bid_hrs as sp_bid label="spouse medicare id " from 
-exit_02_to_10_sp_2 a
+exit_02_to_12_sp_2 a
 left join 
 crosswalk_3_sp b
 on a.sp_id=b.id;
 quit;
 
-data spo_int.exit_restricted_02_to_10_sp;
-set exit_02_to_10_sp_3(drop=r_id s1hhidpn s2hhidpn s3hhidpn 
-s4hhidpn s5hhidpn s6hhidpn s7hhidpn s8hhidpn s9hhidpn s10hhidpn
+data spo_int.exit_restricted_02_to_12_sp;
+set exit_02_to_12_sp_3(drop=r_id s1hhidpn s2hhidpn s3hhidpn 
+s4hhidpn s5hhidpn s6hhidpn s7hhidpn s8hhidpn s9hhidpn s10hhidpn s11hhidpn
 x sp_id_var ) ;
 rename id_num = r_id; /*numeric id*/
 if sp_bid='' then s_xwalk_yes=0;
@@ -391,10 +385,7 @@ if sp_bid~='' then s_xwalk_yes=1;
 label s_xwalk_yes="Spouse has Medicare xwalk id";
 run;
 
-proc freq; table s_xwalk_yes; run;
-
-
-
+proc freq; table r_xwalk_yes*s_xwalk_yes r_exit_year_x*s_xwalk_yes; run;
 
 
 H="xxx - Add r's n1 core and s's p1 core interviews to dataset"
@@ -618,8 +609,8 @@ libname spo_int 'E:\data\spouse\int_data';
 /*******************************************************************/
 
 /*convert the id from the core dataset to a numeric variable*/
-data core_00_to_10_idnum;
-set hrs_cln.core_00_to_10;
+data core_00_to_12_idnum;
+set hrs_cln.core_00_to_12;
 id_num=input(id,9.);
 label id_num="HRS hhidpn";
 drop id;
@@ -631,9 +622,9 @@ run;
 proc sql;
 create table r_n1_core_before_death(drop=id)
 as select b.*,b.id as r_id label="respondent's id"
- from spo_int.exit_restricted_02_to_10_sp a 
+ from spo_int.exit_restricted_02_to_12_sp a 
  inner join
-core_00_to_10_idnum b
+core_00_to_12_idnum b
   on a.r_id=b.id and a.r_death_date_e>b.c_ivw_date;
   quit;
 
@@ -642,8 +633,8 @@ by r_id c_ivw_date;
 run;
 
 /*keep only the n1 core interview
-6509 interviews identified
-of these, 143 are in 1998 so will be dropped because no n2 core*/
+7665 interviews identified
+of these, 167 are in 1998 so will be dropped because no n2 core*/
 data resp_core_n1;
 set r_n1_core_before_death;
 by r_id c_ivw_date;
@@ -664,7 +655,7 @@ create table r_n2_core_before_death(drop=id)
 as select b.*,b.id as r_id label="respondent's id"
  from resp_core_n1 a 
  inner join
-core_00_to_10_idnum b
+core_00_to_12_idnum b
   on a.r_id=b.id and a.c_ivw_date>b.c_ivw_date;
   quit;
 
@@ -673,41 +664,9 @@ by r_id c_ivw_date;
 run;
 
 /*keep only the n2 core interview
-6222 interviews identified*/
+7343 interviews identified*/
 data resp_core_n2;
 set r_n2_core_before_death;
-by r_id c_ivw_date;
-if last.r_id;
-run;
-proc freq;
-table core_year;
-run;
-
-/*******************************************************************/
-/*******************************************************************/
-/*  get the negative 3 core education variable for the respondent   */
-/*******************************************************************/
-/*******************************************************************/
-/*need to do this since education is only asked during r's
-first core interview and only backfilled for an overall education
-level through 2004*/
-proc sql;
-create table r_n3_core_before_death
-as select b.educ,b.c_ivw_date,b.core_year,b.id as r_id label="respondent's id"
- from resp_core_n2 a 
- inner join
-core_00_to_10_idnum b
-  on a.r_id=b.id and a.c_ivw_date>b.c_ivw_date;
-  quit;
-
-proc sort data=r_n3_core_before_death ;
-by r_id c_ivw_date;
-run;
-
-/*keep only the n3 core interview
-4692 interviews identified*/
-data resp_core_n3;
-set r_n3_core_before_death;
 by r_id c_ivw_date;
 if last.r_id;
 run;
@@ -731,9 +690,9 @@ and s's exit interview and restricted data*/
 proc sql;
 create table s_n1_core_before_death(drop=id)
 as select b.*,a.sp_id,a.r_id
- from spo_int.exit_restricted_02_to_10_sp(where=(sp_id>0)) a 
+ from spo_int.exit_restricted_02_to_12_sp(where=(sp_id>0)) a 
  inner join
-core_00_to_10_idnum b
+core_00_to_12_idnum b
   on a.sp_id=b.id and a.r_death_date_e>b.c_ivw_date;
   quit;
 
@@ -742,7 +701,7 @@ by sp_id c_ivw_date;
 run;
 
 /*just keep the n1 core interview for the spouse
-**2565 interviews*/
+**3021 interviews*/
 data sp_core_n1;
 set s_n1_core_before_death;
 by sp_id c_ivw_date;
@@ -763,7 +722,7 @@ create table s_n2_core_before_death(drop=id)
 as select b.*,a.sp_id,a.r_id
  from sp_core_n1 a 
  inner join
-core_00_to_10_idnum b
+core_00_to_12_idnum b
   on a.sp_id=b.id and a.c_ivw_date>b.c_ivw_date;
   quit;
 
@@ -772,45 +731,13 @@ by sp_id c_ivw_date;
 run;
 
 /*just keep the n2 core interview for the spouse
-**2506 interviews*/
+**2938 interviews*/
 data sp_core_n2;
 set s_n2_core_before_death;
 by sp_id c_ivw_date;
 if last.sp_id;
 run;
 
-proc freq;
-table core_year;
-run;
-
-/*******************************************************************/
-/*******************************************************************/
-/*  get the negative 3 core education variable for the spouse   */
-/*******************************************************************/
-/*******************************************************************/
-/*need to do this since education is only asked during s's
-first core interview and only backfilled for an overall education
-level through 2004*/
-proc sql;
-create table s_n3_core_before_death
-as select b.educ,b.c_ivw_date,b.core_year,a.sp_id,a.r_id
- from sp_core_n2 a 
- inner join
-core_00_to_10_idnum b
-  on a.sp_id=b.id and a.c_ivw_date>b.c_ivw_date;
-  quit;
-
-proc sort data=s_n3_core_before_death ;
-by sp_id c_ivw_date;
-run;
-
-/*keep only the n3 core interview
-1878 interviews identified*/
-data sp_core_n3;
-set s_n3_core_before_death;
-by sp_id c_ivw_date;
-if last.sp_id;
-run;
 proc freq;
 table core_year;
 run;
@@ -826,9 +753,9 @@ run;
 proc sql;
 create table s_p1_core_after_death(drop=id)
 as select b.*,a.sp_id,a.r_id
- from spo_int.exit_restricted_02_to_10_sp(where=(sp_id>0)) a 
+ from spo_int.exit_restricted_02_to_12_sp(where=(sp_id>0)) a 
  inner join
-core_00_to_10_idnum b
+core_00_to_12_idnum b
   on a.sp_id=b.id and a.r_death_date_e<b.c_ivw_date;
   quit;
 
@@ -837,7 +764,7 @@ by sp_id c_ivw_date;
 run;
 
 /*just keep the p1 core interview for the spouse
-**2274 interviews*/
+**2682 interviews*/
 data sp_core_p1;
 set s_p1_core_after_death;
 by sp_id c_ivw_date;
@@ -849,7 +776,6 @@ table core_year;
 run;
 
 
-
 /*******************************************************************/
 /*******************************************************************/
 /******         Spouse restricted data, add xwalk id        ********/ 
@@ -857,7 +783,7 @@ run;
 /*******************************************************************/
 
 data restricted;
-set hrs_cln.restricted_v2010;
+set hrs_cln.restr_tracker_v2012;
 run;
 
 proc sort data=restricted nodupkey; by id ; run;
@@ -865,12 +791,12 @@ proc sort data=restricted nodupkey; by id ; run;
 proc sql;
 create table s_restr
 as select * from restricted  
-where id in (select sp_id from spo_int.exit_restricted_02_to_10_sp) ;
+where id in (select sp_id from spo_int.exit_restricted_02_to_12_sp) ;
 quit;
 
 /*get spouse id list from exit/restr dataset*/
 data spid;
-set spo_int.exit_restricted_02_to_10_sp(keep=sp_id sp_bid s_xwalk_yes);
+set spo_int.exit_restricted_02_to_12_sp(keep=sp_id sp_bid s_xwalk_yes);
 if sp_id~='' & sp_id~=0;
 run;
 
@@ -906,11 +832,11 @@ run;
 proc contents;
 run;
 
-/*754 spouse exit interviews */
+/*988 spouse exit interviews */
 proc sql;
 create table s_exit
 as select * from exit_xwalk_1a  
-where id_num in (select sp_id from spo_int.exit_restricted_02_to_10_sp) ;
+where id_num in (select sp_id from spo_int.exit_restricted_02_to_12_sp) ;
 quit;
 
 data s_exit_1;
@@ -925,12 +851,10 @@ H="Merge r+s interviews into single dataset"
 
 %rename2(WORK,RESP_CORE_N1,_n1,r_);
 %rename2(WORK,RESP_CORE_N2,_n2,r_);
-%rename2(WORK,RESP_CORE_N3,_n3,r_);
 
 %rename2(WORK,SP_CORE_P1,_p1,s_);
 %rename2(WORK,SP_CORE_N1,_n1,s_);
 %rename2(WORK,SP_CORE_N2,_n2,s_);
-%rename2(WORK,SP_CORE_N3,_n3,s_);
 
 %rename2(WORK,S_RESTR_1,_e,s_);
 %rename2(WORK,S_EXIT_1,_x,s_);
@@ -954,16 +878,6 @@ rename r_r_id_n2 = r_id;
 run;
 
 proc sort data=resp_core_n2_a nodupkey;
-by r_id;
-run;
-
-/*r's n3 core*/
-data resp_core_n3_a;
-set RESP_CORE_N3;
-rename r_r_id_n3 = r_id; 
-run;
-
-proc sort data=resp_core_n3_a nodupkey;
 by r_id;
 run;
 
@@ -1001,17 +915,6 @@ proc sort data=sp_core_n2_a nodupkey;
 by r_id;
 run;
 
-/*s's n3 core*/
-data sp_core_n3_a;
-set SP_CORE_N3;
-rename s_sp_id_n3 = s_id;
-rename s_r_id_n3 = r_id;
-run;
-
-proc sort data=sp_core_n3_a nodupkey;
-by r_id;
-run;
-
 /*s's restricted (no r_id in this dataset)*/
 data s_restr_1_a;
 set S_RESTR_1;
@@ -1035,14 +938,14 @@ run;
 /*merge datasets*/
 /*Step 1, merge r's interviews with exit/restricted dataset*/
 /*Sort r's exit and restricted dataset including r and s xwalk ids*/
-proc sort data=spo_int.exit_restricted_02_to_10_sp out=r_ex_restr;
+proc sort data=spo_int.exit_restricted_02_to_12_sp out=r_ex_restr;
 by r_id;
 run;
 
 proc contents; run;
 
 data r_x_r_n1_n2;
-merge r_ex_restr resp_core_n1_a resp_core_n2_a resp_core_n3_a;
+merge r_ex_restr resp_core_n1_a resp_core_n2_a ;
 by r_id;
 run;
 
@@ -1052,7 +955,7 @@ by r_id;
 run;
 
 data r_all_s_n1_n2_p1;
-merge r_x_r_n1_n2 sp_core_n1_a sp_core_n2_a sp_core_n3_a sp_core_p1_a ;
+merge r_x_r_n1_n2 sp_core_n1_a sp_core_n2_a sp_core_p1_a ;
 by r_id;
 run;
 
@@ -1110,11 +1013,11 @@ H="Medicare FFS determination"
 */
 
 libname spo_int 'E:\data\spouse\int_data';
-libname medi 'E:\data\cms_DUA_25000_2010';
+libname medi 'E:\data\cms_DUA_24548_2012';
 
 /*sort claims denominator file*/
-proc sort data=medi.dn_2000_2010 out=dn_2000_20102  nodupkey;
-by BID_HRS_19 year;
+proc sort data=medi.dn_2000_2012 out=dn_2000_20122  nodupkey;
+by BID_HRS_21 year;
 run;
 
 /***********************************************************/
@@ -1124,25 +1027,25 @@ set spo_int.r_s_core_x_e;
 if r_death_date_e=.;
 run;
 
-*n=175 obs have missing dod in the HRS restricted dataset but have exit interview
+*n=126 obs have missing dod in the HRS restricted dataset but have exit interview
 do they have a dod in the claims denominator file?;
 proc sql;
-create table r_dod_missing1 as select BID_HRS_19,year,death_date 
-from dn_2000_20102
-where BID_HRS_19 in(select r_BID_hrs from r_dod_missing);
+create table r_dod_missing1 as select BID_HRS_21,year,death_date 
+from dn_2000_20122
+where BID_HRS_21 in(select r_BID_hrs from r_dod_missing);
 quit;
 
-proc sort data=r_dod_missing1; by BID_HRS_19 year;
+proc sort data=r_dod_missing1; by BID_HRS_21 year;
 run;
 
-*just keep latest year since looking for dod, n=138;
+*just keep latest year since looking for dod, n=116;
 data r_dod_missing2;
 set r_dod_missing1;
-by BID_HRS_19;
-if last.BID_HRS_19;
+by BID_HRS_21;
+if last.BID_HRS_21;
 run;
 
-*n=135 that have claims dod but no HRS dod;
+*n=99 that have claims dod but no HRS dod;
 data r_dod_missing3(rename=(death_date=claims_dod));
 set r_dod_missing2;
 if death_date~=.;
@@ -1154,7 +1057,7 @@ proc sql;
 create table r_sp as select a.*,b.claims_dod from
 spo_int.r_s_core_x_e a left join
 r_dod_missing3 b
-on a.r_BID_hrs=b.BID_HRS_19;
+on a.r_BID_hrs=b.BID_HRS_21;
 quit;
 
 data r_sp_1;
@@ -1167,7 +1070,7 @@ if r_death_date_e=. and claims_dod~=. then do;
 	end;
 run;
 
-*now only n=40 missing dod;
+*now only n=27 missing dod;
 data miss_dod_incl_claims;
 set r_sp_1;
 if dod_hrs_claims=.;
@@ -1189,8 +1092,8 @@ proc sql;
 create table dn_death_y as select
 a.*,b.buyin12,b.year,b.HMOIND12
 from spo_int.r_sp_2 a inner join
-dn_2000_20102 b
-on trim(left(a.r_BID_hrs))=trim(left(b.BID_hrs_19))
+dn_2000_20122 b
+on trim(left(a.r_BID_hrs))=trim(left(b.BID_hrs_21))
 and a.r_death_year=b.year;
 quit;
 
@@ -1198,16 +1101,11 @@ proc freq data=dn_death_y;
 table r_death_year use_claims_dod /missprint;
 run;
 
-/*5682 from exit have denominator file linked*/
+/*6630 from exit have denominator file linked*/
 proc sql;
 select count(distinct r_BID_hrs) from dn_death_y;
 quit;
 
-/***********************************************************/
-/*revise starting here for dod, using combined restricted, claims dod!*/
-/***********************************************************/
-
-/*note death month should from restricted file*/
 data dn_death_y2;
 set dn_death_y;
 death_month=month(dod_hrs_claims);
@@ -1227,15 +1125,15 @@ run;
 
 /*Check year prior to death to backfill for death dates
 in the first half of the year (since doing 6 mo look back)*/
-/* 5391 have the -1 year dn file*/
+/* 5899 have the -1 year dn file*/
 proc sql;
 create table dn_death_y_bef as select
 a.r_BID_hrs,a.year as death_year,
 b.year as death_year_bef,
 b.year,b.buyin12,b.HMOIND12
 from dn_death_y a inner join
-dn_2000_20102 b
-on trim(left(a.r_BID_hrs))=trim(left(b.BID_hrs_19))
+dn_2000_20122 b
+on trim(left(a.r_BID_hrs))=trim(left(b.BID_hrs_21))
 and 0<a.year-b.year<=1 order by r_bid_hrs,year;
 quit;
 
@@ -1281,7 +1179,7 @@ end;
 
 run;
 
-/*44 observations don't have full denominator data re insurance status
+/*302 observations don't have full denominator data re insurance status
 either died Before July 2000 or are missing year -1 dn file*/
 proc freq;
 table part_ab_6m hmo_d_6m;
@@ -1294,18 +1192,18 @@ run;
 
 /*****************************************************************************/
 /* get list of r's claims death dates to bring into main dataset */
-proc sort data=dn_2000_20102 out=dn_2000_2010_3; 
-by BID_HRS_19 year;
+proc sort data=dn_2000_20122 out=dn_2000_2012_3; 
+by BID_HRS_21 year;
 run;
 
-data dn_2000_2010_4;
-set dn_2000_2010_3;
-by BID_HRS_19;
-if last.BID_HRS_19;
+data dn_2000_2012_4;
+set dn_2000_2012_3;
+by BID_HRS_21;
+if last.BID_HRS_21;
 run;
 
 data spo_int.claims_dod(rename=(death_date=r_claims_dod));
-set dn_2000_2010_4(keep=BID_HRS_19 death_date);
+set dn_2000_2012_4(keep=BID_HRS_21 death_date);
 if death_date~=.;
 format death_date date9.;
 run;
@@ -1316,7 +1214,7 @@ create table all_insurance3 as select
 a.*, b.r_claims_dod from
 all_insurance2 a left join
 spo_int.claims_dod b
-on a.r_BID_hrs=b.BID_HRS_19;
+on a.r_BID_hrs=b.BID_HRS_21;
 quit;
 
 

@@ -8966,6 +8966,210 @@ save core_98_12_clean_nw.dta, replace
 log close
 
 
+H="Merge in HRS xwave data -Cognition and Tracker files"
+/*Get marital status, couple status, sample weights from Tracker file
+TICS score from cognition file
+
+TICS: Use the overall score that ranges from 0-35
+Variable is RxACOGTOT where x is the wave number
+2015 - Variable changed to RxCOGTOT 
+*/
+
+/*Amy PC*/
+LIBNAME tracker 'e:\data\hrs_tracking_2012\trk2012\';
+libname cogn 'E:\data\hrs_public_2012\HRS_Cog';
+
+/*RG PC
+LIBNAME tracker 'e:\data\hrs_tracking_2012\trk2012\';
+libname cogn 'C:\HRS\HRSCogImp9212\SAS'; */
+/*note marital status and coresidence only available 2004 and later so 2 macros used*/
+%macro gettrack1(w=,year=);
+
+data tracker1_&w;
+set tracker.trk2012tr_r;
+keep hhid pn core_year &w.couple &w.coupid &w.WGTHH &w.WGTR;
+core_year=&year;
+run;
+
+data tracker2_&w;
+set tracker1_&w;
+rename &w.couple=couple;
+rename &w.coupid=coupid;
+rename &w.WGTHH=WGTHH;
+rename &w.WGTR=WGTR;
+%mend;
+
+%macro gettrack2(w=,year=);
+
+data tracker1_&w;
+set tracker.trk2012tr_r;
+keep hhid pn core_year &w.couple &w.coupid &w.marst &w.cores &w.WGTHH &w.WGTR;
+core_year=&year;
+run;
+
+data tracker2_&w;
+set tracker1_&w;
+rename &w.couple=couple;
+rename &w.coupid=coupid;
+rename &w.marst=marst;
+rename &w.cores=cores;
+rename &w.WGTHH=WGTHH;
+rename &w.WGTR=WGTR;
+%mend;
+
+%gettrack1(w=F,year=1998);
+%gettrack1(w=G,year=2000);
+%gettrack1(w=H,year=2002);
+%gettrack2(w=J,year=2004);
+%gettrack2(w=K,year=2006);
+%gettrack2(w=L,year=2008);
+%gettrack2(w=M,year=2010);
+%gettrack2(w=N,year=2012);
+
+data track_9812;
+set tracker2_F tracker2_G tracker2_H tracker2_J tracker2_K tracker2_L tracker2_M tracker2_N;
+label couple='Couple status'
+coupid='Couple household id'
+marst='Marital status'
+cores='Couple resides together'
+wgthh='Household level survey weight'
+wgtr='Respondant level survey weight';
+run;
+
+proc sort nodupkey; by hhid pn core_year ; run;
+
+/*note marital status and coresidence only available 2004 and later so 2 macros used*/
+libname cogn 'E:\data\hrs_public_2012\HRS_Cog';
+
+%macro gettics(w=,year=);
+
+data tics1_&w;
+set cogn.cogimp9212a_r;
+keep hhid pn core_year r&w.cogtot;
+core_year=&year;
+run;
+
+data tics2_&w;
+set tics1_&w;
+rename r&w.cogtot=TICS_tot;
+%mend;
+
+%gettics(w=4,year=1998);
+%gettics(w=5,year=2000);
+%gettics(w=6,year=2002);
+%gettics(w=7,year=2004);
+%gettics(w=8,year=2006);
+%gettics(w=9,year=2008);
+%gettics(w=10,year=2010);
+%gettics(w=11,year=2012);
+
+data tics_9812;
+set tics2_4 tics2_5 tics2_6 tics2_7 tics2_8 tics2_9 tics2_10 tics2_11;
+label TICS_tot='TICS Cognition Score, scale 0-35';
+run;
+
+proc sort nodupkey; by hhid pn core_year ; run;
+
+/*merge tracker and tics to one dataset*/
+data track_tics_9812;
+merge track_9812 tics_9812;
+by hhid pn core_year;
+run;
+
+proc sort nodupkey; by hhid pn core_year ; run;
+
+/*convert to stata RG Computer filepath
+proc export data=track_tics_9812 
+outfile="C:\HRS\hrs_cleaned\working\track_tics_9812 .dta"
+replace;
+run; */
+
+/*convert to stata Amy Computer filepath*/
+proc export data=track_tics_9812 
+outfile="E:\data\hrs_cleaned\working\track_tics_9812.dta"
+replace;
+run;
+
+
+
+/****************************************************************/
+/*Stata code to merge into HRS core interview dataset */
+/****************************************************************/
+
+
+capture log close
+
+clear all
+set more off
+
+//Amy's PC
+local logpath E:\data\hrs_cleaned\logs
+local datapath E:\data\hrs_cleaned\working
+
+//RG PC
+//local logpath C:\HRS\hrs_cleaned\logs
+//local datapath C:\HRS\hrs_cleaned\working
+
+log using "`logpath'\2_HRS_TICS_clean_2012.txt", text replace
+cd `datapath'
+
+use track_tics_9812.dta
+
+egen id= concat(hhid pn)
+la var id "Respondent ID (HHID+PN)"
+
+tab core_year, missing
+
+foreach y in 1998 2000 2002 2004 2006 2008 2010 2012{
+sum tics_tot if(core_year==`y'), detail
+}
+
+//check for duplicate ids
+sort id core_year
+quietly by id core_year: gen dup = cond(_N==1,0,_n)
+tab dup
+drop if dup>1 
+drop dup
+
+save track_tics_98_12_to_merge.dta, replace
+
+/*******************************************************************************/
+/* Merge in to core dataset by id and core_year */
+/*******************************************************************************/
+clear all
+
+//base dataset is core1998-2012 with net worth details
+use core_98_12_clean_nw.dta
+
+describe
+
+tab core_year
+
+// merge in xwave variables
+// Note that tics score variable only available for approximately 9500-13000
+// respondants per wave per the cognitive functioning dataset codebook
+// so many respondants do not have TICS score
+merge 1:1 id core_year using track_tics_98_12_to_merge.dta 
+
+drop if _merge==2
+generate byte TICS_missing=.
+replace TICS_missing=1 if _merge==1
+replace TICS_missing=0 if _merge==3
+tab TICS_missing core_year
+drop _merge
+
+save core_98_12_nw_tics.dta, replace
+
+saveold core_98_12_nw_tics_oldv.dta, replace
+
+log close
+
+
+
+
+
+
+
 H="Exit - variable cleaning - part 1"
 /*Code cleans exit interview variables, 2002-2012
 Mostly taken from HRS Outline_11_22_11.txt
@@ -9422,142 +9626,6 @@ tab livealone exit_year, missing
 
 save exit_02_12_clean1.dta, replace
 log close
-
-
-H="TICS score - cognition xwave dataset - merge into core"
-/*
-***This dataset is only available thru 2010 as of May 2015, need to bring in 2012 data when available
-
-2012 data added May 2015
-
-TICS score used comes from the cross wave cognitive functioning measures
-imputed file
-
-Use the overall score that ranges from 0-35
-Variable is RxACOGTOT where x is the wave number
-2015 - Variable changed to RxCOGTOT 
-
-
-*/
-
-
-/*Amy PC*/
-libname cogn 'E:\data\hrs_public_2012\HRS_Cog';
-
-/*RG PC*/
-/*libname cogn 'C:\HRS\HRSCogImp9212\SAS'; */
-
-proc contents data=cogn.cogimp9212a_r ;
-run;
-
-data tics_98_12;  
-set cogn.cogimp9212a_r;
-keep hhid pn r4cogtot r5cogtot r6cogtot r7cogtot r8cogtot r9cogtot r10cogtot r11cogtot
-;
-run;
-
-proc means;
-vars r4cogtot r5cogtot r6cogtot r7cogtot r8cogtot r9cogtot r10cogtot r11cogtot;
-run;
-
-/*convert to stata RG Computer filepath
-proc export data=tics_98_12
-outfile="C:\HRS\hrs_cleaned\working\tics_98_12.dta"
-replace;
-run; */
-
-/*convert to stata Amy Computer filepath*/
-proc export data=tics_98_12
-outfile="E:\data\hrs_cleaned\working\tics_98_12.dta"
-replace;
-run;
-
-
-
-/****************************************************************/
-/*Stata code to check TICS score variables */
-/****************************************************************/
-
-capture log close
-
-clear all
-set more off
-
-//Amy's PC
-local logpath E:\data\hrs_cleaned\logs
-local datapath E:\data\hrs_cleaned\working
-
-//RG PC
-//local logpath C:\HRS\hrs_cleaned\logs
-//local datapath C:\HRS\hrs_cleaned\working
-
-log using "`logpath'\2_HRS_TICS_clean_2012.txt", text replace
-cd `datapath'
-
-use tics_98_12.dta
-
-egen id= concat(hhid pn)
-la var id "Respondent ID (HHID+PN)"
-
-rename r4cogtot cogtot_1998
-rename r5cogtot cogtot_2000
-rename r6cogtot cogtot_2002
-rename r7cogtot cogtot_2004
-rename r8cogtot cogtot_2006
-rename r9cogtot cogtot_2008
-rename r10cogtot cogtot_2010
-rename r11cogtot cogtot_2011
-
-reshape long cogtot_, i(id) j(year)
-
-rename cogtot_ TICS_tot
-rename year core_year
-
-sum TICS_tot if(core_year==1998), detail
-sum TICS_tot if(core_year==2000), detail
-sum TICS_tot if(core_year==2002), detail
-sum TICS_tot if(core_year==2004), detail
-sum TICS_tot if(core_year==2006), detail
-sum TICS_tot if(core_year==2008), detail
-sum TICS_tot if(core_year==2010), detail
-sum TICS_tot if(core_year==2011), detail
-
-la var TICS_tot "TICS Cognition Score, scale 0-35"
-
-save tics_98_12_to_merge.dta, replace
-
-/*******************************************************************************/
-/* Merge in to core dataset by id and core_year */
-/*******************************************************************************/
-clear all
-
-//base dataset is core 2000-2012 with net worth details
-use core_98_12_clean_nw.dta
-
-describe
-
-tab core_year
-
-// merge in tics scores
-// Note that tics score variable only available for approximately 9500-13000
-// respondants per wave per the cognitive functioning dataset codebook
-// so many respondants do not have TICS score
-merge 1:1 id core_year using tics_98_12_to_merge.dta 
-
-drop if _merge==2
-generate byte TICS_missing=.
-replace TICS_missing=1 if _merge==1
-replace TICS_missing=0 if _merge==3
-tab TICS_missing core_year
-drop _merge
-
-save core_98_12_nw_tics.dta, replace
-
-saveold core_98_12_nw_tics_oldv.dta, replace
-
-log close
-
-
 
 
 H="Exit - variable cleaning - part 2 - adls and iadls"
@@ -11751,6 +11819,37 @@ table cause_death_12_n;
 run;
 
 
+H="Add tracker permanent demo char to restr dataset"
+/*gets permanent demo characterics from tracker file to merge with 
+the restricted dataset
+also pulls survey details sampling unit and stratum variables
+
+variables pulled in are gender, education level*/
+
+LIBNAME tracker 'e:\data\hrs_tracking_2012\trk2012\';
+
+proc sort data=hrs_cln.restricted_v2012 nodupkey;
+by id;
+run;
+
+data tracker1;
+set tracker.trk2012tr_r;
+keep hhid pn id id_num degree gender secu stratum;
+id=hhid||pn;
+id_num=id+0;
+label id="HRS resp ID";
+label id_num="HRS resp ID, num";
+run;
+
+proc freq; table degree gender; run;
+
+proc sql;
+create table hrs_cln.restr_tracker_v2012 as select a.*,b.degree,b.gender,b.secu,b.stratum from
+hrs_cln.restricted_v2012 a left join
+tracker1 b
+on a.id=b.id_num;
+quit;
+
 H="Add core interview date to core dataset (from restricted)"
 /*to get the core interview date from restricted file 
 Uses 2012 restricted dataset
@@ -11783,7 +11882,6 @@ datafile="E:\data\hrs_cleaned\working\core_98_12_nw_tics_oldv.dta"
 out=hrs_int.core_00_12_nw_tics replace;
 run; */
 
-
 /*convert STATA HRS core dataset to SAS
 Amy PC filepath*/
 proc import 
@@ -11796,188 +11894,57 @@ data hrs_int.core_00_12_nw_tics  (compress=yes);
 set hrs_int.core_00_12_nw_tics;
 run;
 
-%let year=1998;
-proc sql;
-create table core_98_date
-as select a.hhid,a.pn,a.core_year,b.FIWMONTH as c_ivw_month,b.FIWDAY as c_ivw_day,FIWyear as c_ivw_year
-from hrs_int.core_00_12_nw_tics(where=(core_year=&year)) a left join
-IVWDATE b
-on a.hhid=b.hhid and a.pn=b.pn;
-quit;
+%macro ivwdate(w=,year=);
 
-data core_98_date_1;
-set core_98_date;
+data ivwdate1_&w;
+set IVWDATE;
+keep hhid pn core_year &w.IWMONTH &w.IWDAY &w.IWyear ;
+core_year=&year;
+run;
+
+data ivwdate2_&w;
+set ivwdate1_&w;
+rename &w.IWMONTH=c_ivw_month;
+rename &w.IWDAY=c_ivw_day;
+rename &w.IWyear=c_ivw_year;
+run;
+%mend;
+
+%ivwdate(w=F,year=1998);
+%ivwdate(w=G,year=2000);
+%ivwdate(w=H,year=2002);
+%ivwdate(w=J,year=2004);
+%ivwdate(w=K,year=2006);
+%ivwdate(w=L,year=2008);
+%ivwdate(w=M,year=2010);
+%ivwdate(w=N,year=2012);
+
+data ivw_9812;
+set ivwdate2_F ivwdate2_G ivwdate2_H ivwdate2_J ivwdate2_K ivwdate2_L ivwdate2_M ivwdate2_N;
+label c_ivw_day='Interview day'
+c_ivw_month='Interview month'
+c_ivw_year='Interview year';
 if c_ivw_day=. then do;
 	c_ivw_day=15;
 	c_ivw_day_imp=1;
 	end;
 run;
 
-proc freq;
-table c_ivw_day c_ivw_month c_ivw_year core_year c_ivw_day_imp /missprint;
-run;
+proc sort data=ivw_9812 nodupkey; by hhid pn core_year ; run;
 
-%let year=2000;
+proc freq; table core_year*c_ivw_day_imp; run;
+
+/*merge dates with core interviews*/
 proc sql;
-create table core_00_date
-as select a.hhid,a.pn,a.core_year,b.GIWMONTH as c_ivw_month,b.GIWDAY as c_ivw_day,GIWyear as c_ivw_year
-from hrs_int.core_00_12_nw_tics(where=(core_year=&year)) a left join
-IVWDATE b
-on a.hhid=b.hhid and a.pn=b.pn;
+create table core_date_00_12 as select a.*, b.c_ivw_month, b.c_ivw_day, b.c_ivw_year, b.c_ivw_day_imp
+from  hrs_int.core_00_12_nw_tics a 
+left join
+ivw_9812 b
+on a.hhid=b.hhid & a.pn=b.pn & a.core_year=b.core_year;
 quit;
 
-data core_00_date_1;
-set core_00_date;
-if c_ivw_day=. then do;
-	c_ivw_day=15;
-	c_ivw_day_imp=1;
-	end;
-run;
-
-proc freq;
-table c_ivw_day c_ivw_month c_ivw_year core_year c_ivw_day_imp /missprint;
-run;
-
-%let year=2002;
-proc sql;
-create table core_02_date
-as select a.hhid,a.pn,a.core_year,b.hIWMONTH as c_ivw_month,b.hIWDAY as c_ivw_day,hIWyear as c_ivw_year
-from hrs_int.core_00_12_nw_tics(where=(core_year=&year)) a left join
-IVWDATE b
-on a.hhid=b.hhid and a.pn=b.pn;
-quit;
-
-data core_02_date_1;
-set core_02_date;
-if c_ivw_day=. then do;
-	c_ivw_day=15;
-	c_ivw_day_imp=1;
-	end;
-run;
-
-proc freq;
-table c_ivw_day c_ivw_month c_ivw_year core_year c_ivw_day_imp /missprint;
-run;
-
-%let year=2004;
-proc sql;
-create table core_04_date
-as select a.hhid,a.pn,a.core_year,b.jIWMONTH as c_ivw_month,b.jIWDAY as c_ivw_day,jIWyear as c_ivw_year
-from hrs_int.core_00_12_nw_tics(where=(core_year=&year)) a left join
-IVWDATE b
-on a.hhid=b.hhid and a.pn=b.pn;
-quit;
-
-data core_04_date_1;
-set core_04_date;
-if c_ivw_day=. then do;
-	c_ivw_day=15;
-	c_ivw_day_imp=1;
-	end;
-run;
-
-proc freq;
-table c_ivw_day c_ivw_month c_ivw_year core_year c_ivw_day_imp /missprint;
-run;
-
-%let year=2006;
-proc sql;
-create table core_06_date
-as select a.hhid,a.pn,a.core_year,b.kIWMONTH as c_ivw_month,b.kIWDAY as c_ivw_day,kIWyear as c_ivw_year
-from hrs_int.core_00_12_nw_tics(where=(core_year=&year)) a left join
-IVWDATE b
-on a.hhid=b.hhid and a.pn=b.pn;
-quit;
-
-data core_06_date_1;
-set core_06_date;
-if c_ivw_day=. then do;
-	c_ivw_day=15;
-	c_ivw_day_imp=1;
-	end;
-run;
-
-proc freq;
-table c_ivw_day c_ivw_month c_ivw_year core_year c_ivw_day_imp /missprint;
-run;
-
-%let year=2008;
-proc sql;
-create table core_08_date
-as select a.hhid,a.pn,a.core_year,b.lIWMONTH as c_ivw_month,b.lIWDAY as c_ivw_day,lIWyear as c_ivw_year
-from hrs_int.core_00_12_nw_tics(where=(core_year=&year)) a left join
-IVWDATE b
-on a.hhid=b.hhid and a.pn=b.pn;
-quit;
-
-data core_08_date_1;
-set core_08_date;
-if c_ivw_day=. then do;
-	c_ivw_day=15;
-	c_ivw_day_imp=1;
-	end;
-run;
-
-proc freq;
-table c_ivw_day c_ivw_month c_ivw_year core_year c_ivw_day_imp /missprint;
-run;
-
-%let year=2010;
-proc sql;
-create table core_10_date
-as select a.hhid,a.pn,a.core_year,b.mIWMONTH as c_ivw_month,b.mIWDAY as c_ivw_day,mIWyear as c_ivw_year
-from hrs_int.core_00_12_nw_tics(where=(core_year=&year)) a left join
-IVWDATE b
-on a.hhid=b.hhid and a.pn=b.pn;
-quit;
-
-data core_10_date_1;
-set core_10_date;
-if c_ivw_day=. then do;
-	c_ivw_day=15;
-	c_ivw_day_imp=1;
-	end;
-run;
-
-proc freq;
-table c_ivw_day c_ivw_month c_ivw_year core_year c_ivw_day_imp /missprint;
-run;
-
-
-
-%let year=2012;
-proc sql;
-create table core_12_date
-as select a.hhid,a.pn,a.core_year,b.mIWMONTH as c_ivw_month,b.mIWDAY as c_ivw_day,mIWyear as c_ivw_year
-from hrs_int.core_00_12_nw_tics(where=(core_year=&year)) a left join
-IVWDATE b
-on a.hhid=b.hhid and a.pn=b.pn;
-quit;
-
-data core_12_date_1;
-set core_12_date;
-if c_ivw_day=. then do;
-	c_ivw_day=15;
-	c_ivw_day_imp=1;
-	end;
-run;
-
-proc freq;
-table c_ivw_day c_ivw_month c_ivw_year core_year c_ivw_day_imp /missprint;
-run;
-
-
-
-
-data core_date_00_12;
-set core_98_date_1
-core_00_date_1
-core_02_date_1
-core_04_date_1
-core_06_date_1
-core_08_date_1
-core_10_date_1
-core_12_date_1;
+data core_date_00_12_1;
+set core_date_00_12;
 length id $9 hhid $6 pn $3;
 id=hhid||pn;
 c_ivw_date=mdy(c_ivw_month,c_ivw_day,c_ivw_year);
@@ -11989,25 +11956,10 @@ label c_ivw_day_imp="Indicator for imputed core int. day";
 label id="HRS id";
 run;
 
-proc sort data=core_date_00_12 out=temp_date nodupkey;
+proc sort data=core_date_00_12_1 out=temp_date nodupkey;
 by id core_year;
 run;
 
-proc freq;
-table core_year /missing;
-run;
-
-/*merge interview date into the core data set*/
-proc sql;
-create table core_00_to_12_dt as 
-select * from 
-hrs_int.core_00_12_nw_tics a 
-left join 
-temp_date(drop=hhid pn ) b
-on a.id=b.id and a.core_year=b.core_year;
-quit;
-
-/*approximately half of this dataset is missing interview date*/
 proc freq;
 table core_year c_ivw_date;
 run;
@@ -12016,7 +11968,7 @@ libname hrs_cln 'E:\data\hrs_cleaned';
 
 /*save core dataset with interview date in the hrs_cleaned directory*/
 data hrs_cln.core_00_to_12;
-set core_00_to_12_dt;
+set core_date_00_12_1;
 run;
 
 
@@ -12157,7 +12109,7 @@ net worth data, TICS score and interview date from restricted dataset
 
 hrs_cln.exit_02_to_10_dt.sas7bdat - exit dataset with interview date from restricted dataset
 
-hrs_cln.restricted_v2010.sas7bdat - restricted dataset
+hrs_cln.restr_tracker_v2012.sas7bdat - restricted dataset with perm tracker data added
 
 The core file has multiple rows per beneficiary, one for each core interview
 Exit and restricted do not have duplicate rows per beneficiary
@@ -12174,6 +12126,6 @@ proc contents data=hrs_cln.core_00_to_12; run;
 
 proc contents data=hrs_cln.exit_02_to_12_dt; run;
 
-proc contents data=hrs_cln.restricted_v2012; run;
+proc contents data=hrs_cln.restr_tracker_v2012; run;
 
 ods rtf close;

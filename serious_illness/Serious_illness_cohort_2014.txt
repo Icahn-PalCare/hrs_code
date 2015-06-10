@@ -31,15 +31,10 @@ H="Initial core criteria"
 /*Core interview dataset, merge variables from restricted              */
 /***********************************************************************/
 
-/*proc printto new 
-log="&logdir.\sas_1_sic_core_criteria_log.log"
-	print="&logdir.\sas_1_sic_core_criteria_out.lst"; 
-run;*/
-
 libname hrs_fnl 'E:\data\hrs_cleaned';
 
 data core;
-set hrs_fnl.core_00_to_10;
+set hrs_fnl.core_00_to_12;
 label c_ivw_year="Core interview year";
 run;
 
@@ -48,8 +43,8 @@ by id core_year;
 run;
 
 data restr(rename=(ZIP10_2000=ZIP10));
-set hrs_fnl.restricted_v2010(keep=hhid pn id birth_date death_date white black hisp_eth native_amer 
-asian_pi other_race other_na_api_race zip: stateusps: cause_death_12_n );
+set hrs_fnl.restr_tracker_v2012(keep=hhid pn id birth_date death_date white black hisp_eth native_amer 
+asian_pi other_race other_na_api_race zip: stateusps: cause_death_12_n degree gender);
 id_c=trim(hhid)||trim(pn);
 drop id;
 rename id_c=id;
@@ -291,16 +286,69 @@ proc freq data=sic_int.core_age_zip; table zip_wave state_wave  /missprint ; run
 proc freq; table zip_imputed state_imputed /missprint ; run;
 
 ****************************************************************;
+//bring in BMI from rand dataset
+libname rand 'E:\data\hrs_public_2012\rand2012\main';
+/*pull each wave bmi variable from rand xwave data file
+wave 5 = 2000
+wave 6 = 2002 ... wave 10 = 2010
+*/
+options fmterr=no;
+data bmi_rand;
+set rand.rndhrs_n(keep=hhid pn R4BMI R5BMI R6BMI R7BMI R8BMI R9BMI R10BMI R11BMI);
+keep hhid pn R4BMI R5BMI R6BMI R7BMI R8BMI R9BMI R10BMI R11BMI;
+run;
 
-ods rtf body=" E:\data\serious_ill\logs\core_00_to_08_meet_criteria.rtf" ;
+%macro getBMI(w=,year=);
+
+data bmi_rand1_&w;
+set bmi_rand;
+keep hhid pn core_year R&w.BMI;
+core_year=&year;
+run;
+
+data bmi_rand2_&w;
+set bmi_rand1_&w;
+rename R&w.BMI=BMI;
+%mend;
+
+%getBMI(w=4,year=1998);
+%getBMI(w=5,year=2000);
+%getBMI(w=6,year=2002);
+%getBMI(w=7,year=2004);
+%getBMI(w=8,year=2006);
+%getBMI(w=9,year=2008);
+%getBMI(w=10,year=2010);
+%getBMI(w=11,year=2012);
+
+data bmi_9812;
+set bmi_rand2_4 bmi_rand2_5 bmi_rand2_6 bmi_rand2_7 bmi_rand2_8 bmi_rand2_9 bmi_rand2_10 bmi_rand2_11;
+label BMI='Body Mass Index';
+run;
+
+proc means; var BMI; run;
+
+proc sort nodupkey; by hhid pn core_year ; run;
+
+/*merge into dataset by id,core year*/
+proc sql;
+create table sic_int.core_age_zip_bmi as select a.*,b.BMI from
+sic_int.core_age_zip a
+left join
+bmi_9812 b 
+on a.hhid=b.hhid & b.pn=b.pn & a.core_year=b.core_year;
+quit;
+
+
+****************************************************************;
+ods rtf body=" E:\data\serious_ill\logs\core_00_to_10_meet_criteria.rtf" ;
 proc sql;
 title "serious illness cohort, initial core interview criteria";
-title "meet age>=65 at core interview,2000-2008";
-select count(distinct id) from sic_int.core_age_zip
-where age_ge_65=1 and core_year in (2000,2002,2004,2006,2008);
+title "meet age>=65 at core interview,2000-2010";
+select count(distinct id) from sic_int.core_age_zip_bmi 
+where age_ge_65=1 and core_year in (2000,2002,2004,2006,2008,2010);
 create table age_ge_65 as 
-select * from sic_int.core_age_zip
-where age_ge_65=1 and core_year in (2000,2002,2004,2006,2008);
+select * from sic_int.core_age_zip_bmi 
+where age_ge_65=1 and core_year in (2000,2002,2004,2006,2008,2010);
 
 title "those meet age>=65,srf(poor,fair)";
 select count(distinct id) from age_ge_65 
@@ -357,71 +405,18 @@ Final dataset is sic_int.core_age_zip_wi_da*/
 /******************************************************************/
 
 /******************************************************************/
-/* Pull in wage index file and clean up for states that are missing WI*/
+/* Pull in wage index, set up with wage_index_setup.txt code 
+in the general HRS processing directory*/
 /******************************************************************/
-/*bring in 2010 wage index file*/
-proc import datafile="E:\data\hrs_oop_2010\ref_data\wage_index\wage_index_cbsa_2010.xls"
-out=sic_int.wage_index dbms=xls
-replace;
-run;
+/*bring in 2012 wage index file*/
+libname misc 'E:\data\Dartmouth_misc';
 
-/*get RI average*/
-data wi_ri;
-set sic_int.wage_index;
-if index(trim(left(Area_Title)),", RI")>0;
+data sic_int.wage_index;
+set misc.wage_index_2012;
 run;
 
 proc means;
-var wage_index;
-run;
-
-/*get DC average*/
-data wi_dc;
-set sic_int.wage_index;
-if index(trim(left(Area_Title)),", DC")>0;
-run;
-
-proc means;
-var wage_index;
-run;
-
-/*deal with states that were missing wage index values in the 2010 file
-These values are the state averages using the individual cbsa values 
-data in the 2010 excel file came from
-Note in switching from 2008 to 2010, RI, DC are missing
-Manually added in blank DC line to Excel sheet so entry can match rest of other states*/
-data wage_index2;
-set sic_int.wage_index;
-cbsa_n=cbsa_code+0;
-if trim(left(cbsa_code))~="";
-wage_index_2010=Wage_Index;
-if index(trim(left(Area_Title)),", RI")>0 then RI=1;
-if index(trim(left(Area_Title)),", DC")>0 then DC=1;
-*state 44=RI ,state 11=DC;
-if state_in_wage_index=44 then wage_index_2010=1.0783000; 
-if state_in_wage_index=11 then wage_index_2010=1.0701250; 
-run;
-
-*Look at observations from Rhode Island;
-proc freq data=wage_index2(where=(ri=1));
-table Area_Title;
-run;
-
-%let var=ri;
-proc means data=wage_index2;
-class &var;
-var wage_index_2010;
-run;
-
-*Look at observations from DC;
-proc freq data=wage_index2(where=(DC=1));
-table Area_Title;
-run;
-
-%let var=DC;
-proc means data=wage_index2;
-class &var;
-var wage_index_2010;
+var wage_index_012;
 run;
 
 
@@ -430,7 +425,8 @@ run;
 /******************************************************************/
 /*Bring in xwalk file between CBSA codes and zip codes
 Note only keep variables needed from xwalk file because formats 
-are missing for some of the other text variables*/
+are missing for some of the other text variables
+2012 WI/CBSA - based on 2000 census so no change in the xwalk*/
 
 libname oop_ref "E:\data\hrs_oop_2010\ref_data";
 
@@ -477,10 +473,10 @@ quit;
 there are also many cbsas with missing wage index*/
 proc sql;
 create table zip_cbsa_wage_index as
-select a.*,b.wage_index_2010 from
+select a.*,b.wage_index_2012 from
 cbsa_zip_final a
 left join
-wage_index2 b
+sic_int.wage_index b
 on a.cbsa_n=b.cbsa_n;
 quit;
 
@@ -495,14 +491,14 @@ run;
 
 /*change zip in interview dataset to a number*/
 data core_age_zip_1 ;
-set sic_int.core_age_zip;
+set sic_int.core_age_zip_bmi ;
 zip_wave_n=zip_wave+0;
 run;
 
 proc contents; run;
 
 proc sql;
-create table core_age_zip_wi as select a.*,b.wage_index_2010 from
+create table core_age_zip_wi as select a.*,b.wage_index_2012 from
 core_age_zip_1 a
 left join
 zip_cbsa_wage_index2 b
@@ -512,13 +508,13 @@ quit;
 /*n=60886 ivws are missing the wage index when matched just by zip*/
 data miss_wi;
 set core_age_zip_wi;
-if wage_index_2010 =.;
+if wage_index_2012 =.;
 run;
 
 /******************************************************************/
 /* Bring in  WI by state if missing by zip (b/c not in a metro area) */
 /******************************************************************/
-proc sort data=wage_index2 out=wage_index3 nodupkey;
+proc sort data=sic_int.wage_index out=wage_index3 nodupkey;
 by state_in_wage_index;
 run;
 
@@ -527,7 +523,7 @@ proc freq data=wage_index3; table State; run;
 /*Merges in wage index if there's one for the state but was missing for the zip*/
 proc sql;
 create table sic_int.core_age_zip_wi_2
-as select a.*,coalesce(a.wage_index_2010,b.wage_index_2010) as wage_index_20102
+as select a.*,coalesce(a.wage_index_2012,b.wage_index_2012) as wage_index_2012_2
 from
 core_age_zip_wi a
 left join
@@ -537,17 +533,17 @@ quit;
 
 /*check for missing values*/
 proc means;
-var wage_index_2010 wage_index_20102;
+var wage_index_2012 wage_index_2012_2;
 run;
 
 proc sql;
 select distinct state_wave ,count(*) from sic_int.core_age_zip_wi_2
-where wage_index_20102=. group by state_wave;
+where wage_index_2012_2=. group by state_wave;
 quit;
 
 proc sql;
 select distinct zip_wave_n ,count(*) from sic_int.core_age_zip_wi_2
-where wage_index_20102=. group by zip_wave_n;
+where wage_index_2012_2=. group by zip_wave_n;
 quit;
 
 proc freq data=sic_int.core_age_zip_wi_2; table  state_wave  /missprint ; run;
@@ -660,8 +656,6 @@ H="Create frequency tables of core variables"
 capture log close
 
 clear all
-set mem 1g
-set matsize 800
 set more off
 
 //Need to create project file paths for new dataset, logs!
@@ -679,7 +673,7 @@ cd `datapath'
 ***********************************************************************
 //Core interview dataset
 ***********************************************************************
-use core_98_10_nw_tics.dta //dataset without core interview dates added (all public)
+use core_98_12_nw_tics.dta //dataset without core interview dates added (all public)
 
 //indicator, categorical variables local, want frequency tables
 local catvars alz_hrs dem_hrs cancer_hrs cancer_treat_hrs heart_hrs chf_hrs chfadmit_hrs ///
@@ -716,7 +710,7 @@ sum `v', detail
 //Exit interview dataset
 ***********************************************************************
 clear 
-use exit_02_10_clean.dta //exit prior to adding interview dates
+use exit_02_12_clean.dta //exit prior to adding interview dates
 
 local xcatvars nhres nhres_start_mo nhres_start_yr pain_hrs ///
 pain_level_hrs depr_exit delirium_exit dyspnea_hrs fatigue_hrs ///
@@ -732,11 +726,6 @@ log close
 H="Process Claims Relative to Core Interview Date"
 /*Get claims 1 year and 2 year before each core interview*/
 
-/*proc printto new 
-log="&logdir.\sas_2_sic_add_xwalk_log.log"
-	print="&logdir.\sas_2_sic_add_xwalk_out.lst"; 
-run;*/
-
 /*Step 1: Bring in mc xwalk id
 sic_int.core_xwalk_1 has core interviews, age and claims xwalk id */
 
@@ -747,17 +736,17 @@ run;
 
 /*prepare xwalk id file to merge*/
 data crosswalk_1;
-set medi.cmsxref2010;
-keep bid_hrs_19 hhid pn;
+set medi.cmsxref2012;
+keep bid_hrs_21 hhid pn;
 run;
 
 /*get 2 variables bid_hrs = claims id, id=HRS id*/
 data crosswalk_2;
 set crosswalk_1;
-bid_hrs=bid_hrs_19;
+bid_hrs=bid_hrs_21;
 id=trim(hhid)||trim(pn);
 drop hhid pn;
-drop bid_hrs_19;
+drop bid_hrs_21;
 run;
 
 proc sort data= crosswalk_2;
@@ -803,7 +792,7 @@ run;
 So pulls all interviews for r's with the mc linkage
 91386 interviews have linkage*/
 data sic_int.core_lmt_xwalk_2;
-set core_xwalk_1(keep=id core_year c_ivw_date c_ivw_year c_ivw_month age_at_core bid_hrs xwalk_yes wage_index_20102);
+set core_xwalk_1(keep=id core_year c_ivw_date c_ivw_year c_ivw_month age_at_core bid_hrs xwalk_yes wage_index_2012_2);
 if xwalk_yes=1;
 run;
 
@@ -811,15 +800,15 @@ run;
 /* Get claims death date, from denominator file as a check
 where dod from interview is imputed or after exit interview date */
 /********************************************************************/
-proc sort data=medi.dn_2000_2010 out=dn_dod_1  nodupkey;
-by BID_HRS_19 year;
+proc sort data=medi.dn_2000_2012 out=dn_dod_1  nodupkey;
+by BID_HRS_21 year;
 run;
 
 /*just keep dod from last year*/
 data dn_dod_2;
 set dn_dod_1;
-by BID_HRS_19 year;
-if last.BID_HRS_19;
+by BID_HRS_21 year;
+if last.BID_HRS_21;
 run;
 
 proc freq;
@@ -833,7 +822,7 @@ proc sql;
 create table sic_int.core_xwalk_2 as select a.*,b.death_dt as dod_claims
 from core_xwalk_1 a left join
 dn_dod_2 b
-on a.bid_hrs=b.BID_HRS_19;
+on a.bid_hrs=b.BID_HRS_21;
 quit;
 
 
@@ -845,12 +834,8 @@ during the full 12 months preceeding the core interview
 one for 6 month lookback to see what the difference in sample
 size would be with the more relaxed requirement*/
 
-/*proc printto new log="&logdir.\sas_3_sic_ffs_log.log"
-	print="&logdir.\sas_3_sic_ffs_out.lst" ;
-run;*/
-
-proc sort data=medi.dn_2000_2010 out=dn_2000_20102  nodupkey;
-by BID_HRS_19 year;
+proc sort data=medi.dn_2000_2012 out=dn_2000_20122  nodupkey;
+by BID_HRS_21 year;
 run;
 
 proc sort data=sic_int.core_lmt_xwalk_2 out=core_mc_ids nodupkey;
@@ -873,8 +858,8 @@ proc sql;
 create table dn_core_y as select
 a.*,b.buyin12,b.year,b.HMOIND12
 from core_mc_ids a inner join
-dn_2000_20102 b
-on trim(left(a.BID_hrs))=trim(left(b.BID_hrs_19))
+dn_2000_20122 b
+on trim(left(a.BID_hrs))=trim(left(b.BID_hrs_21))
 and a.c_ivw_year=b.year;
 quit;
 
@@ -916,8 +901,8 @@ a.BID_hrs,a.c_ivw_year ,
 b.year as c_ivw_year_bef,
 b.year,b.buyin12,b.HMOIND12
 from dn_core_y a inner join
-dn_2000_20102 b
-on trim(left(a.BID_hrs))=trim(left(b.BID_hrs_19))
+dn_2000_20122 b
+on trim(left(a.BID_hrs))=trim(left(b.BID_hrs_21))
 and 0<a.c_ivw_year-b.year<=1 order by bid_hrs,c_ivw_year;
 quit;
 
@@ -969,29 +954,6 @@ if index(hmo_12m,"00000000000") then hmo_d_12m=0;
 if index(hmo_12m,"00000000000")=0 then hmo_d_12m=1;
 end;
 
-************************************************;
-** Check of old vs new fixed variables !! ;
-************************************************;
-if length(buyin_2y_r)>11 then buyin_12m_r_old=substr(trim(left(buyin_2y)),1,12);
-if length(hmo_2y_r)>11 then hmo_12m_r_old=substr(trim(left(hmo_2y)),1,12);
-
-if length(buyin_2y_r)<12 then buyin_12m_r_old="";
-if length(hmo_2y_r)<12 then hmo_12m_r_old="";
-
-buyin_12m_old=reverse(trim(buyin_12m_r_old));
-hmo_12m_old=reverse(trim(hmo_12m_r_old));
-
-/*create indicator variable for mc coverage 12 mo. 0=no, 1=yes*/
-if length(buyin_12m_old)=12 then do;
-if indexc(buyin_12m_old,"0","1","2","A","B") then part_ab_12m_old=0;
-if indexc(buyin_12m_old,"0","1","2","A","B")=0 then part_ab_12m_old=1;
-end;
-if length(hmo_12m_old)=12 then do;
-if index(hmo_12m_old,"00000000000") then hmo_d_12m_old=0;
-if index(hmo_12m_old,"00000000000")=0 then hmo_d_12m_old=1;
-end;
-
-
 *************************************************;
 ** 6 month variables                          **;
 *************************************************;
@@ -1013,33 +975,6 @@ if length(hmo_6m)=6 then do;
 if index(hmo_6m,"000000") then hmo_d_6m=0;
 if index(hmo_6m,"000000")=0 then hmo_d_6m=1;
 end;
-
-************************************************;
-** Check of old vs new fixed variables !! ;
-************************************************;
-if length(buyin_2y_r)>5 then buyin_6m_r_old=substr(trim(left(buyin_2y)),1,6);
-if length(hmo_2y_r)>5 then hmo_6m_r_old=substr(trim(left(hmo_2y)),1,6);
-
-if length(buyin_2y_r)<6 then buyin_6m_r_old="";
-if length(hmo_2y_r)<6 then hmo_6m_r_old="";
-
-buyin_6m_old=reverse(trim(buyin_6m_r_old));
-hmo_6m_old=reverse(trim(hmo_6m_r_old));
-
-/*create indicator variable for mc coverage 6 mo. 0=no, 1=yes*/
-if length(buyin_6m_old)=6 then do;
-if indexc(buyin_6m_old,"0","1","2","A","B") then part_ab_6m_old=0;
-if indexc(buyin_6m_old,"0","1","2","A","B")=0 then part_ab_6m_old=1;
-end;
-if length(hmo_6m_old)=6 then do;
-if index(hmo_6m_old,"000000") then hmo_d_6m_old=0;
-if index(hmo_6m_old,"000000")=0 then hmo_d_6m_old=1;
-end;
-
-if part_ab_12m=1 & hmo_d_12m=0 then ffs_yes_12m =1;
-if part_ab_12m_old=1 & hmo_d_12m_old=0 then ffs_yes_12m_old =1;
-if part_ab_6m=1 & hmo_d_6m=0 then ffs_yes_6m =1;
-if part_ab_6m_old=1 & hmo_d_6m_old=0 then ffs_yes_6m_old =1;
  
 run;
 
@@ -1051,12 +986,7 @@ table part_ab_12m hmo_d_12m part_ab_12m*age_at_core_n part_ab_6m hmo_d_6m;
 run;
 
 proc freq;
-table part_ab_12m*part_ab_12m_old hmo_d_12m*hmo_d_12m_old 
-	part_ab_6m*part_ab_6m_old hmo_d_6m*hmo_d_6m_old;
-run;
-
-proc freq;
-table ffs_yes_12m ffs_yes_6m ffs_yes_12m*ffs_yes_12m_old ffs_yes_6m*ffs_yes_6m_old;
+table ffs_yes_12m ffs_yes_6m ;
 run; 
 
 /*bring indicators into full interview dataset*/
@@ -1123,10 +1053,6 @@ H="Step 2 - Get claims"
 /*Step 2: Pull claims lists using mc xwalk id and interview date
 Save claims lists to project folder for use later */
 
-/*proc printto new log='&logdir.\sas_4_sic_get_claims_log.log'
-	print='&logdir.\sas_4_sic_get_claims_out.lst' 
-run;*/
-
 /*get a copy of the dataset with just ffs medicare ivws age 65+
 use this list to pull the claims lists
 n=32945 - just check claims for those that meet analysis criteria*/
@@ -1144,9 +1070,9 @@ run;
 
 proc sql;
 create table &source._meet_&days_bef_core. as select a.*,b.c_ivw_date,b.core_year
-from medi.&source._2000_2010 a inner join
+from medi.&source._2000_2012 a inner join
 sic_int.core_xwalk_ins_ffs_only b
-on trim(left(a.bid_hrs_19))=trim(left(b.bid_hrs))
+on trim(left(a.bid_hrs_21))=trim(left(b.bid_hrs))
 and &days_start<=b.c_ivw_date-a.admit_date<=&days_bef_core;
 quit;
 
@@ -1157,17 +1083,17 @@ quit;
 
 proc sql;
 create table &source._meet as select a.*,b.c_ivw_date,b.core_year
-from medi.&source._2000_2010 a inner join
+from medi.&source._2000_2012 a inner join
 sic_int.core_xwalk_ins_ffs_only b
-on trim(left(a.bid_hrs_19))=trim(left(b.bid_hrs))
+on trim(left(a.bid_hrs_21))=trim(left(b.bid_hrs))
 and &days_start<=b.c_ivw_date-a.admit_date<=&days_bef_core;
 quit;
 
 proc sql;
 create table &source._meet2 as select a.*,b.c_ivw_date,b.core_year
-from medi.&source._2000_2010 a inner join
+from medi.&source._2000_2012 a inner join
 sic_int.core_xwalk_ins_ffs_only b
-on trim(left(a.bid_hrs_19))=trim(left(b.bid_hrs))
+on trim(left(a.bid_hrs_21))=trim(left(b.bid_hrs))
 and b.c_ivw_date-a.admit_date>&days_bef_core and b.c_ivw_date-a.disch_date<=&days_bef_core;
 quit;
 
@@ -1212,7 +1138,7 @@ this speeds up runnnig code later on*/
 /*mp claims*/
 %macro mp_drop(days_bef_core=);
 data sic_int.mp_meet3_&days_bef_core.;
-set mp_meet3_&days_bef_core.(keep=bid_hrs_19 core_year c_ivw_date admit_date disch_date 
+set mp_meet3_&days_bef_core.(keep=bid_hrs_21 core_year c_ivw_date admit_date disch_date 
  SSLSSNF icarecnt CRNRYDAY type_adm ER_AMT AD_DGNS DGNS_CD01-DGNS_CD25 PRCDR_CD01-PRCDR_CD25 
  PRCDR_DT01-PRCDR_DT25 );
 run;
@@ -1221,21 +1147,21 @@ run;
 /*hh*/
 %macro hh_drop(days_bef_core=);
 data sic_int.hh_meet_&days_bef_core.;
-set hh_meet_&days_bef_core.(keep=bid_hrs_19 core_year c_ivw_date PDGNS_CD DGNSCD01-DGNSCD25 );
+set hh_meet_&days_bef_core.(keep=bid_hrs_21 core_year c_ivw_date PDGNS_CD DGNSCD01-DGNSCD25 );
 run;
 %mend hh_drop;
 
 /*hs*/
 %macro hs_drop(days_bef_core=);
 data sic_int.hs_meet_&days_bef_core.;
-set hs_meet_&days_bef_core.(keep=bid_hrs_19 core_year c_ivw_date PDGNS_CD DGNSCD01-DGNSCD25 );
+set hs_meet_&days_bef_core.(keep=bid_hrs_21 core_year c_ivw_date PDGNS_CD DGNSCD01-DGNSCD25 );
 run;
 %mend hs_drop;
 
 /*dme*/
 %macro dm_drop(days_bef_core=);
 data sic_int.dm_meet_&days_bef_core.;
-set dm_meet_&days_bef_core.(keep=bid_hrs_19 core_year c_ivw_date admit_date BETOS01:BETOS13
+set dm_meet_&days_bef_core.(keep=bid_hrs_21 core_year c_ivw_date admit_date BETOS01:BETOS13
 PDGNS_CD DGNS_CD1-DGNS_CD12 );
 run;
 %mend dm_drop;
@@ -1243,7 +1169,7 @@ run;
 /*op*/
 %macro op_drop(days_bef_core=);
 data sic_int.op_meet_&days_bef_core.;
-set op_meet_&days_bef_core.(keep=bid_hrs_19 core_year c_ivw_date admit_date disch_date
+set op_meet_&days_bef_core.(keep=bid_hrs_21 core_year c_ivw_date admit_date disch_date
  RVCNTR01-RVCNTR45 PDGNS_CD DGNSCD01-DGNSCD25 );
 run;
 %mend op_drop;
@@ -1251,7 +1177,7 @@ run;
 /*ip*/
 %macro ip_drop(days_bef_core=);
 data sic_int.ip_meet3_&days_bef_core.;
-set ip_meet3_&days_bef_core.(keep=bid_hrs_19 core_year c_ivw_date admit_date disch_date
+set ip_meet3_&days_bef_core.(keep=bid_hrs_21 core_year c_ivw_date admit_date disch_date
  HCPSCD01-HCPSCD45 );
 run;
 %mend ip_drop;
@@ -1259,7 +1185,7 @@ run;
 /*carrier*/
 %macro pb_drop(days_bef_core=);
 data sic_int.pb_meet_&days_bef_core.;
-set pb_meet_&days_bef_core.(keep=bid_hrs_19 core_year c_ivw_date FROM_DT THRU_DT admit_date disch_date
+set pb_meet_&days_bef_core.(keep=bid_hrs_21 core_year c_ivw_date FROM_DT THRU_DT admit_date disch_date
  HCPSCD01-HCPSCD13 PDGNS_CD DGNS_CD1-DGNS_CD12 );
 run;
 %mend pb_drop;
@@ -1289,8 +1215,8 @@ run;
 
 /*Process carrier medicare claims to pull out dx codes
 Multiple lines per each BID*/
-data pb_last_&range2._dx(keep=bid_hrs_19 core_year diag);
-set sic_int.pb_meet_&days_bef_core.(keep=bid_hrs_19 core_year PDGNS_CD DGNS_CD1-DGNS_CD12 );
+data pb_last_&range2._dx(keep=bid_hrs_21 core_year diag);
+set sic_int.pb_meet_&days_bef_core.(keep=bid_hrs_21 core_year PDGNS_CD DGNS_CD1-DGNS_CD12 );
 array dx PDGNS_CD DGNS_CD1-DGNS_CD12;
 do over dx;
 diag=dx ;
@@ -1299,14 +1225,14 @@ end;
 run;
 /*check for and remove duplicates, note this doesn't remove blanks*/
 proc sort data=pb_last_&range2._dx out=pb_last_&range2._dx2 nodupkey;
-by bid_hrs_19 core_year diag;
+by bid_hrs_21 core_year diag;
 run;
 
 
 /*Process outpatient medicare claims to pull out dx codes
 Dataset being created: op_last_&range2._dx2*/
-data op_last_&range2._dx(keep=bid_hrs_19 core_year diag);
-set sic_int.op_meet_&days_bef_core.(keep=bid_hrs_19 core_year PDGNS_CD DGNSCD01-DGNSCD25  );
+data op_last_&range2._dx(keep=bid_hrs_21 core_year diag);
+set sic_int.op_meet_&days_bef_core.(keep=bid_hrs_21 core_year PDGNS_CD DGNSCD01-DGNSCD25  );
 array dx PDGNS_CD DGNSCD01-DGNSCD25 ;
 do over dx;
 diag=dx ;
@@ -1314,13 +1240,13 @@ output;
 end;
 run;
 proc sort data=op_last_&range2._dx out=op_last_&range2._dx2 nodupkey;
-by bid_hrs_19 core_year diag;
+by bid_hrs_21 core_year diag;
 run;
 
 /*Process medpar medicare claims to pull out dx codes
 Dataset being created: mp_last_&range2._dx2*/
 data mp_last_&range2._dx(keep=bid_hrs_19 core_year diag);
-set sic_int.mp_meet3_&days_bef_core.(keep=bid_hrs_19 core_year AD_DGNS DGNS_CD01-DGNS_CD25 );
+set sic_int.mp_meet3_&days_bef_core.(keep=bid_hrs_21 core_year AD_DGNS DGNS_CD01-DGNS_CD25 );
 array dx AD_DGNS DGNS_CD01-DGNS_CD25 ;
 do over dx;
 diag=dx ;
@@ -1328,13 +1254,13 @@ output;
 end;
 run;
 proc sort data=mp_last_&range2._dx out=mp_last_&range2._dx2 nodupkey;
-by bid_hrs_19 core_year diag;
+by bid_hrs_21 core_year diag;
 run;
 
 /*Process dme medicare claims to pull out dx codes
 Dataset being created: dm_last_&range2._dx2*/
-data dm_last_&range2._dx(keep=bid_hrs_19 core_year diag);
-set sic_int.dm_meet_&days_bef_core.(keep=bid_hrs_19 core_year PDGNS_CD DGNS_CD1-DGNS_CD12 );
+data dm_last_&range2._dx(keep=bid_hrs_21 core_year diag);
+set sic_int.dm_meet_&days_bef_core.(keep=bid_hrs_21 core_year PDGNS_CD DGNS_CD1-DGNS_CD12 );
 array dx PDGNS_CD DGNS_CD1-DGNS_CD12 ;
 do over dx;
 diag=dx ;
@@ -1342,13 +1268,13 @@ output;
 end;
 run;
 proc sort data=dm_last_&range2._dx out=dm_last_&range2._dx2 nodupkey;
-by bid_hrs_19 core_year diag;
+by bid_hrs_21 core_year diag;
 run;
 
 /*Process hh medicare claims to pull out dx codes
 Dataset being created: dm_last_&range2._dx2*/
-data hh_last_&range2._dx(keep=bid_hrs_19 core_year diag);
-set sic_int.hh_meet_&days_bef_core.(keep=bid_hrs_19 core_year PDGNS_CD DGNSCD01-DGNSCD25 );
+data hh_last_&range2._dx(keep=bid_hrs_21 core_year diag);
+set sic_int.hh_meet_&days_bef_core.(keep=bid_hrs_21 core_year PDGNS_CD DGNSCD01-DGNSCD25 );
 array dx PDGNS_CD DGNSCD01-DGNSCD25 ;
 do over dx;
 diag=dx ;
@@ -1356,13 +1282,13 @@ output;
 end;
 run;
 proc sort data=hh_last_&range2._dx out=hh_last_&range2._dx2 nodupkey;
-by bid_hrs_19 core_year diag;
+by bid_hrs_21 core_year diag;
 run;
 
 /*Process hs medicare claims to pull out dx codes
 Dataset being created: dm_last_&range2._dx2*/
-data hs_last_&range2._dx(keep=bid_hrs_19 core_year diag);
-set sic_int.hs_meet_&days_bef_core.(keep=bid_hrs_19 core_year PDGNS_CD DGNSCD01-DGNSCD25 );
+data hs_last_&range2._dx(keep=bid_hrs_21 core_year diag);
+set sic_int.hs_meet_&days_bef_core.(keep=bid_hrs_21 core_year PDGNS_CD DGNSCD01-DGNSCD25 );
 array dx PDGNS_CD DGNSCD01-DGNSCD25 ;
 do over dx;
 diag=dx ;
@@ -1370,7 +1296,7 @@ output;
 end;
 run;
 proc sort data=hs_last_&range2._dx out=hs_last_&range2._dx2 nodupkey;
-by bid_hrs_19 core_year diag;
+by bid_hrs_21 core_year diag;
 run;
 
 
@@ -1412,7 +1338,7 @@ op_last_&range2._dx3
 pb_last_&range2._dx3;
 run;
 proc sort data=dx_all_last_&range2.(where=(diag~="")) out=sic_int.dx_&range1._&range2 nodupkey;
-by bid_hrs_19 core_year diag;
+by bid_hrs_21 core_year diag;
 run;
 
 %mend;
@@ -1428,7 +1354,7 @@ run;
 
 /*31794 of the 32718 w/ ffs mc interviews have at least 1 dx code 1 year preceeding the interview*/
 proc sql;
-select count (distinct bid_hrs_19||core_year_c) from zzzdx_test;
+select count (distinct bid_hrs_21||core_year_c) from zzzdx_test;
 quit;
 
 /*check for frequency of DX codes by bid,core year
@@ -1444,13 +1370,13 @@ if diag~='.';
 run;
 
 proc sort data=dx_all_last_1yr_w_dups;
-by bid_hrs_19 core_year diag;
+by bid_hrs_21 core_year diag;
 run;
 
 proc sql;
-create table zzzdx_freq as select distinct BID_hrs_19,core_year,diag, 
+create table zzzdx_freq as select distinct BID_hrs_21,core_year,diag, 
 count(*) as n_dx_freq label="count times icd9 dx coded, 12m pre-core"
- from dx_all_last_1yr_w_dups group by BID_hrs_19,core_year,diag;
+ from dx_all_last_1yr_w_dups group by BID_hrs_21,core_year,diag;
 quit;
 
 proc freq;
@@ -1484,9 +1410,9 @@ proc freq; table dementia; run;
 /*this is merged into the main dataset when the elixhauser indicator variables 
 in the next section*/
 proc sql;
-create table sic_int.dem_dx_freq_2 as select distinct BID_hrs_19,core_year,
+create table sic_int.dem_dx_freq_2 as select distinct BID_hrs_21,core_year,
 sum(dementia) as dem_dx_1yr label="count dementia dx 1yr pre core ivw"
- from dem_dx_freq group by BID_hrs_19,core_year;
+ from dem_dx_freq group by BID_hrs_21,core_year;
 quit;
 
 proc freq; table dem_dx_1yr; run;
@@ -2007,7 +1933,7 @@ run;
 /*get count of each comorbidity for each id-core year combination*/
 proc sql;
 create table com_test1 as
-select distinct BID_hrs_19,core_year,
+select distinct BID_hrs_21,core_year,
 sum(comorbi_1) as com_1,
 sum(comorbi_2) as com_2,
 sum(comorbi_3) as com_3,
@@ -2043,11 +1969,11 @@ sum(cad) as cad,
 sum(als) as als,
 sum(renal_dis) as renal_dis
 from dx_31_comor
-group by BID_hrs_19,core_year;
+group by BID_hrs_21,core_year;
 quit;
 
 /*convert counts of diagnoses for each comorbidity to indicator variables*/ 
-data comorbidity_1(keep=BID_hrs_19 core_year comorb_1-comorb_34 comorb_all);
+data comorbidity_1(keep=BID_hrs_21 core_year comorb_1-comorb_34 comorb_all);
 set com_test1;
 array list_com com_1-com_30 dementia cad als renal_dis;
 array list_com_bin comorb_1-comorb_34 ;
@@ -2070,7 +1996,7 @@ run;
 
 /*merge in to list of core ivw dates for those with ffs mc, age=65+ */
 proc sort data=comorbidity_1 nodupkey;
-by BID_hrs_19 core_year;
+by BID_hrs_21 core_year;
 run;
 
 proc sort data=sic_int.core_xwalk_ins_ffs_only out=core_xwalk_ins_ffs_only nodupkey;
@@ -2078,12 +2004,12 @@ by BID_hrs core_year;
 run;
 
 proc sql;
-create table core_xwalk_elix_1(drop=BID_hrs_19 core_year2) as
+create table core_xwalk_elix_1(drop=BID_hrs_21 core_year2) as
 select a.*,b.*
 from core_xwalk_ins_ffs_only(drop=age_ge_65 c_ivw_date c_ivw_year hmo_d_12m part_ab_12m) a 
 left join
 comorbidity_1(rename=(core_year=core_year2)) b
-on trim(left(a.BID_hrs))=trim(left(b.BID_hrs_19)) and a.core_year=b.core_year2;
+on trim(left(a.BID_hrs))=trim(left(b.BID_hrs_21)) and a.core_year=b.core_year2;
 quit;
 
 data sic_int.elix_&range1._&range2;
@@ -2194,7 +2120,7 @@ proc sql;
 create table core_ids_elix_1yr_dm_dx as select a.*,b.dem_dx_1yr from
 sic_int.core_ids_elix_1yr_2 a left join
 sic_int.dem_dx_freq_2 b
-on a.BID_hrs=b.BID_hrs_19 and a.core_year=b.core_year;
+on a.BID_hrs=b.BID_hrs_21 and a.core_year=b.core_year;
 quit;
 
 /*overwrite the previously saved dataset with one with the additional dementia variable added*/
@@ -2491,7 +2417,7 @@ run;
 /*get count of each comorbidity for each id-core year combination*/
 proc sql;
 create table cha_test1 as
-select distinct BID_hrs_19,core_year,
+select distinct BID_hrs_21,core_year,
 sum(charlson_1) as cha_1,
 sum(charlson_2) as cha_2,
 sum(charlson_3) as cha_3,
@@ -2510,11 +2436,11 @@ sum(charlson_15) as cha_15,
 sum(charlson_16) as cha_16,
 sum(charlson_17) as cha_17
 from dx_charlson
-group by BID_hrs_19,core_year;
+group by BID_hrs_21,core_year;
 quit;
 
 /*convert counts of diagnoses for each comorbidity to indicator variables*/ 
-data charlson_1(keep=BID_hrs_19 core_year charls_1-charls_17 charls_index charls_index_wt);
+data charlson_1(keep=BID_hrs_21 core_year charls_1-charls_17 charls_index charls_index_wt);
 set cha_test1;
 array list_cha cha_1-cha_17;
 array list_cha_bin charls_1-charls_17 ;
@@ -2558,7 +2484,7 @@ run;
 
 /*merge into list of obs with ffs mc 6m prior to ivw*/
 proc sort data=charlson_1 nodupkey;
-by BID_hrs_19 core_year;
+by BID_hrs_21 core_year;
 run;
 
 proc sort data=sic_int.core_xwalk_ins_ffs_only out=core_xwalk_ins_ffs_only nodupkey;
@@ -2573,7 +2499,7 @@ select a.*,b.*
 from core_xwalk_ins_ffs_only(drop=age_ge_65 c_ivw_date c_ivw_year hmo_d_12m part_ab_12m) a 
 left join
 charlson_1(rename=(core_year=core_year2)) b
-on trim(left(a.BID_hrs))=trim(left(b.BID_hrs_19)) and a.core_year=b.core_year2;
+on trim(left(a.BID_hrs))=trim(left(b.BID_hrs_21)) and a.core_year=b.core_year2;
 quit;
 
 /*if missing because no diagnoses, set to 0*/
@@ -2676,9 +2602,6 @@ ods rtf close;
 
 H="Step 4 - DW chronic conditions"
 /*CMS Data Warehouse Chronic Conditions*/
-/*proc printto new log='&logdir.\sas_6_sic_cc_log.log'
-	print='&logdir.\sas_6_sic_cc_out.lst' 
-run;*/
 
 /****************************************************************************/
 /*First get the dx list into dot format using Stata*/
@@ -2701,7 +2624,6 @@ run;
 
 clear
 set more off
-set memory 500m
 local datapath E:\data\serious_ill\int_data
 
 use `datapath'\dx_0_1yr.dta,clear
@@ -2843,7 +2765,7 @@ run;
 
 proc sql;
 create table bid_dx_0_&precore.(rename=(bid_hrs_19=bid)) as
-select distinct bid_hrs_19,core_year,
+select distinct bid_hrs_21,core_year,
 sum(CC_1_AMI) as CC_1_AMI,
 sum(CC_2_ALZH) as CC_2_ALZH,
 sum(CC_3_ALZHDMTA) as CC_3_ALZHDMTA,
@@ -2866,7 +2788,7 @@ sum(CC_19_CNCRPRST) as CC_19_CNCRPRST,
 sum(CC_20_CNCRLUNG) as CC_20_CNCRLUNG,
 sum(CC_21_CNCREndM) as CC_21_CNCREndM
 
-from list_&precore._dx group by bid_hrs_19,core_year;
+from list_&precore._dx group by bid_hrs_21,core_year;
 quit;
 
 proc sort data=bid_dx_0_&precore. nodupkey;
@@ -3048,11 +2970,6 @@ H="Step 5 - Get additional utilization information from claims"
 elixhauser and cc's 1 year preceeding the interview, can add them
 later when required to get the 2 year look-back dataset*/
 
-/*proc printto new log='&logdir.\sas_7_sic_util_log.log'
-	print='&logdir.\sas_7_sic_util_out.lst' 
-run;*/
-
-
 /****************************************************************************/
 /*Get indicator of any hospital admission 6 and 12 months pre-core interview*/
 /****************************************************************************/
@@ -3096,11 +3013,11 @@ if disch_date-admit_date=0 then adj_los=1;
 run;
 
 proc sort data=ip_&days._2;
-by BID_hrs_19 core_year;
+by BID_hrs_21 core_year;
 run;
 
 proc sql;
-create table ip_&days._3 as select distinct BID_hrs_19,core_year,
+create table ip_&days._3 as select distinct BID_hrs_21,core_year,
 /*total ICU days*/
 sum(icu_days) as icu_days_&suffix. label="total icu days &suffix. pre core ivw",
 /*count of IP admissions, all types*/
@@ -3123,7 +3040,7 @@ count(case when elect_admit=1 then elect_admit else . end) as n_elect_admit_&suf
 count(case when ind_ed_charge=1 then ind_ed_charge else . end) as n_ED_ip_&suffix. 
 	label="total n of ED visits with subsequent admit &suffix. pre core ivw"
 
- from ip_&days._2 group by BID_hrs_19,core_year;
+ from ip_&days._2 group by BID_hrs_21,core_year;
 quit;
 
 data ip_&days._4;
@@ -3158,7 +3075,7 @@ by BID_hrs core_year;
 run;
 
 proc sort data=ip_183_3 nodupkey;
-by bid_hrs_19 core_year;
+by bid_hrs_21 core_year;
 run;
 
 proc sql;
@@ -3168,11 +3085,11 @@ b.n_urgent_admit_6m,b.n_elect_admit_6m,b.n_ED_ip_6m
 from core_xwalk_ins_ffs_only a
 left join
 ip_183_3 b 
-on trim(left(a.bid_hrs))=trim(left(b.bid_hrs_19)) and a.core_year=b.core_year;
+on trim(left(a.bid_hrs))=trim(left(b.bid_hrs_21)) and a.core_year=b.core_year;
 quit;
 
 proc sort data=ip_365_3 nodupkey;
-by bid_hrs_19 core_year;
+by bid_hrs_21 core_year;
 run;
 
 proc sql;
@@ -3182,7 +3099,7 @@ b.n_urgent_admit_12m,b.n_elect_admit_12m,b.n_ED_ip_12m
 from core_ids_criteria_1a a
 left join
 ip_365_3 b 
-on trim(left(a.bid_hrs))=trim(left(b.bid_hrs_19)) and a.core_year=b.core_year;
+on trim(left(a.bid_hrs))=trim(left(b.bid_hrs_21)) and a.core_year=b.core_year;
 quit;
 
 /*Dataset just contains obs with ffs mc 1yr and age 65+
@@ -3285,7 +3202,7 @@ set sic_int.mp_meet3_365(where=(trim(left(SSLSSNF))="N"));
 run;
 
 proc sort data=snf_meet_365;
-by bid_hrs_19 admit_date;
+by bid_hrs_21 admit_date;
 run;
 
 data snf_meet_365_1a;
@@ -3395,14 +3312,14 @@ if calc_snf_LOS=0 then calc_snf_LOS=1;
 run;
 
 proc sort data=pre_snf_days_1;
-by bid_hrs_19 c_ivw_date admit_date;
+by bid_hrs_21 c_ivw_date admit_date;
 run;
 
 proc sql;
-create table snf_days_pre as select distinct bid_hrs_19,core_year,
+create table snf_days_pre as select distinct bid_hrs_21,core_year,
 sum(calc_snf_LOS)
 	as n_snf_days_12m
-	from pre_snf_days_1 group by bid_hrs_19,core_year;
+	from pre_snf_days_1 group by bid_hrs_21,core_year;
 quit;
 
 proc freq;
@@ -3411,7 +3328,7 @@ run;
 
 /*merge into full ffs 1yr, age 65+ dataset*/
 proc sort data=snf_days_pre nodupkey;
-by bid_hrs_19 core_year;
+by bid_hrs_21 core_year;
 run;
 
 proc sql;
@@ -3419,7 +3336,7 @@ create table core_ids_criteria_2a as select a.*,b.n_snf_days_12m
 from core_ids_1yr_criteria a
 left join
 snf_days_pre b 
-on trim(left(a.bid_hrs))=trim(left(b.bid_hrs_19)) and a.core_year=b.core_year;
+on trim(left(a.bid_hrs))=trim(left(b.bid_hrs_21)) and a.core_year=b.core_year;
 quit;
 
  data core_ids_1yr_criteria_2 ;
@@ -3446,8 +3363,8 @@ run;
 /*Get indicator of ESRD codes from the denominator file the year of the interview*/
 /****************************************************************************/
 /****************************************************************************/
-proc sort data=medi.dn_2000_2010 out=dn_2000_20102  nodupkey;
-by BID_HRS_19 year;
+proc sort data=medi.dn_2000_2012 out=dn_2000_20122  nodupkey;
+by BID_HRS_21 year;
 run;
 
 /*pull ESRD status variable from dn file
@@ -3456,8 +3373,8 @@ proc sql;
 create table dn_core_y as select
 a.*,b.ESRD_IND from 
 core_ids_1yr_criteria_2 a left join
-dn_2000_20102 b
-on trim(left(a.BID_hrs))=trim(left(b.BID_hrs_19))
+dn_2000_20122 b
+on trim(left(a.BID_hrs))=trim(left(b.BID_hrs_21))
 and a.c_ivw_year=b.year;
 quit;
 
@@ -3481,7 +3398,7 @@ run;
 /****************************************************************************/
 /*Get indicator of Home 02 use 12 months pre interview from DME claims*/
 /****************************************************************************/
-data oxygen_1(keep=BID_HRS_19 core_year home_oxygen);
+data oxygen_1(keep=BID_HRS_21 core_year home_oxygen);
 set sic_int.dm_meet_365;
 home_oxygen=0;
 label home_oxygen="Home O2 from DME claims";
@@ -3492,7 +3409,7 @@ end;
 run; 
 
 proc sort data=oxygen_1;
-by bid_hrs_19 core_year;
+by bid_hrs_21 core_year;
 run;
 
 proc freq;
@@ -3501,9 +3418,9 @@ run;
 
 proc sql;
 create table oxygen_2 as
-select distinct bid_hrs_19,core_year,
+select distinct bid_hrs_21,core_year,
 sum(home_oxygen) as home_oxygen
-from oxygen_1 group by bid_hrs_19,core_year;
+from oxygen_1 group by bid_hrs_21,core_year;
 quit;
 
 /*convert to binary variables*/
@@ -3523,7 +3440,7 @@ create table core_ids_1yr_criteria_3 as select
 a.*,b.home_oxygen
 from core_ids_1yr_criteria_2b a left join
 oxygen_3 b
-on trim(left(a.BID_hrs))=trim(left(b.BID_hrs_19))
+on trim(left(a.BID_hrs))=trim(left(b.BID_hrs_21))
 and a.core_year=b.core_year;
 quit;
 
@@ -3556,16 +3473,12 @@ on a.bid_hrs=b.bid_hrs2 and a.core_year=b.core_year2;
 quit;
 
 H="Step 5a - Get outpatient ED use info"
-/*proc printto new log='&logdir.\sas_8_sic_op_ed_log.log'
-	print='&logdir.\sas_8_sic_op_ed_out.lst' 
-run;*/
-
 data op_meet_365;
-set sic_int.op_meet_365(keep=bid_hrs_19 admit_date disch_date c_ivw_date core_year RVCNTR01-RVCNTR45);
+set sic_int.op_meet_365(keep=bid_hrs_21 admit_date disch_date c_ivw_date core_year RVCNTR01-RVCNTR45);
 run;
 
 proc sort data=op_meet_365;
-by bid_hrs_19 admit_date;
+by bid_hrs_21 admit_date;
 run;
 
 data ed_op_1;
@@ -3583,10 +3496,10 @@ table ed_op;
 run;
 
 proc sql;
-create table ed_op_2 as select distinct bid_hrs_19,core_year,
+create table ed_op_2 as select distinct bid_hrs_21,core_year,
 count(case when ed_op=1 then ed_op else . end)
 	as n_ed_op_visits_12m
-	from ed_op_1 group by bid_hrs_19,core_year;
+	from ed_op_1 group by bid_hrs_21,core_year;
 quit;
 
 proc freq;
@@ -3598,7 +3511,7 @@ by bid_hrs core_year;
 run;
 
 proc sort data=ed_op_2 nodupkey;
-by bid_hrs_19 core_year;
+by bid_hrs_21 core_year;
 run;
 
 /*merge into dataset*/
@@ -3607,7 +3520,7 @@ create table core_ids_1yr_criteria_4a as select a.*,b.n_ed_op_visits_12m
 from core_ids_1yr_criteria_4 a
 left join
 ed_op_2 b 
-on trim(left(a.bid_hrs))=trim(left(b.bid_hrs_19)) and a.core_year=b.core_year;
+on trim(left(a.bid_hrs))=trim(left(b.bid_hrs_21)) and a.core_year=b.core_year;
 quit;
 
 data sic_int.core_ids_1yr_criteria_4b;
@@ -3625,11 +3538,6 @@ table n_ed_op_visits_12m*ind_ed_op_12m;
 run;
 
 H="Step 5b - Classify serious illness based on just primary dx"
-/*proc printto new log='&logdir.\sas_9_sic_pri_dx_log.log'
-	print='&logdir.\sas_9_sic_pri_dx_out.lst' 
-run;*/
-
-
 /*recoded as a macro and use either the primary diagnosis or admitting diagnoses AD_DGNS */
 
 /*start with IP claim list, 1 year before interview*/
@@ -3692,16 +3600,16 @@ run;
 
 proc sql;
 create table &name._dx_2 as
-select distinct BID_hrs_19,core_year,
+select distinct BID_hrs_21,core_year,
 sum(chf_&name._dx) as chf_&name.,
 sum(copd_&name._dx) as copd_&name.,
 sum(hip_&name._dx) as hip_&name.
 from dx_1_&name.
-group by BID_hrs_19,core_year;
+group by BID_hrs_21,core_year;
 quit;
 
 /*convert counts of diagnoses for each comorbidity to indicator variables*/ 
-data &name._dx_3(keep=BID_hrs_19 core_year chf_&name._dx copd_&name._dx hip_&name._dx);
+data &name._dx_3(keep=BID_hrs_21 core_year chf_&name._dx copd_&name._dx hip_&name._dx);
 set &name._dx_2 ;
 array list_com chf_&name. copd_&name. hip_&name.;
 array list_com_bin chf_&name._dx copd_&name._dx hip_&name._dx;
@@ -3734,7 +3642,7 @@ b.copd_pri_dx,b.hip_pri_dx
 from sic_int.core_xwalk_ins_ffs_only a
 left join
 pri_dx_3 b 
-on trim(left(a.bid_hrs))=trim(left(b.bid_hrs_19)) and a.core_year=b.core_year;
+on trim(left(a.bid_hrs))=trim(left(b.bid_hrs_21)) and a.core_year=b.core_year;
 quit;
 
 proc sql;
@@ -3743,7 +3651,7 @@ b.copd_adm_dx,b.hip_adm_dx
 from core_ids_1yr_criteria_4c a
 left join
 adm_dx_3 b 
-on trim(left(a.bid_hrs))=trim(left(b.bid_hrs_19)) and a.core_year=b.core_year;
+on trim(left(a.bid_hrs))=trim(left(b.bid_hrs_21)) and a.core_year=b.core_year;
 quit;
 
 data core_ids_1yr_criteria_4e;
@@ -3875,7 +3783,7 @@ proc freq; table hf_proc_ind;
 run;
 /********************************************************************/
 /*is there also a physican record within 2 days?*/
-proc sort data=hfproc_carr; by BID_HRS_19 FROM_DT THRU_DT hf_proc_ind;
+proc sort data=hfproc_carr; by BID_HRS_21 FROM_DT THRU_DT hf_proc_ind;
 run;
 
 data hfproc_carr_2;
@@ -3921,7 +3829,7 @@ run;
 proc contents data=ip_meet_365;
 run;
 
-data proc_long(keep=BID_hrs_19 TYPE_ADM procedure procedure_date date_imp_yes AD_DGNS DGNS_CD01-DGNS_CD25
+data proc_long(keep=BID_hrs_21 TYPE_ADM procedure procedure_date date_imp_yes AD_DGNS DGNS_CD01-DGNS_CD25
 	 admit_date disch_date core_year);
 set ip_meet_365;
 array list PRCDR_CD01-PRCDR_CD25;
@@ -3970,7 +3878,7 @@ create table cpt_and_surg as select a.*,b.admit_date as carr_hf_admit, b.disch_d
 b.hf_proc_ind, b.hf_w_visit_2d from 
 surgery_meet a inner join
 hfproc_carr_5 b
-on a.bid_hrs_19=b.bid_hrs_19;
+on a.bid_hrs_21=b.bid_hrs_21;
 quit;
 
 data cpt_and_surg_1;
@@ -3982,26 +3890,26 @@ run;
 /*now merge in lists to get a list of bid's that meet criteria 1 or 2*/
 data cpt_and_surg_2;
 set cpt_and_surg_1;
-keep bid_hrs_19 hf_proc_ind hf_w_surgery core_year;
+keep bid_hrs_21 hf_proc_ind hf_w_surgery core_year;
 run;
 
-proc sort data=cpt_and_surg_2 nodupkey; by bid_hrs_19 core_year ; run;
+proc sort data=cpt_and_surg_2 nodupkey; by bid_hrs_21 core_year ; run;
 
 data hfproc_carr_6;
 set hfproc_carr_4;
-keep bid_hrs_19 hf_proc_ind hf_w_visit_2d core_year;
+keep bid_hrs_21 hf_proc_ind hf_w_visit_2d core_year;
 if hf_proc_ind=1 and hf_w_visit_2d=1;
 run;
 
-proc sort data=hfproc_carr_6 nodupkey; by bid_hrs_19  core_year ; run;
+proc sort data=hfproc_carr_6 nodupkey; by bid_hrs_21  core_year ; run;
 
 *merge the datasets;
 data hf_meet;
 merge hfproc_carr_6 cpt_and_surg_2 ;
-by bid_hrs_19 core_year;
+by bid_hrs_21 core_year;
 run;
 
-proc sort data=hf_meet out=hf_meet2 nodupkey; by bid_hrs_19  core_year; run;
+proc sort data=hf_meet out=hf_meet2 nodupkey; by bid_hrs_21  core_year; run;
 
 /*merge in these hip fracture variables*/
 proc sql;
@@ -4009,7 +3917,7 @@ create table core_ids_1yr_criteria_4f
 as select a.*,b.hf_w_visit_2d,b.hf_w_surgery from
 core_ids_1yr_criteria_4e a left join
 hf_meet2 b
-on a.bid_hrs=b.bid_hrs_19 and a.core_year=b.core_year;
+on a.bid_hrs=b.bid_hrs_21 and a.core_year=b.core_year;
 quit;
 
 proc freq; table hf_w_visit_2d*hf_w_surgery /missprint;
@@ -4053,10 +3961,6 @@ as well as the additional criteria for serious illness
 2 sets of criteria are used:
 Criteria A: Either serious medical illness or ADL impairment
 Criteria B: Critera A + either nursing home resident or hospitalization*/
-
-/*proc printto new log='&logdir.\sas_10_sic_crit_log.log'
-	print='&logdir.\sas_10_sic_crit_out.lst' 
-run;*/
 
 proc freq
 data=sic_int.core_ids_1yr_criteria_4g;
@@ -4260,28 +4164,28 @@ run;
 
  ods rtf body="E:\data\serious_ill\logs\criteria_vars_before_coredate.rtf";
 
-title "Number of unique people in full cohort 2000-2010";
+title "Number of unique people in full cohort 2000-2012";
 proc sql;
 select count(distinct id) from sic_int.core_ids_1yr_criteria_5
-where core_year in (2000,2002,2004,2006,2008,2010);
+where core_year in (2000,2002,2004,2006,2008,2010,2012);
 
 title "Unique R's w/ Age 65+";
 select count(distinct id) from sic_int.core_ids_1yr_criteria_5
-where age_ge_65=1 and core_year in (2000,2002,2004,2006,2008,2010);
+where age_ge_65=1 and core_year in (2000,2002,2004,2006,2008,2010,2012);
 
 title "Unique R's w/ Age 65+, With mc xwalk id";
 select count(distinct id) from sic_int.core_ids_1yr_criteria_5
-where age_ge_65=1 and xwalk_yes=1 and core_year in (2000,2002,2004,2006,2008,2010);
+where age_ge_65=1 and xwalk_yes=1 and core_year in (2000,2002,2004,2006,2008,2010,2012);
 
 title "Unique R's w/ Age 65+, With mc xwalk id, and FFS 1yr pre-ivw";
 select count(distinct id) from sic_int.core_ids_1yr_criteria_5
 where age_ge_65=1 and xwalk_yes=1 and part_ab_12m=1 and hmo_d_12m=0 
-and core_year in (2000,2002,2004,2006,2008,2010);
+and core_year in (2000,2002,2004,2006,2008,2010,2012);
 
 create table age_ge_65_mc as 
 select * from sic_int.core_ids_1yr_criteria_5
 where age_ge_65=1 and xwalk_yes=1 and part_ab_12m=1 and hmo_d_12m=0 
-and core_year in (2000,2002,2004,2006,2008,2010);
+and core_year in (2000,2002,2004,2006,2008,2010,2012);
 quit;
 
 title "Dementia - elix, 2+ diagnoses required";
@@ -4451,10 +4355,10 @@ proc sql;
 create table esrd_check_2 as select a.* from 
 dx_all_last_1yr a join
 esrd_check_1 b
-on a.bid_hrs_19=b.bid_hrs and a.core_year=b.core_year;
+on a.bid_hrs_21=b.bid_hrs and a.core_year=b.core_year;
 quit;
 
-ods rtf body="E:\data\serious_ill\logs\check_esrd.rtf";
+ods rtf body="E:\data\serious_ill\logs\check_esrd_2012.rtf";
 title "n=17 with esrd flag in denominator file but not from elixhauser comorb definition";
 proc freq data=esrd_check_2 order=freq; table diag; run;
 quit;
@@ -4472,7 +4376,6 @@ H="Step 7 - Stata do file to get sample, criteria"
 capture log close
 
 clear all
-set mem 800m
 set more off
 
 local logpath E:\data\serious_ill\logs
@@ -4490,30 +4393,30 @@ tab core_year, missing
 sum core_year
 mat sample_set[1,1]=r(N)
 
-sum core_year if inlist(core_year,2000,2002,2004,2006,2008)
+sum core_year if inlist(core_year,2000,2002,2004,2006,2008,2010)
 mat sample_set[2,1]=r(N)
 
-sum core_year if inlist(core_year,2000,2002,2004,2006,2008) & age_ge_65==1
+sum core_year if inlist(core_year,2000,2002,2004,2006,2008,2010) & age_ge_65==1
 mat sample_set[3,1]=r(N)
 
-sum core_year if inlist(core_year,2000,2002,2004,2006,2008) & age_ge_65==1 & xwalk_yes==1
+sum core_year if inlist(core_year,2000,2002,2004,2006,2008,2010) & age_ge_65==1 & xwalk_yes==1
 mat sample_set[4,1]=r(N)
 
-sum core_year if inlist(core_year,2000,2002,2004,2006,2008) & age_ge_65==1 & xwalk_yes==1 & ///
+sum core_year if inlist(core_year,2000,2002,2004,2006,2008,2010) & age_ge_65==1 & xwalk_yes==1 & ///
 part_ab_12m==1 & hmo_d_12m==0
 mat sample_set[5,1]=r(N)
 
 //check if only require 6 month ffs pre interview, what changes??
-sum core_year if inlist(core_year,2000,2002,2004,2006,2008) & age_ge_65==1 & xwalk_yes==1 & ///
+sum core_year if inlist(core_year,2000,2002,2004,2006,2008,2010) & age_ge_65==1 & xwalk_yes==1 & ///
 part_ab_6m==1 & hmo_d_6m==0
 mat sample_set[6,1]=r(N)
 
 //check if have wage index merged in (FFS 1 year)
-sum core_year if inlist(core_year,2000,2002,2004,2006,2008) & age_ge_65==1 & xwalk_yes==1 & ///
+sum core_year if inlist(core_year,2000,2002,2004,2006,2008,2010) & age_ge_65==1 & xwalk_yes==1 & ///
 part_ab_12m==1 & hmo_d_12m==0 & wage_index_20102!=.
 mat sample_set[7,1]=r(N)
 
-mat rownames sample_set="Core interviews 1998-2010" "Core Interviews 2000-2008" "Age 65+" ///
+mat rownames sample_set="Core interviews 1998-2012" "Core Interviews 2000-2010" "Age 65+" ///
 "With xwalk id" "With FFS MC 1yr pre-ivw" "With FFS MC 6m pre-ivw" "With 1 year FFS & Wage Index"
 
 mat colnames sample_set="Interviews"
@@ -4526,7 +4429,7 @@ ctitle("","N Interviews") ///
 sdec(0) replace
 
 //drop interviews that don't meet above criteria
-keep if inlist(core_year,2000,2002,2004,2006,2008) & age_ge_65==1 & xwalk_yes==1 & ///
+keep if inlist(core_year,2000,2002,2004,2006,2008,2010) & age_ge_65==1 & xwalk_yes==1 & ///
 part_ab_12m==1 & hmo_d_12m==0
 
 save core_ids_1yr_criteria_5_sample1.dta, replace
@@ -4536,14 +4439,9 @@ log close
 
 
 H="Step 7a - Stata looking at criteria"
-//6/9/14 Note HIV was removed from the list of serious illnesses 
-//so it was also removed from these tables
-**4/2/15 - hiv added back in
-
 capture log close
 
 clear all
-set mem 500m
 set more off
 
 local logpath E:\data\serious_ill\logs
@@ -4701,21 +4599,21 @@ tab criteria_b, missing
 **********************************************************************************
 
 //look at interview years, number per R
-mat years=J(5,2,.)
+mat years=J(6,2,.)
 
 tab core_year, missing matcell(yr)
 
-forvalues r=1/4{
+forvalues r=1/5{
 mat years[`r',1]=yr[`r',1]
 mat years[`r',2]=yr[`r',1]/r(N)*100
 }
 
 sum core_year
-mat years[5,1]=r(N)
-mat years[5,2]=r(N)/r(N)*100
+mat years[6,1]=r(N)
+mat years[6,2]=r(N)/r(N)*100
 mat list years
 
-mat rownames years="2002" "2004" "2006" "2008" "Total"
+mat rownames years="2002" "2004" "2006" "2008" "2010" "Total"
 
 frmttable using `logpath'\sic_Table2_criteria, statmat(years) ///
 title("Interview years") ///
@@ -4731,19 +4629,19 @@ preserve
 keep if n1==n2
 tab n1, missing matcell(cnt)
 
-mat count=J(5,2,.)
+mat count=J(6,2,.)
 
-forvalues r=1/4{
+forvalues r=1/5{
 mat count[`r',1]=cnt[`r',1]
 mat count[`r',2]=cnt[`r',1]/r(N)*100
 }
 
 sum core_year
-mat count[5,1]=r(N)
-mat count[5,2]=r(N)/r(N)*100
+mat count[6,1]=r(N)
+mat count[6,2]=r(N)/r(N)*100
 mat list count
 
-mat rownames count="1" "2" "3" "4" "Total"
+mat rownames count="1" "2" "3" "4" "5" "Total"
 
 frmttable using `logpath'\sic_Table2_criteria, statmat(count) ///
 title("Interviews per Respondent") ///
@@ -4802,7 +4700,7 @@ create table meet_pre(keep=id bid_hrs c_ivw_year c_ivw_month
 	c_ivw_date core_year death_date core_to_death) as 
 select * from sic_int.core_ids_1yr_criteria_5
 where age_ge_65=1 and xwalk_yes=1 and part_ab_12m=1 and hmo_d_12m=0 
-and core_year in (2000,2002,2004,2006,2008,2010);
+and core_year in (2000,2002,2004,2006,2008,2010,2012);
 quit;
 
 /*get months from core until death date where relevant*/
@@ -4821,7 +4719,7 @@ run;
 
 proc freq; table core_to_death_mos; run;
 
-proc sort data=medi.dn_2000_2010 out=dn_2000_20102  nodupkey;
+proc sort data=medi.dn_2000_2012 out=dn_2000_20122  nodupkey;
 by BID_HRS_19 year;
 run;
 
@@ -4831,8 +4729,8 @@ proc sql;
 create table dn_core_y as select
 a.*,b.buyin12,b.year,b.HMOIND12
 from meet_pre2 a inner join
-dn_2000_20102 b
-on trim(left(a.BID_hrs))=trim(left(b.BID_hrs_19))
+dn_2000_20122 b
+on trim(left(a.BID_hrs))=trim(left(b.BID_hrs_21))
 and a.c_ivw_year=b.year;
 quit;
 
@@ -4872,8 +4770,8 @@ a.BID_hrs,a.c_ivw_year ,
 b.year as c_ivw_year_aft,
 b.year,b.buyin12,b.HMOIND12
 from dn_core_y a inner join
-dn_2000_20102 b
-on trim(left(a.BID_hrs))=trim(left(b.BID_hrs_19))
+dn_2000_20122 b
+on trim(left(a.BID_hrs))=trim(left(b.BID_hrs_21))
 and -1<=a.c_ivw_year-b.year<0 order by bid_hrs,c_ivw_year;
 quit;
 
@@ -4977,7 +4875,7 @@ run;
 data check_aft;
 set sic_int.core_ids_1yr_criteria_6;
 if age_ge_65=1 & xwalk_yes=1 & part_ab_12m=1 and hmo_d_12m=0 
-& core_year in (2000,2002,2004,2006,2008,2010);
+& core_year in (2000,2002,2004,2006,2008,2010,2012);
 run;
 
 /*of n=32718 that meet sample selection criteria year preceding ivw 
@@ -5003,16 +4901,12 @@ Note: Final dataset is set of interviews that meet ffs mc 1 year and age 65+
 with outcomes added
 */
 
-/*proc printto new log='&logdir.\sas_11_sic_outcomes_log.log'
-	print='&logdir.\sas_11_sic_outcomes_out.lst' 
-run;*/
-
 /*ids of those interviews with ffs medicare year preceding interview and 65+*/
 proc sql;
 create table age_ge_65_mc as 
 select * from sic_int.core_ids_1yr_criteria_6 
 where age_ge_65=1 and xwalk_yes=1 and part_ab_12m=1 and hmo_d_12m=0 
-and core_year in (2000,2002,2004,2006,2008,2010);
+and core_year in (2000,2002,2004,2006,2008,2010,2012);
 quit;
 
 proc freq; table core_to_dod_1yr  core_to_dod_6m; run;
@@ -5032,17 +4926,17 @@ List of claims with some time within 1 year of interview*/
 
 proc sql;
 create table &source._meet_post as select a.*,b.c_ivw_date,b.core_year
-from medi.&source._2000_2010 a inner join
+from medi.&source._2000_2012 a inner join
 age_ge_65_mc_ltd b
-on trim(left(a.bid_hrs_19))=trim(left(b.bid_hrs))
+on trim(left(a.bid_hrs_21))=trim(left(b.bid_hrs))
 and &days_start<=a.disch_date-b.c_ivw_date<=&days_after_core;
 quit;
 
 proc sql;
 create table &source._meet2_post as select a.*,b.c_ivw_date,b.core_year
-from medi.&source._2000_2010 a inner join
+from medi.&source._2000_2012 a inner join
 age_ge_65_mc_ltd b
-on trim(left(a.bid_hrs_19))=trim(left(b.bid_hrs))
+on trim(left(a.bid_hrs_21))=trim(left(b.bid_hrs))
 and a.disch_date-b.c_ivw_date>&days_after_core and a.admit_date-b.c_ivw_date<=&days_after_core;
 quit;
 
@@ -5060,9 +4954,9 @@ Pull list of any claims with admission date within 1 year of the interview*/
 proc sql;
 create table sic_int.&source._meet_post_&days_after_core. as select 
 a.*,b.c_ivw_date,b.core_year
-from medi.&source._2000_2010(keep=admit_date BID_hrs_19 pmt_amt) a inner join
+from medi.&source._2000_2012(keep=admit_date BID_hrs_19 pmt_amt) a inner join
 age_ge_65_mc_ltd b
-on trim(left(a.bid_hrs_19))=trim(left(b.bid_hrs))
+on trim(left(a.bid_hrs_21))=trim(left(b.bid_hrs))
 and &days_start<=a.admit_date-b.c_ivw_date<=&days_after_core;
 quit;
 
@@ -5127,11 +5021,11 @@ if disch_date-admit_date=0 then adj_los=1;
 run;
 
 proc sort data=ip_post_&days._2;
-by BID_hrs_19 core_year;
+by BID_hrs_21 core_year;
 run;
 
 proc sql;
-create table ip_post_&days._3 as select distinct BID_hrs_19,core_year,
+create table ip_post_&days._3 as select distinct BID_hrs_21,core_year,
 /*count of IP admissions, all types*/
 count(*) as n_ip_admit_&suffix. label="total n of hospital admit &suffix. after core ivw",
 /*count of nights in hospital*/
@@ -5154,7 +5048,7 @@ count(case when ind_ed_charge=1 then ind_ed_charge else . end) as n_ED_ip_&suffi
 sum(admit_trunc) as adm_trunc_ind_&suffix.
 	label="admit before interview indicator, counted as both pre and post admit"
 
- from ip_post_&days._2 group by BID_hrs_19,core_year;
+ from ip_post_&days._2 group by BID_hrs_21,core_year;
 quit;
 
 data ip_post_&days._4;
@@ -5176,7 +5070,7 @@ b.n_urgent_admit_p12m,b.n_elect_admit_p12m,b.n_ED_ip_p12m
 from age_ge_65_mc_ltd(drop=c_ivw_date) a
 left join
 ip_post_365_4 b 
-on trim(left(a.bid_hrs))=trim(left(b.bid_hrs_19)) and a.core_year=b.core_year;
+on trim(left(a.bid_hrs))=trim(left(b.bid_hrs_21)) and a.core_year=b.core_year;
 quit;
 
 proc sql;
@@ -5187,7 +5081,7 @@ b.n_urgent_admit_p6m,b.n_elect_admit_p6m,b.n_ED_ip_p6m
 from core_ids_admit_post_1 a
 left join
 ip_post_183_4 b 
-on trim(left(a.bid_hrs))=trim(left(b.bid_hrs_19)) and a.core_year=b.core_year;
+on trim(left(a.bid_hrs))=trim(left(b.bid_hrs_21)) and a.core_year=b.core_year;
 quit;
 
 
@@ -5297,13 +5191,13 @@ proc means; var ivw_to_admit;run;
 %macro hospice(days=,suffix=);
 
 proc sort data=sic_int.hs_meet_post_&days.;
-by bid_hrs_19 c_ivw_date admit_date;
+by bid_hrs_21 c_ivw_date admit_date;
 run;
 
 /*just keep 1 claim per beneficiary-interview since only need indicator of hospice use*/
 data hs_meet_post_2_&days.;
 set sic_int.hs_meet_post_&days.;
-by bid_hrs_19 c_ivw_date;
+by bid_hrs_21 c_ivw_date;
 if first.c_ivw_date;
 hs_admit_&suffix.=1;
 label hs_admit_&suffix.="Hospice admission &suffix. after interview";
@@ -5320,14 +5214,14 @@ proc sql;
 create table core_ids_admit_hs_post_2 as select a.*,b.hs_admit_p12m from
 core_ids_admit_post_3 a left join
 hs_meet_post_2_365 b
-on trim(left(a.bid_hrs))=trim(left(b.bid_hrs_19)) and a.core_year=b.core_year;
+on trim(left(a.bid_hrs))=trim(left(b.bid_hrs_21)) and a.core_year=b.core_year;
 quit;
 
 proc sql;
 create table core_ids_admit_hs_post_3 as select a.*,b.hs_admit_p6m from
 core_ids_admit_hs_post_2 a left join
 hs_meet_post_2_183 b
-on trim(left(a.bid_hrs))=trim(left(b.bid_hrs_19)) and a.core_year=b.core_year;
+on trim(left(a.bid_hrs))=trim(left(b.bid_hrs_21)) and a.core_year=b.core_year;
 quit;
 
 proc freq; table hs_admit_p6m*hs_admit_p12m /missprint; run;
@@ -5368,7 +5262,7 @@ H="Step 8b - Get Medicare payments 1 year after interview"
 /*Add total Medicare payments from claims 1 year after interview
 and 6m after interview*/
 
-/*Claims files from 2000-2010, claims pulled in previous section
+/*Claims files from 2000-2012, claims pulled in previous section
 to get just claims that are within 1 year of the interview dates
 for those interviews were r>65 and ffs medicare 1 yr prior to ivw*/
 
@@ -5473,7 +5367,7 @@ end;
 run;
 
 /*adjust for inflation, Uses CPI for Medical Services from 
-BLS website, accessed 3/14/2014*/
+BLS website, accessed 5/4/2015*/
 
 /*create table merging both the claims fully in the 2 year period 
 and those partially in that time
@@ -5485,18 +5379,20 @@ do over list;
 if list=. then list=0;
 end;
 
-if year(admit_date)>=2010 then rate=1;
-if year(admit_date)=2009 then rate=1.0350;
-if year(admit_date)=2008 then rate=1.06823;
-if year(admit_date)=2007 then rate=1.11347;
-if year(admit_date)=2006 then rate=1.17287;
-if year(admit_date)=2005 then rate=1.22119;
-if year(admit_date)=2004 then rate=1.27983;
-if year(admit_date)=2003 then rate=1.34381;
-if year(admit_date)=2002 then rate=1.40392;
-if year(admit_date)=2001 then rate=1.47492;
-if year(admit_date)=2000 then rate=1.54589;
-if year(admit_date)<=1999 then rate=1.61195;
+if year(admit_date)>=2012 then rate=1;
+if year(admit_date)=2011 then rate=1.03902;
+if year(admit_date)=2010 then rate=1.07086;
+if year(admit_date)=2009 then rate=1.10835;
+if year(admit_date)=2008 then rate=1.1439;
+if year(admit_date)=2007 then rate=1.1923;
+if year(admit_date)=2006 then rate=1.25586;
+if year(admit_date)=2005 then rate=1.30783;
+if year(admit_date)=2004 then rate=1.37027;
+if year(admit_date)=2003 then rate=1.43908;
+if year(admit_date)=2002 then rate=1.50337;
+if year(admit_date)=2001 then rate=1.57963;
+if year(admit_date)=2000 then rate=1.65519;
+if year(admit_date)<=1999 then rate=1.72641;
 
 
 &source._paid_by_mc=rate*(pmt_amt+passthru);
@@ -5504,9 +5400,9 @@ run;
 
 *calculates total of mc charges for the claim type by hrs bid;
 proc sql;
-create table &source._pay_post as select distinct bid_hrs_19,core_year,
+create table &source._pay_post as select distinct bid_hrs_21,core_year,
 sum(&source._paid_by_mc) as &source._paid_by_mc 
-from &source._cost_post group by BID_HRS_19,core_year;
+from &source._cost_post group by BID_HRS_21,core_year;
 quit;
 
 *merges the totals above with the full interview list;
@@ -5516,7 +5412,7 @@ a.BID_hrs,a.id,a.core_year,coalesce(b.&source._paid_by_mc,0) as &source._paid_by
 from sic_int.core_ids_init_outcomes a
 left join
  &source._pay_post b
- on trim(left(a.BID_hrs))=trim(left(b.bid_hrs_19)) and a.core_year=b.core_year;
+ on trim(left(a.BID_hrs))=trim(left(b.bid_hrs_21)) and a.core_year=b.core_year;
  quit;
 
  proc sort data=&source._&name. ;
@@ -5542,28 +5438,30 @@ left join
 /*Adjust for inflation*/
 data &source._meet2_post;
 set sic_int.&source._meet_post_&days_after_core.;
-/*adjust to 2010 dollars*/
-if year(admit_date)>=2010 then rate=1;
-if year(admit_date)=2009 then rate=1.0350;
-if year(admit_date)=2008 then rate=1.06823;
-if year(admit_date)=2007 then rate=1.11347;
-if year(admit_date)=2006 then rate=1.17287;
-if year(admit_date)=2005 then rate=1.22119;
-if year(admit_date)=2004 then rate=1.27983;
-if year(admit_date)=2003 then rate=1.34381;
-if year(admit_date)=2002 then rate=1.40392;
-if year(admit_date)=2001 then rate=1.47492;
-if year(admit_date)=2000 then rate=1.54589;
-if year(admit_date)<=1999 then rate=1.61195;
+/*adjust to 2012 dollars*/
+if year(admit_date)>=2012 then rate=1;
+if year(admit_date)=2011 then rate=1.03902;
+if year(admit_date)=2010 then rate=1.07086;
+if year(admit_date)=2009 then rate=1.10835;
+if year(admit_date)=2008 then rate=1.1439;
+if year(admit_date)=2007 then rate=1.1923;
+if year(admit_date)=2006 then rate=1.25586;
+if year(admit_date)=2005 then rate=1.30783;
+if year(admit_date)=2004 then rate=1.37027;
+if year(admit_date)=2003 then rate=1.43908;
+if year(admit_date)=2002 then rate=1.50337;
+if year(admit_date)=2001 then rate=1.57963;
+if year(admit_date)=2000 then rate=1.65519;
+if year(admit_date)<=1999 then rate=1.72641;
 
 &source._paid_by_mc=rate*(pmt_amt);
 run;
 
 /*Calculate total mc payments by ID*/
 proc sql;
-create table &source._pay_post as select distinct BID_hrs_19,core_year,
+create table &source._pay_post as select distinct BID_hrs_21,core_year,
 sum(&source._paid_by_mc) as &source._paid_by_mc
-from &source._meet2_post group by BID_hrs_19,core_year;
+from &source._meet2_post group by BID_hrs_21,core_year;
 quit;
 
 /*merge in mc totals with interview list*/
@@ -5573,7 +5471,7 @@ a.BID_hrs,a.id,a.core_year,coalesce(b.&source._paid_by_mc,0) as &source._paid_by
 from sic_int.core_ids_init_outcomes a
 left join
  &source._pay_post b
- on trim(left(a.BID_hrs))=trim(left(b.BID_hrs_19)) and a.core_year=b.core_year;
+ on trim(left(a.BID_hrs))=trim(left(b.BID_hrs_21)) and a.core_year=b.core_year;
  quit;
 
  proc sort data=&source&month_n._post ;
@@ -5613,7 +5511,7 @@ run;
 
 *add wage index to the costs totals files;
 proc sql;
-create table mc_costs_all_wi_1 as select a.*, b.wage_index_20102
+create table mc_costs_all_wi_1 as select a.*, b.wage_index_2012_2
 from mc_costs_all a left join
 sic_int.core_lmt_xwalk_2 b
 on a.BID_hrs=b.bid_hrs and a.core_year=b.core_year;
@@ -5622,9 +5520,9 @@ quit;
 /*if wage index is missing, set to 1 and identify with an indicator variable*/
 data mc_costs_all_wi_2;
 set mc_costs_all_wi_1;
-if wage_index_20102=. then do;
+if wage_index_2012_2=. then do;
 	wage_index_missing_yes = 1;
-	wage_index_20102 = 1;
+	wage_index_2012_2 = 1;
 end;
 run;
 
@@ -5633,8 +5531,8 @@ proc freq; table wage_index_missing_yes; run;
 %macro wage_ind(source=);
 data mc_costs_all_wi_2;
 set mc_costs_all_wi_2;
-&source._paid_by_mc_12m_wi = &source._paid_by_mc_12m / wage_index_20102;
-&source._paid_by_mc_6m_wi = &source._paid_by_mc_6m / wage_index_20102;
+&source._paid_by_mc_12m_wi = &source._paid_by_mc_12m / wage_index_2012_2;
+&source._paid_by_mc_6m_wi = &source._paid_by_mc_6m / wage_index_2012_2;
 %mend;
 
 %wage_ind(source=ip);
@@ -5714,7 +5612,7 @@ proc sort data=sic_int.mc_costs_12m_6m; by bid_hrs core_year; run;
 proc sql;
 create table sic_int.core_ids_init_outcomes_2(drop=bid_hrs2 id2 core_year2 wi) as select * from
 sic_int.core_ids_init_outcomes a left join
-sic_int.mc_costs_12m_6m(rename=(bid_hrs=bid_hrs2) rename=(id=id2) rename=(core_year=core_year2) rename=(wage_index_20102=wi)) b
+sic_int.mc_costs_12m_6m(rename=(bid_hrs=bid_hrs2) rename=(id=id2) rename=(core_year=core_year2) rename=(wage_index_2012_2=wi)) b
 on trim(left(a.bid_hrs))=trim(left(b.bid_hrs2)) and a.core_year=b.core_year2;
 quit;
 
@@ -5755,9 +5653,6 @@ home residents but haven't had a hospitalization
 
 */
 
-/*proc printto new log='&logdir.\sas_12_sic_n0_log.log'
-	print='&logdir.\sas_12_sic_n0_out.lst' 
-run;*/
 
 /***********    Criteria A    ************/
 data ivw_meet_a;
@@ -6117,7 +6012,6 @@ H="Looking at outcomes"
 capture log close
 
 clear all
-set mem 500m
 set more off
 
 local logpath E:\data\serious_ill\logs
@@ -6128,7 +6022,7 @@ log using "`logpath'\4-sic_initial_outcomes_1.txt", text replace
 cd `datapath'
 
 //use dataset with outcomes, just obs that meet interview sample inclusion criteria
-use ivws_crit_1.dta if inlist(core_year,2000,2002,2004,2006,2008) & /// 
+use ivws_crit_1.dta if inlist(core_year,2000,2002,2004,2006,2008,2010) & /// 
 age_ge_65==1 & xwalk_yes==1 & part_ab_12m==1 & hmo_d_12m==0
 *******************************************************************
 //Table comparing outcomes for those with serious illness only, 
@@ -6137,7 +6031,7 @@ age_ge_65==1 & xwalk_yes==1 & part_ab_12m==1 & hmo_d_12m==0
 //for n=47 observations where wage index is missing, it has been set to 1
 //for the purposes of adjusting the medicare spending totals
 sum core_year
-sum core_year if wage_index_20102==.
+sum core_year if wage_index_2012_2==.
 tab wage_index_missing_yes, missing
 
 //categorical variable for serious illness vs adl impairment
@@ -6342,7 +6236,7 @@ count(*) as ivw_count
 from do_not_meet group by id;
 quit;
 
-/*range from having 1-5 core interviews in the dataset*/
+/*range from having 1-6 core interviews in the dataset*/
 title"Number of core interviews, n=5877 R's that never meet criteria";
 proc freq; table ivw_count; run;
 
@@ -6378,10 +6272,6 @@ _n0 - when first meet criteria
 _n1 - interview prior to first meeting criteria
 _p1 and _p2 - 2 interviews after meeting criteria
 */
-
-/*proc printto new log='&logdir.\sas_13_sic_ivw_time_log.log'
-	print='&logdir.\sas_13_sic_ivw_time_out.lst' 
-run;*/
 
 
 *****************************************************;
@@ -6433,19 +6323,15 @@ interviews after have p1, p2 suffix */
 *these are variables from the restricted dataset;
 data core_to_use;
 set sic_int.ivws_crit_1(drop=birth_date death_date white black hisp_eth native_amer 
-asian_pi other_race other_na_api_race wage_index_2010
+asian_pi other_race other_na_api_race wage_index_2012
 zip_0: zip_10: zip_98: first_ivw_year last_ivw_year restr_yes dod_claims cause_death_12_n);
 run;
 
 data core_all_drop;
 set sic_int.core_ids_1yr_criteria_6(drop=birth_date death_date white black hisp_eth native_amer 
-asian_pi other_race other_na_api_race wage_index_2010 
+asian_pi other_race other_na_api_race wage_index_2012 
 zip_0: zip_10: zip_98: first_ivw_year last_ivw_year restr_yes dod_claims cause_death_12_n);
 rename Hospital_care_intensity_index__s=hospital_care_intensity;
-run;
-
-data core_educ_only;
-set sic_int.core_ids_1yr_criteria_6(keep=id core_year c_ivw_date educ);
 run;
 
 *note interview counts listed are for criteria a dataset, they are different for criteria b,c;
@@ -6548,48 +6434,6 @@ quit;
 
 proc freq; table n_ivws_bef_&crit.;
 run;
-****************************************************************;
-*get n2 and n3 interviews to backfill education variable;
-proc sql;
-create table before_n1_&crit. 
-as select b.*
- from core_n1_&crit._1 a
- inner join
-core_educ_only b
-  on a.id=b.id and a.c_ivw_date>b.c_ivw_date;
-  quit;
-
-proc sort data= before_n1_&crit. ;
-by id c_ivw_date;
-run;
-
-*keep n2 core;
-data core_n2_&crit.;
-set before_n1_&crit.;
-by id c_ivw_date;
-if last.id;
-run;
-
-proc sql;
-create table before_n2_&crit. 
-as select b.*
- from core_n2_&crit. a
- inner join
-before_n1_&crit. b
-  on a.id=b.id and a.c_ivw_date>b.c_ivw_date;
-  quit;
-
-proc sort data= before_n2_&crit. ;
-by id c_ivw_date;
-run;
-
-*keep n3 core;
-data core_n3_&crit.;
-set before_n2_&crit.;
-by id c_ivw_date;
-if last.id;
-run;
-
 
 ****************************************************************;
 *get p1 interview, interview after meeting criteria*;
@@ -6713,28 +6557,6 @@ rename id_n1=id;
 rename bid_hrs_n1=bid_hrs;
 run;
 
-*n2 interview;
-data TEST;
-set core_n2_&crit. ;
-run;
-
-%rename(WORK,TEST,n2);
-data core_n2_&crit._1;
-set TEST;
-rename id_n2=id;
-run;
-
-*n3 interview;
-data TEST;
-set core_n3_&crit. ;
-run;
-
-%rename(WORK,TEST,n3);
-data core_n3_&crit._1;
-set TEST;
-rename id_n3=id;
-run;
-
 *p1 interview;
 data TEST;
 set CORE_P1_&crit._1;
@@ -6767,14 +6589,6 @@ proc sort data=core_n1_&crit._1 nodupkey;
 by id;
 run;
 
-proc sort data=core_n2_&crit._1 nodupkey;
-by id;
-run;
-
-proc sort data=core_n3_&crit._1 nodupkey;
-by id;
-run;
-
 proc sort data=core_p1_&crit._1 nodupkey;
 by id;
 run;
@@ -6784,7 +6598,7 @@ by id;
 run;
 
 data sic_fin.n0_n1_p1_p2_criteria_&crit.;
-merge n0_&crit._3 core_n1_&crit._1 core_n2_&crit._1 core_n3_&crit._1 core_p1_&crit._1 core_p2_&crit._1;
+merge n0_&crit._3 core_n1_&crit._1 core_p1_&crit._1 core_p2_&crit._1;
 by id;
 run;
 
@@ -6797,15 +6611,15 @@ run;
 
 
 proc freq data=sic_fin.n0_n1_p1_p2_criteria_a;
-table core_year_n3 core_year_n2 core_year_n1 core_year_n0 core_year_p1 core_year_p2;
+table core_year_n1 core_year_n0 core_year_p1 core_year_p2;
 run;
 
 proc freq data=sic_fin.n0_n1_p1_p2_criteria_b;
-table core_year_n3 core_year_n2 core_year_n1 core_year_n0 core_year_p1 core_year_p2;
+table core_year_n1 core_year_n0 core_year_p1 core_year_p2;
 run;
 
 proc freq data=sic_fin.n0_n1_p1_p2_criteria_c;
-table core_year_n3 core_year_n2 core_year_n1 core_year_n0 core_year_p1 core_year_p2;
+table core_year_n1 core_year_n0 core_year_p1 core_year_p2;
 run;
 
 proc freq data=sic_fin.n0_n1_p1_p2_criteria_smi;
@@ -6939,10 +6753,6 @@ zip_0: zip_10: zip_98: first_ivw_year last_ivw_year restr_yes dod_claims cause_d
 rename Hospital_care_intensity_index__s=hospital_care_intensity;
 run;
 
-data core_educ_only;
-set sic_int.core_ids_1yr_criteria_6(keep=id core_year c_ivw_date educ);
-run;
-
 *get ids, 2008 core interviews, n=6494;
 data n0_2008_1;
 set sic_int.ivws_crit_1;
@@ -7042,47 +6852,6 @@ quit;
 
 proc freq; table n_ivws_bef_&crit.;
 run;
-****************************************************************;
-*get n2 and n3 interviews to backfill education variable;
-proc sql;
-create table before_n1_&crit. 
-as select b.*
- from core_n1_&crit._1 a
- inner join
-core_educ_only b
-  on a.id=b.id and a.c_ivw_date>b.c_ivw_date;
-  quit;
-
-proc sort data= before_n1_&crit. ;
-by id c_ivw_date;
-run;
-
-*keep n2 core;
-data core_n2_&crit.;
-set before_n1_&crit.;
-by id c_ivw_date;
-if last.id;
-run;
-
-proc sql;
-create table before_n2_&crit. 
-as select b.*
- from core_n2_&crit. a
- inner join
-before_n1_&crit. b
-  on a.id=b.id and a.c_ivw_date>b.c_ivw_date;
-  quit;
-
-proc sort data= before_n2_&crit. ;
-by id c_ivw_date;
-run;
-
-*keep n3 core;
-data core_n3_&crit.;
-set before_n2_&crit.;
-by id c_ivw_date;
-if last.id;
-run;
 
 
 ****************************************************************;
@@ -7179,28 +6948,6 @@ rename id_n1=id;
 rename bid_hrs_n1=bid_hrs;
 run;
 
-*n2 interview;
-data TEST;
-set core_n2_&crit. ;
-run;
-
-%rename(WORK,TEST,n2);
-data core_n2_&crit._1;
-set TEST;
-rename id_n2=id;
-run;
-
-*n3 interview;
-data TEST;
-set core_n3_&crit. ;
-run;
-
-%rename(WORK,TEST,n3);
-data core_n3_&crit._1;
-set TEST;
-rename id_n3=id;
-run;
-
 *p1 interview;
 data TEST;
 set CORE_P1_&crit._1;
@@ -7222,20 +6969,12 @@ proc sort data=core_n1_&crit._1 nodupkey;
 by id;
 run;
 
-proc sort data=core_n2_&crit._1 nodupkey;
-by id;
-run;
-
-proc sort data=core_n3_&crit._1 nodupkey;
-by id;
-run;
-
 proc sort data=core_p1_&crit._1 nodupkey;
 by id;
 run;
 
 data sic_fin.n0_n1_p1_p2_criteria_&crit.;
-merge n0_&crit._3 core_n1_&crit._1 core_n2_&crit._1 core_n3_&crit._1 core_p1_&crit._1 ;
+merge n0_&crit._3 core_n1_&crit._1 core_p1_&crit._1 ;
 by id;
 run;
 
@@ -7244,7 +6983,7 @@ run;
 %ds_restr(crit=2008);
 
 proc freq data=sic_fin.n0_n1_p1_p2_criteria_2008;
-table core_year_n3 core_year_n2 core_year_n1 core_year_n0 core_year_p1 ;
+table core_year_n1 core_year_n0 core_year_p1 ;
 run;
 
 *************************************************************;
@@ -7308,12 +7047,9 @@ Note for now, this just adds interview information, nothing pulled from claims
 prior to death, may need to revisit this if we need outcomes prior to exit
 interview*/
 
-/*proc printto new log='&logdir.\sas_14_sic_exit_log.log'
-	print='&logdir.\sas_14_sic_exit_out.lst' 
-run;*/
 
 data exit;
-set hrs_fnl.exit_02_to_10_dt;
+set hrs_fnl.exit_02_to_12_dt;
 run;
 
 proc sort data=exit out=EXIT_1;
@@ -7406,13 +7142,12 @@ sections to be modified when switching between them
 When run this on the 2008 dataset, need to comment out sections relating to the
 p2 interview since it isn't included in this dataset
 
-4/2/15 - Added cleaning step for the datset based on Medical Illness Only
+4/2/15 - Added cleaning step for the dataset based on Medical Illness Only
 */
 
 capture log close
 
 clear all
-set mem 500m
 set more off
 
 local crit smi
@@ -7449,8 +7184,20 @@ sum age_at_core_n0 if age_cat_n0 ==1
 sum age_at_core_n0 if age_cat_n0 ==2
 sum age_at_core_n0 if age_cat_n0 ==3
 
+gen age_cat2_n0 = .
+replace age_cat2_n0 = 1 if age_at_core_n0<70
+replace age_cat2_n0 = 2 if age_at_core_n0>=70 & age_at_core_n0<75
+replace age_cat2_n0 = 3 if age_at_core_n0>=75 & age_at_core_n0<80
+replace age_cat2_n0 = 4 if age_at_core_n0>=80 & age_at_core_n0<85
+replace age_cat2_n0 = 5 if age_at_core_n0>=85 & age_at_core_n0!=.
+la var age_cat2_n0 "Age when meets criteria, categorical"
+la def age_cat2 1 "Age 65-69" 2 "Age 70-74" 3 "Age 75-79" 4 "Age 80-84" 5"Age 85+"
+la val age_cat2_n0 age_cat2
+tab age_cat2_n0, missing
+
 //female gender indicator variable
 tab female_n0, missing
+tab gender_n0, missing //from tracker file
 
 //create race and ethnicity categorical variable
 //may want to backfill from claims and check this variable!
@@ -7495,6 +7242,7 @@ label define educ 0 "No Formal Education" 1 "Grades 1-11" 2 "High School" 3 "Som
 label values educ_n0 educ 
 tab educ_n0, missing
 tab educ_n1 educ_n0, missing
+tab degree_n0, missing //from tracker file
 
 //1 obs reports no formal educ n1 ivw but post college educ n0 ivw
 tab educ_n1 if educ_n0==5, missing
@@ -7543,6 +7291,17 @@ tab srh_n0 srh_n1, missing
 
 //marital status
 tab married_n0 married_n1, missing
+tab couple_n0, missing //tracker file variables to check
+tab marst_n0, missing
+
+//bmi
+sum bmi_n0, missing
+gen bmi_lt25_n0=1 if bmi_n0<25
+replace bmi_lt25_n0=1 if bmi_n0>=25
+replace bmi_lt25_n0=. if bmi_n0==.
+la var bmi_lt25_n0 "BMI < 25 n0 ivw"
+tab bmi_lt25_n0, missing
+
 *******************************************************************
 //fill in missing symptoms variables, only asked 1st interview and every other year
 tab pain_hrs_n0, missing
@@ -7639,7 +7398,7 @@ replace meet_crit_first=1 if ind_n1_interview==1 & (part_ab_12m_n1==0 | hmo_d_12
 replace meet_crit_first=1 if ind_n1_interview==1 & (part_ab_12m_n1==. | hmo_d_12m_n1==.) //have n1 but no denominator file
 la var meet_crit_first "Meet criteria first interview with full information"
 tab meet_crit_first , missing
-tab meet_crit_first if core_year_n0<2010, missing
+tab meet_crit_first if core_year_n0<2012, missing
 
 *******************************************************************
 //cleaning up date of death variable!
@@ -13612,7 +13371,7 @@ log using "`logpath'\22_xtabs_mortality_crit_`crit'.txt", text replace
 
 cd `datapath'
 
-use n0_n1_p1_p2_x_criteria_`crit'_v1.dta if core_year_n0<2010
+use n0_n1_p1_p2_x_criteria_`crit'_v1.dta if core_year_n0<2012
 ******************************************************************
 //Elix vs self report for chronic conditions
 
@@ -13682,6 +13441,412 @@ tab fl_diff_push_n0 adl_impair_core_n0, missing
 
 tab smoke_curr_n0, missing
 
+//age 5 yr categories
+tab age_cat2_n0, missing
+
+//bmi
+tab bmi_lt25_n0, missing
+******************************************************************
+log close
+
+
+H="Propensity score match using Lee variables"
+/*propensity score match on mortality
+group that meets criteria A or medical illness only
+use comments to switch between criteria
+*/
+
+capture log close
+
+clear all
+set more off
+
+//local crit a
+local crit smi
+local logpath E:\data\serious_ill\logs
+local datapath E:\data\serious_ill\final_data
+
+log using "`logpath'\23_ps_match_mortality_crit_`crit'_lee_vars.txt", text replace
+
+cd `datapath'
+
+use n0_n1_p1_p2_x_criteria_`crit'_v1.dta if core_year_n0<2012
+******************************************************************
 
 ******************************************************************
+di "Criteria `crit' dataset"
+******************************************************************
+tab core_to_dod_1yr_n0, missing //mortality at 1 year
+tab core_to_dod_1yr_p1, missing //at p1 interview
+
+tab age_cat2_n0, gen(age_n0_ind)
+
+
+//define matching variable list, drop if missing in any variables
+//als indicator, all die within 1 year, so cannot include in the list
+global matchvars age_n0_ind2 age_n0_ind3 age_n0_ind4 age_n0_ind5 gender_n0 ///
+dm_hrs_n0 cancer_hrs_n0 lung_hrs_n0 chf_hrs_n0 bmi_lt25_n0 smoke_curr_n0  ///
+adl_diff_bh_n0 iadl_diff_m_n0 fl_diff_wk_many_n0 fl_diff_push_n0 
+
+//n=4408 meet criteria A
+//n=3596 meet Condition only criteria
+foreach v in $matchvars{
+sum `v', detail
+bys core_to_dod_1yr_n0: sum `v'
+drop if `v'==.
+}
+
+//n=4374 after drop missingness - Criteria A
+//n=3578 after drop missingness - Condition Only criteria
+tab core_to_dod_1yr_n0, missing //mortality at 1 year
+
+******************************************************************
+//sort data, generate propensity score
+set seed 2000
+gen x=uniform()
+sort x
+
+//generate pscore variable hs_pscore
+pscore core_to_dod_1yr_n0 $matchvars, pscore(m1y_pscore) blockid(m1y_block) logit detail
+
+psgraph, treated(core_to_dod_1yr_n0) pscore(m1y_pscore)
+
+gen logitpscore=ln(m1y_pscore/(1-m1y_pscore))
+sum logitpscore
+
+sca cal_ps=r(sd)*0.02
+sca list cal_ps
+
+//rule of thumb 0.2*sd, we can use 0.02*sd, manually change this depending on which dataset used
+//psmatch2 core_to_dod_1yr_n0,outcome(tot_paid_by_mc_6m_wi_n0) ///
+//	pscore(m1y_pscore) radius caliper(.02081047) logit //criteria A caliper
+psmatch2 core_to_dod_1yr_n0,outcome(tot_paid_by_mc_6m_wi_n0) ///
+	pscore(m1y_pscore) radius caliper(.02178898) logit //criteria condition only caliper
+
+//graph including off common support information
+psgraph, treated(core_to_dod_1yr_n0) pscore(m1y_pscore)
+graph save `logpath'\ps_dist_crit_`crit'.gph, replace
+
+histogram m1y_pscore if _support==1, by(core_to_dod_1yr_n0) 
+
+//look at balance of matched vs unmatched samples using %bias (std diff)
+pstest $matchvars ,treated(core_to_dod_1yr_n0) both hist
+
+mat vr=J(15,6,.)
+//compare variance of covariates before and after matching
+local i=1
+foreach v in $matchvars  {
+sum `v' if core_to_dod_1yr_n0==1 //get variance treated before matching
+mat vr[`i',1]=r(Var)
+sum `v' if core_to_dod_1yr_n0==0 //get variance comparison before matching
+mat vr[`i',2]=r(Var)
+mat vr[`i',3]= vr[`i',1]/vr[`i',2] //ratio
+sum `v' if core_to_dod_1yr_n0==1 & _support==1 //get variance treated after matching
+mat vr[`i',4]=r(Var)
+sum `v' if core_to_dod_1yr_n0==0 [iweight=_weight] //get variance comparison after matching
+mat vr[`i',5]=r(Var)
+mat vr[`i',6]= (vr[`i',4]) / (vr[`i',5]) //ratio
+local i=`i'+1
+}
+
+mat rownames vr=$matchvars
+
+mat list vr
+
+******************************************************************
+//using this matching, 7 obs from the treatment group are dropped b/c they are off support
+//0 are dropped b/c not matched (weight=.)
+//_support ==1 if matched
+tab _support, missing
+tab _support if core_to_dod_1yr_n0==1, missing
+tab _support if core_to_dod_1yr_n0==0, missing
+tab _weight if core_to_dod_1yr_n0==1, missing
+sum _weight if core_to_dod_1yr_n0==0
+
+//thinking about how those that died will have truncated 1 year lookback for outcomes...
+sum core_to_death_n0 if core_to_dod_1yr_n0==1, detail
+histogram core_to_death_n0 if core_to_dod_1yr_n0==1
+
+gen core_to_dod_1_2yr_n0=1 if core_to_death_n0<2 & core_to_death_n0>=1
+tab core_to_dod_1_2yr_n0, missing
+******************************************************************
+//save the dataset
+rename _weight ps_weight
+rename _support ps_common_support
+
+save n0_n1_p1_p2_x_criteria_`crit'_v1_psmatch_lee.dta, replace
+
+
+******************************************************************
+log close
+
+
+H="Univariate and glm for Lee matched sample"
+/*using propensity score matched sample on mortality
+from previous section, look at outcomes for
+group that meets criteria a and condition only, use comments to set dataset
+*/
+
+capture log close
+
+clear all
+set more off
+
+local crit a
+local cdesc "Serious medical illness and/or ADL impairment"
+//local crit smi
+//local cdesc "Serious medical condition only"
+local logpath E:\data\serious_ill\logs
+local datapath E:\data\serious_ill\final_data
+
+log using "`logpath'\24_ps_matched_outcomes1_crit_`crit'_lee_vars.txt", text replace
+
+cd `datapath'
+
+use n0_n1_p1_p2_x_criteria_`crit'_v1_psmatch_lee.dta
+***************************************************************
+//look at those that died 1st 6 months, their utilization is truncated
+tab core_to_dod_6m_n0 core_to_dod_1yr_n0, missing
+
+***************************************************************
+//table 1 compare pre-post matched samples
+//on covariates used in matching
+
+***************************************************************
+//table 2 look at 6m outcomes pre-post matched samples
+//show pvalues since looking at outcomes??
+
+la var core_to_dod_1yr_n0 "Died, n (%)"
+la var hs_admit_p6m_n0 "Enrolled in hospice, n (%)"
+la var ind_em_ur_adm_p6m_n0 "Hospital admission, n (%)"
+la var n_hospd_p6m_n0 "Hospital nights, mean (sd)"
+
+la var ip_paid_by_mc_6m_wi_n0 "Inpatient"
+la var snf_paid_by_mc_6m_wi_n0 "SNF"
+la var hh_paid_by_mc_6m_wi_n0 "Home health" 
+la var hs_paid_by_mc_6m_wi_n0 "Hospice" 
+la var pb_paid_by_mc_6m_wi_n0 "Carrier"
+la var op_paid_by_mc_6m_wi_n0 "Outpatient" 
+la var dm_paid_by_mc_6m_wi_n0 "DME"
+la var tot_paid_by_mc_6m_wi_n0 "Total Medicare payments"
+
+local ivars ind_em_ur_adm_p6m_n0
+
+local cvars n_hospd_p6m_n0 tot_paid_by_mc_6m_wi_n0 ip_paid_by_mc_6m_wi_n0 ///
+snf_paid_by_mc_6m_wi_n0 hh_paid_by_mc_6m_wi_n0 hs_paid_by_mc_6m_wi_n0 ///
+pb_paid_by_mc_6m_wi_n0 op_paid_by_mc_6m_wi_n0 dm_paid_by_mc_6m_wi_n0
+
+//columns 1,2, before matching, 6m outcomes those that died vs didn't
+mat t2=J(1,6,.)
+foreach v in `ivars' { //indicator variables
+local c=1
+	foreach i in 1 0{
+		sum `v' if core_to_dod_1yr_n0==`i'
+		mat t2[1,`c']=r(mean)*r(N) //n
+		mat t2[1,`c'+1]=r(mean)*100 //percent
+		local c = `c'+2
+	}
+	tab `v' core_to_dod_1yr_n0, chi2 //p-values
+	mat t2[1,5]=r(p)
+	
+	mat rownames t2=`v'
+	frmttable, statmat(t2) varlabels sdec(0,0,3\2,2,2) substat(1) store(t2_1)
+	
+	outreg, replay(t2_2) append(t2_1) store(t2_2)
+}
+
+foreach v in `cvars' { //continuous variables
+local c=1
+	foreach i in 1 0{
+		sum `v' if core_to_dod_1yr_n0==`i'
+		mat t2[1,`c']=r(mean) //mean
+		mat t2[1,`c'+1]=r(sd) //sd
+		local c = `c'+2
+	}
+	ttest `v', by(core_to_dod_1yr_n0) //p-values
+	mat t2[1,5]=r(p)
+	
+	mat rownames t2=`v'
+	frmttable, statmat(t2) varlabels sdec(0,0,3\0,0,0) substat(1) store(t2_1)
+	
+	outreg, replay(t2_2) append(t2_1) store(t2_2)
+}
+
+//last row, n for each group
+mat t2_n=J(1,2,.)
+tab core_to_dod_1yr_n0, matcell(t2n)
+mat t2_n[1,1]=t2n[2,1]
+mat t2_n[1,2]=t2n[1,1]
+mat rownames t2_n="N"
+frmttable, statmat(t2_n) store(t2_n) sdec(0)
+
+outreg, replay(t2_2) append(t2_n) store(t2_3) ///
+title("Criteria `crit' Utilization Outcomes, by 1 year Mortality") ///
+ctitles("","Died 1 year","Alive 1 year","p-value") ///
+note("Utilization for 6 months after interview" \ ///
+"Sample limited to survey respondents first interview that meet Criteria A:" \ ///
+"at least one serious medical illness and/or ADL impairment" \ ///
+"Medicare spending in 2010$, wage index adjusted.")
+
+//now columns using propensity score matched sample
+mat t2=J(1,6,.)
+foreach v in `ivars' { //indicator variables
+local c=1
+	foreach i in 1 0{
+		sum `v' if core_to_dod_1yr_n0==`i' [iweight=ps_weight]
+		mat t2[1,`c']=r(mean)*r(N) //n
+		mat t2[1,`c'+1]=r(mean)*100 //percent
+		local c = `c'+2
+	}
+	logit core_to_dod_1yr_n0 `v' [iweight=ps_weight] //p-values
+	test `v'
+	mat t2[1,5]=r(p)
+	
+	mat rownames t2=`v'
+	frmttable, statmat(t2) varlabels sdec(0,0,3\2,2,2) substat(1) store(t2m_1)
+	
+	outreg, replay(t2m_2) append(t2m_1) store(t2m_2)
+}
+
+foreach v in `cvars' { //continuous variables
+local c=1
+	foreach i in 1 0{
+		sum `v' if core_to_dod_1yr_n0==`i' [iweight=ps_weight]
+		mat t2[1,`c']=r(mean) //mean
+		mat t2[1,`c'+1]=r(sd) //sd
+		local c = `c'+2
+	}
+	logit core_to_dod_1yr_n0 `v' [iweight=ps_weight] //p-values
+	test `v'
+	mat t2[1,5]=r(p)
+	
+	mat rownames t2=`v'
+	frmttable, statmat(t2) varlabels sdec(0,0,3\0,0,0) substat(1) store(t2m_1)
+	
+	outreg, replay(t2m_2) append(t2m_1) store(t2m_2)
+}
+
+//last row, n for each group
+mat t2_n=J(1,2,.)
+tab core_to_dod_1yr_n0 if ps_weight~=., matcell(t2n)
+mat t2_n[1,1]=t2n[2,1]
+mat t2_n[1,2]=t2n[1,1]
+mat rownames t2_n="N"
+frmttable, statmat(t2_n) store(t2_n) sdec(0)
+
+outreg, replay(t2m_2) append(t2_n) store(t2m_3) 
+
+outreg using `logpath'/24_ps_matched_outcomes_`crit'_lee, replace replay(t2_3) merge(t2m_3) ///
+title("Lee matching: Criteria `crit' Utilization Outcomes, by 1 year Mortality" \ ///
+"Comparing unmatched and matched samples") ///
+ctitles("","Raw sample","","","Matched sample","","" \  ///
+"","Died 1 year","Alive 1 year","p-value","Died 1 year","Alive 1 year","p-value") ///
+note("Utilization for 6 months after interview" \ ///
+"Sample limited to survey respondents first interview that meet Criteria `crit':" \ ///
+`cdesc' \ ///
+"Matched sample is propensity score matched for risk of mortality at 1 year" \ ///
+"Medicare spending in 2010$, wage index adjusted." \ ///
+"P-values for continuous variables from t-test, for binary variables from chi-squared statistic")
+***************************************************************
+//multivariate analysis, ps-matched sample using glm model
+//2 versions, (1) excluding mortality on RHS, (2) including mortality
+gen relig_vimp_n0=1 if imprelig_n0==1
+replace relig_vimp_n0=0 if inlist(imprelig_n0,2,3,4)
+tab relig_vimp_n0 imprelig_n0, missing
+
+sum networth_adj2010_n0, detail
+replace networth_adj2010_n0=networth_adj2010_n0/10000
+
+//want to cluster at eol spending quintiles
+sum tot_eol_spending_hrr_n0 , detail
+sca sp_20=r(p20)
+sca sp_40=r(p40)
+sca sp_60=r(p60)
+sca sp_80=r(p80)
+xtile eol_spend_hrr_quint = tot_eol_spending_hrr_n0 , nquantiles(5)
+la var eol_spend_hrr_quint "EOL Spending at HRR Quintiles 1=low, 5=high"
+tab eol_spend_hrr_quint, missing
+bys eol_spend_hrr_quint : sum tot_eol_spending_hrr_n0
+
+local matchvars age_n0_ind2 age_n0_ind3 age_n0_ind4 age_n0_ind5 gender_n0 ///
+dm_hrs_n0 cancer_hrs_n0 lung_hrs_n0 chf_hrs_n0 bmi_lt25_n0 smoke_curr_n0  ///
+adl_diff_bh_n0 iadl_diff_m_n0 fl_diff_wk_many_n0 fl_diff_push_n0 
+
+local addvars nhres_n0 rel_nb_n0 relig_vimp_n0 medicaid_n0 champus_n0 ///
+medigap_n0 hospital_care_intensity_n0 hospital_beds_n0 specialists_n0
+
+la var networth_adj2010_n0 "Net worth /$10,000"
+la var smi_dem_ind_n0 "Dementia"
+la var smi_cancer_ind_n0 "Metastatic Cancer"
+la var smi_esrd_ind_n0 "End stage renal disease" 
+la var smi_chf_ind_n0 "CHF with hospitalization" 
+la var smi_copd_ind_n0 "COPD" 
+la var smi_diab_compl_ind_n0 "Diabetes with complications"
+la var smi_liver_ind_n0 "Advanced liver disease"
+la var smi_hip_ind_n0 "Hip fracture"
+la var relig_vimp_n0 "Religion very important"
+la var hospital_care_intensity_n0 "Hospital care intensity index, HRR"
+la var hospital_beds_n0 "Hospital beds/1000 residents, HRR"
+la var specialists_n0 "Specialists /100,000 residents, HRR"
+
+la var adl_stable_partial_n0n1 "ADL Stable, Partial Impairment"
+la var adl_stable_severe_n0n1 "ADL Stable, Severe Impairment"
+la var adl_change_i_m_n0n1 "ADL Independ to Partial Impair"
+la var adl_change_i_s_n0n1 "ADL Independ to Severe Impair"
+la var adl_change_m_s_n0n1 "ADL Partial to Severe Impair"
+
+la var core_to_dod_1yr_n0 "Died within 1 year of interview"
+
+***************************************************************
+//glm outcome=spending, excluding mortality
+glm tot_paid_by_mc_6m_wi_n0 `matchvars' `addvars' [iweight=ps_weight], ///
+	fam(gamma) link(log) vce(cluster eol_spend_hrr_quint)
+	
+glm, eform
+
+outreg , stats(e_b e_ci) store(tab3) varlabels ///
+title("Lee matching: Criteria `crit' 6 month utilization, GLM regression" \ ///
+"using sample propensity score matched on 1 year mortality" \ ///
+"Excluding mortality from RHS") ///
+ctitle("","Total Medicare spending") ///
+note("6 month Medicare spending for those R's that meet Criteria `crit'" \ ///
+"Generalized linear model. For Medicare Costs: gamma distribution and log link" \ ///
+"For hospital nights: Poisson distribution, log link" \ ///
+"Exponentiated coefficients (rate ratios) and 95% confidence intervals reported." \ ///
+"Robust standard errors are clustered by 2yr EOL MC Spending Quintiles")
+
+//glm outcome=hospital nights
+glm n_hospd_p6m_n0 `matchvars' `addvars' [iweight=ps_weight], ///
+	fam(poisson) link(log)  vce(cluster eol_spend_hrr_quint)
+outreg using `logpath'/24_ps_matched_outcomes_`crit'_lee, addtable varlabels ///
+stats(e_b e_ci) merge(tab3) ///
+ctitle("","Hospital nights")
+
+***************************************************************
+//glm outcome=spending, including mortality
+glm tot_paid_by_mc_6m_wi_n0 `matchvars' `addvars' core_to_dod_1yr_n0 [iweight=ps_weight], ///
+	fam(gamma) link(log) vce(cluster eol_spend_hrr_quint)
+	
+glm, eform
+
+outreg , stats(e_b e_ci) store(tab3) varlabels ///
+title("Lee Matching: Criteria `crit' 6 month utilization, GLM regression" \ ///
+"using sample propensity score matched on 1 year mortality" \ ///
+"Including mortality on RHS") ///
+ctitle("","Total Medicare spending") ///
+note("6 month Medicare spending for those R's that meet Criteria `crit'" \ ///
+"Generalized linear model. For Medicare Costs: gamma distribution and log link" \ ///
+"For hospital nights: Poisson distribution, log link" \ ///
+"Exponentiated coefficients (rate ratios) and 95% confidence intervals reported." \ ///
+"Robust standard errors are clustered by 2yr EOL MC Spending Quintiles")
+
+//glm outcome=hospital nights
+glm n_hospd_p6m_n0 `matchvars' `addvars' core_to_dod_1yr_n0 [iweight=ps_weight], ///
+	fam(poisson) link(log)  vce(cluster eol_spend_hrr_quint)
+outreg using `logpath'/24_ps_matched_outcomes_`crit'_lee, addtable varlabels ///
+stats(e_b e_ci) merge(tab3) ///
+ctitle("","Hospital nights")
+
+***************************************************************
+
 log close

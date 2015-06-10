@@ -2,9 +2,9 @@
 
 H="Serious illness cohort definition development"
 HRS variables are processed in file HRS_Processing.txt
-1998-2010 Core interviews
-2002-2010 Exit interviews
-Restricted data received in November 2013
+1998-2012 Core interviews
+2002-2012 Exit interviews
+Restricted data received in March 2015
 
 Note elixhauser comorbidities diagnosis lists are modified for the 
 purposes of this project, do not copy and paste this Elixhauser code 
@@ -16,14 +16,12 @@ for use in other projects!!
 libname hrs_fnl 'E:\data\hrs_cleaned';
 
 /*medicare xwalk and claims path*/
-libname medi 'E:\data\cms_DUA_25000_2010';
+libname medi 'E:\data\cms_DUA_24548_2012';
 
 /*project data paths*/
 libname sic_int 'E:\data\serious_ill\int_data';
 libname sic_fin 'E:\data\serious_ill\final_data';
 libname sic_ref 'E:\data\serious_ill\ref_data';
-
-%let logdir=%str(E:\data\serious_ill\logs);
 
 
 H="Initial core criteria"
@@ -63,7 +61,7 @@ restr(rename=(id=id2) drop=hhid pn) b
 on a.id=b.id2;
 quit;
 
-*5 obs have no match in the restricted dataset;
+*6 obs have no match in the restricted dataset;
 *These obs each only have 1 inteview, so can't use them anyway;
 proc freq data=core_dob; table restr_yes /missprint; run;
 
@@ -203,10 +201,14 @@ if zip10='' & first_ivw_year<=2010<=last_ivw_year then do;
 	zip_10_imp_yes=1;
 	zip10=zip08;
 	end;
+/*2012 12 observations missing, use 2010*/
+if zip12='' & first_ivw_year<=2012<=last_ivw_year then do;
+	zip_12_imp_yes=1;
+	zip12=ZIP10_2010;
+	end;
 run;
 
 ****************************************************************;
-
 *get clean state code variable by wave;
 data core_age_zip_state;
 set core_age_zip_2;
@@ -261,6 +263,12 @@ if stateusps10='' & first_ivw_year<=2010<=last_ivw_year then do;
 	st_10_imp_yes=1;
 	stateusps10=stateusps08;
 	end;
+/*2012 updates, use 2010 state
+no observations missing*/
+if stateusps12='' & first_ivw_year<=2012<=last_ivw_year then do;
+	st_12_imp_yes=1;
+	stateusps12=stateusps10;
+	end;
 run;
 
 proc sort data=core_age_zip_state; by id core_year; run;
@@ -286,7 +294,7 @@ proc freq data=sic_int.core_age_zip; table zip_wave state_wave  /missprint ; run
 proc freq; table zip_imputed state_imputed /missprint ; run;
 
 ****************************************************************;
-//bring in BMI from rand dataset
+/*bring in BMI from rand dataset*/
 libname rand 'E:\data\hrs_public_2012\rand2012\main';
 /*pull each wave bmi variable from rand xwave data file
 wave 5 = 2000
@@ -295,14 +303,14 @@ wave 6 = 2002 ... wave 10 = 2010
 options fmterr=no;
 data bmi_rand;
 set rand.rndhrs_n(keep=hhid pn R4BMI R5BMI R6BMI R7BMI R8BMI R9BMI R10BMI R11BMI);
-keep hhid pn R4BMI R5BMI R6BMI R7BMI R8BMI R9BMI R10BMI R11BMI;
+id = hhid||pn;
 run;
 
 %macro getBMI(w=,year=);
 
 data bmi_rand1_&w;
 set bmi_rand;
-keep hhid pn core_year R&w.BMI;
+keep id core_year R&w.BMI;
 core_year=&year;
 run;
 
@@ -323,21 +331,21 @@ rename R&w.BMI=BMI;
 data bmi_9812;
 set bmi_rand2_4 bmi_rand2_5 bmi_rand2_6 bmi_rand2_7 bmi_rand2_8 bmi_rand2_9 bmi_rand2_10 bmi_rand2_11;
 label BMI='Body Mass Index';
+label id='HRS ID';
 run;
 
 proc means; var BMI; run;
 
-proc sort nodupkey; by hhid pn core_year ; run;
+proc sort nodupkey; by id core_year ; run;
 
 /*merge into dataset by id,core year*/
 proc sql;
-create table sic_int.core_age_zip_bmi as select a.*,b.BMI from
+create table sic_int.core_age_zip_bmi as select a.*,b.BMI as BMI_rand from
 sic_int.core_age_zip a
 left join
 bmi_9812 b 
-on a.hhid=b.hhid & b.pn=b.pn & a.core_year=b.core_year;
+on a.id=b.id and a.core_year=b.core_year;
 quit;
-
 
 ****************************************************************;
 ods rtf body=" E:\data\serious_ill\logs\core_00_to_10_meet_criteria.rtf" ;
@@ -405,22 +413,6 @@ Final dataset is sic_int.core_age_zip_wi_da*/
 /******************************************************************/
 
 /******************************************************************/
-/* Pull in wage index, set up with wage_index_setup.txt code 
-in the general HRS processing directory*/
-/******************************************************************/
-/*bring in 2012 wage index file*/
-libname misc 'E:\data\Dartmouth_misc';
-
-data sic_int.wage_index;
-set misc.wage_index_2012;
-run;
-
-proc means;
-var wage_index_012;
-run;
-
-
-/******************************************************************/
 /* Link CBSA codes and zip codes from the WI file*/
 /******************************************************************/
 /*Bring in xwalk file between CBSA codes and zip codes
@@ -468,6 +460,20 @@ quit;
 /******************************************************************/
 /* Create dataset with cbsa, state, wage index and zip code */
 /******************************************************************/
+/******************************************************************/
+/* Pull in wage index, set up with wage_index_setup.txt code 
+in the general HRS processing directory*/
+/******************************************************************/
+/*bring in 2012 wage index file*/
+libname misc 'E:\data\Dartmouth_misc';
+
+data sic_int.wage_index;
+set misc.wage_index_2012;
+run;
+
+proc means;
+var wage_index_2012;
+run;
 
 /*for zip codes with no cbsa, wage index is left missing
 there are also many cbsas with missing wage index*/
@@ -505,7 +511,7 @@ zip_cbsa_wage_index2 b
 on a.zip_wave_n=b.zip_n;
 quit;
 
-/*n=60886 ivws are missing the wage index when matched just by zip*/
+/*n=76792 ivws are missing the wage index when matched just by zip*/
 data miss_wi;
 set core_age_zip_wi;
 if wage_index_2012 =.;
@@ -518,7 +524,10 @@ proc sort data=sic_int.wage_index out=wage_index3 nodupkey;
 by state_in_wage_index;
 run;
 
-proc freq data=wage_index3; table State; run;
+data wage_index4; set wage_index3; if state_in_wage_index~='';
+run;
+
+proc freq data=wage_index4; table ST; run;
 
 /*Merges in wage index if there's one for the state but was missing for the zip*/
 proc sql;
@@ -527,8 +536,8 @@ as select a.*,coalesce(a.wage_index_2012,b.wage_index_2012) as wage_index_2012_2
 from
 core_age_zip_wi a
 left join
-wage_index3 b
-on a.state_wave=b.State;
+wage_index4 b
+on a.state_wave=b.ST;
 quit;
 
 /*check for missing values*/
@@ -640,7 +649,7 @@ run;
 proc freq; table miss_hrr; run;
 
 /*who is missing the hrr - zip link??
-72% don't have valid zip code = 99999
+64% don't have valid zip code = 99999
 Rest have zip codes that aren't in the hrr-zip crosswalk file*/
 data zzzz_misshrr;
 set sic_int.core_age_zip_wi_da;
@@ -764,7 +773,7 @@ on a.id=b.id;
 quit;
 
 /*check for missing xwalk ids
-38934 of 130320 interviews are missing xwalk ids*/
+47839 of 157534 interviews are missing xwalk ids*/
 data check1;
 set core_xwalk ;
 if bid_hrs ='';
@@ -846,7 +855,7 @@ proc freq;
 table c_ivw_year;
 run;
 
-*2 obs have missing core year because no restricted data (no ivw date or dob);
+*8 obs have missing core year;
 proc freq data=core_mc_ids; table c_ivw_year /missprint; run;
 
 data core_year_test; set core_mc_ids; if c_ivw_year=.; run;
@@ -867,7 +876,7 @@ proc freq data=dn_core_y ;
 table c_ivw_year c_ivw_month age_at_core;
 run;
 
-/*16095 r's have at least 1 interview with a denominator file linked*/
+/*18127 r's have at least 1 interview with a denominator file linked*/
 proc sql;
 select count(distinct BID_hrs) from dn_core_y ;
 quit;
@@ -894,7 +903,7 @@ run;
 
 /*Check year prior to core interview to backfill for interview dates
 in the first half of the year (since doing 12 mo look back)*/
-/* 49041 have the -1 year dn file*/
+/* 62565 have the -1 year dn file*/
 proc sql;
 create table dn_core_y_bef as select
 a.BID_hrs,a.c_ivw_year ,
@@ -975,11 +984,16 @@ if length(hmo_6m)=6 then do;
 if index(hmo_6m,"000000") then hmo_d_6m=0;
 if index(hmo_6m,"000000")=0 then hmo_d_6m=1;
 end;
+
+if part_ab_12m=1 & hmo_d_12m=0 then ffs_yes_12m=1;
+if part_ab_12m=0 | hmo_d_12m=1 then ffs_yes_12m=0;
+if part_ab_6m=1 & hmo_d_6m=0 then ffs_yes_6m=1;
+if part_ab_6m=0 | hmo_d_6m=1 then ffs_yes_6m=0;
  
 run;
 
-/*12954 observations don't have full denominator data re insurance status
-either interview Before Jan 2001 (10945 ivws) or are missing year -1 dn file
+/*13875 observations don't have full denominator data re insurance status
+either interview Before Jan 2001 (11386 ivws) or are missing year -1 dn file
 */
 proc freq;
 table part_ab_12m hmo_d_12m part_ab_12m*age_at_core_n part_ab_6m hmo_d_6m;
@@ -988,6 +1002,13 @@ run;
 proc freq;
 table ffs_yes_12m ffs_yes_6m ;
 run; 
+
+data missdn;
+set all_insurance2;
+if ffs_yes_12m=.;
+run;
+
+proc freq; table c_ivw_year; run;
 
 /*bring indicators into full interview dataset*/
 proc sql;
@@ -1014,18 +1035,18 @@ on a.bid_hrs=b.bid_hrs and a.c_ivw_year=b.c_ivw_year;
 quit;
 
 /*why missing medicare status 12m?*/
-/*n=72559 age >66 at interview, so elgible for 1 year prior*/
+/*n=82780 age >66 at interview, so elgible for 1 year prior*/
 data age_ge_65;
 set zzz_core_xwalk_ins;
 if age_at_core>=66;
 run;
-*n=65920 have xwalk
-*n=20024 ivws are 2000 and earlier;
+*n=77131 have xwalk
+*n=20032 ivws are 2000 and earlier;
 proc freq;
 table xwalk_yes c_ivw_year /missprint;
 run;
-*n=47241
-of those, n=2213 that are missing status don't have the full 1
+*n=57717
+of those, n=674 that are missing status don't have the full 1
 year lookback;
 data age_ge_65_1;
 set age_ge_65;
@@ -1033,7 +1054,7 @@ if xwalk_yes =1 and c_ivw_year>2000;
 length_12m=length(buyin_12m);
 length_6m=length(buyin_6m);
 run;
-proc freq; table length_12m length_6m /missprint; run;
+proc freq; table length_12m length_6m c_ivw_year /missprint; run;
 
 data age_ge_65_2;
 set age_ge_65_1;
@@ -1043,6 +1064,7 @@ proc freq; table dn_year_ivw*dn_year_bef_civw /missprint; run;
 proc freq; table dn_year_ivw*dn_year_bef_civw /missprint; run;
 proc freq; table dn_year_ivw*c_ivw_year /missprint; run;
 
+*REVISE THIS****
 *2157 have no denominator link the year of the ivw;
 *of these 2157, n=2058 are interviews done in 2011, we don't have 2011 dn file;
 *n=56 gave dn year of ivw but not year before;
@@ -1055,7 +1077,7 @@ Save claims lists to project folder for use later */
 
 /*get a copy of the dataset with just ffs medicare ivws age 65+
 use this list to pull the claims lists
-n=32945 - just check claims for those that meet analysis criteria*/
+n=40481 - just check claims for those that meet analysis criteria*/
 data sic_int.core_xwalk_ins_ffs_only;
 set sic_int.core_xwalk_ins(keep=bid_hrs c_ivw_date c_ivw_year core_year part_ab_12m hmo_d_12m age_ge_65);
 if part_ab_12m=1 & hmo_d_12m=0 & age_ge_65=1;
@@ -1162,7 +1184,7 @@ run;
 %macro dm_drop(days_bef_core=);
 data sic_int.dm_meet_&days_bef_core.;
 set dm_meet_&days_bef_core.(keep=bid_hrs_21 core_year c_ivw_date admit_date BETOS01:BETOS13
-PDGNS_CD DGNS_CD1-DGNS_CD12 );
+PDGNS_CD DGNSCD01-DGNSCD12 );
 run;
 %mend dm_drop;
 
@@ -1186,7 +1208,7 @@ run;
 %macro pb_drop(days_bef_core=);
 data sic_int.pb_meet_&days_bef_core.;
 set pb_meet_&days_bef_core.(keep=bid_hrs_21 core_year c_ivw_date FROM_DT THRU_DT admit_date disch_date
- HCPSCD01-HCPSCD13 PDGNS_CD DGNS_CD1-DGNS_CD12 );
+ HCPSCD01-HCPSCD13 PDGNS_CD DGNSCD01-DGNSCD12 );
 run;
 %mend pb_drop;
 
@@ -1216,8 +1238,8 @@ run;
 /*Process carrier medicare claims to pull out dx codes
 Multiple lines per each BID*/
 data pb_last_&range2._dx(keep=bid_hrs_21 core_year diag);
-set sic_int.pb_meet_&days_bef_core.(keep=bid_hrs_21 core_year PDGNS_CD DGNS_CD1-DGNS_CD12 );
-array dx PDGNS_CD DGNS_CD1-DGNS_CD12;
+set sic_int.pb_meet_&days_bef_core.(keep=bid_hrs_21 core_year PDGNS_CD DGNSCD01-DGNSCD12 );
+array dx PDGNS_CD DGNSCD01-DGNSCD12;
 do over dx;
 diag=dx ;
 output;
@@ -1245,9 +1267,9 @@ run;
 
 /*Process medpar medicare claims to pull out dx codes
 Dataset being created: mp_last_&range2._dx2*/
-data mp_last_&range2._dx(keep=bid_hrs_19 core_year diag);
-set sic_int.mp_meet3_&days_bef_core.(keep=bid_hrs_21 core_year AD_DGNS DGNS_CD01-DGNS_CD25 );
-array dx AD_DGNS DGNS_CD01-DGNS_CD25 ;
+data mp_last_&range2._dx(keep=bid_hrs_21 core_year diag);
+set sic_int.mp_meet3_&days_bef_core.(keep=bid_hrs_21 core_year AD_DGNS  DGNS_CD01-DGNS_CD25 );
+array dx AD_DGNS  DGNS_CD01-DGNS_CD25 ;
 do over dx;
 diag=dx ;
 output;
@@ -1260,8 +1282,8 @@ run;
 /*Process dme medicare claims to pull out dx codes
 Dataset being created: dm_last_&range2._dx2*/
 data dm_last_&range2._dx(keep=bid_hrs_21 core_year diag);
-set sic_int.dm_meet_&days_bef_core.(keep=bid_hrs_21 core_year PDGNS_CD DGNS_CD1-DGNS_CD12 );
-array dx PDGNS_CD DGNS_CD1-DGNS_CD12 ;
+set sic_int.dm_meet_&days_bef_core.(keep=bid_hrs_21 core_year PDGNS_CD DGNSCD01-DGNSCD12 );
+array dx PDGNS_CD DGNSCD01-DGNSCD12 ;
 do over dx;
 diag=dx ;
 output;
@@ -1352,7 +1374,7 @@ set sic_int.dx_0_1yr;
 core_year_c=put(core_year,z4.);
 run;
 
-/*31794 of the 32718 w/ ffs mc interviews have at least 1 dx code 1 year preceeding the interview*/
+/*39024 ffs mc interviews have at least 1 dx code 1 year preceeding the interview*/
 proc sql;
 select count (distinct bid_hrs_21||core_year_c) from zzzdx_test;
 quit;
@@ -2494,7 +2516,7 @@ run;
 proc freq; table age_ge_65 hmo_d_12m part_ab_12m; run;
 
 proc sql;
-create table core_xwalk_charls_1(drop=BID_hrs_19 core_year2) as
+create table core_xwalk_charls_1(drop=BID_hrs_21 core_year2) as
 select a.*,b.*
 from core_xwalk_ins_ffs_only(drop=age_ge_65 c_ivw_date c_ivw_year hmo_d_12m part_ab_12m) a 
 left join
@@ -2764,7 +2786,7 @@ run;
 
 
 proc sql;
-create table bid_dx_0_&precore.(rename=(bid_hrs_19=bid)) as
+create table bid_dx_0_&precore.(rename=(bid_hrs_21=bid)) as
 select distinct bid_hrs_21,core_year,
 sum(CC_1_AMI) as CC_1_AMI,
 sum(CC_2_ALZH) as CC_2_ALZH,

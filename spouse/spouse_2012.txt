@@ -1329,6 +1329,7 @@ H="Create additional medicare use variables from claims"
 /*Variables required are:
 1. Number of IP, SNF and hospice days in last 2 years of life
 1a. Hospice initial enrollment date
+1b. Hospice home or inpatient
 2. Elixhauser comorbidities
 3. Chronic conditions
 */
@@ -1462,7 +1463,7 @@ run;
 %los(source=hs,days_bef_death=6m,days=(183));
 
 /**********************************************************/
-/*******Get hospice enrollment date                   *****/
+/*******Get hospice enrollment date       *****/
 /**********************************************************/
 /*start with list of claims last 6m of life, get earliest claim*/
 proc sort data=hs_meet_6m; 
@@ -1480,13 +1481,40 @@ set hs_enrol_1;
 days_enr_to_dod=death_date-admit_date;
 run;
 
-proc freq; table days_enr_to_dod;
+proc freq; table days_enr_to_dod ;
 run;
 
-data spo_int.hs_enrol_3(keep=bid_hrs_21 hs_enrol_dt);
+data spo_int.hs_enrol_3(keep=bid_hrs_21 hs_enrol_dt );
 set hs_enrol_2(rename=( admit_date = hs_enrol_dt));
 label hs_enrol_dt="Hospice enrollment date, from claims 6m pre death";
 run;
+/*****************************************************************/
+/*get hospice hospital based from last 1 year claims */
+/*****************************************************************/
+/*start with list of claims last 12m of life, get earliest claim*/
+proc sort data=hs_meet_12m; 
+by bid_hrs_21 admit_date; 
+run;
+
+/*type service 1=hospice,non-hospital based, 2=hospice,hospital based*/
+proc freq; table FAC_TYPE*TYPESRVC; run;
+
+data hs_type_1;
+set hs_meet_12m;
+by bid_hrs_21;
+if first.bid_hrs_21;
+if typesrvc=2 then hs_hospital_based_12m=1;
+if typesrvc=1 then hs_hospital_based_12m=0;
+run;
+
+proc freq; table hs_hospital_based_12m;
+run;
+
+data spo_int.hs_type_2(keep=bid_hrs_21 hs_hospital_based_12m);
+set hs_type_1;
+label hs_hospital_based_12m="Hospice,hospital based, from claims 12m pre death";
+run;
+
 
 /*****************************************************************/
 /*pull los and hospice enrollment date variables into main dataset*/
@@ -1512,10 +1540,17 @@ spo_int.hs_enrol_3 b
 on a.r_bid_hrs = b.bid_hrs_21;
 quit;
 
+proc sql;
+create table add_los1_1a as select a.*,b.hs_hospital_based_12m from
+add_los1_1 a
+left join
+spo_int.hs_type_2 b
+on a.r_bid_hrs = b.bid_hrs_21;
+quit;
 
 proc sql;
 create table add_los2 as select a.*, b.ip_los_24m from
-add_los1_1 a
+add_los1_1a a
 left join
 spo_int.ip24m b
 on a.r_bid_hrs = b.bid_hrs_21;
@@ -1557,7 +1592,7 @@ if r_part_ab_6m~=1 or r_hmo_d_6m~=0 then list=.;
 end;
 run;
 
-proc freq; table r_part_ab_6m*r_hmo_d_6m; run;
+proc freq; table r_part_ab_6m*r_hmo_d_6m hs_hospital_based_12m; run;
 
 proc means;
 var hs_los_24m ip_los_24m snf_los_24m hs_los_12m hs_los_6m;
@@ -2442,7 +2477,7 @@ run;
 
 %mend;
 
-/*run macro to get elixhauser comorbidities 12 months pre-surgery
+/*run macro to get elixhauser comorbidities 12 months pre-death
 resulting dataset is spo_int.elix_0d_n12m_2 which has r_bid_hrs to merge back to dataset*/
 %elixhauser(range1=0d, range2=n12m);
 
@@ -3212,64 +3247,14 @@ data hrs_add_wi;
 set spo_int.hrs_elix_cc_n12m_reg(drop=wage_index_2008);
 run;
 
-/*bring in 2010 wage index file*/
-proc import datafile="E:\data\hrs_oop_2010\ref_data\wage_index\wage_index_cbsa_2010.xls"
-out=spo_int.wage_index dbms=xls
-replace;
-run;
-
-/*RI and DC don't have overall state wage index so use average*/
-data wi_ri;
-set spo_int.wage_index;
-if index(trim(left(Area_Title)),", RI")>0;
+/*bring in 2012 wage index file*/
+libname da_ref "E:\data\Dartmouth_misc";
+data spo_int.wage_index;
+set da_ref.wage_index_2012;
 run;
 
 proc means;
-var wage_index;
-run;
-
-/*get DC average*/
-data wi_dc;
-set spo_int.wage_index;
-if index(trim(left(Area_Title)),", DC")>0;
-run;
-
-proc means;
-var wage_index;
-run;
-
-data wage_index2;
-set spo_int.wage_index;
-cbsa_n=cbsa_code+0;
-if trim(left(cbsa_code))~="";
-wage_index_2010=Wage_Index;
-if index(trim(left(Area_Title)),", RI")>0 then RI=1;
-if index(trim(left(Area_Title)),", DC")>0 then DC=1;
-*state 44=RI ,state 11=DC;
-if state_in_wage_index=44 then wage_index_2010=1.0783000; 
-if state_in_wage_index=11 then wage_index_2010= 1.0701250; 
-run;
-
-*Look at observations from Rhode Island;
-proc freq data=wage_index2(where=(ri=1));
-table Area_Title;
-run;
-
-%let var=ri;
-proc means data=wage_index2;
-class &var;
-var wage_index_2010;
-run;
-
-*Look at observations from DC;
-proc freq data=wage_index2(where=(DC=1));
-table Area_Title;
-run;
-
-%let var=DC;
-proc means data=wage_index2;
-class &var;
-var wage_index_2010;
+var wage_index_2012;
 run;
 
 /******************************************************************/
@@ -3284,7 +3269,6 @@ libname oop_ref "E:\data\hrs_oop_2010\ref_data";
 data zip_cb;
 set oop_ref.xtract(keep=zip5 cbsa state);
 zip_n=zip5+0;
-cbsa_n=cbsa+0;
 /*If zip code is not missing, add state code*/
 if zip_n~=.;
 state_n=state+0;
@@ -3293,14 +3277,8 @@ run;
 *Remove duplicate entries for zip5 and cbsa from xwalk file;
 *Goes from 399045 to 49289 rows;
 proc sort data=zip_cb out=zip_cb2 nodupkey;
-by zip_n cbsa_n;
+by zip_n cbsa;
 run;
-
-*Check to see zip codes in a cbsa code for Rochester, NY;
-proc sql;
-select zip5, cbsa from zip_cb2
-where cbsa_n in (40380);
-quit;
 
 /*note several zip codes have multiple cbsa*/
 /*create dataset with just one entry for each zip code
@@ -3310,12 +3288,6 @@ proc sort data=zip_cb2 out=cbsa_zip_final nodupkey;
 by zip_n;
 run;
 
-*Check to see zip codes in a cbsa code for Rochester, NY;
-proc sql;
-select zip_n, cbsa from cbsa_zip_final
-where cbsa_n in (40380);
-quit;
-
 /******************************************************************/
 /* Create dataset with cbsa, wage index and zip code */
 /******************************************************************/
@@ -3324,11 +3296,11 @@ quit;
 there are also many cbsas with missing wage index*/
 proc sql;
 create table zip_cbsa_wage_index as
-select a.*,b.wage_index_2010 from
+select a.*,b.wage_index_2012 from
 cbsa_zip_final a
 left join
-wage_index2 b
-on a.cbsa_n=b.cbsa_n;
+spo_int.wage_index b
+on a.cbsa=b.cbsa;
 quit;
 
 /*Check for and remove duplicates by zip, keep first entry*/
@@ -3336,7 +3308,7 @@ proc sort data=zip_cbsa_wage_index out=zip_cbsa_wage_index2 nodupkey;
 by zip_n;
 run;
 
-/* 7 zip codes without an associated cbsa */
+/* 9 zip codes without an associated cbsa */
 proc sql;
 select count(distinct zip_exit_n) from hrs_add_wi
 where zip_exit_n not in 
@@ -3348,57 +3320,61 @@ quit;
 /******************************************************************/
 proc sql;
 create table hrs_wage_index as
-select a.*,b.wage_index_2010,b.state_n from 
+select a.*,b.wage_index_2012,b.state_n from 
 hrs_add_wi a
 left join 
 zip_cbsa_wage_index2 b
 on a.zip_exit_n=b.zip_n;
 quit;
 
-/*3177 observations do not have wage id by cbsa-zip*/
+/*3830 observations do not have wage id by cbsa-zip*/
 proc sql; 
 select count(distinct r_id) from hrs_wage_index
-where wage_index_2010 is null ;
+where wage_index_2012 is null ;
 quit;
 
 /******************************************************************/
 /* Bring wage index into cost file by state if missing above*/
 /******************************************************************/
 /*Get dataset with one wage index per state*/
-proc sort data=wage_index2 out=wage_index3 nodupkey;
+proc sort data=spo_int.wage_index out=wage_index3 nodupkey;
 by state_in_wage_index;
 run;
 
-*Puerto Rico is missing state;
+data wage_index4;
+set wage_index3;
+if state_in_wage_index~='';
+run;
+
 proc freq; table state_in_wage_index; run;
 
 /*Merges in wage index if there's one for the state but was missing for the zip*/
 proc sql;
 create table spo_int.hrs_elix_cc_n12m_reg2 
-as select a.*,coalesce(a.wage_index_2010,b.wage_index_2010) as wage_index_20102
+as select a.*,coalesce(a.wage_index_2012,b.wage_index_2012) as wage_index_2012_2
 from
 hrs_wage_index a
 left join
-wage_index3 b
+wage_index4 b
 on a.state_n=b.state_in_wage_index;
 quit;
 
 /*check for missing values*/
 proc means;
-var wage_index_2010 wage_index_20102;
+var wage_index_2012 wage_index_2012_2;
 run;
 
-/*50 obs have missing state so can't backfill using state wage index*/
+/*57 obs have missing state so can't backfill using state wage index*/
 proc sql;
 select distinct state_n ,count(*) from spo_int.hrs_elix_cc_n12m_reg2 
-where wage_index_20102=. group by state_n;
+where wage_index_2012_2=. group by state_n;
 quit;
 
 /*who is missing wage index?
 most don't have valid zip codes*/
 data miss_wi;
 set spo_int.hrs_elix_cc_n12m_reg2;
-if wage_index_20102=.;
+if wage_index_2012_2=.;
 run;
 
 proc freq; table state_n zip_exit_n;

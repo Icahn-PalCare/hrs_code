@@ -73,7 +73,7 @@ run;
 data core_age_1;
 set core_dob;
 format death_date date9.;
-age_at_core=(c_ivw_date-birth_date)/365.25;
+age_at_core=floor((c_ivw_date-birth_date)/365.25);
 label age_at_core="Age at core interview";
 if age_at_core>=65 then age_ge_65=1;
 if age_at_core<65 then age_ge_65=0;
@@ -92,7 +92,7 @@ label core_to_dod_6m="Died within 6 months of core interview";
 run;
 
 proc freq data=core_age_1;
-table age_ge_65 core_to_dod_1yr*core_to_dod_6m /missprint;
+table age_at_core*age_ge_65 core_to_dod_1yr*core_to_dod_6m /missprint;
 run;
 
 
@@ -643,7 +643,7 @@ data sic_int.core_age_zip_wi_da;
 set hrs_add_da ;
 miss_hrr=0;
 if hrr_number=. then miss_hrr=1;
-label miss_hrr = "Missing HRR - zip link"
+label miss_hrr = "Missing HRR - zip link";
 run;
 
 proc freq; table miss_hrr; run;
@@ -787,8 +787,10 @@ if bid_hrs ='' then xwalk_yes=0;
 if bid_hrs~='' then xwalk_yes=1;
 run;
 
+/*most that are missing are <65 years old*/
 proc freq;
 table xwalk_yes*core_year /missprint;
+table age_at_core*xwalk_yes; 
 run;
 
 /*export this dataset to Stata for a check of the demo differences
@@ -892,13 +894,9 @@ buyin_dy=trim(left(buyin12));
 hmo_dy=trim(left(HMOIND12));
 end;
 format c_ivw_date date9.;
-age_at_core_n=floor(age_at_core);
 run;
 proc means n;
 var  c_ivw_month;
-run;
-proc freq;
-table age_at_core_n;
 run;
 
 /*Check year prior to core interview to backfill for interview dates
@@ -996,7 +994,7 @@ run;
 either interview Before Jan 2001 (11386 ivws) or are missing year -1 dn file
 */
 proc freq;
-table part_ab_12m hmo_d_12m part_ab_12m*age_at_core_n part_ab_6m hmo_d_6m;
+table part_ab_12m hmo_d_12m part_ab_12m*age_at_core part_ab_6m hmo_d_6m;
 run;
 
 proc freq;
@@ -1024,50 +1022,29 @@ table age_ge_65*part_ab_12m age_ge_65*part_ab_6m /missprint;
 run;
 
 /*look into missing medicare status 12m preceding the interview*/
-proc sql;
-create table zzz_core_xwalk_ins as select a.*,b.part_ab_12m,b.hmo_d_12m,
-	b.part_ab_6m,b.hmo_d_6m,b.buyin_12m,b.buyin_6m,b.year as dn_year_ivw,
-	b.year_bef_civw as dn_year_bef_civw
- from
-sic_int.core_xwalk_2 a left join
-all_insurance2 b
-on a.bid_hrs=b.bid_hrs and a.c_ivw_year=b.c_ivw_year;
-quit;
+/*94905 missing insurance info for 12m lookback from ivw*/
+data miss_ins1;
+set sic_int.core_xwalk_ins;
+if part_ab_12m=.;
+run;
 
-/*why missing medicare status 12m?*/
-/*n=82780 age >66 at interview, so elgible for 1 year prior*/
-data age_ge_65;
-set zzz_core_xwalk_ins;
-if age_at_core>=66;
-run;
-*n=77131 have xwalk
-*n=20032 ivws are 2000 and earlier;
-proc freq;
-table xwalk_yes c_ivw_year /missprint;
-run;
-*n=57717
-of those, n=674 that are missing status don't have the full 1
-year lookback;
-data age_ge_65_1;
-set age_ge_65;
-if xwalk_yes =1 and c_ivw_year>2000;
-length_12m=length(buyin_12m);
-length_6m=length(buyin_6m);
-run;
-proc freq; table length_12m length_6m c_ivw_year /missprint; run;
+proc freq; table xwalk_yes; run;
+*47839 don't have xwalk;
 
-data age_ge_65_2;
-set age_ge_65_1;
-if length_12m~=12;
+data miss_ins2;
+set miss_ins1;
+if xwalk_yes=0;
 run;
-proc freq; table dn_year_ivw*dn_year_bef_civw /missprint; run;
-proc freq; table dn_year_ivw*dn_year_bef_civw /missprint; run;
-proc freq; table dn_year_ivw*c_ivw_year /missprint; run;
 
-*REVISE THIS****
-*2157 have no denominator link the year of the ivw;
-*of these 2157, n=2058 are interviews done in 2011, we don't have 2011 dn file;
-*n=56 gave dn year of ivw but not year before;
+*of remaining 47066 with xwalk, why missing? most explained by interiew timing and age;
+*6776 (3346+233+3197) have core 2000 or earlier;
+*1147 had 2013 interviews;
+*35332 (41385-951-3027-210-2816) are < 65 at the interview;
+proc freq; table c_ivw_year*age_ge_65; run;
+
+
+
+
 
 H="Step 2 - Get claims"
 /*Get claims 1 year and 2 year before each core interview*/
@@ -2644,6 +2621,7 @@ run;
 /****************************************************************************/
 /****************************************************************************/
 
+capture log close
 clear
 set more off
 local datapath E:\data\serious_ill\int_data
@@ -4435,7 +4413,7 @@ mat sample_set[6,1]=r(N)
 
 //check if have wage index merged in (FFS 1 year)
 sum core_year if inlist(core_year,2000,2002,2004,2006,2008,2010) & age_ge_65==1 & xwalk_yes==1 & ///
-part_ab_12m==1 & hmo_d_12m==0 & wage_index_20102!=.
+part_ab_12m==1 & hmo_d_12m==0 & wage_index_2012_2!=.
 mat sample_set[7,1]=r(N)
 
 mat rownames sample_set="Core interviews 1998-2012" "Core Interviews 2000-2010" "Age 65+" ///
@@ -4742,7 +4720,7 @@ run;
 proc freq; table core_to_death_mos; run;
 
 proc sort data=medi.dn_2000_2012 out=dn_2000_20122  nodupkey;
-by BID_HRS_19 year;
+by BID_HRS_21 year;
 run;
 
 /*get medicare and hmo status variables from the dn file
@@ -4760,7 +4738,7 @@ proc freq data=dn_core_y ;
 table c_ivw_year c_ivw_month ;
 run;
 
-/*10882 r's have at least 1 interview with a denominator file linked*/
+/*11982 r's have at least 1 interview with a denominator file linked*/
 proc sql;
 select count(distinct BID_hrs) from dn_core_y ;
 quit;
@@ -4785,7 +4763,7 @@ var  c_ivw_month;
 run;
 
 /*Get info for year after interview to fill in remainder of the 12m period*/
-/*n=27613 have +1 year dn file*/
+/*n=34320 have +1 year dn file*/
 proc sql;
 create table dn_core_y_aft as select
 a.BID_hrs,a.c_ivw_year ,
@@ -4900,10 +4878,10 @@ if age_ge_65=1 & xwalk_yes=1 & part_ab_12m=1 and hmo_d_12m=0
 & core_year in (2000,2002,2004,2006,2008,2010,2012);
 run;
 
-/*of n=32718 that meet sample selection criteria year preceding ivw 
-n= 26627 (81.3%) also meet it 1 year after the interview
+/*of n=40481 that meet sample selection criteria year preceding ivw 
+n= 33812 (83.5%) also meet it 1 year after the interview
 
-Many of these are bc they are 2010 interviews that don't have the 2011 denominator
+Many of these are bc they are 2012 interviews that don't have the 2013 denominator
 file to follow up with, they also won't have a full set of claims 1 year
 after the interview*/
 
@@ -4976,7 +4954,7 @@ Pull list of any claims with admission date within 1 year of the interview*/
 proc sql;
 create table sic_int.&source._meet_post_&days_after_core. as select 
 a.*,b.c_ivw_date,b.core_year
-from medi.&source._2000_2012(keep=admit_date BID_hrs_19 pmt_amt) a inner join
+from medi.&source._2000_2012(keep=admit_date BID_hrs_21 pmt_amt) a inner join
 age_ge_65_mc_ltd b
 on trim(left(a.bid_hrs_21))=trim(left(b.bid_hrs))
 and &days_start<=a.admit_date-b.c_ivw_date<=&days_after_core;
@@ -5555,6 +5533,7 @@ data mc_costs_all_wi_2;
 set mc_costs_all_wi_2;
 &source._paid_by_mc_12m_wi = &source._paid_by_mc_12m / wage_index_2012_2;
 &source._paid_by_mc_6m_wi = &source._paid_by_mc_6m / wage_index_2012_2;
+run;
 %mend;
 
 %wage_ind(source=ip);
@@ -5919,7 +5898,7 @@ end;
 rename Hospital_care_intensity_index__s=hospital_care_intensity;
 run;
 
-/*should be 5158 and 2901 and 1333*/
+/*should be 5813 and 3497 and 1649*/
 proc freq;
 table ivw_meet_crit_a ivw_meet_crit_b ivw_meet_crit_c;
 run;
@@ -6251,7 +6230,7 @@ title "Core interview years for those R's that never meet Criteria A B or C";
 proc freq; table core_year; run;
 
 /*get number of interviews per R
-n=5877 R's that never meet criteria with at least 1 core interview, ffs mc 1 year before that ivw*/
+n=6169 R's that never meet criteria with at least 1 core interview, ffs mc 1 year before that ivw*/
 proc sql;
 create table do_not_meet_2 as select distinct id,
 count(*) as ivw_count 
@@ -6259,7 +6238,7 @@ from do_not_meet group by id;
 quit;
 
 /*range from having 1-6 core interviews in the dataset*/
-title"Number of core interviews, n=5877 R's that never meet criteria";
+title"Number of core interviews, n=6169 R's that never meet criteria";
 proc freq; table ivw_count; run;
 
 /*what are the last core years we have represented for this group?*/
@@ -6346,13 +6325,13 @@ interviews after have p1, p2 suffix */
 data core_to_use;
 set sic_int.ivws_crit_1(drop=birth_date death_date white black hisp_eth native_amer 
 asian_pi other_race other_na_api_race wage_index_2012
-zip_0: zip_10: zip_98: first_ivw_year last_ivw_year restr_yes dod_claims cause_death_12_n);
+zip_0: zip_10: zip_12: zip_98: first_ivw_year last_ivw_year restr_yes dod_claims cause_death_12_n);
 run;
 
 data core_all_drop;
 set sic_int.core_ids_1yr_criteria_6(drop=birth_date death_date white black hisp_eth native_amer 
 asian_pi other_race other_na_api_race wage_index_2012 
-zip_0: zip_10: zip_98: first_ivw_year last_ivw_year restr_yes dod_claims cause_death_12_n);
+zip_0: zip_10: zip_12: zip_98: first_ivw_year last_ivw_year restr_yes dod_claims cause_death_12_n);
 rename Hospital_care_intensity_index__s=hospital_care_intensity;
 run;
 
@@ -6366,7 +6345,7 @@ if ivw_meet_crit_&crit.=1;
 run;
 
 data TEST;
-set n0_&crit._1(drop=zip_0: zip_10: zip_98:);
+set n0_&crit._1(drop=zip_0: zip_10: zip_12: zip_98:);
 run;
 
 *add _n0 suffix for interview variables for year that first meets criteria;
@@ -6380,7 +6359,7 @@ run;
 
 ****************************************************************;
 *get n1 interview, interiew prior to meeting criteria*;
-*list of 4585 core interviews with ffs medicare 1 year prior before meeting the criteria*;
+*list of 6786 core interviews with ffs medicare 1 year prior before meeting the criteria*;
 proc sql;
 create table all_ivw_bef_meet_&crit.
 as select b.*
@@ -6395,7 +6374,7 @@ by id c_ivw_date;
 run;
 
 *keep only the n1 core interview;
-*2375 interviews identified that have ffs medicare 1 year prior to n1 interview;
+*3000 interviews identified that have ffs medicare 1 year prior to n1 interview;
 data core_n1_&crit.;
 set all_ivw_bef_meet_&crit.;
 by id c_ivw_date;
@@ -6417,7 +6396,7 @@ core_all_drop b
   on a.id=b.id and a.c_ivw_date_n0>b.c_ivw_date;
   quit;
 
-*6555 of the ivws are not in the list that already have the n1 ivw;
+*7158 of the ivws are not in the list that already have the n1 ivw;
 proc sql;
 create table noffsreq_ivw_bef_meet_&crit._1 as select * from
 noffsreq_ivw_bef_meet_&crit.
@@ -6429,14 +6408,14 @@ by id c_ivw_date;
 run;
 
 *keep only the n1 core interview;
-*2681 interviews identified;
+*2723 interviews identified;
 data noffsreq_core_n1_&crit.;
 set noffsreq_ivw_bef_meet_&crit._1;
 by id c_ivw_date;
 if last.id;
 run;
 
-*append to get full list of 5056 n1 interviews;
+*append to get full list of 5723 n1 interviews;
 data core_n1_&crit._1;
 set core_n1_&crit. noffsreq_core_n1_&crit.;
 run;
@@ -6474,7 +6453,7 @@ by id c_ivw_date;
 run;
 
 *keep only the p1 core interview;
-*3149 interviews identified;
+*3681 interviews identified;
 data core_p1_&crit.;
 set all_ivw_aft_meet_&crit.;
 by id c_ivw_date;
@@ -6496,7 +6475,7 @@ core_all_drop b
   on a.id=b.id and a.c_ivw_date_n0<b.c_ivw_date;
   quit;
 
-*500 of the ivws are not in the list that already have the p1 ivw;
+*413 of the ivws are not in the list that already have the p1 ivw;
 proc sql;
 create table noffsreq_ivw_aft_meet_&crit._1 as select * from
 noffsreq_ivw_aft_meet_&crit.
@@ -6508,14 +6487,14 @@ by id c_ivw_date;
 run;
 
 *keep only the p1 core interview;
-*347 interviews identified;
+*225 interviews identified;
 data noffsreq_core_p1_&crit.;
 set noffsreq_ivw_aft_meet_&crit._1;
 by id c_ivw_date;
 if first.id;
 run;
 
-*append to get full list of 3496 p1 interviews;
+*append to get full list of 3906 p1 interviews;
 data core_p1_&crit._1;
 set core_p1_&crit. noffsreq_core_p1_&crit.;
 run;
@@ -6554,7 +6533,7 @@ by id c_ivw_date;
 run;
 
 *keep only the p2 core interview;
-*1729 interviews identified;
+*2078 interviews identified;
 data core_p2_&crit.;
 set all2_ivw_aft_meet_&crit.;
 by id c_ivw_date;
@@ -6645,7 +6624,7 @@ table core_year_n1 core_year_n0 core_year_p1 core_year_p2;
 run;
 
 proc freq data=sic_fin.n0_n1_p1_p2_criteria_smi;
-table core_year_n3 core_year_n2 core_year_n1 core_year_n0 core_year_p1 core_year_p2;
+table core_year_n1 core_year_n0 core_year_p1 core_year_p2;
 run;
 
 
@@ -6670,49 +6649,49 @@ run;
 *************************************************************;
 data no_p1_core_1;
 set sic_fin.n0_n1_p1_p2_criteria_a;
-if core_year_p1=. & core_year_n0<2010;
+if core_year_p1=. & core_year_n0<2012;
 if core_to_death_n0<=2 then core_to_dod_2yr_n0=1;
 else core_to_dod_2yr_n0=0;
 run;
 
-/*43% died within 1 year of meeting criteria interview*/
+/*46% died within 1 year of meeting criteria interview*/
 proc freq;
 table core_year_n0 first_ivw_year_n0 core_to_dod_1yr_n0 core_to_dod_2yr_n0;
 run;
 
-/*look at those that didn't die within 2 years n=104*/
+/*look at those that didn't die within 2 years n=112*/
 data no_p1_core_2;
 set no_p1_core_1;
 if core_to_dod_2yr_n0=0;
 run;
 
-/*n=71 died within 2.5 years, can't be sure about remaining
+/*n=70 died within 2.5 years, can't be sure about remaining
 next thing to do is to check exit interviews*/
 proc freq; table core_to_death_n0 core_to_death_n0*core_year_n0 ; run;
 
-/*why missing insurance status of 165 obs in p1 interview for criteria a dataset?
-All interviewed in 2011 for p1, we don't have denominator file that year*/
+/*why missing insurance status of 47 obs in p1 interview for criteria a dataset?
+All interviewed in 2013 for p1, we don't have denominator file that year*/
 data miss_ins_a_1;
 set noffsreq_core_p1_a;
 if part_ab_12m=.;
 run;
 
 proc freq;
-table  core_year;
+table  core_year c_ivw_year;
 run;
 
 
 
-H="Step 10a - Get 2008 interview dataset set up"
-/*Creates additional dataset that is 2008 core interviews, with
+H="Step 10a - Get 2010 interview dataset set up"
+/*Creates additional dataset that is 2010 core interviews, with
 
 Dataset saved as:
-sic_fin.n0_n1_p1_p2_criteria_2008
+sic_fin.n0_n1_p1_p2_criteria_2010
 
 Contain the following interviews as denoted by variable suffix:
-_n0 - 2008
-_n1 - interview prior to 2008
-_p1 - 2010 interview
+_n0 - 2010
+_n1 - interview prior to 2010
+_p1 - 2012 interview
 */
 
 *****************************************************;
@@ -6764,27 +6743,27 @@ interviews after have p1, p2 suffix */
 *these are variables from the restricted dataset;
 data core_to_use;
 set sic_int.ivws_crit_1(drop=birth_date death_date white black hisp_eth native_amer 
-asian_pi other_race other_na_api_race wage_index_2010
-zip_0: zip_10: zip_98: first_ivw_year last_ivw_year restr_yes dod_claims cause_death_12_n);
+asian_pi other_race other_na_api_race wage_index_2012
+zip_0: zip_10: zip_12: zip_98: first_ivw_year last_ivw_year restr_yes dod_claims cause_death_12_n);
 run;
 
 data core_all_drop;
 set sic_int.core_ids_1yr_criteria_6(drop=birth_date death_date white black hisp_eth native_amer 
-asian_pi other_race other_na_api_race wage_index_2010 
-zip_0: zip_10: zip_98: first_ivw_year last_ivw_year restr_yes dod_claims cause_death_12_n);
+asian_pi other_race other_na_api_race wage_index_2012 
+zip_0: zip_10: zip_12: zip_98: first_ivw_year last_ivw_year restr_yes dod_claims cause_death_12_n);
 rename Hospital_care_intensity_index__s=hospital_care_intensity;
 run;
 
-*get ids, 2008 core interviews, n=6494;
-data n0_2008_1;
+*get ids, 2010 core interviews, n=6494;
+data n0_2010_1;
 set sic_int.ivws_crit_1;
-if core_year=2008;
+if core_year=2010;
 run;
 
 %macro ds_restr(crit=);
 
 data TEST;
-set n0_&crit._1(drop=zip_0: zip_10: zip_98:);
+set n0_&crit._1(drop=zip_0: zip_10: zip_12: zip_98:);
 run;
 
 *add _n0 suffix for interview variables for year that first meets criteria;
@@ -7002,21 +6981,21 @@ run;
 
 %mend ds_restr;
 
-%ds_restr(crit=2008);
+%ds_restr(crit=2010);
 
-proc freq data=sic_fin.n0_n1_p1_p2_criteria_2008;
+proc freq data=sic_fin.n0_n1_p1_p2_criteria_2010;
 table core_year_n1 core_year_n0 core_year_p1 ;
 run;
 
 *************************************************************;
 ** Looking at who has missing n1 core interviews  ***********;
 *************************************************************;
-proc freq data=sic_fin.n0_n1_p1_p2_criteria_2008;
+proc freq data=sic_fin.n0_n1_p1_p2_criteria_2010;
 table part_ab_12m_n1*hmo_d_12m_n1 part_ab_6m_n1*hmo_d_6m_n1 /missprint;
 run;
 
 data no_n1_core_1;
-set sic_fin.n0_n1_p1_p2_criteria_2008;
+set sic_fin.n0_n1_p1_p2_criteria_2010;
 if core_year_n1=.;
 run;
 
@@ -7028,8 +7007,8 @@ run;
 ** Looking at who has missing p1 core interviews  ***********;
 *************************************************************;
 data no_p1_core_1;
-set sic_fin.n0_n1_p1_p2_criteria_2008;
-if core_year_p1=. & core_year_n0<2010;
+set sic_fin.n0_n1_p1_p2_criteria_2010;
+if core_year_p1=. & core_year_n0<2012;
 if core_to_death_n0<=2 then core_to_dod_2yr_n0=1;
 else core_to_dod_2yr_n0=0;
 run;
@@ -7049,9 +7028,9 @@ run;
 proc freq; table core_to_death_n0 core_to_death_n0*core_year_n0 ; run;
 
 /*why missing insurance status of 1165 obs in p1 interview for criteria a dataset?
-All interviewed in 2011 for p1, we don't have denominator file that year*/
-data miss_ins_2008_1;
-set noffsreq_core_p1_2008;
+All interviewed in 2013 for p1, we don't have denominator file that year*/
+data miss_ins_2010_1;
+set noffsreq_core_p1_2010;
 if part_ab_12m=.;
 run;
 
@@ -7161,7 +7140,7 @@ Data cleaning, create new variables
 Code can be run on either criteria a, b or c datasets, comments indicate
 sections to be modified when switching between them
 
-When run this on the 2008 dataset, need to comment out sections relating to the
+When run this on the 2010 dataset, need to comment out sections relating to the
 p2 interview since it isn't included in this dataset
 
 4/2/15 - Added cleaning step for the dataset based on Medical Illness Only
@@ -7176,7 +7155,7 @@ local crit smi
 //local crit a
 //local crit b
 //local crit c
-//local crit 2008
+//local crit 2010
 
 local logpath E:\data\serious_ill\logs
 local datapath E:\data\serious_ill\final_data

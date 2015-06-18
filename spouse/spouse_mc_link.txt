@@ -2,22 +2,23 @@
 
 H="Spouse with Medicare linkage"
 Starts with dataset created for the spousal depression outcomes project
-created in the file spouse_2010.txt
-This ds is created in the "Create additional variables" tab of spouse_2010.txt
+created in the file spouse_2012.txt
+This ds is created in the "Create additional variables" tab of spouse_2012.txt
 
 This has the Spouse Medicare xwalk id already linked in (s_bid_hrs and s_xwalk_yes)
 
 But now this code adds variables derived from the spouse claims
 
-/*data from spouse_2010.txt code - starting point for this work*/
+/*data from spouse_2012.txt code - starting point for this work*/
 libname spo_fnl 'E:\data\spouse\final_data';
 
 /*data for this project with spouse medicare variables added in*/
 libname spo_mc_i 'E:\data\spouse_claims\data\int_data';
 libname spo_mc_f 'E:\data\spouse_claims\data\final_data';
 
-/*2000-2010 medicare claims*/
-libname medi 'E:\data\cms_DUA_25000_2010';
+/*2000-2012 medicare claims*/
+libname medi 'E:\data\cms_DUA_24548_2012';
+
 
 H="FFS determination for spouse"
 /*determine Spouse ffs medicare before R's death using the 
@@ -28,9 +29,10 @@ Several sets of variables created, looking back 6m, 12m, 18m, 24m from R's death
 Also pulls in spouse date of death where available in the claims s_claims_dod*/
 
 /*sort claims denominator file*/
-proc sort data=medi.dn_2000_2010 out=dn_2000_20102  nodupkey;
-by BID_HRS_19 year;
+proc sort data=medi.dn_2000_2012 out=dn_2000_20122  nodupkey;
+by BID_HRS_21 year;
 run;
+proc freq; table year; run;
 
 /*assign death year using merged dataset with all r and s info
 drop variables not needed for finding insurance status
@@ -57,10 +59,10 @@ run;
 
 proc freq; table r_death_month r_death_year r_dod_missing_yes r_dod_use_claims; run;
 
-*keep a version with only those with dod;
+*keep a version with only those with dod and dod 2000-2012 to match claims dates;
 data r_sp2;
 set r_sp;
-if r_dod_missing_yes=0;
+if r_dod_missing_yes=0 & 2000<=r_death_year<=2012;
 run;
 
 proc sort data=r_sp2 nodupkey; by r_id; run;
@@ -71,8 +73,8 @@ proc sql;
 create table s_dn_death_y as select
 a.*,b.buyin12,b.year,b.HMOIND12
 from r_sp2 a inner join
-dn_2000_20102 b
-on trim(left(a.s_bid_hrs))=trim(left(b.BID_hrs_19))
+dn_2000_20122 b
+on trim(left(a.s_bid_hrs))=trim(left(b.BID_hrs_21))
 and a.r_death_year=b.year;
 quit;
 
@@ -83,15 +85,15 @@ run;
 /*who is missing denominator file??*/
 proc sql;
 create table s_missing_dn as select * from r_sp2 where s_bid_hrs
-not in (select BID_hrs_19 from dn_2000_20102); 
+not in (select BID_hrs_21 from dn_2000_20122); 
 quit;
 
 proc sql;
 create table s_missing_dn_2 as select
 a.*,b.buyin12,b.year,b.HMOIND12
 from r_sp2 a left join
-dn_2000_20102 b
-on trim(left(a.s_bid_hrs))=trim(left(b.BID_hrs_19))
+dn_2000_20122 b
+on trim(left(a.s_bid_hrs))=trim(left(b.BID_hrs_21))
 and a.r_death_year=b.year;
 quit;
 
@@ -108,10 +110,10 @@ set s_missing_dn_3;
 if dn_missing=1;
 run;
 
-/*144 of the 245 missing denominator file are <65 when R dies*/
+/*193 of the 297 missing denominator file are <65 when R dies*/
 proc freq; table r_death_year s_age; run;
 
-/*1932 spouses have denominator file linked year of R's death
+/*2349 spouses have denominator file linked year of R's death
 cases where spouse remarried after first r's death, and then in sample when 2nd r dies*/
 proc sql;
 select count(distinct s_bid_hrs) from s_dn_death_y;
@@ -137,28 +139,28 @@ run;
 
 /*Check year prior to death to backfill for death dates
 in the first half of the year (since doing 6 mo look back)*/
-/* 1772 have the -1 year dn file*/
+/* 2176 have the -1 year dn file*/
 proc sql;
 create table s_dn_death_y_bef as select
 a.r_bid_hrs,a.s_bid_hrs,a.year as death_year,
 b.year as death_year_bef,
 b.year,b.buyin12,b.HMOIND12
 from s_dn_death_y a inner join
-dn_2000_20102 b
-on trim(left(a.s_bid_hrs))=trim(left(b.BID_hrs_19))
+dn_2000_20122 b
+on trim(left(a.s_bid_hrs))=trim(left(b.BID_hrs_21))
 and 0<a.year-b.year<=1 order by s_bid_hrs,year;
 quit;
 
 
-/* and the year before... 1537 have the -2 year dn file*/
+/* and the year before... 1922 have the -2 year dn file*/
 proc sql;
 create table s_dn_death_y_2bef as select
 a.r_bid_hrs,a.s_bid_hrs,a.death_year,a.death_year_bef,
 b.year as death_year_2bef,
 b.year,b.buyin12,b.HMOIND12
 from s_dn_death_y_bef a inner join
-dn_2000_20102 b
-on trim(left(a.s_bid_hrs))=trim(left(b.BID_hrs_19))
+dn_2000_20122 b
+on trim(left(a.s_bid_hrs))=trim(left(b.BID_hrs_21))
 and 0<a.death_year_bef-b.year<=1 order by s_bid_hrs,year;
 quit;
 
@@ -285,7 +287,7 @@ label hmo_d_24m = "S HMO 24m pre R's death";
 
 run;
 
-/*36 observations don't have full denominator data re insurance status
+/*46 observations don't have full denominator data re insurance status
 either died Before July 2000 or are missing year -1 dn file*/
 proc freq;
 table part_ab_6m*hmo_d_6m part_ab_12m*hmo_d_12m part_ab_18m*hmo_d_18m part_ab_24m*hmo_d_24m;
@@ -300,9 +302,9 @@ run;
 /******************************************************************/
 /*keep just the last entry in the dn file, if died, this will have dod*/
 data s_dod_1;
-set dn_2000_20102;
-by bid_hrs_19;
-if last.bid_hrs_19;
+set dn_2000_20122;
+by bid_hrs_21;
+if last.bid_hrs_21;
 run;
 
 /*keep just list of those S's with xwalk id, and R with DOD*/
@@ -311,8 +313,8 @@ create table s_dod_2 as select a.s_bid_hrs,a.r_id,b.BENE_DOB as s_claims_dob,
 b.DEATH_DT as s_claims_dod from
 r_sp2 a left join
 s_dod_1 b
-on a.s_bid_hrs=b.bid_hrs_19;
-run;
+on a.s_bid_hrs=b.bid_hrs_21;
+quit;
 
 data s_dod_3;
 set s_dod_2;
@@ -373,7 +375,6 @@ Requires both R and S to have FFS MC 6m prior to R's death*/
 capture log close
 
 clear all
-set mem 500m
 set more off
 
 //Amy's PC
@@ -388,12 +389,12 @@ use r_sp_ins.dta
 //set matrix for sample size determination table
 mat deced_core=J(8,1,.)
 
-//all decedents from 2002-2010 exit interviews
+//all decedents from 2002-2012 exit interviews
 sum r_exit_year_x, detail
 mat deced_core[1,1]=r(N)
 
-//check of married decedents
-tab r_married_x, missing
+//check of married or partnered decedents
+tab r_married_x r_married_or_part_v2_x , missing
 
 gen n1core_ind=.
 replace n1core_ind=0 if  r_core_year_n1==.
@@ -416,11 +417,11 @@ sum r_exit_year_x if r_xwalk_yes==1 & r_ins_ind==1, detail
 mat deced_core[3,1]=r(N)
 
 //decedents with xwalk + married
-sum r_exit_year_x if r_xwalk_yes==1 & r_ins_ind==1 &  r_married_x==1, detail
+sum r_exit_year_x if r_xwalk_yes==1 & r_ins_ind==1 &  r_married_or_part_v2_x==1, detail
 mat deced_core[4,1]=r(N)
 
 //with spouse xwalk id
-sum r_exit_year_x if r_xwalk_yes==1 & r_ins_ind==1 &  r_married_x==1 & ///
+sum r_exit_year_x if r_xwalk_yes==1 & r_ins_ind==1 &  r_married_or_part_v2_x==1 & ///
 	s_xwalk_yes==1, detail
 mat deced_core[5,1]=r(N)
 
@@ -442,25 +443,25 @@ replace s_ins_ind_24m=0 if s_part_ab_24m!=1 | s_hmo_d_24m!=0
 tab s_ins_ind_24m, missing
 
 //with spouse ffs medicare
-sum r_exit_year_x if r_xwalk_yes==1 & r_ins_ind==1 &  r_married_x==1 & ///
+sum r_exit_year_x if r_xwalk_yes==1 & r_ins_ind==1 &  r_married_or_part_v2_x==1 & ///
 	s_xwalk_yes==1 & s_ins_ind_6m==1, detail
 mat deced_core[6,1]=r(N)
 
-sum r_exit_year_x if r_xwalk_yes==1 & r_ins_ind==1 &  r_married_x==1 & ///
+sum r_exit_year_x if r_xwalk_yes==1 & r_ins_ind==1 &  r_married_or_part_v2_x==1 & ///
 	s_xwalk_yes==1 & s_ins_ind_6m==1 & s_ins_ind_12m==1, detail
 mat deced_core[7,1]=r(N)
 
-sum r_exit_year_x if r_xwalk_yes==1 & r_ins_ind==1 &  r_married_x==1 & ///
+sum r_exit_year_x if r_xwalk_yes==1 & r_ins_ind==1 &  r_married_or_part_v2_x==1 & ///
 	s_xwalk_yes==1 & s_ins_ind_6m==1 & s_ins_ind_12m==1 & s_ins_ind_24m==1, detail
 mat deced_core[8,1]=r(N)
 
 mat list deced_core
 	
-frmttable using `logpath'\2010_sample_est , statmat(deced_core) ///
-	title("2010 sample size estimate - Spouse requires Medicare link") ///
+frmttable using `logpath'\2012_sample_est , statmat(deced_core) ///
+	title("2012 sample size estimate - Spouse requires Medicare link") ///
 	ctitle("","n") ///
 	rtitle("All decedents from exit interviews" \ "With mc xwalk id" \ ///
-	"With FFS mc last 6 months of life" \ "Married at time of death" \ ///
+	"With FFS mc last 6 months of life" \ "Married or partnered at time of death" \ ///
  	"Spouse has mc xwalk id" \ "S has ffs medicare 6 months before R's death" \ ///
 	"S has ffs medicare 12m before R's death" \ "S has ffs medicare 24m before R's death") ///
 	sdec(0) replace
@@ -534,18 +535,18 @@ saves datasets for each claim type / time window to the spo_mc_i directory*/
 /*claims fully within x time of death date*/
 proc sql;
 create table &source._meet_1 as select a.*,b.r_dod_hrs_claims,b.r_id 
-from medi.&source._2000_2010 a inner join
+from medi.&source._2000_2012 a inner join
 spo_mc_i.s_r_dod b
-on trim(left(a.bid_hrs_19))=trim(left(b.s_bid_hrs))
+on trim(left(a.bid_hrs_21))=trim(left(b.s_bid_hrs))
 and &days_start<=b.r_dod_hrs_claims-a.admit_date<=&days_bef_death ;
 quit;
 
 /*claims that start earlier than x time but span into x time before death*/
 proc sql;
 create table &source._meet_2 as select a.*,b.r_dod_hrs_claims,b.r_id 
-from medi.&source._2000_2010 a inner join
+from medi.&source._2000_2012 a inner join
 spo_mc_i.s_r_dod b
-on trim(left(a.bid_hrs_19))=trim(left(b.s_bid_hrs))
+on trim(left(a.bid_hrs_21))=trim(left(b.s_bid_hrs))
 and b.r_dod_hrs_claims-a.admit_date>&days_bef_death and b.r_dod_hrs_claims-a.disch_date<=&days_bef_death;
 quit;
 
@@ -593,18 +594,18 @@ saves datasets for each claim type / time window to the spo_mc_i directory*/
 /*claims fully within x time of death date*/
 proc sql;
 create table &source._meet_1 as select a.*,b.r_dod_hrs_claims,b.r_id 
-from medi.&source._2000_2010 a inner join
+from medi.&source._2000_2012 a inner join
 spo_mc_i.s_r_dod b
-on trim(left(a.bid_hrs_19))=trim(left(b.s_bid_hrs))
+on trim(left(a.bid_hrs_21))=trim(left(b.s_bid_hrs))
 and &days_start<=a.admit_date - b.r_dod_hrs_claims<=&days_aft_death ;
 quit;
 
 /*claims that start earlier than R's DOD but span after R's death*/
 proc sql;
 create table &source._meet_2 as select a.*,b.r_dod_hrs_claims,b.r_id 
-from medi.&source._2000_2010 a inner join
+from medi.&source._2000_2012 a inner join
 spo_mc_i.s_r_dod b
-on trim(left(a.bid_hrs_19))=trim(left(b.s_bid_hrs))
+on trim(left(a.bid_hrs_21))=trim(left(b.s_bid_hrs))
 and a.admit_date<b.r_dod_hrs_claims
 and &days_start<=a.disch_date - b.r_dod_hrs_claims;
 quit;
@@ -651,21 +652,21 @@ run;
 
 %macro dx_time_range(range1=, range2=, suf=);
 /*pulls just dx codes from carrier claims*/
-data pb_last_&range2._dx(keep=bid_hrs_19 r_id diag);
-set spo_mc_i.pb_meet_&suf.(keep=bid_hrs_19 r_id PDGNS_CD DGNS_CD1-DGNS_CD12 );
-array dx PDGNS_CD DGNS_CD1-DGNS_CD12;
+data pb_last_&range2._dx(keep=bid_hrs_21 r_id diag);
+set spo_mc_i.pb_meet_&suf.(keep=bid_hrs_21 r_id PDGNS_CD DGNSCD01-DGNSCD12 );
+array dx PDGNS_CD DGNSCD01-DGNSCD12;
 do over dx;
 diag=dx ;
 output;
 end;
 run;
 proc sort data=pb_last_&range2._dx out=pb_last_&range2._dx2 nodupkey;
-by bid_hrs_19 r_id diag;
+by bid_hrs_21 r_id diag;
 run;
 
 /*outpatient claims*/
-data op_last_&range2._dx(keep=bid_hrs_19 r_id diag);
-set spo_mc_i.op_meet_&suf.(keep=bid_hrs_19 r_id PDGNS_CD DGNSCD01-DGNSCD25  );
+data op_last_&range2._dx(keep=bid_hrs_21 r_id diag);
+set spo_mc_i.op_meet_&suf.(keep=bid_hrs_21 r_id PDGNS_CD DGNSCD01-DGNSCD25  );
 array dx PDGNS_CD DGNSCD01-DGNSCD25 ;
 do over dx;
 diag=dx ;
@@ -673,12 +674,12 @@ output;
 end;
 run;
 proc sort data=op_last_&range2._dx out=op_last_&range2._dx2 nodupkey;
-by bid_hrs_19 r_id diag;
+by bid_hrs_21 r_id diag;
 run;
 
 /*medpar claims*/
-data mp_last_&range2._dx(keep=bid_hrs_19 r_id diag);
-set spo_mc_i.mp_meet_&suf.(keep=bid_hrs_19 r_id AD_DGNS DGNS_CD01-DGNS_CD25 );
+data mp_last_&range2._dx(keep=bid_hrs_21 r_id diag);
+set spo_mc_i.mp_meet_&suf.(keep=bid_hrs_21 r_id AD_DGNS DGNS_CD01-DGNS_CD25 );
 array dx D_DGNS DGNS_CD01-DGNS_CD25 ;
 do over dx;
 diag=dx ;
@@ -686,25 +687,25 @@ output;
 end;
 run;
 proc sort data=mp_last_&range2._dx out=mp_last_&range2._dx2 nodupkey;
-by bid_hrs_19 r_id diag;
+by bid_hrs_21 r_id diag;
 run;
 
 /*dme claims*/
-data dm_last_&range2._dx(keep=bid_hrs_19 r_id diag);
-set spo_mc_i.dm_meet_&suf.(keep=bid_hrs_19 r_id PDGNS_CD DGNS_CD1-DGNS_CD12 );
-array dx PDGNS_CD DGNS_CD1-DGNS_CD12 ;
+data dm_last_&range2._dx(keep=bid_hrs_21 r_id diag);
+set spo_mc_i.dm_meet_&suf.(keep=bid_hrs_21 r_id PDGNS_CD DGNSCD01-DGNSCD12 );
+array dx PDGNS_CD DGNSCD01-DGNSCD12 ;
 do over dx;
 diag=dx ;
 output;
 end;
 run;
 proc sort data=dm_last_&range2._dx out=dm_last_&range2._dx2 nodupkey;
-by bid_hrs_19 r_id diag;
+by bid_hrs_21 r_id diag;
 run;
 
 /*home health agency*/
-data hh_last_&range2._dx(keep=bid_hrs_19 r_id diag);
-set spo_mc_i.hh_meet_&suf.(keep=bid_hrs_19 r_id PDGNS_CD DGNSCD01-DGNSCD25 );
+data hh_last_&range2._dx(keep=bid_hrs_21 r_id diag);
+set spo_mc_i.hh_meet_&suf.(keep=bid_hrs_21 r_id PDGNS_CD DGNSCD01-DGNSCD25 );
 array dx PDGNS_CD DGNSCD01-DGNSCD25 ;
 do over dx;
 diag=dx ;
@@ -712,12 +713,12 @@ output;
 end;
 run;
 proc sort data=hh_last_&range2._dx out=hh_last_&range2._dx2 nodupkey;
-by bid_hrs_19 r_id diag;
+by bid_hrs_21 r_id diag;
 run;
 
 /*hospice*/
-data hs_last_&range2._dx(keep=bid_hrs_19 r_id diag);
-set spo_mc_i.hs_meet_&suf.(keep=bid_hrs_19 r_id PDGNS_CD DGNSCD01-DGNSCD25 );
+data hs_last_&range2._dx(keep=bid_hrs_21 r_id diag);
+set spo_mc_i.hs_meet_&suf.(keep=bid_hrs_21 r_id PDGNS_CD DGNSCD01-DGNSCD25 );
 array dx PDGNS_CD DGNSCD01-DGNSCD25 ;
 do over dx;
 diag=dx ;
@@ -725,7 +726,7 @@ output;
 end;
 run;
 proc sort data=hs_last_&range2._dx out=hs_last_&range2._dx2 nodupkey;
-by bid_hrs_19 r_id diag;
+by bid_hrs_21 r_id diag;
 run;
 
 /*set diag variable length = 7 chars since that's the max length from the mc claims
@@ -765,7 +766,7 @@ pb_last_&range2._dx3;
 run;
 
 proc sort data=dx_all_last_&range2.(where=(diag~="")) out=spo_mc_i.dx_&range1._&range2 nodupkey;
-by bid_hrs_19 r_id diag;
+by bid_hrs_21 r_id diag;
 run;
 
 %mend;
@@ -780,7 +781,7 @@ run;
 %dx_time_range(range1=0d, range2=p12m, suf=p12m);
 %dx_time_range(range1=0d, range2=p24m, suf=p24m);
 
-*check all obs have r_id and bid_hrs_19 (s mc id);
+*check all obs have r_id and bid_hrs_21 (s mc id);
 data miss_rid;
 set spo_mc_i.dx_0d_n6m;
 if r_id=.;
@@ -788,7 +789,7 @@ run;
 
 data miss_sid;
 set spo_mc_i.dx_0d_n6m;
-if bid_hrs_19='';
+if bid_hrs_21='';
 run;
 
 H="Get S Elixhauser comorbidities"
@@ -1296,7 +1297,7 @@ run;
 /*check sums of each comorbidity for each ID*/
 proc sql;
 create table com_test1_&range2 as
-select distinct BID_hrs_19, r_id,
+select distinct BID_hrs_21, r_id,
 sum(comorbi_1) as com_1,
 sum(comorbi_2) as com_2,
 sum(comorbi_3) as com_3,
@@ -1330,11 +1331,11 @@ sum(comorbi_30) as com_30,
 sum(dementia) as com_31,
 sum(cad) as com_32
 from dx_31_comor_&range2
-group by BID_hrs_19, r_id;
+group by BID_hrs_21, r_id;
 quit;
 
 /*define comorbidities as binary indicators*/
-data comorbidity_&range2.(keep=BID_hrs_19 r_id 
+data comorbidity_&range2.(keep=BID_hrs_21 r_id 
 	s_comorb_1-s_comorb_32 s_comorb_all);
 set com_test1_&range2;
 array list_com com_1-com_30 com_31 com_32;
@@ -1361,17 +1362,17 @@ run;
 
 
 proc sort data=comorbidity_&range2. nodupkey;
-by BID_hrs_19 r_id;
+by BID_hrs_21 r_id;
 run;
 
 /*merges with list of s's with xwalk id, dod & ffs mc 6m before R's death*/
 proc sql;
-create table ids_w_xwalk_&range2._1(drop=BID_hrs_192 r_id2) as
+create table ids_w_xwalk_&range2._1(drop=BID_hrs_212 r_id2) as
 select a.s_bid_hrs,a.r_id,b.* 
 from spo_mc_i.s_r_dod a 
 left join
-comorbidity_&range2.(rename=(BID_hrs_19=BID_hrs_192) rename=(r_id=r_id2))  b
-on trim(left(a.s_bid_hrs))=trim(left(b.BID_hrs_192)) and
+comorbidity_&range2.(rename=(BID_hrs_21=BID_hrs_212) rename=(r_id=r_id2))  b
+on trim(left(a.s_bid_hrs))=trim(left(b.BID_hrs_212)) and
 	a.r_id=b.r_id2;
 quit;
 
@@ -1453,7 +1454,7 @@ have r_id and s_bid_hrs to merge back to dataset*/
 %elixhauser(range1=0d, range2=p24m);
 
 proc freq data=spo_mc_i.elix_0d_n12m_2;
-table comorb:;
+table s_comorb:;
 run;
 
 /*combine the 6 sets of variables into a single dataset
@@ -1476,7 +1477,7 @@ elix_all(rename=(s_bid_hrs=s_bid_hrs2) rename=(r_id=r_id2)) b
 on a.s_bid_hrs=b.s_bid_hrs2 and a.r_id=b.r_id2;
 quit;
 
-/*5437 do not have s with ffs medicare 6m before R's death so missing*/
+/*6356 do not have s with ffs medicare 6m before R's death so missing*/
 proc freq data=spo_mc_i.hrs_elix;
 table s_comorb: ;
 run;
@@ -1643,8 +1644,8 @@ run;
 
 /*aggregate all chronic condition variables by bid*/
 proc sql;
-create table bid_dx_&start._&predeath.(rename=(bid_hrs_19=bid)) as
-select distinct bid_hrs_19,r_id,
+create table bid_dx_&start._&predeath.(rename=(bid_hrs_21=bid)) as
+select distinct bid_hrs_21,r_id,
 sum(s_CC_1_AMI) as s_CC_1_AMI,
 sum(s_CC_2_ALZH) as s_CC_2_ALZH,
 sum(s_CC_3_ALZHDMTA) as s_CC_3_ALZHDMTA,
@@ -1667,7 +1668,7 @@ sum(s_CC_19_CNCRPRST) as s_CC_19_CNCRPRST,
 sum(s_CC_20_CNCRLUNG) as s_CC_20_CNCRLUNG,
 sum(s_CC_21_CNCREndM) as s_CC_21_CNCREndM
 
-from list_&start._&predeath._dx group by bid_hrs_19,r_id;
+from list_&start._&predeath._dx group by bid_hrs_21,r_id;
 quit;
 
 

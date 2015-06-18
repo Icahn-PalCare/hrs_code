@@ -1,0 +1,212 @@
+= V4 Outline MultiLine NoSorting TabWidth=30
+
+H="Intensive procedures - based on procedure date"
+/*intense procedure dataset
+time n0 = index procedure, then look forward and back at interviews
+*/
+libname medi 'E:\data\cms_DUA_24548_2012';
+
+data ip;
+set medi.mp_2000_2012(where=(trim(left(SSLSSNF))~="N"));
+run;
+
+/*restructure data so one row per procedure*/
+data proc_long(keep=bid_hrs_21 pro procedure_date );
+set ip;
+array list PRCDR_CD01-PRCDR_CD25;
+array date PRCDR_DT01-PRCDR_DT25;
+do over list;
+	if list~="" then do;
+	pro=list+0; *turns procedure code into number, missing if has letters;
+		if date=0000000 then date=.;
+		procedure_date=datejul(date);
+		output;
+		end;
+	end;
+format procedure_date date10. ;
+run;
+
+data check_miss_date;
+set proc_long;
+miss_date=0;
+if procedure_date=. then miss_date=1;
+run;
+
+proc freq;
+table miss_date;
+run;
+
+/*identify intensive procedures and the dates for those procedures*/
+data proc_long_ba;
+set proc_long;
+array list 
+	int_intubation
+	int_trach
+	int_gastro_tude
+	int_hemodia
+	int_enteral_nut
+	int_cpr;
+do over list;
+	list=0;
+	end;
+
+if length(trim(left(pro)))>=3 then do;
+
+	if  substr(trim(left(pro)),1,3) in ("967")  then int_intubation=1;
+	if  substr(trim(left(pro)),1,3) in ("311") then  int_trach=1;
+	if  substr(trim(left(pro)),1,3) in ("432") then  int_gastro_tude=1;
+
+	if substr(trim(left(pro)),1,3) in ("966") then  int_enteral_nut=1;
+
+	if length(trim(left(pro)))>3 then do;
+		if substr(trim(left(pro)),1,4) in ("9604","9605") or 
+		  substr(trim(left(pro)),1,3) in ("967") then int_intubation =1;
+		if substr(trim(left(pro)),1,4) in ("3121","3129") or 
+		  substr(trim(left(pro)),1,3) in ("311") then int_trach=1;
+		if substr(trim(left(pro)),1,4) in ("4311","4319","4432")  or 
+		  substr(trim(left(pro)),1,3) in ("432") then int_gastro_tude=1;
+		if substr(trim(left(pro)),1,4) in ("3995") then int_hemodia=1;
+		if substr(trim(left(pro)),1,4) in ("9915") or 
+		  substr(trim(left(pro)),1,3) in ("966") then int_enteral_nut=1;
+		if substr(trim(left(pro)),1,4) in ("9960","9963") then int_cpr=1;
+	end;
+
+end;
+
+if int_intubation|
+int_trach|
+int_gastro_tude|
+int_hemodia|
+int_enteral_nut|
+int_cpr then date_proc=procedure_date;
+run;
+
+/*Get first and last procedure dates
+Count of each type of procedure
+(Data format is now one row per beneficiary) */
+proc sql;
+create table proc_sum_new as
+select distinct bid_hrs_21,
+min(date_proc) as first_proc_date format=date10.
+label="first intensive procedure date,Barnato",
+max(date_proc) as last_proc_date format=date10.
+label="last intensive procedure date,Barnato",
+sum(int_intubation) as n_int_intubation,
+sum(int_trach) as n_int_trach,
+sum(int_gastro_tude) as n_int_gastro_tude,
+sum(int_hemodia) as n_int_hemodia,
+sum(int_enteral_nut) as n_int_enteral_nut,
+sum(int_cpr) as n_int_cpr
+from proc_long_ba group by bid_hrs_21;
+quit;
+
+/*identify first&last procedure dates, excluding the hemodial procedure category*/
+data excl_hemodia_1;
+set proc_long_ba;
+if int_hemodia=0;
+run;
+
+proc sql;
+create table excl_hemodia_2 as
+select distinct bid_hrs_21,
+min(date_proc) as first_proc_date_excl_hd format=date10.
+label="last intensive procedure date,excluding hemodialysis proced.",
+max(date_proc) as last_proc_date_excl_hd format=date10.
+label="last intensive procedure date,excluding hemodialysis proced."
+from excl_hemodia_1 group by bid_hrs_21;
+quit;
+
+/*add the first date excluding hemodialysis to the rest of the procedure info*/
+proc sql;
+create table proc_sum_new_2 as select 
+a.*,b.first_proc_date_excl_hd,b.last_proc_date_excl_hd from
+proc_sum_new a left join
+excl_hemodia_2 b
+on a.bid_hrs_21=b.bid_hrs_21;
+quit;
+
+/*creates indicator variables, add variable labels*/
+data proc_intensive_new;
+set proc_sum_new_2 ;
+array list n_int_intubation
+n_int_trach
+n_int_gastro_tude
+n_int_hemodia
+n_int_enteral_nut
+n_int_cpr
+;
+array ind int_intubation_ind
+int_trach_ind
+int_gastro_tude_ind
+int_hemodia_ind
+int_enteral_nut_ind
+int_cpr_ind
+;
+do over list;
+if list>0 then ind=1;
+if list=0 then ind=0;
+end;
+label n_int_intubation="n intubation/mechanic ventilation,Barnato";
+label n_int_trach="n trachostomy,Barnato";
+label n_int_gastro_tude="n gastrostomy tube,Barnato";
+label n_int_hemodia="n hemodialysis,Barnato";
+label n_int_enteral_nut="n enteral/parenteral nutrition,Barnato";
+label n_int_cpr="n CPR,Barnato";
+
+label int_intubation_ind="any intubation/mechanic ventilation,1=yes";
+label int_trach_ind="trachostomy,1=yes";
+label int_gastro_tude_ind="gastrostomy tube,1=yes";
+label int_hemodia_ind="hemodialysis,1=yes";
+label int_enteral_nut_ind="enteral/parenteral nutrition,1=yes";
+label int_cpr_ind="CPR,1=yes";
+
+if int_intubation_ind=1 |
+int_trach_ind=1 |
+int_gastro_tude_ind=1 |
+int_hemodia_ind=1 |
+int_enteral_nut_ind=1 |
+int_cpr_ind=1 then int_any=1;
+else int_any=0;
+label int_any="Any of 6 intensive procedures, 1=yes";
+
+if int_intubation_ind=1 |
+int_trach_ind=1 |
+int_gastro_tude_ind=1 |
+int_enteral_nut_ind=1 |
+int_cpr_ind=1 then int_any_of5=1;
+else int_any_of5=0;
+label int_any_of5="Any intensive pro, excl hemodial";
+
+*may need to change this to sum statement if missing values present for n vars;
+total_int_proc=n_int_intubation + n_int_trach + n_int_gastro_tude + n_int_hemodia + 
+ n_int_enteral_nut + n_int_cpr;
+total_int_proc_of5=n_int_intubation + n_int_trach + n_int_gastro_tude + 
+ n_int_enteral_nut + n_int_cpr;
+ 
+miss_first_date=0;
+if first_proc_date=. then miss_first_date=1;
+miss_last_date=0;
+if last_proc_date=. then miss_last_date=1;
+
+run;
+
+proc freq;
+table int_any*miss_first_date int_any*miss_last_date int_any*int_any_of5 
+ total_int_proc total_int_proc_of5;
+run;
+
+/*n=2485 have at least 1 intensive procedure of the 6*/
+proc sql;
+select count(*),count(first_proc_date)
+from proc_intensive_new where (total_int_proc)>0;
+quit;
+
+/*n=2216 have 1 of the 5 procedures, excludes hemodialysis*/
+proc sql;
+select count(*),count(first_proc_date)
+from proc_intensive_new where (total_int_proc_of5)>0;
+quit;
+
+proc freq data=proc_intensive_new;
+table int: n_int: total_int: ;
+run;

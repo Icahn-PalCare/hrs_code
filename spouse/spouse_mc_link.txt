@@ -3592,7 +3592,28 @@ la var s_comorb_all_0d_n24m "Count of S Elix comorbidities 24m pre R's death"
 la var s_comorb_all_0d_p6m "Count of S Elix comorbidities 6m post R's death"
 la var s_comorb_all_0d_p12m "Count of S Elix comorbidities 12m post R's death"
 la var s_comorb_all_0d_p24m "Count of S Elix comorbidities 24m post R's death"
-	
+************************************************************
+//check for and remove duplicates
+sort r_id
+quietly by r_id : gen dup1 = cond(_N==1,0,_n)
+tab dup1 //no duplicates by decedent id
+
+//check s_id for duplicates
+sort s_id
+quietly by s_id : gen dup2 = cond(_N==1,0,_n)
+tab dup2 //2 instances with spouse with more than one partner
+list r_id s_id r_exit_year_x if dup2>0
+
+sort s_id r_exit_year_x
+quietly by s_id : gen dup3 = cond(_N==1,0,_n)
+tab dup3
+drop if dup3==2
+
+//check again
+sort s_id
+quietly by s_id : gen dup4 = cond(_N==1,0,_n)
+tab dup4 //all dups removed
+
 ************************************************************
 //save this dataset
 save spouse_claims_v1.dta, replace
@@ -3979,16 +4000,6 @@ renamenum p6mp12m 6
 renamenum p12mp18m 7	
 renamenum p18mp24m 8	
 
-//check s_id for duplicates
-sort s_id
-quietly by s_id : gen dup = cond(_N==1,0,_n)
-tab dup
-//drop if dup>1 
-//drop dup
-sort r_id
-quietly by r_id : gen dup2 = cond(_N==1,0,_n)
-tab dup2
-
 local varlist s_tot_paid_by_mc_wi_ s_ip_paid_by_mc_wi_ ///
 	s_op_paid_by_mc_wi_ s_n_ip_admit_ s_n_hospd_ s_n_op_visits_ 
 	
@@ -4123,6 +4134,119 @@ graph combine n_op_vis_mean.gph n_op_vis_med.gph, ///
 graph save n_op_vis.gph, replace
 graph export n_op_vis.pdf, replace
 *******************************************************************
+log close
+
+
+H="Utilization by decedent's hospice use"
+/*Limited to decedents with FFS MC 6m prior to death, married at time of death,
+with spouse mc id*/
+
+capture log close
+
+clear all
+mata: mata clear
+set more off
+
+//Server file paths
+global logpath E:\data\spouse_claims\logs
+local projdatapath E:\data\spouse_claims\data\int_data
+
+log using $logpath\4-HRS_Spouse_claims_utilization.txt, text replace
+
+cd `projdatapath'
+
+use spouse_claims_v1.dta if (s_part_ab_6m==1 & s_hmo_d_6m==0)
+*********************************************************
+*********************************************************
+//limited to sample with 24m lookback/forward
+keep if s_died_p24m==0
+keep if sample_n24m==1
+
+tab r_hs_12m_gt3d r_hs_12m, missing
+tab r_hs_los_12m r_hs_12m_gt3d , missing
+
+//output table of the n's
+tab r_hs_12m_gt3d,matcell(ntab)
+
+frmttable using $logpath\4_util_by_hs_use, ///
+statmat(ntab) rtitles("no hospice use" \ "hospice use") ///
+ctitles("","n") sdec(0) replace
+
+local suffixlist 18m24m 12m18m 6m12m 6m p6m p6mp12m p12mp18m p18mp24m
+
+//rename variables so can use in the table names below
+foreach su in `suffixlist'{
+rename s_tot_paid_by_mc_wi_`su' tot`su'
+}
+
+foreach out in tot s_ip_paid_by_mc_wi_ s_op_paid_by_mc_wi_ ///
+ s_n_ip_admit_ s_n_hospd_ s_n_op_visits_ {
+ 
+mat util=J(8,5,.)
+
+local c = 1
+foreach h in 1 0 {
+local r = 1
+foreach su in `suffixlist'{
+sum `out'`su' if r_hs_12m_gt3d==`h',detail
+mat util[`r',`c']=r(mean)
+mat util[`r',`c'+1]=r(p50)
+local r = `r'+1
+}
+local c = `c'+2
+
+}
+
+//now p-values
+local r = 1
+foreach su in 18m24m 12m18m 6m12m 6m p6m p6mp12m p12mp18m p18mp24m{
+ttest `out'`su' ,by(r_hs_12m_gt3d)
+mat util[`r',5]=r(p)
+local r = `r'+1
+}
+
+mat rownames util="18-24m before death" "12-18m" "6-12m" "0-6m" ///
+"0-6m after death" "6-12m" "12-18m" "18-24m"
+mat list util
+
+//save in frmttable
+mat dmat=(0,1,0,1,0)
+mat ann=J(8,2,1)
+
+frmttable, statmat(util) ///
+	sdec(2) doubles(dmat) ///
+	dbldiv(" (") annotate(ann) asymbol(")") ///
+	store(util_`out') ///
+	ctitle("mean (median)","Hospice use", "No hospice use", "P-value") ///
+	title("`out'")
+	
+}
+
+//first table output so replace old file
+outreg using $logpath\4_util_by_hs_use , ///
+ title("Suriviving spouse total Medicare spending") ///
+ replay(util_tot) addtable
+ 
+//then use program with addtable option
+capture program drop output
+program define output
+args var label 
+
+outreg using $logpath\4_util_by_hs_use , ///
+ title("Suriviving spouse `label'") ///
+ replay(util_`var') addtable
+ 
+end
+
+output tot "total Medicare spending"
+output s_ip_paid_by_mc_wi_ "inpatient Medicare spending"
+output s_op_paid_by_mc_wi_ "outpatient Medicare spending" 
+output s_n_ip_admit_ "number hospital admissions"
+output s_n_hospd_ "number hospital days"
+output s_n_op_visits_ "number outpatient visits"
+ 
+
+*********************************************************
 log close
 
 

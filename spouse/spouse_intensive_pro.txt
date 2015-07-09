@@ -1662,13 +1662,22 @@ merge(res1) replace  varlabels stats(b ci p) ///
 ctitles("","(3) Raw change in CES-D score") ///
 summstat(N) landscape 
 
+logit s_cesdworse int_any_of5_6m `rvars' `svars' [pw=ip_weight], or
+outreg, ///
+title("Impact of intensive procedure on spousal depression" \ ///
+"Propensity matched sample") ///
+varlabels stats(e_b e_ci p)  ///
+ctitles("","(4) Any increase in depressive symptoms" ) ///
+starlevels(10 5 1) store(res1) summstat(N)
+
+
 *******************************************************************
 //run model on post-death cesd score, controlling for pre-death score
 regress s_cesd_tot_p1 int_any_of5_6m `rvars' `svars' s_cesd_tot_n1n2  [pw=ip_weight]
 
 outreg using `logpath'\6_dr_est_results_ps_matched, ///
 merge(res1) replace  varlabels stats(b ci p) ///
-ctitles("","(4) Post-death CES-D score") ///
+ctitles("","(5) Post-death CES-D score") ///
 summstat(N) landscape  
 
 *******************************************************************
@@ -1811,13 +1820,21 @@ merge(res1) store(res1) varlabels stats(b ci p) ///
 ctitles("","(3) Raw change in CES-D score") ///
 summstat(N) landscape
 
+logit s_cesdworse int_any_of5_6m `rvars' `svars' [pw=ip_weight], or
+outreg, ///
+title("Impact of intensive procedure on spousal depression" \ ///
+"Propensity matched sample") ///
+varlabels stats(e_b e_ci p)  ///
+ctitles("","(4) Any increase in depressive symptoms" ) ///
+starlevels(10 5 1) store(res1) summstat(N)
+
 *******************************************************************
 //run model on post-death cesd score, controlling for pre-death score
 regress s_cesd_tot_p1 int_any_of5_6m `rvars' `svars' s_cesd_tot_n1n2  [pw=ip_weight_cg]
 
 outreg using `logpath'\6b_ps_matched_caregivers_only, ///
 merge(res1) replace  varlabels stats(b ci p) ///
-ctitles("","(4) Post-death CES-D score") ///
+ctitles("","(5) Post-death CES-D score") ///
 summstat(N) landscape  
 
 
@@ -1882,6 +1899,233 @@ frmttable, statmat(t2_3m) varlabels ///
 	store(tab2_3m) 
 
 outreg using `logpath'\6b_ps_matched_caregivers_only, ///
+replay(tab2_2m) append(tab2_3m) addtable ///
+ctitles("" "Intensive procedure" "No procedure" "Std Diff." "p-value") ///
+title("Matched sample, S CES-D before and after R's death")
+
+*******************************************************************
+log close
+
+
+H="Propensity match - non-hospice only"
+capture log close
+
+clear all
+set more off
+
+local logpath E:\data\spouse_intensive\logs
+local datapath E:\data\spouse_intensive\data
+
+log using "`logpath'\6c-Spouse_intense_nonhospice.txt", text replace
+
+cd `datapath'
+
+//use dataset with no missing variables, caregivers only
+*******************************************************************
+use spouse_intens_data_ps_set.dta 
+tab r_hs_3d_6m int_any_of5_6m, missing
+
+drop if r_hs_3d_6m==1
+
+tab int_any_of5_6m, missing
+
+tab r_s_help_dur_cat, missing
+
+//where r&s highly correlated, use s
+local rvars r_nw_midlow_n1 r_nw_midhigh_n1 r_nw_highest_n1 ///
+r_nhres_n1n2 r_srh_pf_n1n2 r_advdir_x r_dexp_x  r_adl_impair_n1n2 ///
+cc_3_alzhdmta_n12mn6m cc_6_chrnkidn_n12mn6m cc_ami_isch_n12mn6m ///
+cc_8_chf_n12mn6m cc_9_diabetes_n12mn6m cc_7_copd_n12mn6m ///
+cc_16_strketia_n12mn6m cc_cncr_chronic_n12mn6m cc_15_ra_oa_n12mn6m ///
+cc_13_depressn_n12mn0 cc_all_count_6m12m_2
+
+local svars s_age s_female s_race_cat1   ///
+s_hseduc s_srh_pf_n1n2 s_imprelig_vimp_n1  ///
+s_hrs_comorb_mild_n1 s_hrs_comorb_mod_n1 s_psych_overall_hrs_n1n2 ///
+r_s_help_dur_ind2 r_s_help_dur_ind3 days_p1_core_dod_6_12m days_p1_core_dod_12_18m ///
+days_p1_core_dod_18_24m days_p1_core_dod_gt2yr
+*******************************************************************
+//propensity score generation
+
+//first sort data randomly
+set seed 2000
+gen x=uniform()
+sort x
+
+//generate pscore variable hs_pscore
+pscore int_any_of5_6m `rvars' `svars', pscore(ip_pscore) blockid(ip_block) logit detail
+
+psgraph, treated(int_any_of5_6m) pscore(ip_pscore)
+
+*******************************************************************
+//implement radius matching
+gen logitpscore=ln(ip_pscore/(1-ip_pscore))
+sum logitpscore
+
+sca cal_ps1=r(sd)*0.02
+sca list cal_ps1
+
+//rule of thumb 0.2*sd, try 0.02* sd
+psmatch2 int_any_of5_6m,outcome(s_cesdbetter) pscore(ip_pscore) radius caliper(.01277744) logit
+//note this creates varaible _weight
+
+*******************************************************************
+//look at balance of propensity score across variables
+psgraph, treated(int_any_of5_6m) pscore(ip_pscore)
+
+pstest `rvars' `svars' ,treated(int_any_of5_6m) both hist
+
+//look at quantile-quantile plots for continuous variables
+foreach v in r_age cc_all_count_6m12m_2{
+gen `v'_treated = `v' if int_any_of5_6m==1 & _support==1
+gen `v'_comparison = `v' if int_any_of5_6m==0 & _support==1
+qqplot `v'_treated `v'_comparison
+graph save `logpath'/qqplot_`v'_cg, replace
+}
+
+mat vr=J(34,6,.)
+//compare variance of covariates before and after matching
+local i=1
+foreach v in `rvars' `svars'  {
+sum `v' if int_any_of5_6m==1 //get variance treated before matching
+mat vr[`i',1]=r(Var)
+sum `v' if int_any_of5_6m==0 //get variance comparison before matching
+mat vr[`i',2]=r(Var)
+mat vr[`i',3]= vr[`i',1]/vr[`i',2] //ratio
+sum `v' if int_any_of5_6m==1 & _support==1 //get variance treated after matching
+mat vr[`i',4]=r(Var)
+sum `v' if int_any_of5_6m==0 [iweight=_weight] //get variance comparison after matching
+mat vr[`i',5]=r(Var)
+mat vr[`i',6]= (vr[`i',4]) / (vr[`i',5]) //ratio
+local i=`i'+1
+}
+
+mat rownames vr=`rvars' `svars'
+
+mat list vr
+
+//what gets dropped from sample using this match?
+tab _support, missing
+tab _support if int_any_of5_6m==1, missing //n=1 treated dropped, off comm support
+tab _support if int_any_of5_6m==0, missing
+tab _weight if int_any_of5_6m==1, missing
+sum _weight if int_any_of5_6m==0 //n=7 control dropped, no weight assigned
+
+rename _weight ip_weight_cg
+
+*******************************************************************
+//run the doubly robust models
+la var int_any_of5_6m "Intensive procedure used"
+la var r_nhres_n1n2 "R Nursing home resident"
+la var r_srh_pf_n1n2 "R SRH Fair/Poor"
+la var r_adl_impair_n1n2 "R ADL Impaired"
+la var cc_all_count_6m12m_2 "R # Chronic conditions"
+la var s_race_cat1 "S White, Non-Hispanic"
+la var s_hseduc "S HS Degree"
+la var s_srh_pf_n1n2 "S SRH Fair/Poor"
+la var s_hrs_comorb_mild_n1 "S Mild comorb."
+la var s_hrs_comorb_mod_n1 "S Moderate comorb."
+la var s_psych_overall_hrs_n1n2 "S Psych condition"
+
+logit s_cesdbetter int_any_of5_6m `rvars' `svars' [iw=ip_weight_cg], or
+outreg, ///
+title("Impact of intensive procedure on spousal depression" \ ///
+"Propensity matched sample, Subsample with 0-2 day hospice use only") ///
+varlabels stats(e_b e_ci p)  ///
+ctitles("","(1) Any improvement" ) ///
+starlevels(10 5 1) store(res1) summstat(N)
+
+logit s_cesd_ge3better int_any_of5_6m `rvars' `svars' [iw=ip_weight_cg], or
+outreg , ///
+merge(res1) store(res1) varlabels stats(e_b e_ci p) ///
+ctitles("","(2) Clinical improvement") ///
+summstat(N)
+
+regress s_cesdchange int_any_of5_6m `rvars' `svars' [iw=ip_weight_cg]
+outreg , ///
+merge(res1) store(res1) varlabels stats(b ci p) ///
+ctitles("","(3) Raw change in CES-D score") ///
+summstat(N) landscape
+
+logit s_cesdworse int_any_of5_6m `rvars' `svars' [pw=ip_weight], or
+outreg, ///
+title("Impact of intensive procedure on spousal depression" \ ///
+"Propensity matched sample") ///
+varlabels stats(e_b e_ci p)  ///
+ctitles("","(4) Any increase in depressive symptoms" ) ///
+starlevels(10 5 1) store(res1) summstat(N)
+
+*******************************************************************
+//run model on post-death cesd score, controlling for pre-death score
+regress s_cesd_tot_p1 int_any_of5_6m `rvars' `svars' s_cesd_tot_n1n2  [pw=ip_weight_cg]
+
+outreg using `logpath'\6c_ps_matched_no_hospice_only, ///
+merge(res1) replace  varlabels stats(b ci p) ///
+ctitles("","(5) Post-death CES-D score") ///
+summstat(N) landscape  
+
+
+*******************************************************************
+//quick look at matched sample, outcomes univariate comparison
+la var s_cesd_tot_ge3_p1 "S Depressed CESD 3+, p1 core"
+la var s_cesd_tot_ge3_p1 "S CES-D Score, p1 core"
+
+mat t2_2m=J(3,4,.)
+
+local r = 1
+foreach v in s_cesd_tot_ge3_n1n2 s_cesd_tot_ge3_p1 s_cesdbetter { //indicator variables
+	local c = 1
+	foreach d in 1 0 {
+		sum `v' if int_any_of5_6m ==`d' [iweight=ip_weight_cg]
+		mat t2_2m[`r',`c']=r(mean)*100
+		local c = `c'+1		
+	}
+	mat t2_2m[`r',3]=(t2_2m[`r',1]/100-t2_2m[`r',2]/100)/sqrt((t2_2m[`r',1]/100* ///
+		(1-t2_2m[`r',1]/100)+t2_2m[`r',2]/100*(1-t2_2m[`r',2]/100))/2)
+		
+	logit int_any_of5_6m `v' [iw=ip_weight_cg]
+	test `v'
+	mat t2_2m[`r',4] = r(p)
+	
+	local r = `r'+1
+}
+mat rownames t2_2m=s_cesd_tot_ge3_n1n2 s_cesd_tot_ge3_p1 s_cesdbetter 
+frmttable, statmat(t2_2m) varlabels ///
+	sdec(2) store(tab2_2m) 
+
+mat t2_3m=J(3,6,.)
+local r = 1
+foreach v in s_cesd_tot_n1n2 s_cesd_tot_p1 s_cesdchange  { //continuous variables
+	local c = 1
+	foreach d in 1 0 {
+		sum `v' if int_any_of5_6m ==`d' [iweight=ip_weight_cg]
+		mat t2_3m[`r',`c']=r(mean)
+		mat t2_3m[`r',`c'+1]=r(sd)
+		local c = `c'+2	
+	}
+	mat t2_3m[`r',5]=(t2_3m[`r',1]-t2_3m[`r',3])/sqrt((t2_3m[`r',2]^2+t2_3m[`r',4]^2)/2) 
+	
+	logit int_any_of5_6m `v' [iw=ip_weight]
+	test `v'
+	mat t2_3m[`r',6] = r(p)
+	
+	local r = `r'+1
+}
+mat rownames t2_3m=s_cesd_tot_n1n2 s_cesd_tot_p1 s_cesdchange 
+
+mat dmat=(0,1,0,1,0,0)
+mat ann=(1,1,0,0\1,1,0,0\1,1,0,0)
+mat list dmat
+mat list ann
+
+mat list t2_3m
+
+frmttable, statmat(t2_3m) varlabels ///
+	sdec(2) doubles(dmat) ///
+	dbldiv(" (") annotate(ann) asymbol(")") ///
+	store(tab2_3m) 
+
+outreg using `logpath'\6c_ps_matched_no_hospice_only, ///
 replay(tab2_2m) append(tab2_3m) addtable ///
 ctitles("" "Intensive procedure" "No procedure" "Std Diff." "p-value") ///
 title("Matched sample, S CES-D before and after R's death")
@@ -2504,9 +2748,8 @@ tab int_any_of5_6m, missing
 //create Table 1, overall sample characteristics, prior to matching
 *************************************************************************************
 *************************************************************************************
-
 //Part 1 - Decedent char
-local rvars r_female r_race_cat1 r_hseduc r_nw_lowest_n1 ///
+local rvars r_female r_married_x r_race_cat1 r_hseduc r_nw_lowest_n1 ///
 r_nw_midlow_n1 r_nw_midhigh_n1 r_nw_highest_n1 r_medicaid_n1 r_champus_n1 r_medigap_n1 ///
 r_nhres_n1n2 r_advdir_x r_dexp_x  r_discuss_x ///
 r_adl_impair_n1n2 r_srh_pf_n1n2 int_any_of5_6m ///
@@ -2520,6 +2763,8 @@ cc_13_depressn_n12mn6m cc_14_osteoprs_n12mn6m cc_15_ra_oa_n12mn6m
 //r_age cc_all_count_6m12m_2 
  
 la var r_age "Age at death, years, mean (SD)"
+
+la var r_married_x "Married at death, %"
 la var r_female "Female, %"
 la var r_race_cat1 "Race, White, Non-Hispanic, %"
 la var r_hseduc "Education, High School Deg, %"
@@ -2558,7 +2803,7 @@ frmttable, statmat(rchar_1) varlabels ///
 	dbldiv(" (") annotate(ann) asymbol(")") ///
 	store(tab1_1) 	
 
-mat rchar_2=J(30,1,.)
+mat rchar_2=J(31,1,.)
 local r = 1
 foreach v in `rvars'{
 	sum `v'
@@ -2648,6 +2893,7 @@ la var s_cesd_ge3better "Clinical improvement n1 to p1,%"
 la var s_cesd_tot_n1n2 "CESD score pre-death, mean(SD)**"
 la var s_cesd_tot_p1 "CESD score post-death, mean(SD)"
 la var s_cesdchange "Change CES-D Score n1 to p1, mean(SD)"
+la var days_p1_core_dead "Days R death to p1 s interview, mean(SD)"
 
 mat schar_1=J(1,2,.)
 
@@ -2679,17 +2925,17 @@ mat rownames schar_2 = `svars'
 frmttable, statmat(schar_2) varlabels ///
 	sdec(2) store(tab1_2) 	  
 
-mat schar_3=J(3,2,.)
+mat schar_3=J(4,2,.)
 
 local r = 1
-foreach v in s_cesd_tot_n1n2 s_cesd_tot_p1 s_cesdchange {
+foreach v in s_cesd_tot_n1n2 s_cesd_tot_p1 s_cesdchange days_p1_core_dead {
 	sum `v', detail //ces-d scores
 	mat schar_3[`r',1]=r(mean)
 	mat schar_3[`r',2]=r(sd)
 	local r = `r'+1
 	}
 
-mat rownames schar_3=s_cesd_tot_n1n2 s_cesd_tot_p1 s_cesdchange
+mat rownames schar_3=s_cesd_tot_n1n2 s_cesd_tot_p1 s_cesdchange days_p1_core_dead
 
 //save the table in frmttable	
 mat dmat=(0,1)
@@ -2948,8 +3194,10 @@ la var s_cesd_tot_n1n2 "S CES-D Score, pre-death, mean(sd)"
 la var s_cesd_tot_p1 "S CES-D Score, post-death, mean(sd)"
 la var s_cesdchange "Change CES-D Score n1 to p1, mean(sd)"
 
+la var days_p1_core_dead "Days death to p1, mean(sd)"
+
 local ivars s_cesd_tot_ge3_n1n2 s_cesd_tot_ge3_p1 s_cesdbetter s_cesd_ge3better 
-local cvars s_cesd_tot_n1n2 s_cesd_tot_p1 s_cesdchange
+local cvars s_cesd_tot_n1n2 s_cesd_tot_p1 s_cesdchange days_p1_core_dead
 
 //part 1 - prior to matching
 mat t2_2m=J(4,4,.)
@@ -2975,7 +3223,7 @@ mat rownames t2_2m= `ivars'
 frmttable, statmat(t2_2m) varlabels ///
 	sdec(2) store(tab2_2m) 
 
-mat t2_3m=J(3,6,.)
+mat t2_3m=J(4,6,.)
 local r = 1
 foreach v in `cvars'  { //continuous variables
 	local c = 1
@@ -2996,7 +3244,7 @@ foreach v in `cvars'  { //continuous variables
 mat rownames t2_3m=`cvars' 
 
 mat dmat=(0,1,0,1,0,0)
-mat ann=(1,1,0,0\1,1,0,0\1,1,0,0)
+mat ann=(1,1,0,0\1,1,0,0\1,1,0,0\1,1,0,0)
 mat list dmat
 mat list ann
 
@@ -3036,7 +3284,7 @@ mat rownames t2_2m=`ivars'
 frmttable, statmat(t2_2m) varlabels ///
 	sdec(2) store(tab2_2m) 
 
-mat t2_3m=J(3,6,.)
+mat t2_3m=J(4,6,.)
 local r = 1
 foreach v in `cvars'  { //continuous variables
 	local c = 1
@@ -3057,7 +3305,7 @@ foreach v in `cvars'  { //continuous variables
 mat rownames t2_3m=`cvars' 
 
 mat dmat=(0,1,0,1,0,0)
-mat ann=(1,1,0,0\1,1,0,0\1,1,0,0)
+mat ann=(1,1,0,0\1,1,0,0\1,1,0,0\1,1,0,0)
 mat list dmat
 mat list ann
 
@@ -3080,6 +3328,8 @@ ttest s_cesd_tot_p1=s_cesd_tot_n1n2 if ///
 ttest s_cesdchange if  (r_adl_sp_helper_x==1 | r_iadl_sp_helper_x==1), ///
  by(int_any_of5_6m)  //caregiver sample
 
+tab r_female s_female, missing 
+ 
 ***************************************************************
 log close
 

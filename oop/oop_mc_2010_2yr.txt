@@ -4067,11 +4067,10 @@ that also contains the Elixhauser comorbidities */
 %macro mergecc(predeath=);
 
 proc sql;
-create table oop_fnl.hrs_oop_ivws_meet_el_cc_&predeath(drop=bid_hrs2)
-as select * from
-oop_fnl.hrs_oop_ivws_meet_el_&predeath. a
-left join
-oop_int.chronic_21_&predeath._n0_0(rename=(bid_hrs=bid_hrs2)) b 
+create table oop_fnl.hrs_oop_ivws_meet_el_cc_&predeath(drop=bid_hrs2) 
+as select * 
+from oop_fnl.hrs_oop_ivws_meet_el_&predeath. a
+left join oop_int.chronic_21_&predeath._n0_0(rename=(bid_hrs=bid_hrs2)) b 
 on (a.bid_hrs)=(b.bid_hrs2);
 quit;
 
@@ -4196,7 +4195,7 @@ Need to get nursing home nights by interview cycle!
 working code is in the next heading section*/
 
 /*get list of all interview dates for decedents, use the oop dataset and merge in xwalk id*/
-bid_hrs
+
 
 
 /*first pull all snf claims x years before death*/
@@ -4300,8 +4299,7 @@ proc sql;
 create table add_nh_&predeath._1
 as select a.*,b.snf_stay_all_2y, b.los_snf_paid_by_mc_2y from
 oop_fnl.hrs_oop_ivws_meet_el_cc_&predeath. a
-left join
-snf_2y b 
+left join snf_2y b 
 on (a.bid_hrs)=(b.BID_HRS_21);
 quit;
 
@@ -4309,8 +4307,7 @@ proc sql;
 create table add_nh_&predeath._2
 as select a.*,b.snf_stay_all_5y, b.los_snf_paid_by_mc_5y from
 add_nh_&predeath._1 a
-left join
-snf_5y b 
+left join snf_5y b 
 on (a.bid_hrs)=(b.BID_HRS_21);
 quit;
 
@@ -4337,6 +4334,7 @@ proc freq; table los_snf_paid_by_mc_2y snf_stay_all_2y; run;
 
 
 
+
 H="Medpar mc spending total"
 /*Totals are from merged claims files from 2000-2012
 Initial claims merging, processing done in HRS_2012_MC_claims.txt code
@@ -4360,8 +4358,8 @@ and one for all other claims in the mp file (inpatient claims)*/
 /*identify claims where entire claim is within the x months prior to death*/
 proc sql;
 create table &source._meet as select a.*,b.death_date_e
-from medi.&source0._2000_2012(where=(trim(left(SSLSSNF))&equ.="N")) a inner join
-oop_int.meet_criteria_2yr b
+from medi.&source0._2000_2012(where=(trim(left(SSLSSNF))&equ.="N")) a 
+inner join oop_int.meet_criteria_2yr b
 on trim(left(a.BID_HRS_21))=trim(left(b.BID_hrs))
 and &days_start<=b.death_date_e-a.admit_date<=&days_bef_death;
 quit;
@@ -4370,8 +4368,8 @@ quit;
 of x months but discharge date is within the x month window*/
 proc sql;
 create table &source._meet2 as select a.*,b.death_date_e
-from medi.&source0._2000_2012(where=(trim(left(SSLSSNF))&equ.="N")) a inner join
-oop_int.meet_criteria_2yr b
+from medi.&source0._2000_2012(where=(trim(left(SSLSSNF))&equ.="N")) a 
+inner join oop_int.meet_criteria_2yr b
 on trim(left(a.BID_HRS_21))=trim(left(b.BID_hrs))
 and b.death_date_e-a.admit_date>&days_bef_death and b.death_date_e-a.disch_date<=&days_bef_death;
 quit;
@@ -4382,7 +4380,7 @@ by just using the fraction of time that was included in the span*/
 data &source._meet3;
 set &source._meet2;
 pct_xm=(disch_date-(death_date_e-&days_bef_death))/(disch_date-admit_date);
-array list pmt_amt passthru;
+array list pmt_amt passthru loscnt;
 do over list;
 if list=. then list=0;
 /*scale the partial claims by the time within the x month period*/
@@ -4400,7 +4398,7 @@ and those partially in that time
 adjust for inflation here also*/
 data &source._cost;
 set &source._meet &source._meet3;
-array list pmt_amt passthru;
+array list pmt_amt passthru loscnt;
 do over list;
 if list=. then list=0;
 end;
@@ -4441,19 +4439,20 @@ run;
 *calculates total of mc charges for the claim type by hrs bid;
 proc sql;
 create table &source._pay as select distinct BID_HRS_21,
-sum(&source._paid_by_mc) as &source._paid_by_mc 
+sum(&source._paid_by_mc) as &source._paid_by_mc, 
+sum(loscnt) as &source._los
 from &source._cost group by BID_HRS_21;
 quit;
 
 *merges the totals above with the hrs dataset that meets the 2 year criteria;
 proc sql;
 create table &source._&name. as select
-a.BID_hrs,a.id,coalesce(b.&source._paid_by_mc,0) as &source._paid_by_mc_&name.
+a.BID_hrs,a.id,coalesce(b.&source._paid_by_mc,0) as &source._paid_by_mc_&name.,
+coalesce(b.&source._los,0) as &source._los_&name.
 from oop_int.meet_criteria_2yr a
-left join
- &source._pay b
- on trim(left(a.BID_hrs))=trim(left(b.BID_HRS_21));
- quit;
+left join &source._pay b
+on trim(left(a.BID_hrs))=trim(left(b.BID_HRS_21));
+quit;
 
  proc sort data=&source._&name. ;
  by BID_hrs;
@@ -4466,6 +4465,7 @@ left join
 /*Runs macro to get total for the inpatient (not SNF) claims*/
 %mp(days_start=0,days_bef_death=(365.25*2),source=ip,equ=~,name=24m );
 %mp(days_start=0,days_bef_death=(365.25*5),source=ip,equ=~,name=60m );
+
 
 /*************************************************************************/
 /*Simple check to view one of the HRS id's claims that are totaled to get the snf number
@@ -4489,6 +4489,7 @@ quit;
 /*************************************************************************/
 
 
+
 H="Other types of mc spending totals"
 /*macro to calculate totals for the claims that are not in medpar files*/
 %macro all_other(source=,month_n=,days_start=,days_bef_death=);
@@ -4496,8 +4497,8 @@ H="Other types of mc spending totals"
 /*identify claims where entire claim is within the x months prior to death*/
 proc sql;
 create table &source._meet as select a.*
-from medi.&source._2000_2012(keep=admit_date BID_HRS_21 pmt_amt) a inner join
-oop_int.meet_criteria_2yr b
+from medi.&source._2000_2012(keep=admit_date BID_HRS_21 pmt_amt) a 
+inner join oop_int.meet_criteria_2yr b
 on trim(left(a.BID_HRS_21))=trim(left(b.BID_hrs))
 and &days_start<=b.death_date_e-a.admit_date<=&days_bef_death;
 quit;
@@ -4552,10 +4553,9 @@ proc sql;
 create table &source.&month_n as select
 a.BID_hrs,coalesce(b.&source._paid_by_mc,0) as &source._paid_by_mc&month_n 
 from oop_int.meet_criteria_2yr a
-left join
- &source._pay b
- on trim(left(a.BID_hrs))=trim(left(b.BID_HRS_21));
- quit;
+left join &source._pay b
+on trim(left(a.BID_hrs))=trim(left(b.BID_HRS_21));
+quit;
 
  proc sort data=&source&month_n ;
  by BID_hrs;
@@ -4619,7 +4619,8 @@ out=oop_int.wage_index dbms=xls replace;
 run; 
 
 
-/*get RI average
+
+/*get RI average */
 data wi_ri;
 set oop_int.wage_index;
 if index(trim(left(Area_Title)),", RI")>0;
@@ -4629,7 +4630,7 @@ proc means;
 var wage_index;
 run;
 
-/*get DC average
+/*get DC average */
 data wi_dc;
 set oop_int.wage_index;
 if index(trim(left(Area_Title)),", DC")>0;
@@ -4638,7 +4639,16 @@ run;
 proc means;
 var wage_index;
 run;
-*/
+
+/*get NJ average */
+data wi_nj;
+set oop_int.wage_index;
+if index(trim(left(Area_Title)),", NJ")>0;
+run;
+
+proc means;
+var wage_index;
+run;
 
 
 data WAGE_INDEX2;
@@ -4646,16 +4656,19 @@ set oop_int.wage_index;
 cbsa_n=cbsa_code+0;
 if trim(left(cbsa_code))~="";
 wage_index_2012=Wage_Index;
-/*
 if index(trim(left(Area_Title)),", RI")>0 then RI=1;
 if index(trim(left(Area_Title)),", DC")>0 then DC=1;
+if index(trim(left(Area_Title)),", NJ")>0 then NJ=1;
 *state 44=RI ,state 11=DC;
+if state_in_wage_index=44 then wage_index_2012=1.2074; 
+if state_in_wage_index=11 then wage_index_2012= 0.98395; 
+if state_in_wage_index=34 then wage_index_2012= 1.0885; 
+/* 2010
 if state_in_wage_index=44 then wage_index_2010=1.0783000; 
 if state_in_wage_index=11 then wage_index_2010= 1.0701250; 
 */
 run;
 
-/*
 *Look at observations from Rhode Island;
 proc freq data=wage_index2(where=(ri=1));
 table Area_Title;
@@ -4664,7 +4677,7 @@ run;
 %let var=ri;
 proc means data=wage_index2;
 class &var;
-var wage_index_2010;
+var wage_index_2012;
 run;
 
 *Look at observations from DC;
@@ -4675,9 +4688,20 @@ run;
 %let var=DC;
 proc means data=wage_index2;
 class &var;
-var wage_index_2010;
+var wage_index_2012;
 run;
-*/
+
+*Look at observations from New Jersey;
+proc freq data=wage_index2(where=(NJ=1));
+table Area_Title;
+run;
+
+%let var=NJ;
+proc means data=wage_index2;
+class &var;
+var wage_index_2012;
+run;
+
 
 
 /******************************************************************/
@@ -4730,10 +4754,9 @@ quit;
 there are also many cbsas with missing wage index*/
 proc sql;
 create table zip_cbsa_wage_index as
-select a.*,b.wage_index_2012 from
-cbsa_zip_final a
-left join
-wage_index2 b
+select a.*,b.wage_index_2012 
+from cbsa_zip_final a
+left join wage_index2 b
 on a.cbsa_n=b.cbsa_n;
 quit;
 
@@ -4748,14 +4771,28 @@ run;
 /******************************************************************/
 
 /*Add zip code to the cost table by id*/
+/* 2010 
 proc sql;
 create table cost_zip as
-select a.*,b.zip_exit_e from 
-oop_int.costs_all a
-left join 
-oop_int.exit_restricted_02_to_12_v1 b
+select a.*,b.zip_exit_e,    
+from oop_int.costs_all a
+left join oop_int.exit_restricted_02_to_12_v1 b
 on a.id=b.id;
-quit;
+quit;*/
+
+/* 2012 variable snf_stay_all_2y & snf_stay_all_2y missing - patch to keep those variables in the data for later use;
+proc sort data=oop_int.costs_all out=cost_sort;
+by id;
+run;
+proc sort data=oop_fnl.hrs_oop_with_nh_nights out=nh_nights_sort;
+by id;
+run;
+data cost_zip;
+merge cost_sort 
+oop_int.exit_restricted_02_to_12_v1 (keep=id zip_exit_e)
+nh_nights_sort(keep=id snf_stay_all_2y snf_stay_all_5y);
+by id;
+run;
 
 
 /******************************************************************/
@@ -4790,14 +4827,14 @@ quit;
 /******************************************************************/
 proc sql;
 create table cost_id_wage_index as
-select a.*,b.wage_index_2012,b.state_n from 
-cost_zip a
-left join 
-zip_cbsa_wage_index2 b
+select a.*,b.wage_index_2012,b.state_n 
+from cost_zip a
+left join zip_cbsa_wage_index2 b
 on a.zip_exit_e=b.ZIP5;
 quit;
 
-/*1604 observations do not have wage id by cbsa-zip*/
+/*2012 1986 observations do not have wage id by cbsa-zip
+2010 1604 observations do not have wage id by cbsa-zip*/
 proc sql; 
 select count(distinct id) from cost_id_wage_index
 where wage_index_2012 is null ;
@@ -4817,17 +4854,15 @@ proc freq; table state_in_wage_index; run;
 /*Merges in wage index if there's one for the state but was missing for the zip*/
 proc sql;
 create table oop_fnl.mc_costs_2and5yr 
-as select a.*,coalesce(a.wage_index_2012,b.wage_index_2012) as wage_index_2012
-from
-cost_id_wage_index a
-left join
-wage_index3 b
+as select a.*,coalesce(a.wage_index_2012,b.wage_index_2012) as wage_index_2012_2
+from cost_id_wage_index a
+left join wage_index3 b
 on a.state_n=b.state_in_wage_index;
 quit;
 
 /*check for missing values*/
 proc means;
-var  wage_index_2012;
+var  wage_index_2012_2;
 run;
 
 /* 24 obs have missing state
@@ -4842,17 +4877,17 @@ quit;
 /*********************************************************/
 /*most of these have invalid zip codes too*/
 proc sql;
-select distinct zip_exit ,count(*) from cost_id_wage_index2
-where wage_index_2012=. group by zip_exit;
+select distinct zip_exit_e ,count(*) from cost_id_wage_index
+where wage_index_2012=. group by zip_exit_e;
 quit;
 
 /*manually fill in state where zip code is valid and rematch on state*/
-data cost_id_wage_index2a;
-set cost_id_wage_index2;
-if wage_index_2012=. and zip_exit=10065 then state_n=36; /*NY*/
-if wage_index_2012=. and zip_exit=33596 then state_n=12; /*FL*/
-if wage_index_2012=. and zip_exit=77498 then state_n=48; /*TX*/
-if wage_index_2012=. and zip_exit=78542 then state_n=48; /*TX*/
+data cost_id_wage_index2;
+set cost_id_wage_index;
+if wage_index_2012=. and zip_exit_e=10065 then state_n=36; /*NY*/
+if wage_index_2012=. and zip_exit_e=33596 then state_n=12; /*FL*/
+if wage_index_2012=. and zip_exit_e=77498 then state_n=48; /*TX*/
+if wage_index_2012=. and zip_exit_e=78542 then state_n=48; /*TX*/
 run;
 
 proc sql;
@@ -4903,14 +4938,14 @@ cd `datapath'
 use mc_costs_2and5yr.dta
 
 //drop extra variables
-drop wage_index_2010 state_n
+drop wage_index_2012 state_n
 
 //if missing wage index, set to 1 and create indicator to note no
 //wage index present b/c bad zip code and missing state
 //23 observations with wage index assigned = 1
 gen wi_missing_yes=0
-replace wi_missing_yes=1 if wage_index_2012==.
-replace wage_index_2012=1 if wage_index_2012==.
+replace wi_missing_yes=1 if wage_index_2012_2==.
+replace wage_index_2012=1 if wage_index_2012_2==.
 label var wi_missing_yes "Indicator missing wage index, set to 1"
 
 tab wi_missing_yes, missing
@@ -5027,6 +5062,8 @@ use oop_resp_sp_restri_24mand60m_mc.dta
 *****************************************************
 //check for missing core interviews
 gen missing_core_ivw_2y = 0
+replace missing_core_ivw_2y = 1 if exit_year_x==2012 & ///
+core_year_n1!=2010
 replace missing_core_ivw_2y = 1 if exit_year_x==2010 & ///
 core_year_n1!=2008
 replace missing_core_ivw_2y = 1 if exit_year_x==2008 & ///
@@ -5040,6 +5077,8 @@ core_year_n1!=2000
 tab missing_core_ivw_2y , missing
 
 gen missing_core_ivw_5y = 0
+replace missing_core_ivw_5y = 1 if exit_year_x==2012 & ///
+core_year_n1!=2010 & core_year_n2!=2008
 replace missing_core_ivw_5y = 1 if exit_year_x==2010 & ///
 core_year_n1!=2008 & core_year_n2!=2006
 replace missing_core_ivw_5y = 1 if exit_year_x==2008 & ///
@@ -5108,10 +5147,10 @@ mat samp=J(11,2,.)
 tab exit_year_x
 
 //2 year lookback column
-sum exit_year_x if inlist(exit_year_x,2002, 2004, 2006, 2008, 2010) //total number of decedents
-mat samp[1,1]=r(N) //2002-2010 exit waves
+sum exit_year_x if inlist(exit_year_x,2002, 2004, 2006, 2008, 2010, 2012) //total number of decedents
+mat samp[1,1]=r(N) //2002-2012 exit waves
 
-local ivw2y inlist(exit_year_x,2002, 2004, 2006, 2008, 2010) /*& ///
+local ivw2y inlist(exit_year_x,2002, 2004, 2006, 2008, 2010, 2012) /*& ///
 	no_core_2y==0 */
 sum exit_year_x if `ivw2y' //no missing core interviews
 mat samp[2,1]=r(N)
@@ -5161,10 +5200,10 @@ label var ind_sample_2yr "Indicator in 2 yr lookback sample"
 
 *****************************************************
 //5 year lookback column
-sum exit_year_x if inlist(exit_year_x,2006,2008,2010)
-mat samp[1,2]=r(N) //2006-2010 exit waves
+sum exit_year_x if inlist(exit_year_x,2006,2008,2010,2012)
+mat samp[1,2]=r(N) //2006-2012 exit waves
 
-local ivw5y inlist(exit_year_x,2006, 2008, 2010) /*& ///
+local ivw5y inlist(exit_year_x,2006, 2008, 2010, 2012) /*& ///
 	no_core_5y==0*/
 sum exit_year_x if `ivw5y' //no missing core interviews
 mat samp[2,2]=r(N)
@@ -5176,7 +5215,7 @@ sum exit_year_x if `ivw5y' & age_at_death_e>=70 & age!=. & xwalk_yes==1 //with m
 mat samp[4,2]=r(N)
 
 
-local ivw5y inlist(exit_year_x,2006, 2008, 2010)
+local ivw5y inlist(exit_year_x,2006, 2008, 2010, 2012)
 sum exit_year_x if `ivw5y' & age_at_death_e>=70 & age!=. & xwalk_yes==1 & part_ab_5y!=. //with full insur info
 mat samp[5,2]=r(N)
 
@@ -5226,12 +5265,12 @@ mat rownames samp="All decedents" "All decedents (dup)" ///
 frmttable using `logpath'\2-oop_sample, statmat(samp) ///
 title("Sample size determination" \ ///
 "2 and 5 year lookback at HRS and Claims") ///
-ctitles("","2 years","5 years" \ "", "2002-2010 exit years" , "2006-2010 exit years") ///
+ctitles("","2 years","5 years" \ "", "2002-2012 exit years" , "2006-2012 exit years") ///
 sdec(0) replace
 
 *******************************************************
-//who is missing full insurance information? mostly because died before 2005 or in 2011
-gen miss_ins = 1 if  inlist(exit_year_x,2006, 2008, 2010) & ///
+//who is missing full insurance information? mostly because died before 2005 or in 2013
+gen miss_ins = 1 if  inlist(exit_year_x,2006, 2008, 2010, 2012) & ///
  age_at_death_e>=70 & age!=. & xwalk_yes==1 & part_ab_5y==.
 replace miss_ins=0 if exit_year_x==2000 | exit_year_x==2002 | exit_year_x==2004
 replace miss_ins=0 if age_at_death_e<70
@@ -5242,7 +5281,7 @@ tab exit_year_x if miss_ins==1, missing
 tab death_year_e exit_year_x if miss_ins==1, missing
 
 //who does not have parts a,b coverage
-gen no_ab=1 if inlist(exit_year_x,2006, 2008, 2010) & ///
+gen no_ab=1 if inlist(exit_year_x,2006, 2008, 2010, 2012) & ///
  age_at_death_e>=70 & age!=. & xwalk_yes==1 & part_ab_5y==0
 replace no_ab=0 if exit_year_x==2000 | exit_year_x==2002 | exit_year_x==2004
 replace no_ab=0 if age_at_death_e<70
@@ -5321,6 +5360,7 @@ sum los_snf_paid_by_mc_2y , detail
 
 //if medicare reports more days than self report, assign total days as mc days
 //otherwise, keep just the oop days
+**** START HERE VARIABLE ALREADY EXISTS
 gen nh_nights_24m = nh_nights_sr_24m if (nh_nights_sr_24m>=snf_stay_all_2y | snf_stay_all_2y==.)
 replace nh_nights_24m=snf_stay_all_2y if nh_nights_24m==. & snf_stay_all_2y~=.
 label var nh_nights_24m "Total NH nights 2yrs before death, source=self report or claims"

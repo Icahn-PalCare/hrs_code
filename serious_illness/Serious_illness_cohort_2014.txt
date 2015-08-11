@@ -12871,12 +12871,10 @@ log close
 
 
 H="Try FMM on 2010 interview sample and Criteria A sample"
-/*Applying fmm to full 2010 wave sample and to criteria a only dataset
+/*Saves estimates from hospital  nights 2 and 3 component fmm models*/
 
-saves estimates from hospital nights 2 and 3 component fmm models*/
+foreach crit in  "a" {
 
-
-foreach crit in "2010" "a" {
 capture log close
 clear all
 set more off
@@ -12889,13 +12887,16 @@ log using "`logpath'\13_fmm_`crit'_core.txt", text replace
 
 cd `datapath'
 
+
 use n0_n1_p1_p2_x_criteria_`crit'_v1.dta
+***************************************************************
+drop if tot_paid_by_mc_12m_wi_n0<0
 
-drop if tot_paid_by_mc_12m_wi_n0<0 //drops 8 obs that have negative spending
+la var n_hospd_p12m_n0 "Hospital nights"
+la var tot_paid_by_mc_12m_wi_n0 "Total MC spending"
 
-********************************************************************
-//variable lists
 tab degree hs_deg_ind, missing //switched to tracker degree level variable
+tab female, missing
 
 gen religvimp_n0=1 if imprelig_n0==1
 replace religvimp_n0=0 if inlist(imprelig_n0,2,3,4)
@@ -12903,21 +12904,11 @@ tab religvimp_n0, missing
 
 gen smi_any_n0=1 if smi_count_n0>0
 replace smi_any_n0=0 if smi_count_n0==0
-tab smi_any_n0, missing
-
-gen criteria=0
-replace criteria=1 if criteria_a_n0==1
-replace criteria=2 if criteria_b_n0==1
-replace criteria=3 if criteria_c_n0==1
-
-label define criteria 1 "Criteria A Only" 2 "Criteria B Only" 3 "Criteria C"
-
-label values criteria criteria
-
-
+tab smi_any_n0, m
 //base no high school degree, male, white, adl improved or stable independent n1n0
 
 local cvars age_at_core_n0
+
 
 local ivars female re_white ///
 hs_deg_ind nw_midlow_n0 nw_midhigh_n0 nw_highest_n0 ///
@@ -12926,39 +12917,19 @@ medicaid_n0 champus_n0 medigap_n0 ///
 smi_any_n0 ind_em_ur_adm_12m_n0 ///
 adl_impair_core_n0
 
-//iterations of this variable list
-//tried with all serious medical illnesses listed out separately - then reduced to just any smi
-//tried with adl change variables - then reduced to independent vs not n0
-//individual race vs white - reduced to white vs non white (base)
-********************************************************************
-
-/*individual serious medical illnesses, not used
-smi_dem_ind smi_cancer_ind smi_esrd_ind ///
-smi_chf_ind smi_copd_ind ///
-smi_diab_compl_ind smi_liver_ind /*smi_als_ind*/ smi_hip_ind */
-
-//regional variables, split by quartile of hrr eol spending per dartmouth atlas
+//regional variables, split by quartile of hrr eol spending per dm atlas
 local rvars tot_eol_spending_hrr_n0 hospital_care_intensity_n0 ///
 	physicians_n0 specialists_n0 hospital_beds_n0
-foreach v in `rvars'{
-sum `v', detail
-drop if `v'==.
+
+foreach v in `rvars' {
+qui sum `v', detail
+qui drop if `v'==.
 }
 
-centile tot_eol_spending_hrr_n0, centile(20(20)80)
-sca d_qui_20=r(c_1)
-sca d_qui_40=r(c_2)
-sca d_qui_60=r(c_3)
-sca d_qui_80=r(c_4)
+xtile quintile_dm_2yr=tot_eol_spending_hrr_n0, nq(5)
 
-gen quintile_dm_2yr=.
-replace quintile_dm_2yr=1 if tot_eol_spending_hrr_n0 <=d_qui_20 & tot_eol_spending_hrr_n0 <.
-replace quintile_dm_2yr=2 if tot_eol_spending_hrr_n0 >d_qui_20 & tot_eol_spending_hrr_n0 <=d_qui_40
-replace quintile_dm_2yr=3 if tot_eol_spending_hrr_n0 >d_qui_40 & tot_eol_spending_hrr_n0 <=d_qui_60
-replace quintile_dm_2yr=4 if tot_eol_spending_hrr_n0 >d_qui_60 & tot_eol_spending_hrr_n0 <=d_qui_80
-replace quintile_dm_2yr=5 if tot_eol_spending_hrr_n0 >d_qui_80 & tot_eol_spending_hrr_n0 <.
-tab quintile_dm_2yr, missing
-la var quintile_dm_2yr"Quintiles of 2 year Dartmouth EOL Medicare Spending, HRR level (within this sample)"
+tab quintile_dm_2yr, m
+la var quintile_dm_2yr "Quintiles of 2 year Dartmouth EOL Medicare Spending, HRR level (within this sample)"
 la val quintile_dm_2yr quint
 
 sum tot_eol_spending_hrr_n0 if quintile_dm_2yr==1, detail
@@ -12969,130 +12940,256 @@ sum tot_eol_spending_hrr_n0 if quintile_dm_2yr==5, detail
 
 tab quintile_dm_2yr, gen(d_eol_spend_quint) missing
 
-foreach v in `cvars'{
-sum `v', detail
+foreach v in `cvars' {
+qui sum `v', detail
+qui drop if `v'==.
+}
+
+foreach v in `ivars' {
+qui tab `v', missing
 drop if `v'==.
 }
 
-foreach v in `ivars'{
-tab `v', missing
-drop if `v'==.
-}
 
 //now look at outcomes for the sample to be used for fmm
-***************************************************************
-//look at distribution of total medicare payments
-sum tot_paid_by_mc_12m_wi_n0 , detail
+**************************************************************************
 
-kdensity tot_paid_by_mc_12m_wi_n0 , ///
-ytitle(density) subtitle("Density of Medicare payments, 1 year after 2008 core interview")
+kdensity tot_paid_by_mc_12m_wi_n0, ///
+ytitle(density) subtitle("Density of Medicare payments, 1 year after Core Interview")
 graph save `logpath'\mc_paid_kdensity, replace
 
-//what about hospital nights
-tab n_hospd_p12m_n0, missing
-sum n_hospd_p12m_n0, detail
-histogram n_hospd_p12m_n0, freq
+//hosp nights?
+by n_hospd_p12m_n0, sort: egen hospd_freq=count(n_hospd_p12m_n0)
+tab n_hospd_p12m_n0 if hospd_freq>10, m
+sum n_hospd_p12m_n0, d
+hist n_hospd_p12m_n0 if hospd_freq>10, freq
 graph save `logpath'\hospd_hist, replace
 
 //quick look at who meets the criteria
-tab criteria_a_n0, missing
 
-gen totplus1_wi_n0=tot_paid_by_mc_12m_wi_n0+1 //new variable to get rid of zeros for gamma distribution
+gen criteria=1
+replace criteria=2 if criteria_b_n0==1
+replace criteria=3 if criteria_c_n0==1
 
-//other way of getting past zeros, create bins of $100/$1000 and model as a count var
+label define criteria 1 "Criteria A Only" 2 "Criteria B Only" 3 "Criteria C"
+label values criteria criteria
+
+tab criteria, missing
+
+
+***************************************************************************
+local da_quint d_eol_spend_quint1 d_eol_spend_quint2 d_eol_spend_quint3 ///
+d_eol_spend_quint4
+
+tab age_cat2_n0, gen(age_n0_ind)
+
+//lee index of mortality
+gen leeindex_n0=1
+qui replace leeindex_n0=leeindex_n0+3 if age_n0_ind2==1
+qui replace leeindex_n0=leeindex_n0+4 if  age_n0_ind3==1	
+qui replace leeindex_n0=leeindex_n0+5 if age_n0_ind4 ==1
+qui replace leeindex_n0=leeindex_n0+7 if age_n0_ind5 ==1
+qui replace leeindex_n0=leeindex_n0+2 if female ==0
+qui replace leeindex_n0=leeindex_n0+1 if dm_hrs_n0==1
+qui replace leeindex_n0=leeindex_n0+2 if cancer_hrs_n0==1
+qui replace leeindex_n0=leeindex_n0+2 if lung_hrs_n0== 1
+qui replace leeindex_n0=leeindex_n0+2 if chf_hrs_n0 ==1
+qui replace leeindex_n0=leeindex_n0+2 if smoke_curr_n0==1
+qui replace leeindex_n0=leeindex_n0+1 if bmi_lt25_n0==1
+qui replace leeindex_n0=leeindex_n0+2 if adl_diff_bh_n0==1
+qui replace leeindex_n0=leeindex_n0+2 if iadl_diff_m_n0==1
+qui replace leeindex_n0=leeindex_n0+1 if fl_diff_push_n0==1
+qui replace leeindex_n0=leeindex_n0+2 if fl_diff_wk_many_n0==1
+
+//generate inverse propensity score weight, 1/p if w=1 1/1-p if w=0
+
+global weightvars age_n0_ind2 age_n0_ind3 age_n0_ind4 age_n0_ind5 female ///
+dm_hrs_n0 cancer_hrs_n0 lung_hrs_n0 chf_hrs_n0 bmi_lt25_n0 smoke_curr_n0  ///
+adl_diff_bh_n0 iadl_diff_m_n0 fl_diff_wk_many_n0 fl_diff_push_n0 
+
+logit core_to_dod_1yr_n0 $weightvars
+predict prob_death_1yr_n0 //generate new var-pscore
+gen invpscore=(1/prob_death_1yr_n0) if core_to_dod_1yr_n0==1
+replace invpscore=(1/(1-prob_death_1yr_n0)) if core_to_dod_1yr_n0==0
+
+gen totplus1_wi_n0=tot_paid_by_mc_12m_wi_n0+1 //new variable amt paid +$1
+
+//look at dist of tot medicare payments
+sum tot_paid_by_mc_12m_wi_n0, d
+
+// other way of getting around zeros, put in $100 and $1000 bins
 gen tot_100bins_wi_12m=.
 gen tot_1000bins_wi_12m=.
 
 forvalues i = 1/5230 {
 
-qui replace tot_100bins_wi_12m=`i' if tot_paid_by_mc_12m_wi_n0>=((`i'-1)*100) & tot_paid_by_mc_12m_wi_n0<(`i'*100)
-qui replace tot_1000bins_wi_12m=`i' if tot_paid_by_mc_12m_wi_n0>=((`i'-1)*1000) & tot_paid_by_mc_12m_wi_n0<(`i'*1000)
+qui replace tot_100bins= `i' if tot_paid_by_mc_12m_wi_n0>=((`i'-1)*100) & ///
+	tot_paid_by_mc_12m_wi_n0<(`i'*100)
+qui replace tot_1000bins= `i' if tot_paid_by_mc_12m_wi_n0>=((`i'-1)*1000) & ///
+	tot_paid_by_mc_12m_wi_n0<(`i'*1000)
 }
+gen tot_reportable_100bins=tot_100bi
+replace tot_reportable_100bins=61 if tot_reportable_100b>61
+tab tot_reportable_100b
+
+by tot_100bins, sort: egen bins_freq=count(tot_100bins)
+tab tot_100bins if bins_freq>10
 
 gen tot_reportable_1000bins=tot_1000b
-replace tot_reportable=68 if tot_1000b>68
+replace tot_reportable_1000b=68 if tot_1000b>68
 
-tab tot_reportable 
-hist tot_reportable, width(1) freq
+tab tot_reportable_1000b
+hist tot_reportable_1000, width(1) freq title("MC Spending, $1000 bins")
+graph save `logpath'\tot_reportable_1000bins_hist, replace
 
-//save this dataset
-save n0_n1_p1_p2_x_criteria_`crit'_v2_fmm.dta, replace
 
-********************************************************************
-local da_quint d_eol_spend_quint1 d_eol_spend_quint2 d_eol_spend_quint3 ///
-d_eol_spend_quint4
-********************************************************************
+
+******************************************************************
+
 //hospital nights - base nb2 model
 nbreg n_hospd_p12m_n0 `cvars' `ivars' `da_quint', vce(robust)
+estat ic
+
 
 fmm n_hospd_p12m_n0 `cvars' `ivars' `da_quint', components(2) mixtureof(negbin2) ///
- diff vce(robust)
+	diff vce(robust)
 estimates save hospd_`crit'_fmm_2comp, replace
-
 predict phospd, posterior eq(component1)
+predict phospd_1, eq(component1)
+predict phospd_2, eq(component2)
+predict phospd_0
+estat ic
+
 /* //does not converge for criteria a group
 fmm n_hospd_p12m_n0 `cvars' `ivars' `da_quint', components(3) mixtureof(negbin2) ///
- diff vce(robust) iter(100)
+	diff vce(robust)
 estimates save hospd_`crit'_fmm_3comp, replace
+predict phospd3, posterior eq(component1)
+*/
 
-//fmm n_hospd_p12m_n0 `cvars' `ivars' `da_quint', components(4) mixtureof(negbin2) ///
-// diff vce(robust) iter(200)
-//estimates save hospd_`crit'_fmm_4comp, replace
-*/ 
-********************************************************************
 //looking at spending
 
-//total medicare payments - run base glm model
+//total medicare payments, different ways
 glm totplus1_wi_n0 `cvars' `ivars' `da_quint', family(gamma) link(log) vce(robust)
-glm , eform
+glm, eform
+estat ic
+mat glmtotplus1=r(S)
 
 fmm totplus1_wi_n0 `cvars' `ivars' `da_quint', components(2) ///
 	mixtureof(gamma) search(on) diff vce(robust)
-estimates save tot_paid_`crit'_fmm_2comp, replace	
+estimates save tot_paid_`crit'_fmm_2comp, replace
 predict ptot1, posterior eq(component1)
+predict ptot1_1, eq(component1)
+predict ptot1_2, eq(component2)
+predict ptot1_0
+estat ic
+mat totplus1=r(S)
+
+
 /*
 //does not converge
 fmm totplus1_wi_n0 `cvars' `ivars' `da_quint', components(3) ///
-	mixtureof(gamma) search(on) diff vce(robust) iter(200)
+	mixtureof(gamma) search(on) vce(robust)
 estimates save tot_paid_`crit'_fmm_3comp, replace
-
-fmm totplus1_wi_n0 `cvars' `ivars' `da_quint', components(4) ///
-	mixtureof(gamma) search(on) diff vce(robust) iter(200)
-estimates save tot_paid_`crit'_fmm_4comp, replace
 */
+
 glm tot_100bins_wi_12m `cvars' `ivars' `da_quint', family(gamma) link(log) vce(robust)
-glm , eform
+glm, eform
+estat ic
+mat glm100bins=r(S)
+
 
 fmm tot_100bins_wi_12m `cvars' `ivars' `da_quint', components(2) ///
 	mixtureof(gamma) search(on) diff vce(robust)
-estimates save tot_paid_`crit'_fmm_2comp, replace	
 predict pbinsgamma, posterior eq(component1)
+predict pbinsgamma_1, eq(component1)
+predict pbinsgamma_2, eq(component2)
+predict pbinsgamma_0
+estat ic
+mat twocompglm100bins=r(S)
 
-fmm tot_100bins_wi_12m `cvars' `ivars' `da_quint', components(2) mixtureof(negbin2) ///
-	diff vce(robust)
+
+
+nbreg tot_100bins_wi_12m `cvars' `ivars' `da_quint'
+estat ic
+mat nb100bins=r(S)
+
+
+fmm tot_100bins_wi_12m `cvars' `ivars' `da_quint', components(2) ///
+	mixtureof(negbin2) diff vce(robust)
 estimates save tot_100bins_`crit'_fmm_2comp, replace
 predict pbins100, posterior eq(component1)
+predict pbins100_1, eq(component1)
+predict pbins100_2, eq(component2)
+predict pbins100_0
+estat ic
+mat twocomp100bins=r(S)
 
 
-fmm tot_1000bins_wi_12m `cvars' `ivars' `da_quint', components(2) mixtureof(negbin2) ///
-	diff vce(robust)
-estimates save tot_1000bins_`crit'_fmm_2comp, replace
-predict pbins1000, posterior eq(component1)
+/* does not converge with ipsw for any specification
 
-/*
-//does not converge
-fmm tot_1000bins_wi_12m `cvars' `ivars' `da_quint', components(3) mixtureof(negbin2) ///
-	diff vce(robust) iter(100)
-estimates save tot_1000bins_`crit'_fmm_3comp, replace
+nbreg tot_100bins_wi_12m `cvars' `ivars' `da_quint' [pw=invp]
+estat ic
+mat nbpw100bins=r(S)
 
-fmm tot_1000bins_wi_12m `cvars' `ivars' `da_quint', components(4) mixtureof(negbin2) ///
-	diff vce(robust) iter(200)
-estimates save tot_1000bins_`crit'_fmm_4comp, replace
+
+fmm tot_100bins_wi_12m `cvars' `ivars' `da_quint' [pw=invp], components(2) ///
+	mixtureof(negbin2) diff vce(robust)
+estimates save tot_100bins_`crit'_fmm_pw_2comp, replace
+predict pbins100pw, posterior eq(component1)
+predict pbins100pw_1, eq(component1)
+predict pbins100pw_2, eq(component2)
+predict pbins100pw_0
+estat ic
+mat twocomppw100bins=r(S)
 */
 
 
+nbreg tot_1000bins_wi_12m `cvars' `ivars' `da_quint'
+estat ic
+mat nb1000bins=r(S)
+
+
+fmm tot_1000bins_wi_12m `cvars' `ivars' `da_quint', components(2) ///
+	mixtureof(negbin2) diff vce(robust)
+estimates save tot_1000bins_`crit'_fmm_2comp, replace
+predict pbins1000, posterior eq(component1)
+predict pbins1000_1, eq(component1)
+predict pbins1000_2, eq(component2)
+predict pbins1000_0
+estat ic
+mat twocomp1000bins=r(S)
+
+
+corr phospd ptot1 pbinsgamma pbins100 pbins1000 //pbins100pw
+
+di "glmtotplus1"
+matlist glmtotplus1
+di "twcomptotplus1"
+matlist totplus1
+di "glm100bins"
+matlist glm100bins
+di "twocompglm100bins"
+matlist twocompglm100bins
+di "nb100bins"
+matlist nb100bins
+di "twocomp100bins"
+matlist twocomp100bins
+*di "nbpw100bins"
+*matlist nbpw100bins
+*di "twocomppw100bins"
+*matlist twocomppw100bins
+di "nb1000bins"
+matlist nb1000bins
+di "twocomp1000bins"
+matlist twocomp1000bins
+
+//save this dataset
+
+save n0_n1_p1_p2_x_criteria_`crit'_v2_fmm.dta, replace
 log close
 }
+
 
 
 H="2010 & crit a fmm hospital nights postestimation"
@@ -13108,7 +13205,7 @@ local logpath E:\data\serious_ill\logs
 local datapath2 E:\data\serious_ill\int_data
 local datapath E:\data\serious_ill\final_data
 
-log using "`logpath'\14_fmm_`crit'_core_postest.txt", text replace
+log using "`logpath'\14_fmm_`crit'_core_postest_hospd.txt", text replace
 
 cd `datapath'
 
@@ -13306,12 +13403,11 @@ capture log close
 clear all
 set more off
 
-local crit = "a"
 local logpath E:\data\serious_ill\logs
 local datapath2 E:\data\serious_ill\int_data
 local datapath E:\data\serious_ill\final_data
 
-log using "`logpath'\14_fmm_`crit'_core_postest.txt", text replace
+log using "`logpath'\14_fmm_`crit'_core_postest_totplus1.txt", text replace
 
 cd `datapath'
 
@@ -13354,9 +13450,10 @@ sum yhat2
 scalar yhat2mean = r(mean)
 
 
-twoway hist yhat1, percent  color(blue) finten(inten10) title("Predicted MC Payments") legend(label(1 Component1)) bin(100) || hist yhat2, percent color(orange) legend(label(2 Component2)) bin(100) fint(inten10)
-
+twoway hist yhat1, percent  color(blue) finten(inten10) title("Predicted MC Payments") legend(label(1 Component1)) || hist yhat2, percent color(orange) legend(label(2 Component2)) fint(inten10)
+graph save `logpath'\14_fmm_totplus1_`crit'_2comp_hist, replace
 twoway kdensity yhat1, color(blue) legend(label(1 Component1)) title("Predicted MC Payments")|| kdensity yhat2, color(orange) legend(label(2 Component2)) || kdensity yhat0, color(gray) legend(label(3 Full Sample Prediction))
+graph save `logpath'\14_fmm_totplus1_`crit'_2comp_kden, replace
 **************************************************
 //get posterior probability each component
 predict po1_Xres, posterior eq(component1) //posterior prob comp 1
@@ -13375,7 +13472,7 @@ reg po1_Xres `cvars' `ivars' `da_quint', beta vce(r)
 
 outreg using `logpath'\14_fmm_tot_plus1__`crit'_2comp_means, ///
 replace stats(beta) ///
-title("Hospital nights - regression posterior probability on expl variables") ///
+title("Total Paid + $1 - regression posterior probability on expl variables") ///
 ctitles("","Posterior probability Comp 1") ///
 bdec(4) starlevels(10 5 1) ///
 addrows("Probability","`p1'") varlabels
@@ -13458,7 +13555,7 @@ log close
 
 
 H="2010 & crit a fmm totbins postestimation"
-/*looking at postestimation for the fmm models for totplus1
+/*looking at postestimation for the fmm models for total paid in $100 & $1000 bins
 for the 2010 sample in the previous section*/
 
 foreach crit in "2010" "a" {
@@ -13471,7 +13568,7 @@ local datapath E:\data\serious_ill\final_data
 
 cd `datapath'
 
-log using "`logpath'\14_fmm_`crit'_core_postest.txt", text replace
+log using "`logpath'\14_fmm_`crit'_core_postest_bins.txt", text replace
 
 foreach bins in "tot_100bins" "tot_1000bins" {
 clear all
@@ -13537,7 +13634,7 @@ reg po1_Xres `cvars' `ivars' `da_quint', beta vce(r)
 
 outreg using `logpath'\14_fmm_`bins'_`crit'_2comp_means, ///
 replace stats(beta) ///
-title("Hospital nights - regression posterior probability on expl variables") ///
+title("MC Payments `bins' - regression posterior probability on expl variables") ///
 ctitles("","Posterior probability Comp 1") ///
 bdec(4) starlevels(10 5 1) ///
 addrows("Probability","`p1'") varlabels
@@ -14858,7 +14955,7 @@ H="Univariate and glm for weighted sample"
 */
 
 
-foreach crit in "2010" "a" {
+foreach crit in "2010" "a" "c"{
 capture log close
 
 clear all
@@ -14916,6 +15013,18 @@ la var pb_paid_by_mc_6m_wi_n0 "Carrier"
 la var op_paid_by_mc_6m_wi_n0 "Outpatient" 
 la var dm_paid_by_mc_6m_wi_n0 "DME"
 la var tot_paid_by_mc_6m_wi_n0 "Total Medicare payments"
+
+la var cc_ami_isch_1yr_n0 "Ischemic heart disease or myocardial infarction"
+la var cc_8_chf_1yr_n0 "Congestive heart failure" 
+la var cc_4_atrialfb_1yr_n0 "Atrial fibrillation"
+la var cc_3_alzhdmta_1yr_n0 "Alzheimer disease or dementia"
+la var cc_9_diabetes_1yr_n0 "Diabetes" 
+la var cc_6_chrnkidn_1yr_n0 "Chronic kidney disease"
+la var cc_7_copd_1yr_n0 "Chronic obstructive pulmonary disease"
+la var cc_13_depressn_1yr_n0 "Depression" 
+la var cc_cncr_chronic_1yr_n0 "Cancer"
+la var cc_15_ra_oa_1yr_n0 "Arthritis"
+la var cc_16_strketia_1yr_n0 "Stroke or transient ischemic attack"
 
 local ivars ind_em_ur_adm_p6m_n0
 
@@ -15120,6 +15229,18 @@ la var hospital_beds_n0 "Hospital beds/1000 residents, HRR"
 la var specialists_n0 "Specialists /100,000 residents, HRR"
 
 la var core_to_dod_1yr_n0 "Died within 1 year of interview"
+
+la var cc_ami_isch_1yr_n0 "Ischemic heart disease or myocardial infarction"
+la var cc_8_chf_1yr_n0 "Congestive heart failure" 
+la var cc_4_atrialfb_1yr_n0 "Atrial fibrillation"
+la var cc_3_alzhdmta_1yr_n0 "Alzheimer disease or dementia"
+la var cc_9_diabetes_1yr_n0 "Diabetes" 
+la var cc_6_chrnkidn_1yr_n0 "Chronic kidney disease"
+la var cc_7_copd_1yr_n0 "Chronic obstructive pulmonary disease"
+la var cc_13_depressn_1yr_n0 "Depression" 
+la var cc_cncr_chronic_1yr_n0 "Cancer"
+la var cc_15_ra_oa_1yr_n0 "Arthritis"
+la var cc_16_strketia_1yr_n0 "Stroke or transient ischemic attack"
 
 ***************************************************************
 

@@ -1,0 +1,1095 @@
+= V4 Outline MultiLine NoSorting TabWidth=30
+
+H="Hysterectomy Project Outline"
+/*Follows the Surgery Code 2010 Claims 20140324 to create dataset for Hysterectomy Study
+
+Outline will be as follows:
+1. Identify index surgeries that meet selection criteria
+2. Check IP claims for claims that span continuous hospital stays 
+	and save a list of all hospital stays for beneficiaries
+	that have an index surgery
+3. Identify index surgery information
+	a. Presence of complications
+	b. Index surgery hospital stay LOS
+	c. Index surgery hospital stay discharge status / destination codes
+4. Check insurance status 6m and 12m pre-surgery to determine
+	sample selection (Medicare parts a and b and no hmo coverage required)
+5. Identify number of hospital admissions in the 6 months pre-surgery
+6. Identify post-surgery hospital and snf use in the 12 months post-surgery
+	a. Days from surgery to next IP admission
+	b. Total number of days spent in a hospital
+	c. Count of hospital admissions
+	d. Total number of days in a SNF
+7. Identify Elixhauser comorbidities 6 and 12 months pre surgery
+8. Identify chronic conditions 6 and 12 months pre surgery
+
+
+/*Set up project libraries in SAS
+Note created separate folders for the 2012 claims data files*/
+
+/*********************************************************/
+/*Unique to Amy's computer - 2012 Claims*/
+/*********************************************************/
+/*Medicare claims files - 2012*/
+libname medi 'E:\data\cms_DUA_24548_2012';
+
+/*Surgery project data files*/
+libname sur_fin "E:\data\surgery_hysterectomy\final_2012clms";
+
+/*Surgery project temporary data files*/
+libname sur_int "E:\data\surgery_hysterectomy\int_2012clms";
+
+/*Procedures project raw data files
+Reference files like list of chronic conditions ICD-9 codes*/
+libname ref_data "E:\data\surgery_hysterectomy\ref_data";
+
+/*Cleaned HRS 2000-2012 dataset*/
+libname hrs_cln 'E:\data\hrs_cleaned';
+
+H="Identify Surgeries that Meet Criteria"
+/*Identify claims with particular procedure codes present from the
+ip claims file
+
+Final file created: sur_int.last_surgery_date
+List of index surgery  by beneficiary id
+
+Keep additional information needed about this claim / surgery:
+1. Complications (type of complications? can look to original surgery for it)
+2. LOS
+3. Discharge status (to home, SNF, etc)
+4. Admission type (to track if ER admission or not)
+
+%let source0=ip;
+
+proc sort data=medi.&source0._2000_2012 ;
+by BID_HRS_21;
+run;
+
+/*Create claim id for full set of ip claims 2000-2012*/
+/*sequential, unique ID for each claim in this file*/
+data sur_int.&source0._2000_2012_claim_id;
+set medi.&source0._2000_2012;
+	clm_id=_N_;
+run;
+
+/*check no duplicates of new claim id*/
+proc sort data=sur_int.&source0._2000_2012_claim_id nodupkey ;
+by clm_id;
+run;
+
+proc contents order=casecollate data=sur_int.&source0._2000_2012_claim_id;
+run;
+
+/*check to confirm that all dx and procedure codes are using icd-9 codes*/
+proc freq data=sur_int.&source0._2000_2012_claim_id;
+table PDVRSNCD DVRSCD01-DVRSCD25 PVRSCD01-PVRSCD25;
+run;
+
+proc sql;
+create table &source0._meet as select BID_hrs_21,
+PRCDRCD01,PRCDRCD02,PRCDRCD03,PRCDRCD04,
+PRCDRCD05,PRCDRCD06,PRCDRCD07,PRCDRCD08,
+PRCDRCD09,PRCDRCD10,PRCDRCD11,PRCDRCD12,
+PRCDRCD13,PRCDRCD14,PRCDRCD15,PRCDRCD16,
+PRCDRCD17,PRCDRCD18,PRCDRCD19,PRCDRCD20,
+PRCDRCD21,PRCDRCD22,PRCDRCD23,PRCDRCD24,
+PRCDRCD25,
+TYPE_ADM,
+PRCDRDT01,PRCDRDT02,PRCDRDT03,
+PRCDRDT04,PRCDRDT05,PRCDRDT06,PRCDRDT07,
+PRCDRDT08,PRCDRDT09,PRCDRDT10,PRCDRDT11,
+PRCDRDT12,PRCDRDT13,PRCDRDT14,PRCDRDT15,
+PRCDRDT16,PRCDRDT17,PRCDRDT18,PRCDRDT19,
+PRCDRDT20,PRCDRDT21,PRCDRDT22,PRCDRDT23,
+PRCDRDT24,PRCDRDT25,
+AD_DGNS ,
+DGNSCD01,DGNSCD02,DGNSCD03,DGNSCD04,DGNSCD05,
+DGNSCD06,DGNSCD07,DGNSCD08,DGNSCD09,DGNSCD10,
+DGNSCD11,DGNSCD12,DGNSCD13,DGNSCD14,DGNSCD15,
+DGNSCD16,DGNSCD17,DGNSCD18,DGNSCD19,DGNSCD20,
+DGNSCD21,DGNSCD22,DGNSCD23,DGNSCD24,DGNSCD25,
+STUS_CD,
+clm_id,
+admit_date,
+disch_date
+from sur_int.&source0._2000_2012_claim_id ;
+quit;
+
+proc contents data=sur_int.&source0._2000_2012_claim_id(keep=PRCDR:);
+run;
+proc sql outobs=2;
+select PRCDRCD01,PRCDRDT01 from sur_int.&source0._2000_2012_claim_id;
+quit;
+
+/*creates table with each procedure as a separate row*/
+
+data proc_long(keep=BID_hrs_21 TYPE_ADM procedure procedure_date AD_DGNS DGNSCD01-DGNSCD25
+	STUS_CD clm_id admit_date disch_date);
+set ip_meet;
+array list PRCDRCD01-PRCDRCD25;
+array date PRCDRDT01-PRCDRDT25;
+do over list;
+if list~="" then do;
+procedure=list;
+procedure_date=mdy(substr(trim(left(date)),5,2),substr(trim(left(date)),7,2),substr(trim(left(date)),1,4));
+output;
+end;
+end;
+format procedure_date date10.;
+run;
+
+/*rename admit date and discharge date to be is_ for index surgery
+This way can use this index surgery information to check against
+claims lists pre- and post-surgery*/
+data proc_long2(rename=(admit_date=is_admit_date) rename=(disch_date=is_disch_date));
+set proc_long;
+format admit_date date10.;
+format disch_date date10.;
+run; 
+
+/* Identify surgeries that meet the criteria
+Indicator variable surgery_meet = 1 if yes, include in sample 
+1700 surgeries meet the criteria*/
+data surgery_meet;
+set proc_long2;
+if length(compress(procedure))>0 then do;
+
+if procedure+0 in (683, 684, 685, 686, 687, 689, 6849, 6839, 6869, 6841, 6831, 6851, 6861, 6871, 6859, 6879) then surgery_meet=1;
+
+if substr(compress(procedure),1,3)+0 in (683, 684, 685, 686, 687, 689) then surgery_meet=1;
+
+end;
+/*only keep observations in work.surgery_meet that meet criteria*/
+if surgery_meet then output;
+
+run;
+
+proc freq data=surgery_meet;
+table procedure;
+run;
+
+/*****************************************************************************/
+/*Look at number of qualifying procedures per bid*/
+/*****************************************************************************/
+/*Identify the most recent surgery from the list that meet the criteria for each 
+beneficiary id*/
+proc sort data=surgery_meet;
+by bid_hrs_21 procedure_date;
+run;
+
+/*get count of qualifying procedures per beneficary, regardless of surgery dates
+so a beneficiary can have more than 1 surgery on the same date*/
+data surg_meet_count1;
+set surgery_meet;
+by bid_hrs_21;
+	if first.bid_hrs_21 then pro_count=1;
+	else pro_count+1;
+run;
+
+data surg_meet_count2(rename=pro_count=pro_cnt_all);
+set surg_meet_count1(keep=bid_hrs_21 pro_count);
+by bid_hrs_21;
+if last.bid_hrs_21;
+label pro_count="Procedure count, all qualifying procedures";
+run;
+
+/*now get list of surgeries on seperate dates*/
+proc sort data=surgery_meet out=surg_meet_count3 nodupkey;
+by bid_hrs_21 procedure_date;
+run;
+
+data surg_meet_count4;
+set surg_meet_count3;
+by bid_hrs_21;
+	if first.bid_hrs_21 then pro_count=1;
+	else pro_count+1;
+run;
+
+
+data surg_meet_count5(rename=pro_count=pro_cnt_date);
+set surg_meet_count4(keep=bid_hrs_21 pro_count);
+by bid_hrs_21;
+if last.bid_hrs_21;
+label pro_count="Procedure count, only count 1 per procedure date";
+run;
+
+/*finally with separate medicare claims*/
+proc sort data=surgery_meet out=surg_meet_count6 nodupkey;
+by bid_hrs_21 clm_id;
+run;
+
+data surg_meet_count7;
+set surg_meet_count6;
+by bid_hrs_21;
+	if first.bid_hrs_21 then pro_count=1;
+	else pro_count+1;
+run;
+
+data surg_meet_count8(rename=pro_count=pro_cnt_clm);
+set surg_meet_count7(keep=bid_hrs_21 pro_count);
+by bid_hrs_21;
+if last.bid_hrs_21;
+label pro_count="Procedure count, only count 1 per claim";
+run;
+
+ods rtf body='E:\data\surgery_hysterectomy\logs\Procedure_counts.rtf';
+
+title "Count of qualifying procedures, including multiple surgeries on the same date";
+proc freq data=surg_meet_count2; table pro_cnt_all; run;
+
+title "Count of qualifying procedures with separate procedure dates";
+proc freq data=surg_meet_count5; table pro_cnt_date; run;
+
+title "Count of qualifying procedures with separate Medicare claims";
+proc freq data=surg_meet_count8; table pro_cnt_clm; run;
+
+ods rtf close;
+
+/*final file list of index surgery by bid
+243 beneficiaries have index surgery identified*/
+data last_surgery_date_1;
+set surgery_meet ;
+by bid_hrs_21 procedure_date ;
+if last.bid_hrs_21;
+run;
+
+/*now merge in procedure counts so can carry through dataset*/
+data counts;
+merge surg_meet_count2 surg_meet_count5 surg_meet_count8;
+by bid_hrs_21;
+run;
+
+proc freq; table pro_cnt_all pro_cnt_date pro_cnt_clm; run;
+
+proc sql;
+create table sur_int.last_surgery_date as select a.*,b.pro_cnt_all,b.pro_cnt_date,b.pro_cnt_clm from
+last_surgery_date_1 a left join
+counts b
+on a.bid_hrs_21=b.bid_hrs_21;
+quit;
+
+H="(note-hasn't been done) Check for continuous stay"
+/*
+Check list of IP claims for cases where multiple claims are present
+for a single hospital stay
+
+This is identified where 
+1. start day of claim is within 1 day of end
+date of the claim before AND
+2. discharge code = 2 or 5 for transfer for inpatient care
+
+Need to check index surgery to determine if more than one claim
+is associated with that hospital stay in order to calculate LOS, etc.
+
+If discharge destination code = 02 (transferred to short term general hospital
+for inpatient care) or = 05 (transferred to anoter type of institution for inpatient care)
+and the discharge date of 1st claim is the the same or one day before the admit
+date for the next claim, then the claims are part of the same inpatient stay.
+
+List of claims with new start/ end dates that span overall stay
+is saved as sur_int.ip_cont_stay_clms_merged
+If multiple claims were merged into single stay observation, ind_clm_merge=1
+
+*/
+
+/*Step 1: get dataset of ip claims only from the medpar file
+Use medpar file with the unique claim id assigned*/
+data sur_int.ip_2000_2010;
+set sur_int.ip_2000_2010_claim_id/*(where=(trim(left(SSLSSNF))~="N"))*/;
+run;
+
+/*step 2: only keep claims where the bid had an index surgery
+5283 claims identified
+This list of claims includes the index surgery claim*/
+proc sql;
+create table mp_cont_stay_1 as select a.*,b.procedure_date,b.is_admit_date,b.is_disch_date
+from sur_int.ip_2000_2010 a inner join
+sur_int.last_surgery_date b
+on trim(left(a.bid_hrs_19))=trim(left(b.bid_hrs_19)) ;
+quit;
+
+proc sort data=mp_cont_stay_1 ;
+by bid_hrs_19 admit_date;
+run;
+
+/*change formats of dates*/
+data mp_cont_stay_2 ;
+set mp_cont_stay_1 ;
+format admit_date date10.;
+format disch_date date10.;
+run;
+
+/***********************************************************************/
+/*         Determine days from current obs. claim admit date
+	   to previous claim discharge date                   */
+/***********************************************************************/
+
+/*sort ascending to calculate days from previous claim to current claim*/
+proc sort data=mp_cont_stay_2 ;
+by bid_hrs_19 admit_date disch_date;
+run;
+
+/*new variable
+daydiff_prev = days from previous claim end date to current claim start date
+If claim is the first claim for that BID, then set daydiff_prev = null */
+data mp_cont_stay_3 ;
+set mp_cont_stay_2 ;
+by bid_hrs_19;
+daydiff_prev = admit_date - LAG(disch_date) ;
+if first.bid_hrs_19 then daydiff_prev = . ;
+run;
+
+proc freq data=mp_cont_stay_3 ;
+table daydiff_prev;
+run;
+
+/***********************************************************************/
+/*         Identify claims that, just using start/end dates
+	   appear to be for continuous hospital stays                  */
+/***********************************************************************/
+
+proc sort data=mp_cont_stay_3 ;
+by bid_hrs_19 admit_date disch_date;
+run;
+
+/*keep a list of just claims where next claim starts on the same
+day or day after discharge from index surgery claim
+There are 444 such claims*/
+data mp_cont_stay_4 ;
+set mp_cont_stay_3(where=(daydiff_prev<2));
+run;
+data mp_cont_stay_5 ;
+set mp_cont_stay_4(where=(daydiff_prev~=.)) ;
+run;
+proc freq data=mp_cont_stay_5;
+table daydiff_prev;
+run;
+
+/***********************************************************************/
+/*         Add indicator for claims with discharge codes
+           indicating patient transferred for further
+           inpatient care                                    */
+/***********************************************************************/
+
+/*check discharge destination code for surgeries where the next claim
+starts either the same day as discharge from surgery claim or day after
+add indicator to dataset that claim has the discharge code*/
+proc freq data=mp_cont_stay_3;
+table stus_cd;
+run;
+
+data mp_cont_stay_6;
+set mp_cont_stay_3;
+dstn_cd_cont=0;
+if STUS_CD in(02,05) then dstn_cd_cont=1;
+run;
+
+proc freq data=mp_cont_stay_6;
+table dstn_cd_cont;
+run;
+
+proc freq data=mp_cont_stay_6(where=(dstn_cd_cont=1)) ;
+table STUS_CD ;
+run;
+
+/********************************************************************/
+/* Merge claim start and end dates if they have the required
+discharge destination codes and claim dates are within one day */
+/********************************************************************/
+
+proc sort data=mp_cont_stay_6 out=mp_cont_stay_7;
+     by BID_HRS_19 admit_date disch_date;
+run;
+
+data mp_cont_stay_8;
+set mp_cont_stay_7;
+retain stay_start stay_end;
+       by BID_HRS_19 admit_date;
+          /* Handle claims that are for distinct stay
+             Distinct stay if more than 1 day between claim dates or
+             claim dates overlap but discharge destination code does not
+             indicate transferred for inpatient care  */
+	ind_clm_merge=.; /*initialize the indicator variable for merged claims*/
+if (daydiff_prev > 1 or daydiff_prev=.) or
+              (daydiff_prev <2 and daydiff_prev~=. and lag(dstn_cd_cont)=0) then do;
+             stay_start = admit_date;
+             stay_end = disch_date;
+			 ind_clm_merge=0;
+             end;
+          /* Handle claims that are for continous stays */
+          if (daydiff_prev <2 and daydiff_prev~=. and lag(dstn_cd_cont)=1) then do;
+             stay_end = disch_date;
+			 ind_clm_merge=1;
+             end;
+          format stay_start date10. stay_end date10.;
+run;
+
+/*189 cases where claims dates are merged*/
+proc freq;
+table ind_clm_merge /missprint;
+run;
+
+/********************************************************************/
+/* Drop claims so there is only one claim per stay with the overall
+stay start and end dates */
+/********************************************************************/
+
+data mp_cont_stay_9;
+set mp_cont_stay_8;
+by BID_HRS_19 stay_start;
+   j = 0;
+   if last.stay_start then j=j+1;
+run;
+
+proc freq;
+table j;
+run;
+/*3.63% of claims (192) are merged with an additional claim, 2 stays have 3 claims
+merged into a single stay (explains ind_clm_merge count=189 while j=0 count=192,
+results in 5091 unique stays out of the 5283 claims*/
+
+/*save the new ip stay dataset sur_int.ip_cont_stay_clms_merged*/
+data sur_int.ip_cont_stay_clms_merged;
+set mp_cont_stay_9;
+if j=1;
+drop j;
+label ind_clm_merge="Indicator for stay dates merged over multiple claims";
+run;
+
+/*174 (3.42%) of the 5091 stays have multiple claims dates merged
+to get stay start / end dates*/
+proc freq data=sur_int.ip_cont_stay_clms_merged;
+table ind_clm_merge /missprint;
+run;
+
+
+
+H="(note-hasn't been done) Index Surgery Defined"
+/*Add information about index surgery claim
+
+Information needed is:
+From index surgery claim
+1. Complications 
+From index surgery hospital overall stay
+2. LOS 
+3. Discharge destination code
+
+Resulting dataset is saved as:
+sur_int.index_sur_stay
+
+Also save intermediate dataset sur_int.hospital_stays
+Use list of all hospital stays to determine number of 
+hospitalizations pre-surgery and details re. post-surgery
+hospitalizations later in the code
+
+*/
+
+
+/*Not doing this at this time.
+/*************************************************************************/
+/*Identify complications from dx codes for index surgery
+Dataset created: sur_int.compl*/
+/*************************************************************************/
+
+data sur_int.compl;
+set sur_int.last_surgery_date;
+
+dx_1=trim(left(DGNSCD01));
+if dx_1~="" then do;
+	
+/*initialize complications variables*/
+comp_uti=0;
+comp_pe=0;
+comp_inf=0;
+comp_rf=0;
+comp_mi=0;
+comp_del=0;
+comp_any=0;
+end;
+
+array dx DGNSCD01-DGNSCD25 ;
+do over dx;
+/*UTI*/
+if substr(dx,1,4)='5990' and comp_uti=0 
+	then comp_uti=1;
+
+/*PE*/
+if (substr(dx,1,3)='480'
+	or substr(dx,1,3)='486')
+	 and comp_pe=0 
+	then comp_pe=1;
+
+/*Infection*/
+if (substr(dx,1,4)='9985'
+	or substr(dx,1,5)='99859')
+	 and comp_inf=0 
+	then comp_inf=1;
+
+/*Resp Failure*/
+if substr(dx,1,5)='51881' and comp_rf=0
+	then comp_rf=1;
+
+/*MI*/
+if (substr(dx,1,4)='5845'
+	or substr(dx,1,4)='5846'
+	or substr(dx,1,4)='5847'
+	or substr(dx,1,4)='5848'
+	or substr(dx,1,4)='5849')
+	and comp_mi=0 
+	then comp_mi=1;
+
+/*Delirium*/
+if (substr(dx,1,4)='2930'
+	or substr(dx,1,4)='2931')
+	 and comp_del=0 
+	then comp_del=1;
+
+if (comp_uti=1  
+	or comp_pe=1
+	or comp_inf=1
+	or comp_rf=1
+	or comp_mi=1
+	or comp_del=1)
+	and comp_any=0
+	then comp_any=1; 
+
+end;
+run;
+
+proc freq;
+table comp_uti comp_pe comp_inf comp_rf comp_mi comp_del;
+run;
+
+proc freq;
+table comp_any;
+run;
+
+**************************************************************************
+End of commented out section for complications--
+*/
+/*************************************************************************/
+/*Check for presence of complications dx codes in admitting dx field
+Decision made not to include admitting dx in the dx codes used to determine
+if complications were present during the index surgery stay*/
+/*************************************************************************/
+
+/*************************************************************************/
+/*************************************************************************/
+/*************************************************************************/
+/*
+BEGINNING OF COMMENTED OUT SECTION
+
+data compl_1;
+set sur_int.compl;
+
+dx_2=trim(left(AD_DGNS));
+if dx_2~="" then do;
+	
+/*initialize complications variables*/
+comp_ad_uti=0;
+comp_ad_pe=0;
+comp_ad_inf=0;
+comp_ad_rf=0;
+comp_ad_mi=0;
+comp_ad_del=0;
+comp_ad_any=0;
+end;
+
+/*UTI*/
+if substr(AD_DGNS,1,4)='5990' and comp_ad_uti=0 
+	then comp_ad_uti=1;
+
+/*PE*/
+if (substr(AD_DGNS,1,3)='480'
+	or substr(AD_DGNS,1,3)='486')
+	 and comp_ad_pe=0 
+	then comp_ad_pe=1;
+
+/*Infection*/
+if (substr(AD_DGNS,1,4)='9985'
+	or substr(AD_DGNS,1,5)='99859')
+	 and comp_ad_inf=0 
+	then comp_ad_inf=1;
+
+/*Resp Failure*/
+if substr(AD_DGNS,1,5)='51881' and comp_ad_rf=0
+	then comp_ad_rf=1;
+
+/*MI*/
+if (substr(AD_DGNS,1,4)='5845'
+	or substr(AD_DGNS,1,4)='5846'
+	or substr(AD_DGNS,1,4)='5847'
+	or substr(AD_DGNS,1,4)='5848'
+	or substr(AD_DGNS,1,4)='5849')
+	and comp_ad_mi=0 
+	then comp_ad_mi=1;
+
+/*Delirium*/
+if (substr(AD_DGNS,1,4)='2930'
+	or substr(AD_DGNS,1,4)='2931')
+	 and comp_ad_del=0 
+	then comp_ad_del=1;
+
+if (comp_ad_uti=1  
+	or comp_ad_pe=1
+	or comp_ad_inf=1
+	or comp_ad_rf=1
+	or comp_ad_mi=1
+	or comp_ad_del=1)
+	and comp_ad_any=0
+	then comp_ad_any=1; 
+
+run;
+
+proc freq;
+table comp_ad_uti comp_ad_pe comp_ad_inf comp_ad_rf comp_ad_mi comp_ad_del;
+run;
+
+proc freq;
+table comp_ad_any;
+run;
+
+/*cross tab
+17 observations show complication dx codes as the admitting diagnosis */
+proc freq;
+tables comp_any*comp_ad_any;
+run;
+
+proc freq;
+tables comp_uti*comp_ad_uti;
+run;
+proc freq;
+tables comp_pe*comp_ad_pe;
+run;
+proc freq;
+tables comp_inf*comp_ad_inf;
+run;
+proc freq;
+tables comp_rf*comp_ad_rf;
+run;
+proc freq;
+tables comp_mi*comp_ad_mi;
+run;
+proc freq;
+tables comp_del*comp_ad_del;
+run;
+
+END OF COMMENTED OUT SECTION
+*/
+/*************************************************************************/
+/*************************************************************************/
+/*************************************************************************/
+
+/*************************************************************************/
+/*Identify hospital stay that contain the index surgery                  */
+/*************************************************************************/
+
+/*Step 1 - Check index surgery / claim list to see if all claims
+have the surgery procedure date within the admit date and discharge
+date time window*/
+/*check procedure dates in list of index surgeries*/
+data index_surg_stay_test;
+set sur_int.compl;
+index_stay_test=0;
+if (is_admit_date<= procedure_date <= is_disch_date) then index_stay_test=1;
+run;
+/*6 index surgeries are not within their original claim dates*/
+proc freq;
+table index_stay_test;
+run;
+data index_surg_stay_test2;
+set index_surg_stay_test(where=(index_stay_test=0));
+run;
+/*these surgeries are all 1 day prior to the claim start date
+so recode stay start date as day of the surgery*/
+
+/*Step 2 - For the 6 observations where the procedure date
+is coded as 1 day before admission, re-code admission
+start date as the procedure date */
+proc sql;
+create table index_surg_stay_2 as select * from sur_int.ip_cont_stay_clms_merged
+where bid_hrs_21 in (select bid_hrs_21 from index_surg_stay_test2);
+quit;
+
+data index_surg_stay_3;
+set index_surg_stay_2 ;
+st_proc=stay_start - procedure_date;
+if (st_proc = 1) then do;
+	mod_stay_start=1;
+	stay_start=procedure_date;
+	end;
+label mod_stay_start="Indicator for start day modified to include procedure date in stay";
+drop st_proc;
+run;
+
+proc freq;
+table mod_stay_start;
+run;
+
+/*Step 3 - Bring in the modified stay_start date to the overall list of hopsital stays*/
+/*first check list of surgeries stays for duplicates*/
+proc sort data=sur_int.ip_cont_stay_clms_merged out=test2 nodupkey;
+by bid_hrs_21 stay_end;
+run;
+
+proc sql;
+create table index_surg_stay_4 as select
+a.*,b.mod_stay_start,b.stay_start as new_stay_start from
+sur_int.ip_cont_stay_clms_merged a left join
+index_surg_stay_3 b
+on (a.bid_hrs_21=b.bid_hrs_21 and a.stay_end=b.stay_end);
+quit;
+
+proc freq;
+table mod_stay_start;
+run;
+
+data index_surg_stay_5 ;
+set index_surg_stay_4 ;
+if mod_stay_start=1 then stay_start=new_stay_start;
+drop daydiff_prev dstn_cd_cont new_stay_start;
+if mod_stay_start=. then mod_stay_start=0;
+run;
+
+proc freq;
+table mod_stay_start ind_clm_merge /missprint;
+run;
+
+/*Step 4 - assign indicator to index surgery hospital stays*/
+/*save this list of hospital stays with the indicator to use
+to look at pre and post surgery hospitalizations
+This is list of all ip stays for the cohort that had an
+index surgery indentified
+5091 unique hospital stays*/
+data sur_int.hospital_stays;
+set index_surg_stay_5;
+index_stay=0;
+if (stay_start<= procedure_date <= stay_end) then index_stay=1;
+run;
+
+/*995 index surgeries identified, this matches the index surgery claim list*/
+proc freq;
+table index_stay;
+run;
+
+/*************************************************************************/
+/*Need to merge in index surgery stay start/end dates  
+Replacing is_admit_date and is_disch_date from claims with dates
+from overall stay (in cases where stay info is merged from mult claims   */
+/*************************************************************************/
+data index_surg_1;
+set sur_int.hospital_stays (keep=bid_hrs_21 procedure_date is_admit_date is_disch_date stay_start stay_end index_stay);
+if index_stay=1;
+run;
+
+data index_surg_2;
+set index_surg_1;
+is_admit_date=stay_start;
+is_disch_date=stay_end;
+run;
+
+/*merge in index surgery start end dates to overall hospital stay
+dataset*/
+proc sql;
+create table hospital_stays_r2 as select a.*,b.is_admit_date as
+	is_admit_date_new, b.is_disch_date as is_disch_date_new from
+sur_int.hospital_stays a
+left join index_surg_2 b
+on (a.bid_hrs_21=b.bid_hrs_21);
+quit;
+
+data sur_int.hospital_stays_2;
+set hospital_stays_r2;
+drop is_admit_date is_disch_date;
+rename is_admit_date_new=is_admit_date;
+rename is_disch_date_new=is_disch_date;
+run;
+
+/*************************************************************************/
+/*Merge in stay start date / end date to index
+surgery claim information with complications indicators                  */
+/*************************************************************************/
+
+/*drop is_admit and is_disch dates from complications dataset
+so can add in updated dates from surgery stay (not individ claims*/
+data compl_1;
+set sur_int.compl;
+drop is_admit_date is_disch_date;
+run;
+
+/*list of surgery claims to merge the start / end day information in to*/
+proc sort data=compl_1;
+by bid_hrs_21 procedure_date;
+run;
+
+/*get list of just index surgery stay information to merge*/
+data index_surg_stay_7;
+set sur_int.hospital_stays_2(where=(index_stay=1));
+run;
+
+proc sort data=index_surg_stay_7;
+by bid_hrs_21 procedure_date;
+run;
+
+proc sql;
+create table index_sur_stay_8 as select 
+	a.*, b.stay_start, b.stay_end,b.stus_cd as stay_dstn_cd, 
+	b. mod_stay_start, b.ind_clm_merge, b.is_admit_date, b.is_disch_date
+from compl_1 a left join
+index_surg_stay_7 b
+on (a.bid_hrs_21=b.bid_hrs_21 and a.procedure_date=b.procedure_date);
+quit;
+
+proc freq;
+table stay_dstn_cd mod_stay_start ind_clm_merge;
+run;
+
+/*check of days from stay start to surgery
+most should be within a day or two and they are*/
+data index_sur_stay_9;
+set index_sur_stay_8 ;
+days_to_surg = procedure_date-stay_start;
+run;
+
+proc freq;
+table days_to_surg;
+run;
+
+/*Calculate length of stay for index surgery
+This is last calculation so save this version of the data to the int_data folder*/
+data sur_int.index_sur_stay;
+set index_sur_stay_9;
+index_LOS=stay_end - stay_start;
+if index_LOS=0 then index_LOS=1;
+run;
+
+proc freq;
+table index_LOS /missprint;
+run;
+
+/*************************************************************************/
+/*View Discharge status - Do not have this var in ip claims*/
+/*************************************************************************/
+/*A = discharged alive, B = discharged dead 
+proc freq data=sur_int.index_sur_stay;
+table DSCHRGCD /missprint;
+run;
+*/
+/*************************************************************************/
+/*View Discharge destination status*/
+/*************************************************************************/
+/* See medpar appendix for additional codes
+01 = discharged to home / self care (routine charge)
+02 = Discharged/transferred to other short term general hospital for inpatient care.
+03 = Discharged/transferred to skilled nursing facility (SNF)
+04 = Discharged/transferred to intermediate care facility (ICF).
+05 = Discharged/transferred to another type of institution for inpatient care.
+06 = Discharged/transferred to home health service organization.
+20 = Expired (did not recover - Christian Science patient).
+50 = Hospice - home 
+51 = Hospice - medical facility 
+61 = Discharged/transferred within this institution to a hospital-based Medicare
+approved swing bed
+62 = Discharged/transferred to an inpatient rehab. facility including distinct
+parts units of a hospital.
+63 = Discharged/transferred to a long term care hospitals.
+*/
+
+proc freq data=sur_int.index_sur_stay;
+table stay_dstn_cd /missprint;
+run;
+
+
+
+
+H="check for mc parts a&b"
+/*
+last_surgery_date
+to have part a part b in the last 6m, and no hmo
+Use mc denominator file to determine insurance status*/
+
+
+/*sort denominator file, remove duplicate entries on id and year*/
+proc sort data=medi.dn_2000_2012 out=dn_2000_20122  nodupkey;
+by bid_hrs_21 year;
+run;
+
+/*latest surgery year variable defined*/
+data r_sp;
+set sur_int.last_surgery_date;
+r_year=year(procedure_date);
+run;
+
+/*pull medicare ab status and hmo status variables from dn file
+for latest surgery year from above*/
+proc sql;
+create table dn_surg_y as select
+a.*,b.buyin12,b.year,b.HMOIND12
+from r_sp a inner join
+dn_2000_20122 b
+on trim(left(a.bid_hrs_21))=trim(left(b.bid_hrs_21))
+and a.r_year=b.year;
+quit;
+
+/*check frequency for surgery years*/
+proc freq data=dn_surg_y;
+table r_year;
+run;
+/*243 surgeries that meet criteria with denominator data*/
+proc sql;
+select count(distinct bid_hrs_21) from dn_surg_y;
+quit;
+
+/* Trim buyin and hmo variables to only reflect time before the surgery */
+data dn_surg_y2;
+set dn_surg_y;
+surg_month=month(procedure_date);
+if length(trim(left(buyin12)))=12 and surg_month>0 then do;
+buyin_sy=substr(trim(left(buyin12)),1,surg_month);
+hmo_sy=substr(trim(left(HMOIND12)),1,surg_month);
+end;
+else do;
+buyin_sy=trim(left(buyin12));
+hmo_sy=trim(left(HMOIND12));
+end;
+run;
+proc means n;
+var  surg_month;
+run;
+
+/*Look at year prior to surgery to get records of complete 12 months prior to surgery
+only have the -1 year dn file
+If surgery was within 1 year or 6 months of Jan 2000, then get null for buyin_ vars*/
+proc sql;
+create table dn_surg_y_bef as select
+a.bid_hrs_21,a.year as surg_year,b.year as surg_year_bef,b.year,b.buyin12,b.HMOIND12
+from dn_surg_y a inner join
+dn_2000_20122 b
+on trim(left(a.bid_hrs_21))=trim(left(b.bid_hrs_21))
+and 0<a.year-b.year<=1 order by bid_hrs_21,year;
+quit;
+
+proc sql;
+create table all_insurance as select a.*,b.buyin12 as buyin_bef,b.HMOIND12 as hmo_bef from
+dn_surg_y2 a
+left join
+dn_surg_y_bef b
+on trim(left(a.bid_hrs_21))=trim(left(b.bid_hrs_21));
+quit;
+
+/*merge surgery year and year before surgery buy-in and hmo variables
+Trim so the final variable _1y shows 12 months pre-surgery
+Variable _6m is 6 months pre-surgery
+Note: indicator variables for parts a and b and hmo are null if don't
+have information for full 12 or 6 months pre-surgery*/
+data all_insurance2;
+set all_insurance;
+buyin_2y=trim(left(buyin_bef))||trim(left(buyin_sy));
+hmo_2y=trim(left(hmo_bef))||trim(left(hmo_sy));
+
+/*create 12 month variables*/
+buyin_2y_r=reverse(trim(buyin_2y));
+hmo_2y_r=reverse(trim(hmo_2y));
+
+if length(buyin_2y_r)>11 then buyin_1y_r=substr(trim(left(buyin_2y)),1,12);
+if length(hmo_2y_r)>11 then hmo_1y_r=substr(trim(left(hmo_2y)),1,12);
+
+if length(buyin_2y_r)<12 then buyin_1y_r="";
+if length(hmo_2y_r)<12 then hmo_1y_r="";
+
+buyin_1y=reverse(trim(buyin_1y_r));
+hmo_1y=reverse(trim(hmo_1y_r));
+
+/*create indicator variable for mc coverage 0=no, 1=yes*/
+if length(buyin_1y)=12 then do;
+if indexc(buyin_1y,"0","1","2","A","B") then part_ab_1y=0;
+if indexc(buyin_1y,"0","1","2","A","B")=0 then part_ab_1y=1;
+end;
+/*create indicator variable for hmo coverage 0=no, 1=yes*/
+if length(hmo_1y)=12 then do;
+if index(hmo_1y,"00000000000") then hmo_d_1y=0;
+if index(hmo_1y,"00000000000")=0 then hmo_d_1y=1;
+end;
+
+/*create 6 month variable*/
+if length(buyin_2y_r)>5 then buyin_6m_r=substr(trim(left(buyin_2y)),1,6);
+if length(hmo_2y_r)>5 then hmo_6m_r=substr(trim(left(hmo_2y)),1,6);
+
+if length(buyin_2y_r)<6 then buyin_6m_r="";
+if length(hmo_2y_r)<6 then hmo_6m_r="";
+
+buyin_6m=reverse(trim(buyin_6m_r));
+hmo_6m=reverse(trim(hmo_6m_r));
+
+/*create indicator variable for mc coverage 6 mo. 0=no, 1=yes*/
+if length(buyin_6m)=6 then do;
+if indexc(buyin_6m,"0","1","2","A","B") then part_ab_6m=0;
+if indexc(buyin_6m,"0","1","2","A","B")=0 then part_ab_6m=1;
+end;
+if length(hmo_6m)=6 then do;
+if index(hmo_6m,"00000") then hmo_d_6m=0;
+if index(hmo_6m,"00000")=0 then hmo_d_6m=1;
+end;
+
+run;
+
+/*25 (9 missing=34) observations were within 6months of Jan. 2000 so don't have 6 months pre-surgery data*/
+proc freq;
+table part_ab_6m*hmo_d_6m;
+run;
+
+/*20 (23 missing=43) observations were within 12months of Jan. 2000 so don't have 12 months pre-surgery data*/
+proc freq;
+table part_ab_1y*hmo_d_1y;
+run;
+
+/*bring in gender, reason for entitlement, dob, esrd indicator
+ from claims denominator file*/
+proc sql;
+create table all_ins_gender as select a.*,b.sex,b.CREC,b.BENE_DOB,b.esrd_ind, b.DEATH_DT from
+all_insurance2 a
+left join dn_2000_20122 b
+on trim(left(a.bid_hrs_21))=trim(left(b.bid_hrs_21))
+and a.year=b.year;
+quit;
+
+proc freq data=all_ins_gender;
+table sex CREC esrd_ind CREC*esrd_ind /missprint;
+run;
+
+proc contents order=casecollate data=all_ins_gender;
+run;
+
+data surgery_ids_last_1(drop=dgnscd01-dgnscd25 ad_dgns BUYIN12 HMOIND12 
+surg_month year buyin_1y_r buyin_2y buyin_2y_r r_year buyin_6m_r 
+buyin_bef buyin_sy hmo_1y_r hmo_2y hmo_2y_r hmo_6m_r hmo_bef hmo_sy);
+set all_ins_gender;
+rename sex=claims_sex;
+rename bene_dob=claims_dob;
+rename esrd_ind=claims_esrd_ind;
+rename DEATH_DT=claims_dod;
+run;
+
+proc freq data=surgery_ids_last_1;
+table claims_dod /missprint;
+run;
+
+/*deal with claims dod missing values that are coded as "00000000"
+and change format for dob and dod to dates*/
+data surgery_ids_last_2;
+set surgery_ids_last_1;
+if claims_dod=00000000 then claims_dod=.;
+claims_dob2=input(claims_dob,yyyymmdd8.);
+claims_dod2=input(claims_dod,yyyymmdd8.);
+run;
+
+proc freq;
+table claims_dod2 /missprint;
+run;
+
+data sur_fin.surgery_ids_last;
+set surgery_ids_last_2;
+drop claims_dob claims_dod;
+format claims_dob2 date10. claims_dod2 date10.;
+label claims_dob2="Beneficiary dob from claims" claims_dod2="Beneficiary dod from claims";
+run;

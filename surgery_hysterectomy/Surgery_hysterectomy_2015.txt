@@ -284,7 +284,198 @@ is associated with that hospital stay in order to calculate LOS, etc.
 If discharge destination code = 02 (transferred to short term general hospital
 for inpatient care) or = 05 (transferred to anoter type of institution for inpatient care)
 and the discharge date of 1st claim is the the same or one day before the admit
+date for the next claim, then the clai/*
+Check list of IP claims for cases where multiple claims are present
+for a single hospital stay
+
+This is identified where 
+1. start day of claim is within 1 day of end
+date of the claim before AND
+2. discharge code = 2 or 5 for transfer for inpatient care
+
+Need to check index surgery to determine if more than one claim
+is associated with that hospital stay in order to calculate LOS, etc.
+
+If discharge destination code = 02 (transferred to short term general hospital
+for inpatient care) or = 05 (transferred to anoter type of institution for inpatient care)
+and the discharge date of 1st claim is the the same or one day before the admit
 date for the next claim, then the claims are part of the same inpatient stay.
+
+List of claims with new start/ end dates that span overall stay
+is saved as sur_int.ip_cont_stay_clms_merged
+If multiple claims were merged into single stay observation, ind_clm_merge=1
+
+*/
+
+/*Step 1: get dataset of ip claims only from the medpar file
+Use medpar file with the unique claim id assigned*/
+data sur_int.ip_2000_2012;
+set sur_int.ip_2000_2012_claim_id/*(where=(trim(left(SSLSSNF))~="N"))*/;
+run;
+
+/*step 2: only keep claims where the bid had an index surgery
+923 claims identified
+This list of claims includes the index surgery claim*/
+proc sql;
+create table mp_cont_stay_1 as select a.*,b.procedure_date,b.is_admit_date,b.is_disch_date
+from sur_int.ip_2000_2012 a inner join
+sur_int.last_surgery_date b
+on trim(left(a.bid_hrs_21))=trim(left(b.bid_hrs_21)) ;
+quit;
+
+proc sort data=mp_cont_stay_1 ;
+by bid_hrs_21 admit_date;
+run;
+
+/*change formats of dates*/
+data mp_cont_stay_2 ;
+set mp_cont_stay_1 ;
+format admit_date date10.;
+format disch_date date10.;
+run;
+
+/***********************************************************************/
+/*         Determine days from current obs. claim admit date
+	   to previous claim discharge date                   */
+/***********************************************************************/
+
+/*sort ascending to calculate days from previous claim to current claim*/
+proc sort data=mp_cont_stay_2 ;
+by bid_hrs_21 admit_date disch_date;
+run;
+
+/*new variable
+daydiff_prev = days from previous claim end date to current claim start date
+If claim is the first claim for that BID, then set daydiff_prev = null */
+data mp_cont_stay_3 ;
+set mp_cont_stay_2 ;
+by bid_hrs_21;
+daydiff_prev = admit_date - LAG(disch_date) ;
+if first.bid_hrs_21 then daydiff_prev = . ;
+run;
+
+proc freq data=mp_cont_stay_3 ;
+table daydiff_prev;
+run;
+
+/***********************************************************************/
+/*         Identify claims that, just using start/end dates
+	   appear to be for continuous hospital stays                  */
+/***********************************************************************/
+
+proc sort data=mp_cont_stay_3 ;
+by bid_hrs_21 admit_date disch_date;
+run;
+
+/*keep a list of just claims where next claim starts on the same
+day or day after discharge from index surgery claim
+There are 42 such claims*/
+data mp_cont_stay_4 ;
+set mp_cont_stay_3(where=(daydiff_prev<2));
+run;
+data mp_cont_stay_5 ;
+set mp_cont_stay_4(where=(daydiff_prev~=.)) ;
+run;
+proc freq data=mp_cont_stay_5;
+table daydiff_prev;
+run;
+
+/***********************************************************************/
+/*         Add indicator for claims with discharge codes
+           indicating patient transferred for further
+           inpatient care                                    */
+/***********************************************************************/
+
+/*check discharge destination code for surgeries where the next claim
+starts either the same day as discharge from surgery claim or day after
+add indicator to dataset that claim has the discharge code*/
+proc freq data=mp_cont_stay_3;
+table stus_cd;
+run;
+
+data mp_cont_stay_6;
+set mp_cont_stay_3;
+dstn_cd_cont=0;
+if STUS_CD in(02,05) then dstn_cd_cont=1;
+run;
+
+proc freq data=mp_cont_stay_6;
+table dstn_cd_cont;
+run;
+
+proc freq data=mp_cont_stay_6(where=(dstn_cd_cont=1)) ;
+table STUS_CD ;
+run;
+
+/********************************************************************/
+/* Merge claim start and end dates if they have the required
+discharge destination codes and claim dates are within one day */
+/********************************************************************/
+
+proc sort data=mp_cont_stay_6 out=mp_cont_stay_7;
+     by bid_hrs_21 admit_date disch_date;
+run;
+
+data mp_cont_stay_8;
+set mp_cont_stay_7;
+retain stay_start stay_end;
+       by bid_hrs_21 admit_date;
+          /* Handle claims that are for distinct stay
+             Distinct stay if more than 1 day between claim dates or
+             claim dates overlap but discharge destination code does not
+             indicate transferred for inpatient care  */
+	ind_clm_merge=.; /*initialize the indicator variable for merged claims*/
+if (daydiff_prev > 1 or daydiff_prev=.) or
+              (daydiff_prev <2 and daydiff_prev~=. and lag(dstn_cd_cont)=0) then do;
+             stay_start = admit_date;
+             stay_end = disch_date;
+			 ind_clm_merge=0;
+             end;
+          /* Handle claims that are for continous stays */
+          if (daydiff_prev <2 and daydiff_prev~=. and lag(dstn_cd_cont)=1) then do;
+             stay_end = disch_date;
+			 ind_clm_merge=1;
+             end;
+          format stay_start date10. stay_end date10.;
+run;
+
+/*12 cases where claims dates are merged*/
+proc freq;
+table ind_clm_merge /missprint;
+run;
+
+/********************************************************************/
+/* Drop claims so there is only one claim per stay with the overall
+stay start and end dates */
+/********************************************************************/
+
+data mp_cont_stay_9;
+set mp_cont_stay_8;
+by bid_hrs_21 stay_start;
+   j = 0;
+   if last.stay_start then j=j+1;
+run;
+
+proc freq;
+table j;
+run;
+/*1.41% of claims (13) are merged with an additional claim*/
+
+/*save the new ip stay dataset sur_int.ip_cont_stay_clms_merged*/
+data sur_int.ip_cont_stay_clms_merged;
+set mp_cont_stay_9;
+if j=1;
+drop j;
+label ind_clm_merge="Indicator for stay dates merged over multiple claims";
+run;
+
+/*12 (1.32%) of the 5091 stays have multiple claims dates merged
+to get stay start / end dates*/
+proc freq data=sur_int.ip_cont_stay_clms_merged;
+table ind_clm_merge /missprint;
+run;
+
+ms are part of the same inpatient stay.
 
 List of claims with new start/ end dates that span overall stay
 is saved as sur_int.ip_cont_stay_clms_merged
@@ -484,8 +675,6 @@ hospitalizations later in the code
 
 */
 
-
-/*Not doing this at this time.
 /*************************************************************************/
 /*Identify complications from dx codes for index surgery
 Dataset created: sur_int.compl*/
@@ -564,9 +753,7 @@ proc freq;
 table comp_any;
 run;
 
-**************************************************************************
-End of commented out section for complications--
-*/
+
 /*************************************************************************/
 /*Check for presence of complications dx codes in admitting dx field
 Decision made not to include admitting dx in the dx codes used to determine
@@ -576,110 +763,6 @@ if complications were present during the index surgery stay*/
 /*************************************************************************/
 /*************************************************************************/
 /*************************************************************************/
-/*
-BEGINNING OF COMMENTED OUT SECTION
-
-data compl_1;
-set sur_int.compl;
-
-dx_2=trim(left(AD_DGNS));
-if dx_2~="" then do;
-	
-/*initialize complications variables*/
-comp_ad_uti=0;
-comp_ad_pe=0;
-comp_ad_inf=0;
-comp_ad_rf=0;
-comp_ad_mi=0;
-comp_ad_del=0;
-comp_ad_any=0;
-end;
-
-/*UTI*/
-if substr(AD_DGNS,1,4)='5990' and comp_ad_uti=0 
-	then comp_ad_uti=1;
-
-/*PE*/
-if (substr(AD_DGNS,1,3)='480'
-	or substr(AD_DGNS,1,3)='486')
-	 and comp_ad_pe=0 
-	then comp_ad_pe=1;
-
-/*Infection*/
-if (substr(AD_DGNS,1,4)='9985'
-	or substr(AD_DGNS,1,5)='99859')
-	 and comp_ad_inf=0 
-	then comp_ad_inf=1;
-
-/*Resp Failure*/
-if substr(AD_DGNS,1,5)='51881' and comp_ad_rf=0
-	then comp_ad_rf=1;
-
-/*MI*/
-if (substr(AD_DGNS,1,4)='5845'
-	or substr(AD_DGNS,1,4)='5846'
-	or substr(AD_DGNS,1,4)='5847'
-	or substr(AD_DGNS,1,4)='5848'
-	or substr(AD_DGNS,1,4)='5849')
-	and comp_ad_mi=0 
-	then comp_ad_mi=1;
-
-/*Delirium*/
-if (substr(AD_DGNS,1,4)='2930'
-	or substr(AD_DGNS,1,4)='2931')
-	 and comp_ad_del=0 
-	then comp_ad_del=1;
-
-if (comp_ad_uti=1  
-	or comp_ad_pe=1
-	or comp_ad_inf=1
-	or comp_ad_rf=1
-	or comp_ad_mi=1
-	or comp_ad_del=1)
-	and comp_ad_any=0
-	then comp_ad_any=1; 
-
-run;
-
-proc freq;
-table comp_ad_uti comp_ad_pe comp_ad_inf comp_ad_rf comp_ad_mi comp_ad_del;
-run;
-
-proc freq;
-table comp_ad_any;
-run;
-
-/*cross tab
-17 observations show complication dx codes as the admitting diagnosis */
-proc freq;
-tables comp_any*comp_ad_any;
-run;
-
-proc freq;
-tables comp_uti*comp_ad_uti;
-run;
-proc freq;
-tables comp_pe*comp_ad_pe;
-run;
-proc freq;
-tables comp_inf*comp_ad_inf;
-run;
-proc freq;
-tables comp_rf*comp_ad_rf;
-run;
-proc freq;
-tables comp_mi*comp_ad_mi;
-run;
-proc freq;
-tables comp_del*comp_ad_del;
-run;
-
-END OF COMMENTED OUT SECTION
-*/
-/*************************************************************************/
-/*************************************************************************/
-/*************************************************************************/
-
 /*************************************************************************/
 /*Identify hospital stay that contain the index surgery                  */
 /*************************************************************************/
@@ -693,7 +776,7 @@ set sur_int.compl;
 index_stay_test=0;
 if (is_admit_date<= procedure_date <= is_disch_date) then index_stay_test=1;
 run;
-/*6 index surgeries are not within their original claim dates*/
+/*2 index surgeries are not within their original claim dates*/
 proc freq;
 table index_stay_test;
 run;
@@ -703,7 +786,7 @@ run;
 /*these surgeries are all 1 day prior to the claim start date
 so recode stay start date as day of the surgery*/
 
-/*Step 2 - For the 6 observations where the procedure date
+/*Step 2 - For theobservations where the procedure date
 is coded as 1 day before admission, re-code admission
 start date as the procedure date */
 proc sql;
@@ -760,14 +843,14 @@ run;
 to look at pre and post surgery hospitalizations
 This is list of all ip stays for the cohort that had an
 index surgery indentified
-5091 unique hospital stays*/
+910 unique hospital stays*/
 data sur_int.hospital_stays;
 set index_surg_stay_5;
 index_stay=0;
 if (stay_start<= procedure_date <= stay_end) then index_stay=1;
 run;
 
-/*995 index surgeries identified, this matches the index surgery claim list*/
+/*243 index surgeries identified, this matches the index surgery claim list*/
 proc freq;
 table index_stay;
 run;
@@ -1079,8 +1162,8 @@ and change format for dob and dod to dates*/
 data surgery_ids_last_2;
 set surgery_ids_last_1;
 if claims_dod=00000000 then claims_dod=.;
-claims_dob2=input(claims_dob,yyyymmdd8.);
-claims_dod2=input(claims_dod,yyyymmdd8.);
+claims_dob2=input(claims_dob,yymmdd8.);
+claims_dod2=input(claims_dod,yymmdd8.);
 run;
 
 proc freq;
@@ -1093,3 +1176,191 @@ drop claims_dob claims_dod;
 format claims_dob2 date10. claims_dod2 date10.;
 label claims_dob2="Beneficiary dob from claims" claims_dod2="Beneficiary dod from claims";
 run;
+
+H="number hosp admissions last 6mos"
+/*Start with list of all hospital stays for bid's with an index surgery:
+sur_int.hospital_stays_2
+
+Identify number of hospital admissions in the 6 months prior to
+the index surgery procedure date
+
+Merge count of pre-hospital stays into dataset: sur_fin.surgery_ids_last
+
+Final dataset created: sur_fin.surgery_ids_6m_pre_adm 
+*/
+
+/*Identify all stays 6 months pre-surgery*/
+
+/*start with list of all hospital stays*/
+proc sort data=sur_int.hospital_stays_2;
+by bid_hrs_21;
+run;
+
+/*drop stays that are the index stay*/
+data pre_surg_hosp_1;
+set sur_int.hospital_stays_2(where=(index_stay=0));
+run;
+
+/*identify stays that are 6 months pre-surgery date*/
+data pre_surg_hosp_2 ;
+set pre_surg_hosp_1 ;
+if 0 <= procedure_date-stay_start<=183;
+run;
+
+
+/*Identify stays that are partially within the time from procedure date*/
+data pre_surg_hosp_3 ;
+set pre_surg_hosp_1 ;
+if (procedure_date-stay_start>183 and procedure_date-stay_end<=183);
+run;
+
+/*merge the two lists*/
+data pre_surg_hosp_4;
+set pre_surg_hosp_2 pre_surg_hosp_3 ;
+run;
+
+proc sort data=pre_surg_hosp_4;
+by bid_hrs_21 stay_start;
+run;
+
+/*Assign count variable to count claims in 6 months pre-surgery for each bid*/
+data pre_surg_adm_count;
+set pre_surg_hosp_4;
+admit_6m_pre +1;
+by bid_hrs_21;
+if first.bid_hrs_21 then admit_6m_pre =1;
+run;
+
+proc freq;
+table admit_6m_pre;
+run;
+
+/*keep only the  final count of pre-surgery admissions*/
+proc sort data=pre_surg_adm_count;
+by bid_hrs_21 stay_start;
+run;
+
+data pre_surg_adm_count_1;
+set pre_surg_adm_count;
+by bid_hrs_21;
+if last.bid_hrs_21;
+run;
+/*319 patients had an ip admission within the 6 months pre-surgery*/
+proc freq;
+table admit_6m_pre;
+run;
+
+/**************************************************************************************/
+/*Bring count of pre-surgery claims in to main dataset*/
+/**************************************************************************************/
+
+/*Merge count of hospital admissions pre-surgery into dataset*/
+proc sql;
+create table surgery_ids_6m_pre_adm_1 as select
+a.*, b.admit_6m_pre
+from sur_fin.surgery_ids_last a left join
+pre_surg_adm_count_1 b
+on trim(left(a.bid_hrs_21))=trim(left(b.bid_hrs_21));
+quit;
+
+proc freq;
+table admit_6m_pre;
+run;
+
+/*create indicator variable for pre-surgery hospital admission
+= 0 - no pre surgery admissions
+= 1 - one or more pre surgery admissions
+if no pre-surgery admission, set number admissions to zero */
+data sur_fin.surgery_ids_6m_pre_adm;
+set surgery_ids_6m_pre_adm_1;
+if admit_6m_pre=. then admit_6m_pre=0;
+admit_ind_6m_pre=0;
+if admit_6m_pre>0 then admit_ind_6m_pre=1;
+run;
+
+
+/*************************************************************************/
+/*View Number of Admissions 6 months pre-surgery
+saves freq tables to file in C:\data\surgery\logs*/
+/*************************************************************************/
+
+ods rtf file='E:\data\surgery\logs\pre-surg.rtf';
+proc freq;
+table admit_6m_pre admit_ind_6m_pre /missprint;
+run;
+ods rtf close;
+
+proc sort data=sur_fin.surgery_ids_6m_pre_adm ;
+by admit_6m_pre;
+run;
+
+
+/*************************************************************************/
+/*Check high number of admissions beneficiaries
+The table generated shows the claim prior to the index surgery claim*/
+/*************************************************************************/
+proc sql;
+create table high_pre_surg_cl as select *
+from sur_fin.surgery_ids_6m_pre_adm
+where admit_6m_pre>5;
+quit;
+
+/*all claims for those high admissions beneficiaries*/
+proc sql;
+create table high_pre_surg_cl_2 as select *
+from pre_surg_adm_count
+where bid_hrs_21 in
+(select bid_hrs_21 from high_pre_surg_cl);
+quit;
+
+
+H="xxstata code to retrieve surgeriesxx"
+use "E:\data\surgery_hysterectomy\int_2012clms\ip_meet.dta", clear
+*rename prcdrdt* proc_date*
+local proc prcdrcd01 prcdrcd02 prcdrcd03 prcdrcd04 prcdrcd05 prcdrcd06 prcdrcd07 prcdrcd08 prcdrcd09 prcdrcd10 prcdrcd11 prcdrcd12 prcdrcd13 prcdrcd14 prcdrcd15 prcdrcd16 prcdrcd17 prcdrcd18 prcdrcd19 prcdrcd20 prcdrcd21 prcdrcd22 prcdrcd23 prcdrcd24 prcdrcd25 
+destring `proc', replace
+gen hysterectomy=.
+/*
+forvalues i=10/25 {
+foreach n in 684 683 685 685 589 685 687 6849 6839 6869 ///
+6841 6831 6851 6861 6871 6859 6879 {
+replace hysterectomy=1 if prcdr_cd`i'==`n'
+}
+}
+
+foreach i in "01" "02" "03" "04" "05" "06" "07" "08" "09" {
+foreach num in 684 683 685 685 589 685 687 6849 6839 6869 ///
+6841 6831 6851 6861 6871 6859 6879 {
+replace hysterectomy=1 if prcdr_cd`i'==`n'
+}
+}*/
+gen code1=.
+foreach v of local proc {
+foreach n in 684 683 685 686 687 689 6849 6839 6869 ///
+6841 6831 6851 6861 6871 6859 6879 {
+replace hysterectomy=1 if `v'==`n'
+replace code1=`n' if `v'==`n'
+
+}
+}
+
+keep if hyst==1
+
+
+/*
+local cpt hcpscd01 hcpscd02 hcpscd03 hcpscd04 hcpscd05 hcpscd06 hcpscd07 hcpscd08 hcpscd09 hcpscd10 hcpscd11 hcpscd12 hcpscd13
+
+foreach x of local cpt {
+	foreach n in "58150" "58152" "58180" "58200" ///
+		"58210" "58240" "58951" "58953" ///
+		"58954" "58956" "58541" "58542" ///
+		"58543" "58544" "58548" "58550" ///
+		"58552" "58553" "58554" "58570" ///
+		"58571" "58572" "58573" "58260"  ///
+		"58262" "58263" "58267" "58270" ///
+		"58275" "58280" "58285" "58290" ///
+		"58291" "58292" "58293" "58294" {
+replace hysterectomy=1 if `x'=="`n'"
+}
+}
+

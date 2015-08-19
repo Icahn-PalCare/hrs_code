@@ -234,7 +234,14 @@ proc print; where count ge 2; run;
 /* changed to the medicare date. if NDI and medicare DOD is missing 
 /* and claims after the exit date then use the last discharge date.
 */
-data hrs_cln.death_date_2012 ;
+data hrs_cln.death_date_2012 
+  (keep = bid_hrs_21 id death_all death_any death_source dod_ndi10 dod_dn12 dod_bene12
+   dod_exit12 death_all death_ndi death_bene death_dn death_exit death_imp_all 
+   death_day death_month death_year discrep admit_last disch_last disch_date_mp 
+   disch_date_ip disch_date_op disch_date_hh disch_date_hs disch_date_sn disch_date_sn
+   disch_date_dm dif_all dif_mp dif_ip dif_op  dif_hh dif_hs dif_sn dif_pb dif_dm
+   dif_all_r dif_mp_r dif_ip_r dif_op_r dif_hh_r dif_hs_r dif_sn_r dif_pb dif_dm
+   dod_bene12 dod_ndi10 dod_exit12 dod_dn12  dod_imp dod_imp_exit12 V_DOD_SW DEATHCD DEATHDT );
 set disch_all ;
 *revised by medicare dod & claim after ndi dod OR exit dod only and claim after;
 if dod_dn12>dod_ndi10 and disch_last>dod_ndi10 then death_all=dod_dn12;

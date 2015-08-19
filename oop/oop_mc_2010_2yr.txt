@@ -1,7 +1,8 @@
 = V4 Outline MultiLine NoSorting TabWidth=30
 
 H="Medicare costs last 2 years to merge with oop costs"
-/* 
+/*Update 8/2015: date of death drawn from multiple sources (HRS, CMS, discharge dates) and a separate file for this data created in HRS clean data file. OOPs code updated to use the death_date_2012 data.
+
 Medicare claims 2000-2012
 Core Interviews 1998-2012
 Exit interviews 2002-2012
@@ -77,7 +78,8 @@ libname oop_nh "E:\data\hrs_oop_2010\ref_data\nh_costs_by_state";
 
 H="Pull exit and restricted interviews and mc xwalk id"
 /*
-Create respondant dataset with exit, restricted HRS,
+
+Create respondant dataset with death_date_2012, exit, restricted HRS,
 and medicare xwalk
 
 Resulting dataset is:
@@ -289,9 +291,29 @@ set id_zip_2;
 if zip_exit = "";
 run;
 
+
+/*******************************************************************/
+/*******************************************************************/
+/*  Merge the exit-mc xwalk-restricted dataset with the date of death */
+/*******************************************************************/
+/*******************************************************************/
+proc contents data=hrs_cln.death_date_2012;
+run;
+proc sort data=hrs_cln.death_date_2012;
+by id;
+run;
+
+/*get combined dataset that is just decedents*/
+proc sql;
+create table id_death as select a.*,b.death_all,b.death_source  
+from id_zip_2 a 
+join hrs_cln.death_date_2012 b on a.id=b.id;
+quit;
+
+
 /*save a version of the dataset before renaming*/
 data restricted_r_1;
-set id_zip_2;
+set id_death;
 run;
 
 /*rename variables in restricted dataset with  _e suffix*/
@@ -300,9 +322,10 @@ run;
 data restricted_r3;
 set restricted_r_1;
 rename id_e=id;
-age_at_death_e=(death_date_e-birth_date_e)/365.25;
+* 2012 change death_all_e to death_all ;
+age_at_death_e=(death_all_e-birth_date_e)/365.25;
 label age_at_death_e="Age at death";
-death_year_e=year(death_date_e);
+death_year_e=year(death_all_e);
 run;
 proc print data=restricted_r3(keep=id obs=10);
 run;
@@ -311,14 +334,13 @@ by id;
 run;
 
 /*this dataset = 8001 decedents from 2002 - 2012 exit interviews
-containst exit, mc xwalk id, and restricted info
+containst death_date_2012 exit, mc xwalk id, and restricted info
 2010: dataset = 6814 */
 proc sql;
 create table exit_restricted_02_to_12 as 
 select *
 from  exit_xwalk_3 a
-left join
-restricted_r3 b
+left join restricted_r3 b
 on a.id=b.id;
 quit;
 
@@ -339,6 +361,15 @@ run;
 proc freq;
 table death_year_e*EXIT_YEAR_x /missprint;
 run;
+
+ods rtf file="E:\data\hrs_oop_2010\logs\deathyr_exit_yr_08182015.rtf";
+title 'OOPS: 76 cases where exit year is prior to death year';
+proc print ;
+var id death_all_e death_year_e death_source_e EXIT_YEAR_x;
+where (death_year_e > EXIT_YEAR_x ) OR (death_year_e =. and EXIT_YEAR_x ne .) ;
+run;
+ods rtf close;
+title ' ';
 
 
 
@@ -364,9 +395,8 @@ proc sql;
 create table r_n1_core_before_death
 as select b.*
  from oop_int.exit_restricted_02_to_12_v1 a 
- inner join
-hrs_cln.core_00_to_12 b
-  on a.id=b.id and a.death_date_e>b.c_ivw_date;
+ inner join hrs_cln.core_00_to_12 b
+  on a.id=b.id and a.death_all_e>b.c_ivw_date;
   quit;
 
 proc sort data=r_n1_core_before_death ;
@@ -374,8 +404,8 @@ by id c_ivw_date;
 run;
 
 /*keep only the n1 core interview
-6509 interviews identified
-of these, 143 are in 1998 so will not have n2 core*/
+2012: 7857 interviews identified of these 153 are in 1998 so will not have n2 core
+2010: 6509 interviews identified of these, 143 are in 1998 so will not have n2 core*/
 data resp_core_n1;
 set r_n1_core_before_death;
 by id c_ivw_date;
@@ -393,19 +423,19 @@ run;
 /*list of all core interviews before n1 interview*/
 proc sql;
 create table r_n2_core_before_death
-as select b.*
+ as select b.*
  from resp_core_n1 a 
- inner join
-hrs_cln.core_00_to_12 b
-  on a.id=b.id and a.c_ivw_date>b.c_ivw_date;
-  quit;
+ inner join hrs_cln.core_00_to_12 b
+ on a.id=b.id and a.c_ivw_date>b.c_ivw_date;
+ quit;
 
 proc sort data=r_n2_core_before_death ;
 by id c_ivw_date;
 run;
 
 /*keep only the n2 core interview
-6222 interviews identified*/
+2012: 7474 interviews identified
+2010: 6222 interviews identified*/
 data resp_core_n2;
 set r_n2_core_before_death;
 by id c_ivw_date;
@@ -426,11 +456,10 @@ level through 2004
 Also get insurance self reports so can look at 5 year lookback where needed*/
 proc sql;
 create table r_n3_core_before_death
-as select b.educ,b.medicaid, b.champus,b.medigap,b.married,b.c_ivw_date,b.core_year,b.id,
+as select b.educ,b.medicaid,b.champus,b.medigap,b.married,b.c_ivw_date,b.core_year,b.id,
 	b.networth_adj2012,b.finwealth_adj2012
  from resp_core_n2 a 
- inner join
-hrs_cln.core_00_to_12 b
+ inner join hrs_cln.core_00_to_12 b
   on a.id=b.id and a.c_ivw_date>b.c_ivw_date;
   quit;
 
@@ -439,7 +468,8 @@ by id c_ivw_date;
 run;
 
 /*keep only the n3 core interview
-4692 interviews identified*/
+2012: 5882 interivews identified
+2010: 4692 interviews identified*/
 data resp_core_n3;
 set r_n3_core_before_death;
 by id c_ivw_date;
@@ -481,9 +511,9 @@ run;
 /*n1 core interviews*/
 proc sql;
 create table resp_dem_core_n1
-as select a.*,b.prob_dementia from 
-resp_core_n1 a left join
-dem_1 b
+as select a.*,b.prob_dementia 
+from resp_core_n1 a 
+left join dem_1 b
 on a.id=b.id and a.core_year=b.core_year_imp;
 quit;
 
@@ -494,11 +524,12 @@ run;
 /*n2 core interviews*/
 proc sql;
 create table resp_dem_core_n2
-as select a.*,b.prob_dementia from 
-resp_core_n2 a left join
-dem_1 b
+as select a.*,b.prob_dementia 
+from resp_core_n2 a 
+left join dem_1 b
 on a.id=b.id and a.core_year=b.core_year_imp;
 quit;
+
 
 
 
@@ -576,13 +607,14 @@ if last.BID_hrs then output;
 run;
 
 *Frequency table from denominator file of last entries;
-*165710 obs in 2012 -
+* 2012: 19166 obs and 8539 have a death year
 2010: 11,000+ obs in 2010 for last year, because those are people who don't have a death date;
 proc freq data=dn_last_year;
 table death_year year;
 run;
 
-/* 6818 in 2012 meet age >=67
+/* 
+2012: 6938 meet the age >=67 (6876 have xwalk)
 2010: 5764 meet the age >=67
 create table of observations 67 or older of age when died per the restricted dataset*/
 proc sql;
@@ -595,7 +627,8 @@ proc freq;
 table xwalk_yes;
 run;
 
-/* 6756 ids of 6818 have cross walk ids
+/* 
+2012: 6397 of 6876 have are age ge 70
 2010: 5375 ids of 5764 have the cross walk ids.*/
 *create table of observations that have died that have xwalk id;
 data oop_age_ge67_in_mc ;
@@ -614,7 +647,7 @@ run;
 Limited to those with xwalk id and age 67+ at death*/
 data oop_int.oop_sample;
 set oop_age_ge67_in_mc ;
-keep id bid_hrs exit_year_x death_year_e death_date_e;
+keep id bid_hrs exit_year_x death_year_e death_all_e;
 run;
 
 H="Check to see if medicare and no hmo for 2 and 5 yrs before death"
@@ -633,13 +666,14 @@ oop_int.interviews_ffs_mc_2yr, interviews (x, e, n1, n2, n3) of those decedents
 
 /*new table adding mc monthly buyin and hmo status to hrs file w/ xwalk id added, 
 for year of death per hrs
-Count observations in denominator file with death year 6552 for 2012 
+Count observations in denominator file with death year 
+2012: 6802 
 2010: 5192*/
 proc sql;
 create table dn_death_y as select
 a.*,b.buyin12,b.year,b.HMOIND12,b.bid_n
-from oop_int.oop_sample a inner join
-dn_2000_2012 b
+from oop_int.oop_sample a 
+inner join dn_2000_2012 b
 on trim(left(a.BID_hrs))=trim(left(b.BID_HRS_21))
 and a.death_year_e=b.year;
 quit;
@@ -651,7 +685,8 @@ proc sql;
 select count(distinct bid_n) from dn_death_y;
 quit;
 
-/*Since look back is 2 years, create table of observations with death year is 2002 and later: 5735 for 2012
+/*Since look back is 2 years, create table of observations with death year is 2002 and later: 
+2012: 5949 observations left
 2010: 4477 observations left*/
 proc sql;
 create table dn_death_y_02 as
@@ -664,7 +699,7 @@ This trims the buyin12 and hmo12 variables to only have values
 entered prior to the patient's death using the death date from HRS*/
 data dn_death_y2;
 set dn_death_y_02;
-death_month_e=month(death_date_e);
+death_month_e=month(death_all_e);
 if length(trim(left(buyin12)))=12 and death_month_e>0 then do;
 buyin_dy=substr(trim(left(buyin12)),1,death_month_e);
 hmo_dy=substr(trim(left(HMOIND12)),1,death_month_e);
@@ -686,23 +721,22 @@ run;
 
 /*Now match dn files from 1 year before death
 Matches hrs entry for year died with the previous year's mc denominator file, 
-pulling in buy in and hmo indicator
-to determine mc elgible throughout study time period*/
+pulling in buy in and hmo indicator to determine mc elgible throughout study time period*/
 proc sql;
 create table dn_death_y_1bef as select
 a.*,
 b.year as death_year_l1,
 b.buyin12 as buyin12_l1,
 b.HMOIND12 as HMOIND12_l1
-from dn_death_y2 a inner join
-dn_2000_2012 b
+from dn_death_y2 a 
+inner join dn_2000_2012 b
 on trim(left(a.BID_hrs))=trim(left(b.BID_HRS_21))
 and 0<a.year-b.year<=1 order by a.bid_n,year;
 quit;
 
 /*Now match dn files from 2 years before death
-Matches hrs entry for year died with the previous year's mc denominator file, pulling in buy in and hmo indicator
-to determine mc elgible throughout study time period
+Matches hrs entry for year died with the previous year's mc denominator file, 
+pulling in buy in and hmo indicator to determine mc elgible throughout study time period
 Use _l2 to denote year prior to death (death year less 2)
 10 obs do not have 2 year before den file (n=5725)
 2010: 3 observations do not have 2 year before denominator file*/
@@ -712,15 +746,15 @@ a.*,
 b.year as death_year_l2,
 b.buyin12 as buyin12_l2,
 b.HMOIND12 as HMOIND12_l2
-from dn_death_y_1bef a inner join
-dn_2000_2012 b
+from dn_death_y_1bef a 
+inner join dn_2000_2012 b
 on trim(left(a.BID_hrs))=trim(left(b.BID_HRS_21))
 and 1<a.year-b.year<=2 order by a.bid_n,year;
 quit;
 
 /*Now match dn files from 3 years before death
-Matches hrs entry for year died with the previous year's mc denominator file, pulling in buy in and hmo indicator
-to determine mc elgible throughout study time period
+Matches hrs entry for year died with the previous year's mc denominator file, 
+pulling in buy in and hmo indicator to determine mc elgible throughout study time period
 Use _l3 to denote 3 years prior to death (death year less 3)
 570 obs don't have _13 den file (n=5165)
 2010: 694 observations don't have _l3 denominator file*/
@@ -730,15 +764,15 @@ a.*,
 b.year as death_year_l3,
 b.buyin12 as buyin12_l3,
 b.HMOIND12 as HMOIND12_l3
-from dn_death_y_2bef a inner join
-dn_2000_2012 b
+from dn_death_y_2bef a 
+inner join dn_2000_2012 b
 on trim(left(a.BID_hrs))=trim(left(b.BID_HRS_21))
 and 2<a.year-b.year<=3 order by a.bid_n,year;
 quit;
 
 /*Now match dn files from 4 years before death
-Matches hrs entry for year died with the previous year's mc denominator file, pulling in buy in and hmo indicator
-to determine mc elgible throughout study time period
+Matches hrs entry for year died with the previous year's mc denominator file, 
+pulling in buy in and hmo indicator to determine mc elgible throughout study time period
 Use _l3 to denote 3 years prior to death (death year less 2)
 Lose 1195 obs (n=4540)
 2010: 551 observations: 3429*/
@@ -748,15 +782,15 @@ a.*,
 b.year as death_year_l4,
 b.buyin12 as buyin12_l4,
 b.HMOIND12 as HMOIND12_l4
-from dn_death_y_3bef a inner join
-dn_2000_2012 b
+from dn_death_y_3bef a 
+inner join dn_2000_2012 b
 on trim(left(a.BID_hrs))=trim(left(b.BID_HRS_21))
 and 3<a.year-b.year<=4 order by a.bid_n,year;
 quit;
 
 /*Finally, match dn files from 5 years before death
-Matches hrs entry for year died with the previous year's mc denominator file, pulling in buy in and hmo indicator
-to determine mc elgible throughout study time period
+Matches hrs entry for year died with the previous year's mc denominator file, 
+pulling in buy in and hmo indicator to determine mc elgible throughout study time period
 Use _l5 to denote 5 years prior to death (death year less 5)
 1811 obs don't have 15 den entry n=3924
 2010: 557 obs don't have l5 denominator entry n=2872*/
@@ -766,8 +800,8 @@ a.*,
 b.year as death_year_l5,
 b.buyin12 as buyin12_l5,
 b.HMOIND12 as HMOIND12_l5
-from dn_death_y_4bef a inner join
-dn_2000_2012 b
+from dn_death_y_4bef a 
+inner join dn_2000_2012 b
 on trim(left(a.BID_hrs))=trim(left(b.BID_HRS_21))
 and 4<a.year-b.year<=5 order by a.bid_n,year;
 quit;
@@ -854,9 +888,10 @@ proc freq data=all_insurance_60m; table part_ab_5y*hmo_5y; run;
 Save insurance information to merge with main interview dataset*/
 proc sql;
 create table oop_int.all_insurance as select
-a.id,a.bid_hrs,a.death_year_e,a.death_date_e,a.part_ab_2y,a.hmo_2y,a.hmo_24,a.buyin_24,b.part_ab_5y,b.hmo_5y from
-all_insurance_24m a left join
-all_insurance_60m b
+a.id,a.bid_hrs,a.death_year_e,a.death_all_e,a.part_ab_2y,a.hmo_2y,a.hmo_24,a.buyin_24,
+b.part_ab_5y,b.hmo_5y 
+from all_insurance_24m a 
+left join all_insurance_60m b
 on a.id=b.id;
 quit;
 
@@ -883,7 +918,8 @@ proc means n;
 var hmo_2y part_ab_2y hmo_5y part_ab_5y;
 run;
 
-/* 4147 of 5735 obs meet the mc parts a & b coverage and no hmo
+/* 
+2012: 4380 of the 5939 obs meet the mc parts a & b coverage and no hmo
 2010: 3330 of the 4474 observations meet the mc parts a and b coverage and no hmo criteria
 Save this as a permanent dataset*/
 *create table of observations meeting mc and no hmo requirement;
@@ -898,7 +934,7 @@ where part_ab_2y=1 and hmo_2y=0;
 quit;
 
 /*get count of subsample that also meets 5 year criteria 
-2542 
+*2012: 2697 of the 4083  obs meet criteria
 *2010: 1923, 57.7%*/
 proc sql;
 select count(distinct id) from oop_int.meet_criteria_2yr
@@ -1089,9 +1125,9 @@ proc sort data=oop_int.oop_2; by id year; run;
 proc sort data=oop_int.helper_2; by id year; run;
 
 proc sql;
-create table oop_helper_1(drop=id2 year2) as select * from
-oop_int.oop_2 a left join
-oop_int.helper_2(rename=(id=id2) rename=(year=year2)) b
+create table oop_helper_1(drop=id2 year2) as select * 
+from oop_int.oop_2 a 
+left join oop_int.helper_2(rename=(id=id2) rename=(year=year2)) b
 on a.id=b.id2 and a.year=b.year2;
 quit;
 
@@ -1137,7 +1173,7 @@ the Medicare claims. So method to account for them:
 /*list of decedents with mc id, for those with ffs mc last 2 years of life*/
 data exit_nh_1;
 set oop_int.interviews_ffs_mc_2yr;
-keep id bid_hrs exit_year_x death_date_e ;
+keep id bid_hrs exit_year_x death_all_e ;
 run;
 
 proc sort data=exit_nh_1 out=exit_nh_2 nodupkey; by id; run;
@@ -1154,9 +1190,9 @@ quit;
 proc sort data=oop_meet_2 ; by id curr_iw_date; run;
 
 proc sql;
-create table oop_bid_dec_1(drop=id2) as select * from
-oop_meet_2 a left join
-exit_nh_2(rename=(id=id2)) b 
+create table oop_bid_dec_1(drop=id2) as select * 
+from oop_meet_2 a 
+left join exit_nh_2(rename=(id=id2)) b 
 on a.id=b.id2;
 quit;
 
@@ -1185,9 +1221,9 @@ run;
 /*use dod=exit interview date to match oop dataset*/
 data exit_dates;
 set oop_int.exit_restricted_02_to_12_v1;
-keep id exit_year_x death_date_e ;
+keep id exit_year_x death_all_e ;
 rename exit_year_x=year;
-rename death_date_e=ivw_date_e;
+rename death_all_e=ivw_date_e;
 run;
 
 data ivw_dates;
@@ -1215,17 +1251,17 @@ run;
 /*Merge interview dates into oop interview dataset*/
 /*****************************************************************/
 proc sql;
-create table oop_bid_dec_3 as select a.*,b.ivw_date_e,b.prev_ivw_date_e from
-oop_bid_dec_1 a left join
-ivw_dates_2 b
+create table oop_bid_dec_3 as select a.*,b.ivw_date_e,b.prev_ivw_date_e 
+from oop_bid_dec_1 a 
+left join ivw_dates_2 b
 on a.id=b.id and a.year=b.year;
 quit;
 
 /*only keep interviews within 5 years of death date*/
 data oop_bid_dec_4;
 set oop_bid_dec_3;
-if death_date_e-(365.25*5)<=ivw_date_e and ivw_date_e~=.;
-format death_date_e date9.;
+if death_all_e-(365.25*5)<=ivw_date_e and ivw_date_e~=.;
+format death_all_e date9.;
 run;
 
 /*if previous interview date is missing, b/c not in my dataset, assign to be x months
@@ -1253,8 +1289,8 @@ run;
 /*identify claims where entire claim is within the interview window*/
 proc sql;
 create table snf_meet as select a.*,b.ivw_date_e,b.prev_ivw_date_e
-from snf_2000_2012 a inner join
-oop_bid_dec_5 b
+from snf_2000_2012 a 
+inner join oop_bid_dec_5 b
 on trim(left(a.BID_HRS_21))=trim(left(b.BID_hrs))
 and b.prev_ivw_date_e<=a.admit_date and a.disch_date<=b.ivw_date_e;
 quit;
@@ -1263,8 +1299,8 @@ quit;
 but go into the interview window per the discharge date*/
 proc sql;
 create table snf_meet2 as select a.*,b.ivw_date_e,b.prev_ivw_date_e
-from snf_2000_2012 a inner join
-oop_bid_dec_5 b
+from snf_2000_2012 a 
+inner join oop_bid_dec_5 b
 on trim(left(a.BID_HRS_21))=trim(left(b.BID_hrs))
 and a.admit_date<b.prev_ivw_date_e and a.disch_date>b.prev_ivw_date_e ;
 quit;
@@ -1286,8 +1322,8 @@ proc freq; table admit_trunc disch_trunc; run;
 but go past the current interview date*/
 proc sql;
 create table snf_meet4 as select a.*,b.prev_ivw_date_e,b.ivw_date_e
-from snf_2000_2012 a inner join
-oop_bid_dec_5 b
+from snf_2000_2012 a 
+inner join oop_bid_dec_5 b
 on trim(left(a.BID_HRS_21))=trim(left(b.BID_hrs))
 and (b.prev_ivw_date_e<=a.admit_date) and (b.ivw_date_e<a.disch_date) 
 and (a.admit_date<b.ivw_date_e);
@@ -1370,9 +1406,9 @@ proc sort data=oop_bid_dec_5; by bid_hrs ivw_date_e; run;
 proc sort data=snf_ivw ; by BID_HRS_21 ivw_date_e; run;
 
 proc sql;
-create table oop_bid_dec_nh(drop=ivw_date_e2 BID_HRS_21) as select * from
-oop_bid_dec_5 a left join
-snf_ivw(rename=(ivw_date_e=ivw_date_e2)) b 
+create table oop_bid_dec_nh(drop=ivw_date_e2 BID_HRS_21) as select * 
+from oop_bid_dec_5 a 
+left join snf_ivw(rename=(ivw_date_e=ivw_date_e2)) b 
 on a.bid_hrs=b.BID_HRS_21 and a.ivw_date_e=b.ivw_date_e2;
 quit;
 
@@ -1421,7 +1457,6 @@ label nh_pmt_imp="Nursing home payments imputed = yes";
 run;
 
 proc means; var nh_nights sr_nh_nights los_snf_paid_by_mc_ivw nh_ni_not_mc nh_pmt_imp; run;
-
 
 H="Missing nh nights, part 2, assign prices"
 /*This section pulls in 3 sets of prices:
@@ -1528,9 +1563,9 @@ proc sort data=medicaid_nh_rate_1; by usps_code; run;
 
 /*merge the two price lists into a single dataset*/
 proc sql;
-create table nh_rates as select a.*,b.medicaid_rate from
-private_nh_rate_2 a left join
-medicaid_nh_rate_1 b
+create table nh_rates as select a.*,b.medicaid_rate 
+from private_nh_rate_2 a 
+left join medicaid_nh_rate_1 b
 on a.state_usps_code=b.usps_code;
 quit;
 
@@ -1561,9 +1596,9 @@ proc sort data=hhaide_rate_2; by state_usps_code; run;
 
 /*merge with the nursing home price lists*/
 proc sql;
-create table nh_hh_rates as select a.*,b.avg_hh_aide_rate from
-nh_rates a left join
-hhaide_rate_2 b
+create table nh_hh_rates as select a.*,b.avg_hh_aide_rate 
+from nh_rates a 
+left join hhaide_rate_2 b
 on a.state_usps_code=b.state_usps_code;
 quit;
 
@@ -1599,8 +1634,8 @@ run;
 
 proc sql;
 create table ivw_years_2 as select a.id,a.first_ivw_year,b.last_ivw_year
-from ivw_years_1a a left join
-ivw_years_1b b
+from ivw_years_1a a 
+left join ivw_years_1b b
 on a.id=b.id;
 run;
 
@@ -1610,9 +1645,9 @@ proc freq; table first_ivw_year last_ivw_year; run;
 note only merges in interview years for those with ffs medicare 2 years prior to death*/
 proc sql;
 create table state_res_2 as select
-a.*, b.first_ivw_year,b.last_ivw_year from
-state_res a left join
-ivw_years_2 b
+a.*, b.first_ivw_year,b.last_ivw_year 
+from state_res a 
+left join ivw_years_2 b
 on a.id=b.id;
 run;
 
@@ -1701,9 +1736,9 @@ proc sort data=state_res_3; by id; run;
 
 /*merge in the complete state of residence dataset to the oop dataset*/
 proc sql;
-create table oop_add_state(drop=id2) as select * from
-oop_bid_dec_nh_3 a left join
-state_res_3(rename=(id=id2)) b
+create table oop_add_state(drop=id2) as select * 
+from oop_bid_dec_nh_3 a 
+left join state_res_3(rename=(id=id2)) b
 on a.id=b.id2;
 quit;
 
@@ -1749,8 +1784,8 @@ proc freq data=oop_add_state_1; table md_cov; run;
 /******************************************************/
 proc sql;
 create table oop_add_price as select a.*,b.avg_private_rm_rate,b.medicaid_rate,b.avg_hh_aide_rate
-from oop_add_state_1 a left join
-nh_hh_rates b
+from oop_add_state_1 a 
+left join nh_hh_rates b
 on a.state_wave=b.state_usps_code;
 quit;
 
@@ -1776,8 +1811,8 @@ run;
 
 proc sql;
 create table oop_add_price_3 as select a.*,b.national_priv_rm_rate,b.national_medicaid_rate,b.national_hh_aide_rate
-from oop_add_price_2 a left join
-nation_prices b
+from oop_add_price_2 a 
+left join nation_prices b
 on a.i=b.state_usps_code;
 quit;
 
@@ -1885,7 +1920,8 @@ set oop_nh_costs_1;
 if nh_pmt_imp=1;
 run;
 
-/* n=83 of 2929 had OOP nights adjusted down to be balance of non-medicare paid nights
+/* 
+2012: n=99 of 3122 had OOP nights adjusted down to be balance of non-medicare paid nights
  (total nights - snf_medicare=oop)
 2010: n=280 of 2338 */
 proc freq; table oop_nh_nights_adj /missprint; run;
@@ -1947,6 +1983,7 @@ pct_in_nh = nh_nights/nights_from_months;
 run;
 
 proc means; var pct_in_nh months; run;
+
 
 H="Accounting for informal home care"
 /*use private home health aide rate, from MetLife Survey, 2012
@@ -2157,12 +2194,11 @@ proc means; vars hh_s_cost_ivw hh_u_cost_ivw natl_hh_s_cost_ivw natl_hh_u_cost_i
 
 /*merge new variables into final dataset*/
 proc sql;
-create table oop_nh_hh_costs_1 as select a.*,b.hh_s_cost_ivw,b.hh_u_cost_ivw,b.natl_hh_s_cost_ivw,b.natl_hh_u_cost_ivw,
-b.helper_OOP_adj,b.s_months_used,b.u_months_used,b.OOP_months_used,
-b.s_cost_total_mos,b.u_cost_total_mos,b.helper_OOP_mod
-from
-oop_int.oop_nh_costs_2 a left join
-hh_costs_4(rename=(id=id2) rename=(year=year2)) b
+create table oop_nh_hh_costs_1 as select a.*,b.hh_s_cost_ivw,b.hh_u_cost_ivw,
+b.natl_hh_s_cost_ivw,b.natl_hh_u_cost_ivw,b.helper_OOP_adj,b.s_months_used,
+b.u_months_used,b.OOP_months_used,b.s_cost_total_mos,b.u_cost_total_mos,b.helper_OOP_mod
+from oop_int.oop_nh_costs_2 a 
+left join hh_costs_4(rename=(id=id2) rename=(year=year2)) b
 on a.id=b.id2 and a.year=b.year2;
 quit;
 
@@ -2187,6 +2223,7 @@ run;
 
 proc freq; table s_cost_total_mos u_cost_total_mos helper_OOP_mod; run;
 
+
 H="Get OOP data for exit, n1, n2 and n3 cores"
 /*
 Collects OOP data for decedents from exit, n1, n2, and n3 core interview imputations
@@ -2210,7 +2247,8 @@ run;
 
 proc freq; table helper_missing_yes; run;
 
-/* 4092 exit interviews in the oop dataset
+/* 
+2012: only 4324 exit interviews in the oop dataset
 2010: only 3287 exit interviews in oop dataset*/
 proc freq; table exit_int_yes; run;
 
@@ -2222,7 +2260,7 @@ run;
 and age is 67 and older at death*/
 data exit_meet_2;
 set oop_int.interviews_ffs_mc_2yr;
-keep id exit_year_x death_date_e;
+keep id exit_year_x death_all_e;
 run;
 
 proc sort data=exit_meet_2 nodupkey;
@@ -2231,13 +2269,14 @@ run;
 
 proc sql;
 create table exit_oop(drop=id2)
-as select * from 
-exit_meet_2 a left join
-oop_nh_costs_4(rename=(id=id2) drop=exit_year_x death_date_e) b
+as select * 
+from exit_meet_2 a 
+left join oop_nh_costs_4(rename=(id=id2) drop=exit_year_x death_all_e) b
 on a.id=b.id2 and a.exit_year_x=b.year;
 quit;
 
-/* 55 decedents do not have OOP imputed data from exit interviews
+/* 
+2012: 56 decedents do not have OOP imputed data from exit interviews
 2010: 43 decedents do not have OOP imputed data from exit interviews*/
 proc freq data=exit_oop;
 table year helper_missing_yes;
@@ -2303,9 +2342,9 @@ proc sort data=oop_nh_costs_4; by id curr_iw_date; run;
 /*first get all OOP data for decedents for their core interviews (before the exit ivw)*/
 proc sql;
 create table all_c_oop_deced
-as select b.* from
-exit_oop_4 a inner join
-oop_nh_costs_4 b
+as select b.* 
+from exit_oop_4 a 
+inner join oop_nh_costs_4 b
 on a.id=b.id and a.curr_iw_date_x>b.curr_iw_date;
 quit;
 
@@ -2327,9 +2366,9 @@ run;
 /*now get the n2 core interview*/
 proc sql;
 create table oop_n2_1
-as select b.* from
-oop_n1 a inner join
-all_c_oop_deced b
+as select b.* 
+from oop_n1 a 
+inner join all_c_oop_deced b
 on a.id=b.id and a.curr_iw_date>b.curr_iw_date;
 quit;
 
@@ -2351,9 +2390,9 @@ run;
 /*now get the n3 core interview*/
 proc sql;
 create table oop_n3_1
-as select b.* from
-oop_n2 a inner join
-all_c_oop_deced b
+as select b.* 
+from oop_n2 a 
+inner join all_c_oop_deced b
 on a.id=b.id and a.curr_iw_date>b.curr_iw_date;
 quit;
 
@@ -2411,23 +2450,23 @@ by id;
 run;
 
 proc sql;
-create table oop_x_n1(drop=id2) as select * from 
-exit_oop_4 a left join
-oop_n1_2(rename=(id=id2)) b
+create table oop_x_n1(drop=id2) as select * 
+from exit_oop_4 a 
+left join oop_n1_2(rename=(id=id2)) b
 on a.id=b.id2 ;
 quit;
 
 proc sql;
-create table oop_x_n1_n2(drop=id2) as select * from
-oop_x_n1 a left join
-oop_n2_2(rename=(id=id2)) b
+create table oop_x_n1_n2(drop=id2) as select * 
+from oop_x_n1 a 
+left join oop_n2_2(rename=(id=id2)) b
 on a.id=b.id2 ;
 quit;
 
 proc sql;
-create table oop_int.oop_x_n1_n2_n3(drop=id2) as select * from
-oop_x_n1_n2 a left join
-oop_n3_2(rename=(id=id2)) b
+create table oop_int.oop_x_n1_n2_n3(drop=id2) as select * 
+from oop_x_n1_n2 a 
+left join oop_n3_2(rename=(id=id2)) b
 on a.id=b.id2 ;
 quit;
 
@@ -2437,7 +2476,9 @@ because they don't need to go back that far to look back
 five years for the most part */
 /*********************************************************/
 
-/*43 missing exit OOP data, 118 missing n1, 309 missing n2, 2285 missing n3*/
+/*
+2012: 56 missing exit OOP data, 251 missing n1, 535 missing n2, 3058 missing n3
+2010: 43 missing exit OOP data, 118 missing n1, 309 missing n2, 2285 missing n3*/
 proc freq;
 table year_x year_n1 year_n2 year_n3;
 run;
@@ -2451,9 +2492,9 @@ run;
 vs adl / iadl impairment, interview level check    	 */
 /*********************************************************/
 proc sql;
-create table ivws_oop as select * from
-oop_int.r_x_r_n1_n2 a left join
-oop_int.oop_x_n1_n2_n3 b
+create table ivws_oop as select * 
+from oop_int.r_x_r_n1_n2 a 
+left join oop_int.oop_x_n1_n2_n3 b
 on a.id=b.id;
 quit;
 
@@ -2469,7 +2510,7 @@ H="OOP spending totals 24,60 months before death"
 /*Start with dataset of OOP data exit, core n1 and n2 and n3
 Adjust all OOP spending for inflation to 2012 dollars
 Get totals by OOP spending type over the 24 and 60 months prior to death date
-
+k
 Also gets nursing home nights (self reported) over the 24 and 60m prior to death
 
 Final dataset is oop_int.oop_24m_60m
@@ -2715,9 +2756,9 @@ run;
 /*bring in the total months oop data available variables, create indicator for complete
 data 24m and 60m*/
 proc sql;
-create table complete_oop as select a.*,b.total_mos,b.months_x,b.months_n1,b.months_n2,b.months_n3 from
-all_2 a left join
-check_months b
+create table complete_oop as select a.*,b.total_mos,b.months_x,b.months_n1,b.months_n2,b.months_n3 
+from all_2 a 
+left join check_months b
 on a.id=b.id;
 quit;
 
@@ -2806,9 +2847,9 @@ run;
 
 /*merge oop with HRS interviews*/
 proc sql;
-create table oop_int.hrs_oop_ivws(drop=id2) as select * from
-ivws a left join
-oop(rename=(id=id2))  b
+create table oop_int.hrs_oop_ivws(drop=id2) as select * 
+from ivws a 
+left join oop(rename=(id=id2))  b
 on a.id=b.id2;
 quit;
 
@@ -2825,9 +2866,9 @@ run;
 
 /*merge oop / HRS interview dataset with meet criteria variables*/
 proc sql;
-create table oop_fnl.hrs_oop_ivws_meet(drop=id2) as select * from
-oop_ivws a left join
-meet(rename=(id=id2) drop=death_year_e death_date_e bid_hrs hmo_24 buyin_24) b
+create table oop_fnl.hrs_oop_ivws_meet(drop=id2) as select * 
+from oop_ivws a 
+left join meet(rename=(id=id2) drop=death_year_e death_all_e bid_hrs hmo_24 buyin_24) b
 on a.id=b.id2;
 quit;
 
@@ -2852,11 +2893,11 @@ xx = claim type
 
 /*Identify claims within certain time from death date defined when run macro*/
 proc sql;
-create table &source._meet_&days_bef_death. as select a.*,b.death_date_e
-from medi.&source._2000_2012 a inner join
-oop_int.meet_criteria_2yr b
+create table &source._meet_&days_bef_death. as select a.*,b.death_all_e
+from medi.&source._2000_2012 a 
+inner join oop_int.meet_criteria_2yr b
 on trim(left(a.BID_HRS_21))=trim(left(b.bid_hrs))
-and &days_start<=b.death_date_e-a.admit_date<=&days_bef_death;
+and &days_start<=b.death_all_e-a.admit_date<=&days_bef_death;
 quit;
 run;
 
@@ -2870,20 +2911,20 @@ where ### = days before death */
 
 /*Identify claims within certain time from death date*/
 proc sql;
-create table &source._meet_&days_bef_death. as select a.*,b.death_date_e
-from medi.&source0._2000_2012 a inner join
-oop_int.meet_criteria_2yr b
+create table &source._meet_&days_bef_death. as select a.*,b.death_all_e
+from medi.&source0._2000_2012 a
+inner join oop_int.meet_criteria_2yr b
 on trim(left(a.BID_HRS_21))=trim(left(b.bid_hrs)) 
-and &days_start<=b.death_date_e-a.admit_date<=&days_bef_death ;
+and &days_start<=b.death_all_e-a.admit_date<=&days_bef_death ;
 quit;
 
 /*Identify claims that are partially within the time from death date*/
 proc sql;
-create table &source._meet2_&days_bef_death. as select a.*,b.death_date_e
-from medi.&source0._2000_2012 a inner join
-oop_int.meet_criteria_2yr b
+create table &source._meet2_&days_bef_death. as select a.*,b.death_all_e
+from medi.&source0._2000_2012 a 
+inner join oop_int.meet_criteria_2yr b
 on trim(left(a.BID_HRS_21))=trim(left(b.bid_hrs))
-and b.death_date_e-a.admit_date>&days_bef_death and b.death_date_e-a.disch_date<=&days_bef_death;
+and b.death_all_e-a.admit_date>&days_bef_death and b.death_all_e-a.disch_date<=&days_bef_death;
 quit;
 
 data &source._meet3_&days_bef_death.;
@@ -4204,21 +4245,21 @@ working code is in the next heading section*/
 
 /*identify claims where entire claim is within the x months prior to death*/
 proc sql;
-create table snf_meet as select a.*,b.death_date_e
+create table snf_meet as select a.*,b.death_all_e
 from medi.mp_2000_2012(where=(trim(left(SSLSSNF))="N")) a inner join
 oop_int.meet_criteria_2yr b
 on trim(left(a.BID_HRS_21))=trim(left(b.BID_hrs))
-and &days_start<=b.death_date_e-a.admit_date<=&days_bef_death;
+and &days_start<=b.death_all_e-a.admit_date<=&days_bef_death;
 quit;
 
 /*identify claims that span x months prior to death (admission date is prior to start 
 of x months but discharge date is within the x month window*/
 proc sql;
-create table snf_meet2 as select a.*,b.death_date_e
+create table snf_meet2 as select a.*,b.death_all_e
 from medi.mp_2000_2012(where=(trim(left(SSLSSNF))="N")) a inner join
 oop_int.meet_criteria_2yr b
 on trim(left(a.BID_HRS_21))=trim(left(b.BID_hrs))
-and b.death_date_e-a.admit_date>&days_bef_death and b.death_date_e-a.disch_date<=&days_bef_death;
+and b.death_all_e-a.admit_date>&days_bef_death and b.death_all_e-a.disch_date<=&days_bef_death;
 quit;
 
 /*Reset the start date = x months before death to just capture part of stay that was 
@@ -4233,7 +4274,7 @@ run;
 data snf_meet_4_&name.;
 set snf_meet snf_meet3;
 
-window_start=death_date_e-&days_bef_death.;
+window_start=death_all_e-&days_bef_death.;
 /*determine days paid for by mc and total snf days for claims fully in the window*/
 if early_admit~=1 then do;
 snf_days_mc_paid=util_day;
@@ -4260,7 +4301,7 @@ end;
 format admit_date date10.;
 format disch_date date10.;
 format mc_paid_thru_dt date10.;
-format death_date_e date10.;
+format death_all_e date10.;
 format window_start date10.;
 label mc_paid_thru_dt="Medicaid covered through this date";
 label total_snf_los="Total claim SNF LOS";
@@ -4357,21 +4398,21 @@ and one for all other claims in the mp file (inpatient claims)*/
 
 /*identify claims where entire claim is within the x months prior to death*/
 proc sql;
-create table &source._meet as select a.*,b.death_date_e
+create table &source._meet as select a.*,b.death_all_e
 from medi.&source0._2000_2012(where=(trim(left(SSLSSNF))&equ.="N")) a 
 inner join oop_int.meet_criteria_2yr b
 on trim(left(a.BID_HRS_21))=trim(left(b.BID_hrs))
-and &days_start<=b.death_date_e-a.admit_date<=&days_bef_death;
+and &days_start<=b.death_all_e-a.admit_date<=&days_bef_death;
 quit;
 
 /*identify claims that span x months prior to death (admission date is prior to start 
 of x months but discharge date is within the x month window*/
 proc sql;
-create table &source._meet2 as select a.*,b.death_date_e
+create table &source._meet2 as select a.*,b.death_all_e
 from medi.&source0._2000_2012(where=(trim(left(SSLSSNF))&equ.="N")) a 
 inner join oop_int.meet_criteria_2yr b
 on trim(left(a.BID_HRS_21))=trim(left(b.BID_hrs))
-and b.death_date_e-a.admit_date>&days_bef_death and b.death_date_e-a.disch_date<=&days_bef_death;
+and b.death_all_e-a.admit_date>&days_bef_death and b.death_all_e-a.disch_date<=&days_bef_death;
 quit;
 
 /*identify fraction of claims that span x month period that should be 
@@ -4379,7 +4420,7 @@ attributed to the x month period
 by just using the fraction of time that was included in the span*/
 data &source._meet3;
 set &source._meet2;
-pct_xm=(disch_date-(death_date_e-&days_bef_death))/(disch_date-admit_date);
+pct_xm=(disch_date-(death_all_e-&days_bef_death))/(disch_date-admit_date);
 array list pmt_amt passthru loscnt;
 do over list;
 if list=. then list=0;
@@ -4500,7 +4541,7 @@ create table &source._meet as select a.*
 from medi.&source._2000_2012(keep=admit_date BID_HRS_21 pmt_amt) a 
 inner join oop_int.meet_criteria_2yr b
 on trim(left(a.BID_HRS_21))=trim(left(b.BID_hrs))
-and &days_start<=b.death_date_e-a.admit_date<=&days_bef_death;
+and &days_start<=b.death_all_e-a.admit_date<=&days_bef_death;
 quit;
 
 /*Adjust for inflation*/
@@ -4780,7 +4821,7 @@ left join oop_int.exit_restricted_02_to_12_v1 b
 on a.id=b.id;
 quit;*/
 
-/* 2012 variable snf_stay_all_2y & snf_stay_all_2y missing - patch to keep those variables in the data for later use;
+/* 2012 variable snf_stay_all_2y & snf_stay_all_2y missing - patch to keep those variables in the data for later use*/
 proc sort data=oop_int.costs_all out=cost_sort;
 by id;
 run;
@@ -4872,6 +4913,9 @@ select distinct state_n ,count(*) from oop_fnl.mc_costs_2and5yr
 where wage_index_2012=. group by state_n;
 quit;
 
+
+
+/* STOP HERE */
 /*********************************************************/
 /* Commented out, try to backfill in more manually later */
 /*********************************************************/
@@ -8627,7 +8671,7 @@ HH_WEIGHT=. ;
 HH_WAVE=. ;
 
 array weight(13) AWGTHH BWGTHH CWGTHH DWGTHH EWGTHH FWGTHH GWGTHH HWGTHH JWGTHH KWGTHH LWGTHH MWGTHH NWGTHH;
-array wave(12) (1992, 1993, 1994, 1995, 1996, 1998, 2000, 2002, 2004, 2006, 2008, 2010,2012);
+array wave(13) (1992, 1993, 1994, 1995, 1996, 1998, 2000, 2002, 2004, 2006, 2008, 2010,2012);
 
 do i=1 to 13 ;
    if weight(i)>0 then do;
@@ -15778,7 +15822,7 @@ outreg using E:\data\hrs_oop_2010\logs\23_tables_price_check, ///
 log close
 
 
-H="Margins- region, medicaid, hospice 7 days"
+H="Marginal effects- add region, medicaid, hospice 7 days"
 /*****************************************************************/
 /*Get HOSPICE nights from claims, between interview dates*/
 /*****************************************************************/
@@ -15793,7 +15837,7 @@ proc import datafile="E:\data\hrs_oop_2010\final_data\oop_mc_sample_adj_age_HHW_
 out=oop_add1 replace; 
 run;
 
-/*get hospice claims only from full medpar dataset*/
+/*get hospice claims */
 data hs_2000_2012;
 set medi.hs_2000_2012;
 run;
@@ -15862,7 +15906,7 @@ else if hs_los >=7 then hs_7=1;
 hs_ivw_year=YEAR(ivw_date_e) ;
 put hs_ivw_year;
 hs_admit_date=admit_date;
-hs_disch_date=disch_dat;
+hs_disch_date=disch_date;
 label hs_ivw_year="Interview year for hospice- from restricted";
 label hs_admit_date="hospice admit date";
 label hs_disch_date="hospice disharge date";
@@ -15875,6 +15919,7 @@ proc means; var hs_los ; run;
 
 
  ** add hospice lenghth of stay and 7+ days over admissions in the same year;
+proc sort data=hs_all; by BID_HRS_21 ; run;
 data hs_all2;
 set hs_all;
 by BID_HRS_21 ;
@@ -15899,50 +15944,70 @@ run;
 proc sql;
 create table hs_n1 as
 select a.*,b.c_ivw_date_n1, b.BID_HRS     
-from hs_all3 a 
-left join oop_add1 b
-on a.BID_HRS_21=b.BID_HRS and a.ivw_date_e=b.c_ivw_date_n1;
+from hs_all3 a, oop_add1 b
+where a.BID_HRS_21=b.BID_HRS and a.ivw_date_e=b.c_ivw_date_n1;
 quit;
 proc sql;
 create table hs_n2 as
 select a.*,b.c_ivw_date_n2, b.BID_HRS     
-from hs_all3 a 
-left join oop_add1 b
-on a.BID_HRS_21=b.BID_HRS and a.ivw_date_e=b.c_ivw_date_n2;
+from hs_all3 a, oop_add1 b
+where a.BID_HRS_21=b.BID_HRS and a.ivw_date_e=b.c_ivw_date_n2;
 quit;
 proc sql;
 create table hs_n3 as
 select a.*,b.c_ivw_date_n3, b.BID_HRS     
-from hs_all3 a 
-left join oop_add1 b
-on a.BID_HRS_21=b.BID_HRS and a.ivw_date_e=b.c_ivw_date_n3;
+from hs_all3 a, oop_add1 b
+where a.BID_HRS_21=b.BID_HRS and a.ivw_date_e=b.c_ivw_date_n3;
 quit;
-data hs_n123;
+data hs_n123 (drop=BID_HRS);
 merge 
 hs_n1 (rename=(total_hs_los=total_hs_los_n1 total_hs_7=total_hs_7_n1 hs_ivw_year=hs_ivw_year_n1))
 hs_n2 (rename=(total_hs_los=total_hs_los_n2 total_hs_7=total_hs_7_n2 hs_ivw_year=hs_ivw_year_n2)) 
 hs_n3 (rename=(total_hs_los=total_hs_los_n3 total_hs_7=total_hs_7_n3 hs_ivw_year=hs_ivw_year_n3));
 by BID_HRS_21;
 run;
-data hs_n123;
-merge 
-hs_n1 (rename=(total_hs_los=total_hs_los_n1 total_hs_7=total_hs_7_n1 hs_ivw_year=hs_ivw_year_n1))
-hs_n2 (rename=(total_hs_los=total_hs_los_n2 total_hs_7=total_hs_7_n2 hs_ivw_year=hs_ivw_year_n2)) 
-hs_n3 (rename=(total_hs_los=total_hs_los_n3 total_hs_7=total_hs_7_n3 hs_ivw_year=hs_ivw_year_n3));
-by BID_HRS_21;
-run;
+
 /************************************************************/
 /*merge hs nights data with the oop dataset*/
 /************************************************************/
-
-data oop_fnl.oop_mc_sample_adj_age_HHW_2;
-merge oop_add1  hs_n123 ;
+proc sort data= oop_add1; by BID_HRS  ; run;
+proc sort data= hs_n123; by BID_HRS_21  ; run;
+data oop_add2;
+merge oop_add1  hs_n123 (rename=(BID_HRS_21 =BID_HRS)) ;
 by BID_HRS  ;
+array los (3) total_hs_los_n1 total_hs_los_n2 total_hs_los_n3;
+array los7(3) total_hs_7_n1 total_hs_7_n2 total_hs_7_n3;
+do z=1 to 3;
+   if los(z) = . then los(z) =0;
+   if los7(z) = . then los7(z) =0;
+   if los7(z) GE 1 then los7(z) =1;
+end;
 run;
+
+
+/*************************************************************/
+/*merge region and medicare_138 - created in the section
+/* "missing nh nights, part 2 assign prices" 
+/****************************************************************/
+proc sort data=oop_add_state_1 nodupkey; by BID_HRS  ; run;
+proc sql;
+create table oop_fnl.oop_mc_sample_adj_age_HHW_2 as select
+a.*,b.state_wave,b.region,b.division,b.medicaid_138 
+from oop_add2  a
+left join oop_add_state_1 b
+on a.BID_HRS=b.BID_HRS;
+quit;
 
 proc freq data=oop_fnl.oop_mc_sample_adj_age_HHW_2 ;
-tables total_hs_los_n1 total_hs_7_n1 ;
+tables total_hs_los_n1 total_hs_7_n1 state_wave region division medicaid_138; run;
+
+/*export revised data to stata*/
+proc export data=oop_fnl.oop_mc_sample_adj_age_HHW_2 
+outfile="E:\data\hrs_oop_2010\final_data\oop_mc_sample_adj_age_HHW_2.dta" replace;
 run;
+
+
+
 
 
 
@@ -15958,11 +16023,15 @@ local datapath E:\data\hrs_oop_2010\final_data
 
 log using `logpath'\24new-appendix_Table3_adjustedmodel-LOG.txt, text replace
 
-cd `datapath'
+cd `datapath' 
 
 //this dataset is already limited to ffs, full info last 5 years of life
-use 
+use oop_mc_sample_adj_age_HHW_2.dta
 
+gen educ_3cat=0 if educ_lt_hs==1
+replace educ_3cat=1 if educ_hsdeg==1 |educ_some_coll==1
+replace educ_3cat=2 if educ_coll==1
+tab educ_3cat,missing
 
 **************************************************************************
 //for self report of conditions, use n2 ivw, fill in with n1 if missing
@@ -15976,7 +16045,7 @@ tab `v'2n1, missing
 
 local xvars i.age_at_death_cat ib2.race_eth_cat i.female_x i.married_x i.educ_3cat ///
 i.stroke_hrs_n2n1 i.dm_hrs_n2n1 i.heart_hrs_n2n1 i.htn_hrs_n2n1 i.lung_hrs_n2n1 ///
-i.cancer_hrs_n2n1 i.psych_hrs_n2n1 i.arth_hrs_n2n1 i.region i.medicaid_138 i.hospice_7
+i.cancer_hrs_n2n1 i.psych_hrs_n2n1 i.arth_hrs_n2n1 i.region i.medicaid_138 i.total_hs_7_n1
 
 local rtitles "Predicted value spending" \ "" \ "" \ "Age 75-79" \ ""\ "" \  "80-84" \ ""\ "" \ ///
  "85-89" \ ""\ "" \  "90+" \ ""\ "" \  "Hispanic" \ ""\ "" \   ///
@@ -15995,13 +16064,13 @@ local keepres 2.age_at_death_cat 3.age_at_death_cat 4.age_at_death_cat 5.age_at_
 1.race_eth_cat 3.race_eth_cat 4.race_eth_cat 1.female_x 1.married_x ///
 1.educ_3cat 2.educ_3cat 1.stroke_hrs_n2n1 1.dm_hrs_n2n1 1.heart_hrs_n2n1 ///
 1.htn_hrs_n2n1 1.lung_hrs_n2n1 ///
-1.cancer_hrs_n2n1 1.psych_hrs_n2n1 1.arth_hrs_n2n1 i.region i.medicaid_138 i.hospice_7  
+1.cancer_hrs_n2n1 1.psych_hrs_n2n1 1.arth_hrs_n2n1 2.region 3.region 4.region 1.medicaid_138 1.total_hs_7_n1 
   
 //quantify missingness in the covariates
 foreach v in age_at_death_cat race_eth_cat female_x married_x educ_3cat ///
 stroke_hrs_n2n1 dm_hrs_n2n1 heart_hrs_n2n1 htn_hrs_n2n1 lung_hrs_n2n1 ///
-cancer_hrs_n2n1 psych_hrs_n2n1 arth_hrs_n2n1 {
-tab `v',missing region medicaid_138 hospice_7
+cancer_hrs_n2n1 psych_hrs_n2n1 arth_hrs_n2n1 region medicaid_138 total_hs_7_n1 {
+tab `v',missing 
 drop if `v'==.
 }
 
@@ -16018,13 +16087,13 @@ nostars noautosumm
 //average marginal effects
 margins, dydx(age_at_death_cat race_eth_cat female_x married_x educ_3cat ///
 stroke_hrs_n2n1 dm_hrs_n2n1 heart_hrs_n2n1 htn_hrs_n2n1 lung_hrs_n2n1 ///
-cancer_hrs_n2n1 psych_hrs_n2n1 arth_hrs_n2n1, region, medicaid_138, hospice_7) at(pr_dem_gt50=`d')
+cancer_hrs_n2n1 psych_hrs_n2n1 arth_hrs_n2n1 region medicaid_138 total_hs_7_n1) at(pr_dem_gt50=`d')
 outreg, keep(`keepres') stats(b_dfdx se_dfdx ci_dfdx) ///
  merge(d_`d'_2) store(d_`d'_2) varlabels bdec(0) nostars
 }
 local r = `r'+1
 }
-outreg using E:\data\hrs_oop_2010\logs\22_marginal_effects, ///
+outreg using E:\data\hrs_oop_2010\logs\24_marginal_effects, ///
 replay(d_1_1) append(d_1_2) replace landscape ///
 title("Average marginal effects, Prob Dementia > 50% sub-group") ///
 ctitles("","Total","Medicare","Implicit","OOP","Wealth" \ ///
@@ -16036,8 +16105,18 @@ note("Distribution=gamma; link=log" \ ///
 "Average marginal effect, (standard errors), and [95% Confidence intervial] reported")
 
 
+*************************************************************************
+log close
 
 
-
-**************************************************************************
+log using `logpath'\Marginal_effects_Total24m_4gp.txt, text replace
+glm networth_adj2012_24m i.dis_group_cat i.age_at_death_cat ib2.race_eth_cat ///
+ i.female_x i.married_x i.educ_3cat i.stroke_hrs_n2n1 i.dm_hrs_n2n1 ///
+ i.heart_hrs_n2n1 i.htn_hrs_n2n1 i.lung_hrs_n2n1 i.cancer_hrs_n2n1 ///
+ i.psych_hrs_n2n1 i.arth_hrs_n2n1 i.region i.medicaid_138 i.total_hs_7_n1 ///
+ [aw=hh_weight] , family(gamma) link(log)
+margins, dydx(i.age_at_death_cat ib2.race_eth_cat ///
+ i.female_x i.married_x i.educ_3cat i.stroke_hrs_n2n1 i.dm_hrs_n2n1 ///
+ i.heart_hrs_n2n1 i.htn_hrs_n2n1 i.lung_hrs_n2n1 i.cancer_hrs_n2n1 ///
+ i.psych_hrs_n2n1 i.arth_hrs_n2n1 i.region i.medicaid_138 i.total_hs_7_n1 )
 log close

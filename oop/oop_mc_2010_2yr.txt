@@ -1009,6 +1009,7 @@ if response yes, the assume yes for remaining time*/
 
 libname oop_src "E:\data\hrs_oop_2010\received_data";
 libname oop_int "E:\data\hrs_oop_2010\int_data";
+libname oop_fnl "E:\data\hrs_oop_2010\final_data";
 libname hrs_cln 'E:\data\hrs_cleaned';
 
 proc import datafile="E:\data\hrs_oop_2010\received_data\2012\oopme_final_2012.dta"  
@@ -4175,9 +4176,10 @@ proc freq; table HRR_number; run;
 
 /*merge the eol spending into the zip code/hrr list*/
 proc sql;
-create table zip_eol_2 as select a.*,b.tot_eol_spending_hrr
-from ziphsahrr07_1 a left join
- EOL_dartmouth_1 b
+create table zip_eol_2 
+as select a.*,b.tot_eol_spending_hrr
+from ziphsahrr07_1 a 
+left join EOL_dartmouth_1 b
 on a.hrrnum=b.HRR_number;
 quit;
 
@@ -4186,10 +4188,10 @@ proc means; var tot_eol_spending_hrr; run;
 
 /*merge into the overall dataset by zip code*/
 proc sql;
-create table hrs_oop_hrr_1 as select
-a.*,b.hrrnum,b.tot_eol_spending_hrr from
-oop_fnl.hrs_oop_ivws_meet_el_cc_n24m a left join
-zip_eol_2 b
+create table hrs_oop_hrr_1 
+as select a.*,b.hrrnum,b.tot_eol_spending_hrr 
+from oop_fnl.hrs_oop_ivws_meet_el_cc_n24m a 
+left join zip_eol_2 b
 on a.zip_exit_e=b.zip_n;
 quit;
 
@@ -5400,7 +5402,8 @@ sum nh_nights_sr_60m , detail
 
 //medicare reported nursing home nights
 sum  snf_stay_all_2y , detail
-sum los_snf_paid_by_mc_2y , detail
+*sum los_snf_paid_by_mc_2y , detail
+sum los_snf_paid_by_mc_ivw_24m, detail
 
 //if medicare reports more days than self report, assign total days as mc days
 //otherwise, keep just the oop days
@@ -5420,13 +5423,15 @@ sum nh_nights_60m, detail
 //2012 code generated error: nh_ni_not_mc_24m already defined
 //gen nh_ni_not_mc_24m = 0
 replace nh_ni_not_mc_24m = 0
-replace nh_ni_not_mc_24m=(nh_nights_24m - los_snf_paid_by_mc_2y) if (nh_nights_24m - los_snf_paid_by_mc_2y)>0
+*replace nh_ni_not_mc_24m=(nh_nights_24m - los_snf_paid_by_mc_2y) if (nh_nights_24m - los_snf_paid_by_mc_2y)>0
+replace nh_ni_not_mc_24m=(nh_nights_24m - los_snf_paid_by_mc_ivw_24m) if (nh_nights_24m - los_snf_paid_by_mc_ivw_24m)>0
 label var nh_ni_not_mc_24m "NH Nights not Medicare paid last 2 yrs of life"
 sum nh_ni_not_mc_24m, detail
 
 // same error: gen nh_ni_not_mc_60m = 0
 replace nh_ni_not_mc_60m = 0
-replace nh_ni_not_mc_60m=(nh_nights_60m - los_snf_paid_by_mc_5y) if (nh_nights_60m - los_snf_paid_by_mc_5y)>0
+*replace nh_ni_not_mc_60m=(nh_nights_60m - los_snf_paid_by_mc_5y) if (nh_nights_60m - los_snf_paid_by_mc_5y)>0
+replace nh_ni_not_mc_60m=(nh_nights_60m - los_snf_paid_by_mc_ivw_60m) if (nh_nights_60m - los_snf_paid_by_mc_ivw_60m)>0
 replace nh_ni_not_mc_60m = . if ind_sample_5yr==0
 label var nh_ni_not_mc_60m "NH Nights not Medicare paid last 5 yrs of life"
 sum nh_ni_not_mc_60m, detail
@@ -16269,3 +16274,117 @@ note("Distribution=gamma; link=log" \ ///
 
 *************************************************************************
 log close
+
+
+H="******************************************"
+
+
+H="Look at mean time prob dementia and ratio costs/wealth"
+use "E:\projects\oop_spending\archive_2015_June_Annals_rev1\data\oop_mc_sample_adj_age_HHW.dta", clear
+
+gen prob_dem_ivw_date=c_ivw_date_n1 if prob_dementia_n1!=.
+replace prob_dem_ivw_date=c_ivw_date_n2 if prob_dementia_n1==.
+
+gen assess_to_death=death_date-prob_dem_ivw_date
+
+sum assess_to_death if prob_dem_n1n2<.3
+foreach n in 30 50 70 90 100 {
+	sum assess_to_death if pr_dem_gt`n'==1
+}
+sum assess_to_death
+
+foreach d in 24m 60m {
+gen oop_plus_inf_`d'=d_total_oop_`d'+d_inf_care_costs_`d'
+gen cw_ratio_`d'=oop_plus_inf_`d'/networth_adj2010_`d'
+replace cw_ratio_`d'=. if cw_ratio_`d'<0
+label var oop_plus_inf_`d' "OOP plus Implicit Cost `d'"
+label var cw_ratio_`d' "Ratio, OOP+IC:NW `d'"
+gen ind_ratio_1_`d'=cw_ratio_`d'>=1
+gen ind_ratio_2_`d'=cw_ratio_`d'>=2
+label var ind_ratio_1_`d' "Ratio >=1 `d'"
+label var ind_ratio_2_`d' "Ratio >=2 `d'"
+}
+
+mat ratio=J(6,8,.)
+
+local r=1
+local c=1
+
+foreach d in 24m 60m {
+	sum oop_plus_inf_`d' 
+	mat ratio[`r',`c']=r(mean)
+	mat ratio[`r',`c'+1]=r(sd)
+	sum cw_ratio_`d' 
+	mat ratio[`r',`c'+2]=r(mean)
+	mat ratio[`r',`c'+3]=r(sd)
+	local c=`c'+4
+}
+local r=`r'+1
+local c=1
+	
+foreach n in 30 50 70 90 100 {
+	foreach d in 24m 60m {
+		sum oop_plus_inf_`d' if pr_dem_gt`n'==1
+		mat ratio[`r',`c']=r(mean)
+		mat ratio[`r',`c'+1]=r(sd)
+		sum cw_ratio_`d' if pr_dem_gt`n'==1
+		mat ratio[`r',`c'+2]=r(mean)
+		mat ratio[`r',`c'+3]=r(sd)
+		local c=`c'+4
+}
+	local r=`r'+1
+	local c=1
+}
+
+mat rownames ratio="Full Sample" "Prob Dem>.3" "Prob Dem>.5" "Prob Dem>.7" ///
+"Prob Dem>.9" "Prob Dem=1"
+
+frmttable, statmat(ratio) ctitles("" "mean costs 24m" "sd" "c/w ratio 24m" "sd" ///
+"mean costs 60m" "sd" "c/w ratio 60m" "sd") title("OOP & Implicit Costs & Wealth") ///
+sdec(2) varlabels
+
+outreg using "E:\projects\oop_spending\archive_logs\20150922\oop_costs_wealth.rtf", ///
+replay(ratio) replace
+
+local r=1
+local c=1
+
+mat ratio2=J(6,8,.)
+foreach d in 24m 60m {
+	foreach i in 1 2 {
+		sum ind_ratio_`i'_`d'
+		mat ratio2[`r',`c']=r(mean)*100
+		mat ratio2[`r',`c'+1]=r(mean)*r(N)
+		local c=`c'+2
+}
+}
+local r=`r'+1
+local c=1
+
+foreach n in 30 50 70 90 100 {
+	foreach d in 24m 60m {
+		foreach i in 1 2 {
+			sum ind_ratio_`i'_`d' if pr_dem_gt`n'==1
+			mat ratio2[`r',`c']=r(mean)*100
+			mat ratio2[`r',`c'+1]=r(mean)*r(N)
+			local c=`c'+2
+}
+}
+		local r = `r'+1
+		local c=1
+}
+
+mat rownames ratio2="Full Sample" "Prob Dem>.3" "Prob Dem>.5" "Prob Dem>.7" ///
+"Prob Dem>.9" "Prob Dem=1"
+
+frmttable, statmat(ratio2) ctitles("" "% Ratio>1 24m" "N" "% Ratio>2 24m" "N" ///
+"% ratio>1 60m" "N" "% Ratio>2 60m" "N") title("OOP & Implicit Costs & Wealth") ///
+sdec(2,0,2,0,2,0,2,0) varlabels
+
+outreg using "E:\projects\oop_spending\archive_logs\20150922\oop_costs_wealth.rtf", ///
+replay(ratio2) addtable
+
+hist oop_plus_*60m
+twoway scatter cw_ratio_24m oop_plus*24m || lfit cw_ratio_24m oop_plus*24m
+
+

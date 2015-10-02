@@ -43,11 +43,13 @@ libname sur_int "E:\data\surgery_hysterectomy\int_2012clms";
 Reference files like list of chronic conditions ICD-9 codes*/
 libname ref_data "E:\data\surgery_hysterectomy\ref_data";
 
-/*Cleaned HRS 2000-2012 dataset*/
+/*Cleaned HRS 2000-2012 dataset & Death Date dataset*/
 libname hrs_cln 'E:\data\hrs_cleaned';
 
 /*Dementia Probabilities--note, not updated to 2012*/
 libname hrs_dem 'E:\data\hrs_public_2012\dementia';
+
+
 
 H="Identify Surgeries that Meet Criteria"
 /*Identify claims with particular procedure codes present from the
@@ -61,7 +63,7 @@ Keep additional information needed about this claim / surgery:
 2. LOS
 3. Discharge status (to home, SNF, etc)
 4. Admission type (to track if ER admission or not)
-
+*/
 %let source0=ip;
 
 proc sort data=medi.&source0._2000_2012 ;
@@ -481,6 +483,148 @@ run;
 
 
 H=" Index Surgery Defined"
+/*note-this needs work
+
+/*start of MACRO */
+
+/*Macro for all claims files except for medpar
+Creates file source_meet_after_&name._2 which has the first claim after
+1 year of surgery
+*/
+%macro other_post(days_start=,source=,name=);
+
+/*Identify claims within certain time from procedure date defined when run macro*/
+proc sql;
+create table &source._meet_after_&name. as select a.*,b.procedure_date,b.is_admit_date
+from medi.&source._2000_2012 a inner join
+sur_fin.surgery_ids_last b
+on trim(left(a.bid_hrs_21))=trim(left(b.bid_hrs_21))
+and a.admit_date-b.procedure_date<=&days_start
+and a.admit_date>=is_admit_date;
+quit;
+run;
+
+data &source._meet_after_&name._1a;
+set &source._meet_after_&name.;
+format admit_date date9. disch_date date9.;
+run;
+
+proc sort data=&source._meet_after_&name._1a;
+by bid_hrs_21 admit_date;
+run;
+
+data &source._meet_after_&name._2;
+set &source._meet_after_&name._1a;
+by bid_hrs_21;
+rename admit_date = follow_up_dt_&name._ps;
+run;
+%mend;
+
+/*Macro for medpar claims*/
+%macro mp_post(days_start=,source=,name=);
+%let source0=mp;
+
+/*Identify claims within certain time from procedure date*/
+proc sql;
+create table &source._meet_after_&name. as select a.*,b.procedure_date,b.is_admit_date
+from medi.&source0._2000_2012 a inner join
+sur_fin.surgery_ids_last b
+on trim(left(a.bid_hrs_21))=trim(left(b.bid_hrs_21)) 
+and a.admit_date-b.procedure_date<=&days_start
+and a.admit_date>=b.is_admit_date;
+quit;
+run;
+
+data &source._meet_after_&name._1a;
+set &source._meet_after_&name.;
+format admit_date date9. disch_date date9.;
+run;
+
+proc sort data=&source._meet_after_&name._1a;
+by bid_hrs_21 admit_date;
+run;
+
+data &source._meet_after_&name._2;
+set &source._meet_after_&name._1a;
+by bid_hrs_21;
+run;
+
+%mend;
+/*Run macros to identify claims that are after 60 days from surgery date*/
+%mp_post(days_start=60,source=mp,name=60d );
+%other_post(days_start=60,source=hh,name=60d );
+%other_post(days_start=60,source=hs,name=60d );
+%other_post(days_start=60,source=dm,name=60d );
+%other_post(days_start=60,source=op,name=60d );
+%other_post(days_start=60,source=pb,name=60d );
+
+/*Run macros to identify claims that are after 1 year from surgery date*/
+%mp_post(days_start=366,source=mp,name=1yr );
+%other_post(days_start=366,source=hh,name=1yr );
+%other_post(days_start=366,source=hs,name=1yr );
+%other_post(days_start=366,source=dm,name=1yr );
+%other_post(days_start=366,source=op,name=1yr );
+%other_post(days_start=366,source=pb,name=1yr );
+
+/*combine to get follow up date at least 1 year post surgery to use in
+survival analysis */
+
+/*for medpar claims, create indicator for cases where discharge code indicates died*/
+proc freq data=mp_meet_after_1yr_2;
+table dschrgcd*dstntncd /missprint;
+run;
+
+data mp_after_1yr_3(keep=bid_hrs_21 follow_up_dt_1yr_ps died_post_1yr);
+set mp_meet_after_1yr_2;
+if dschrgcd='B' then died_post_1yr=1;
+follow_up_dt_1yr_ps = disch_date;
+run;
+
+data all_after_1yr;
+set mp_after_1yr_3 hh_meet_after_1yr_2  hs_meet_after_1yr_2  dm_meet_after_1yr_2 
+ op_meet_after_1yr_2  pb_meet_after_1yr_2;
+run;
+
+proc sort data=all_after_1yr;
+by bid_hrs_21 follow_up_dt_1yr_ps ;
+run;
+
+data sur_int.all_after_1yr_1;
+set all_after_1yr;
+by bid_hrs_21 ;
+if first.bid_hrs_21 ;
+run;
+
+/*none of the medpar claims where the beneficiary died
+got used in the final dataset with the claim right after 1 year post surgery*/
+proc freq;
+table died_post_1yr /missprint;
+run;
+
+/*merge in the follow up dates to the overall dataset*/
+
+%macro mergefu(presurg=);
+
+proc sql;
+create table sur_fin.surgery_ids_last_comor_&presurg.2(drop=bid_hrs2 died_post_1yr )
+as select * from
+sur_fin.surgery_ids_last_comor_&presurg. a
+left join
+sur_int.all_after_1yr_1(rename=(bid_hrs_21=bid_hrs2)) b 
+on (a.bid_hrs_21)=(b.bid_hrs2);
+quit;
+
+%mend;
+
+%mergefu(presurg=n6m);
+%mergefu(presurg=n12m);
+
+
+data all_after_60d;
+set mp_meet_after_60d_2 hh_meet_after_60d_2  hs_meet_after_60d_2  dm_meet_after_60d_2 
+ op_meet_after_60d_2  pb_meet_after_60d_2;
+run;
+
 /*Add information about index surgery claim
 
 Information needed is:
@@ -498,8 +642,8 @@ Use list of all hospital stays to determine number of
 hospitalizations pre-surgery and details re. post-surgery
 hospitalizations later in the code
 
-*/
 
+*note-not using these here. instead looking at next 60days
 /*************************************************************************/
 /*Identify complications from dx codes for index surgery
 Dataset created: sur_int.compl*/
@@ -518,7 +662,14 @@ comp_inf=0;
 comp_rf=0;
 comp_mi=0;
 comp_del=0;
+comp_kf=0;
 comp_any=0;
+comp_deh=0;
+comp_int=0;
+comp_pne=0;
+comp_strk=0;
+comp_dvt=0;
+comp_hmrg=0;
 end;
 
 array dx DGNSCD01-DGNSCD25 ;
@@ -528,13 +679,34 @@ if substr(dx,1,4)='5990' and comp_uti=0
 	then comp_uti=1;
 
 /*PE*/
-if (substr(dx,1,3)='480'
-	or substr(dx,1,3)='486')
+if substr(dx,1,4)='4151'
 	 and comp_pe=0 
 	then comp_pe=1;
 
+/*post-op hemorrhage*/
+if substr(dx,1,5)='99811'
+	 and comp_hmrg=0 
+	then comp_hmrg=1;
+
+/*Stroke*/
+if substr(dx,1,5)='43491'
+	 and comp_strk=0 
+	then comp_strk=1;
+
+/*Internal*/
+if substr(dx,1,4)='9983'
+	 and comp_int=0 
+	then comp_int=1;
+
+/*Dehiscence*/
+if (substr(dx,1,5)='99831'
+	or substr(dx,1,5)='99832')
+	 and comp_deh=0 
+	then comp_deh=1;
+
 /*Infection*/
 if (substr(dx,1,4)='9985'
+	or substr(dx,1,5)='99851'
 	or substr(dx,1,5)='99859')
 	 and comp_inf=0 
 	then comp_inf=1;
@@ -544,11 +716,7 @@ if substr(dx,1,5)='51881' and comp_rf=0
 	then comp_rf=1;
 
 /*MI*/
-if (substr(dx,1,4)='5845'
-	or substr(dx,1,4)='5846'
-	or substr(dx,1,4)='5847'
-	or substr(dx,1,4)='5848'
-	or substr(dx,1,4)='5849')
+if substr(dx,1,3)=410
 	and comp_mi=0 
 	then comp_mi=1;
 
@@ -558,12 +726,39 @@ if (substr(dx,1,4)='2930'
 	 and comp_del=0 
 	then comp_del=1;
 
+/*kidney failure*/
+if (substr(dx,1,4)='5845'
+	or substr(dx,1,4)='5846'
+	or substr(dx,1,4)='5847'
+	or substr(dx,1,4)='5848'
+	or substr(dx,1,4)='5849')
+	 and comp_kf=0 
+	then comp_kf=1;
+
+/*Pneumonia*/
+if (substr(dx,1,3)='480'
+	or substr(dx,1,3)='481'
+	or substr(dx,1,3)='482'
+	or substr(dx,1,3)='483'
+	or substr(dx,1,3)='484'
+	or substr(dx,1,3)='485'
+	or substr(dx,1,3)='486')
+	 and comp_pne=0 
+	then comp_pne=1;
+
 if (comp_uti=1  
 	or comp_pe=1
 	or comp_inf=1
 	or comp_rf=1
 	or comp_mi=1
-	or comp_del=1)
+	or comp_del=1
+	or comp_kf=1
+	or comp_deh=1
+	or comp_int=1
+	or comp_pne=1
+	or comp_strk=1
+	or comp_dvt=1
+	or comp_hmrg=1)
 	and comp_any=0
 	then comp_any=1; 
 
@@ -3029,6 +3224,248 @@ run;
 
 
 
+H="**add complications & mortality 60 days/1yr"
+/*note-this needs work
+
+/*start of MACRO */
+
+/*Macro for all claims files except for medpar
+Creates file source_meet_after_&name._2 which has the first claim after
+1 year of surgery
+*/
+%macro other_post(days_start=,source=,name=);
+
+/*Identify claims within certain time from procedure date defined when run macro*/
+proc sql;
+create table &source._meet_after_&name. as select a.*,b.procedure_date,b.is_admit_date
+from medi.&source._2000_2012 a inner join
+sur_fin.surgery_ids_last b
+on trim(left(a.bid_hrs_21))=trim(left(b.bid_hrs_21))
+and a.admit_date-b.procedure_date<=&days_start
+and a.admit_date>=is_admit_date;
+quit;
+run;
+
+data &source._meet_after_&name._1a;
+set &source._meet_after_&name.;
+format admit_date date9. disch_date date9.;
+run;
+
+proc sort data=&source._meet_after_&name._1a;
+by bid_hrs_21 admit_date;
+run;
+
+data &source._meet_after_&name._2;
+set &source._meet_after_&name._1a;
+by bid_hrs_21;
+rename admit_date = follow_up_dt_&name._ps;
+&source=1;
+run;
+%mend;
+
+/*Macro for medpar claims*/
+%macro mp_post(days_start=,source=,name=);
+%let source0=mp;
+
+/*Identify claims within certain time from procedure date*/
+proc sql;
+create table &source._meet_after_&name. as select a.*,b.procedure_date,b.is_admit_date
+from medi.&source0._2000_2012 a inner join
+sur_fin.surgery_ids_last b
+on trim(left(a.bid_hrs_21))=trim(left(b.bid_hrs_21)) 
+and a.admit_date-b.procedure_date<=&days_start
+and a.admit_date>=b.is_admit_date;
+quit;
+run;
+
+data &source._meet_after_&name._1a;
+set &source._meet_after_&name.;
+format admit_date date9. disch_date date9.;
+run;
+
+proc sort data=&source._meet_after_&name._1a;
+by bid_hrs_21 admit_date;
+run;
+
+data &source._meet_after_&name._2;
+set &source._meet_after_&name._1a;
+by bid_hrs_21;
+rename DGNS_CD01=DGNSCD01;
+rename DGNS_CD02=DGNSCD02;
+rename DGNS_CD03=DGNSCD03;
+rename DGNS_CD04=DGNSCD04;
+rename DGNS_CD05=DGNSCD05;
+rename DGNS_CD06=DGNSCD06;
+rename DGNS_CD07=DGNSCD07;
+rename DGNS_CD08=DGNSCD08;
+rename DGNS_CD09=DGNSCD09;
+rename DGNS_CD10=DGNSCD10;
+rename DGNS_CD11=DGNSCD11;
+rename DGNS_CD12=DGNSCD12;
+rename DGNS_CD13=DGNSCD13;
+rename DGNS_CD14=DGNSCD14;
+rename DGNS_CD15=DGNSCD15;
+rename DGNS_CD16=DGNSCD16;
+rename DGNS_CD17=DGNSCD17;
+rename DGNS_CD18=DGNSCD18;
+rename DGNS_CD19=DGNSCD19;
+rename DGNS_CD20=DGNSCD20;
+rename DGNS_CD21=DGNSCD21;
+rename DGNS_CD22=DGNSCD22;
+rename DGNS_CD23=DGNSCD23;
+rename DGNS_CD24=DGNSCD24;
+rename DGNS_CD25=DGNSCD25;
+&source=1;
+
+run;
+
+%mend;
+/*Run macros to identify claims that are up to 60 days from surgery date*/
+%mp_post(days_start=60,source=mp,name=60d );
+%other_post(days_start=60,source=hh,name=60d );
+%other_post(days_start=60,source=hs,name=60d );
+%other_post(days_start=60,source=dm,name=60d );
+%other_post(days_start=60,source=op,name=60d );
+%other_post(days_start=60,source=pb,name=60d );
+
+/*Run macros to identify claims that are up to 365 days from surgery date*/
+%mp_post(days_start=365,source=mp,name=365d );
+%other_post(days_start=365,source=hh,name=365d );
+%other_post(days_start=365,source=hs,name=365d );
+%other_post(days_start=365,source=dm,name=365d );
+%other_post(days_start=365,source=op,name=365d );
+%other_post(days_start=365,source=pb,name=365d );
+data all_after_60d;
+set mp_meet_after_60d_2 hh_meet_after_60d_2  hs_meet_after_60d_2  dm_meet_after_60d_2 
+ op_meet_after_60d_2  pb_meet_after_60d_2;
+run;
+
+data all_after_365d;
+set mp_meet_after_365d_2 hh_meet_after_365d_2  hs_meet_after_365d_2  dm_meet_after_365d_2 
+ op_meet_after_365d_2  pb_meet_after_365d_2;
+run;
+
+data sur_int.compl_60d;
+set all_after_60d;
+
+dx_1=trim(left(DGNSCD01));
+if dx_1~="" then do;
+
+/*initialize complications variables*/
+comp_uti=0;
+comp_pe=0;
+comp_inf=0;
+comp_rf=0;
+comp_mi=0;
+comp_del=0;
+comp_kf=0;
+comp_any=0;
+comp_deh=0;
+comp_int=0;
+comp_pne=0;
+comp_strk=0;
+comp_dvt=0;
+comp_hmrg=0;
+end;
+
+array dx DGNSCD01-DGNSCD25;
+do over dx;
+/*UTI*/
+if substr(dx,1,4)='5990' and comp_uti=0 
+	then comp_uti=1;
+
+/*PE*/
+if substr(dx,1,4)='4151'
+	 and comp_pe=0 
+	then comp_pe=1;
+
+/*post-op hemorrhage*/
+if substr(dx,1,5)='99811'
+	 and comp_hmrg=0 
+	then comp_hmrg=1;
+
+/*Stroke*/
+if substr(dx,1,5)='43491'
+	 and comp_strk=0 
+	then comp_strk=1;
+
+/*Internal*/
+if substr(dx,1,4)='9983'
+	 and comp_int=0 
+	then comp_int=1;
+
+/*Dehiscence*/
+if (substr(dx,1,5)='99831'
+	or substr(dx,1,5)='99832')
+	 and comp_deh=0 
+	then comp_deh=1;
+
+/*Infection*/
+if (substr(dx,1,4)='9985'
+	or substr(dx,1,5)='99851'
+	or substr(dx,1,5)='99859')
+	 and comp_inf=0 
+	then comp_inf=1;
+
+/*Resp Failure*/
+if substr(dx,1,5)='51881' and comp_rf=0
+	then comp_rf=1;
+
+/*MI*/
+if substr(dx,1,3)=410
+	and comp_mi=0 
+	then comp_mi=1;
+
+/*Delirium*/
+if (substr(dx,1,4)='2930'
+	or substr(dx,1,4)='2931')
+	 and comp_del=0 
+	then comp_del=1;
+
+/*kidney failure*/
+if (substr(dx,1,4)='5845'
+	or substr(dx,1,4)='5846'
+	or substr(dx,1,4)='5847'
+	or substr(dx,1,4)='5848'
+	or substr(dx,1,4)='5849')
+	 and comp_kf=0 
+	then comp_kf=1;
+
+/*Pneumonia*/
+if (substr(dx,1,3)='480'
+	or substr(dx,1,3)='481'
+	or substr(dx,1,3)='482'
+	or substr(dx,1,3)='483'
+	or substr(dx,1,3)='484'
+	or substr(dx,1,3)='485'
+	or substr(dx,1,3)='486')
+	 and comp_pne=0 
+	then comp_pne=1;
+
+if (comp_uti=1  
+	or comp_pe=1
+	or comp_inf=1
+	or comp_rf=1
+	or comp_mi=1
+	or comp_del=1
+	or comp_kf=1
+	or comp_deh=1
+	or comp_int=1
+	or comp_pne=1
+	or comp_strk=1
+	or comp_dvt=1
+	or comp_hmrg=1)
+	and comp_any=0
+	then comp_any=1; 
+
+end;
+run;
+
+
+proc export data=sur_int.compl_60d outfile="E:\data\surgery_hysterectomy\int_2012clms\all_after_60d.dta" replace; run;
+proc export data=all_after_365d outfile="E:\data\surgery_hysterectomy\int_2012clms\all_after_365d.dta" replace; run;
+
+
 H="identify first claim after 1yr post surgery"
 /*Survival analysis requires an end date to be coded
 For observations where the core interiew is within 1 year
@@ -3200,11 +3637,11 @@ by bid_hrs;
 run;
 
 /*sort surgery information claims dataset so can merge in hrs xwalk id*/
-proc sort data=sur_fin.surgery_ids_last_comor_n12m2;
+proc sort data=sur_fin.surgery_ids_last_comor_n12m;
 by bid_hrs_21;
 run;
 
-proc sort data=sur_fin.surgery_ids_last_comor_n6m2;
+proc sort data=sur_fin.surgery_ids_last_comor_n6m;
 by bid_hrs_21;
 run;
 
@@ -3213,7 +3650,7 @@ run;
 proc sql;
 create table surg_ids_xwalk_n12m as select
 a.*,b.id from
-sur_fin.surgery_ids_last_comor_n12m2 a
+sur_fin.surgery_ids_last_comor_n12m a
 left join
 crosswalk_2 b
 on a.bid_hrs_21=b.bid_hrs;
@@ -3404,7 +3841,7 @@ create table testn2 as select *
 from RESP_CORE_N2 where id in (select id from surg_ids_xwalk_n12m);
 quit;
 
-H="bring in HRS-p1"
+H="bring in HRS-p1 & p2"
 
 /*get the positive one core (core interview after surgery*/
 
@@ -3440,9 +3877,35 @@ set CORE_P1;
 id=r_id_p1;
 run;
 
+
+data core_pp1;
+set p1_core_after_surg;
+by r_id c_ivw_date;
+if ~first.r_id;
+run;
+
+data core_p2;
+set core_pp1;
+by r_id c_ivw_date;
+if first.r_id;
+run;
+
+%rename2(WORK,CORE_P2,_p2,);
+
+/*rename id variable so can use it to merge later*/
+data CORE_P2;
+set CORE_P2;
+id=r_id_p2;
+run;
+
+
+
+
+H="xxxbring in HRS-p2"
+this is extra from the end of get p1, I just want to hold it for a short while
 /*get interview date for p2 interview also to check
 for end date for survival analysis*/
-
+/*
 proc sql;
 create table p2_core_after_surg
 as select a.id,a.c_ivw_date_p1,b.c_ivw_date
@@ -3461,9 +3924,6 @@ by id;
 if first.id;
 rename c_ivw_date=c_ivw_date_p2;
 run;
-
-
-
 
 H="bring in HRS restricted & exit"
 /*merged with the exit data and restricted data
@@ -3686,14 +4146,22 @@ proc means;
 var days_surg_n1core days_surg_n2core days_surg_p1core days_surg_p2core days_surg_x;
 run;
 
+proc sql;
+create table surgery1_&nm. as select a.*,b.death_all
+from final2_&nm. a left join
+hrs_cln.death_date_2012 b
+on a.id=b.id;
+quit;
+
 /* final dataset*/
 data sur_fin.surgery_&nm.;
-set final2_&nm.;
+set surgery1_&nm.;
 run;
 %mend;
 
 %add_vars(nm=n12m);
 %add_vars(nm=n6m);
+
 
 /*save as stata datasets for analysis and summary statistics*/
 proc export data=sur_fin.surgery_n12m
@@ -4363,7 +4831,8 @@ quit;
 
 
 
-H="get malignancy dx"
+H="get malignancy dx "
+
 /*Pull stata for all claims for now.  */
 
 /*proc export data=medi.mp_2000_2012 outfile="E:\data\surgery_hysterectomy\int_2012clms\mp_2000_2012.dta" replace; run;
@@ -4412,6 +4881,195 @@ gen mal_uc=0
 gen mal_oc=0
 gen mal_cc=0
 gen mal_ppc=0
+gen dx_mal=""
+
+local claims ip op sn hs hh  
+ 
+local diag pdgns_cd dgnscd01 dgnscd02 dgnscd03 dgnscd04 dgnscd05 dgnscd06 dgnscd07 ///
+dgnscd08 dgnscd09 dgnscd10 dgnscd11 dgnscd12 dgnscd13 dgnscd14 dgnscd15 dgnscd16 ///
+dgnscd17 dgnscd18 dgnscd19 dgnscd20 dgnscd21 dgnscd22 dgnscd23 dgnscd24 dgnscd25 ///
+
+
+local diag2 pdgns_cd dgnscd01 dgnscd02 dgnscd03 dgnscd04 dgnscd05 dgnscd06 dgnscd07 ///
+dgnscd08 dgnscd09 dgnscd10 dgnscd11 dgnscd12 
+
+merge 1:m bid_hrs_21 using "all_after_60d", keep(match master) keepusing(pdgns_cd dgns* follow comp*)
+
+foreach c in uti pe inf rf mi del kf deh int pne strk dvt hmrg any {
+	egen _`c'=max(comp_`c'), by(bid_hrs_21)
+	replace comp_`c'=_`c'
+}
+
+
+	
+
+
+foreach x of local diag {
+	foreach n in "179" "182" "1820" "1821" "1828" {
+		replace malignancy=1 if `x'=="`n'"
+		replace mal_uc=1 if `x'=="`n'"
+		replace dx_mal="`n'" if `x'=="`n'"
+}
+	foreach n in "183" "1830" "1832" "1833" "1834" "1835" "1838" "1839" {
+		replace malignancy=1 if `x'=="`n'"
+		replace mal_oc=1 if `x'=="`n'"
+		replace dx_mal="`n'" if `x'=="`n'"
+}	
+		
+	foreach n in "180" "1801" "1808" "1809" {
+		replace malignancy=1 if `x'=="`n'"
+		replace mal_cc=1 if `x'=="`n'"
+		replace dx_mal="`n'" if `x'=="`n'"
+}	
+		
+	foreach n in "158" "1580" "1588" "1589" {
+		replace malignancy=1 if `x'=="`n'"
+		replace mal_ppc=1 if `x'=="`n'"
+		replace dx_mal="`n'" if `x'=="`n'"
+}
+}
+
+
+egen uc=max(mal_uc), by(bid)
+egen oc=max(mal_oc), by(bid)
+egen cc=max(mal_cc), by(bid)
+egen ppc=max(mal_ppc), by(bid)
+
+foreach x in uc oc cc ppc {
+replace mal_`x' = `x' if mal_`x'==0
+replace malignancy=1 if mal_`x'==1
+}
+*rename admit_date mal_admit_date
+keep bid_hrs_21 procedure_date mal* *admit_date comp*
+duplicates drop bid_hrs_21 mal*, force
+
+
+gen mal_type = 1 if mal_uc==1 
+replace mal_type=2 if mal_oc==1 
+replace mal_type=3 if mal_cc==1 
+replace mal_type=4 if mal_ppc==1
+replace mal_type=5 if mal_uc+mal_oc+mal_cc+mal_ppc>1
+
+label define maltype 1 "Uterine Cancer" 2 "Ovarian/Admenxal Cancer" ///
+3 "Cervical Cancer" 4 "Primary Peritoneal Cancer" 5 "Multiple Cancer Diagnoses"
+
+label values mal_type maltype
+
+duplicates tag bid_hrs_21 mal_*, gen(dup)
+
+drop if dup!=0 & mali==0
+
+keep bid_hrs_21 procedure_date mal* *admit_date comp*
+
+duplicates drop bid_hrs_21 mal_uc mal_oc mal_cc mal_ppc mal_type, force
+
+merge 1:m bid_hrs_21 using `datapath2'\all_after_365d, keepusing(mp op hh hs pb follow dm ssl pdgn dgnsc*)
+
+gen proc_to_admit=follow-procedure_date
+
+
+
+foreach i in 60 365 {
+	by bid_hrs_21, sort: egen _hosp_adm_p`i'd=total(mp) if ssl!="N" & proc_to_admit>0 & proc_to_admit<=`i'
+	by bid_hrs_21, sort: egen _snf_adm_p`i'd=total(mp) if ssl=="N" & proc_to_admit>0 & proc_to_admit<=`i' 
+	by bid_hrs_21, sort: egen _hs_clms_p`i'd=total(hs) if proc_to_admit>0 & proc_to_admit<=`i'
+	replace _hosp_adm_p`i'=0 if _hosp_adm_p`i'==.
+	replace _snf_adm_p`i'd=0 if _snf_adm_p`i'd==.
+	replace _hs_clms_p`i'd=0 if _hs_clms_p`i'd==.
+	by bid_hrs_21, sort: egen hosp_adm_p`i'd=max(_hosp_adm_p`i'd) 
+	by bid_hrs_21, sort: egen snf_adm_p`i'd=max(_snf_adm_p`i'd) 
+	by bid_hrs_21, sort: egen hs_clms_p`i'd=max(_hs_clms_p`i'd) 
+
+}
+
+
+gen oneyr_malignancy=0
+gen oneyr_mal_uc=0
+gen oneyr_dx_mal=""
+gen oneyr_mal_oc=0
+gen oneyr_mal_cc=0
+gen oneyr_mal_ppc=0
+
+foreach x of local diag {
+	foreach n in "179" "182" "1820" "1821" "1828" {
+		replace oneyr_malignancy=1 if `x'=="`n'" & proc_to_admit>60
+		replace oneyr_mal_uc=1 if `x'=="`n'" & proc_to_admit>60
+		replace oneyr_dx_mal="`n'" if `x'=="`n'" & proc_to_admit>60
+}
+	foreach n in "183" "1830" "1832" "1833" "1834" "1835" "1838" "1839" {
+		replace oneyr_malignancy=1 if `x'=="`n'" & proc_to_admit>60
+		replace oneyr_mal_oc=1 if `x'=="`n'" & proc_to_admit>60
+		replace oneyr_dx_mal="`n'" if `x'=="`n'" & proc_to_admit>60
+}	
+		
+	foreach n in "180" "1801" "1808" "1809" {
+		replace oneyr_malignancy=1 if `x'=="`n'" & proc_to_admit>60
+		replace oneyr_mal_cc=1 if `x'=="`n'" & proc_to_admit>60
+		replace oneyr_dx_mal="`n'" if `x'=="`n'" & proc_to_admit>60
+}	
+		
+	foreach n in "158" "1580" "1588" "1589" {
+		replace oneyr_malignancy=1 if `x'=="`n'" & proc_to_admit>60
+		replace oneyr_mal_ppc=1 if `x'=="`n'" & proc_to_admit>60
+		replace oneyr_dx_mal="`n'" if `x'=="`n'" & proc_to_admit>60
+}
+}
+
+egen uc=max(oneyr_mal_uc), by(bid)
+egen oc=max(oneyr_mal_oc), by(bid)
+egen cc=max(oneyr_mal_cc), by(bid)
+egen ppc=max(oneyr_mal_ppc), by(bid)
+
+foreach x in uc oc cc ppc {
+replace oneyr_mal_`x' = `x' if oneyr_mal_`x'==0
+replace oneyr_malignancy=1 if oneyr_mal_`x'==1
+}
+
+
+
+
+drop sslssnf follow_up_dt_365d_ps mp hh hs dm op pb _merge proc_to_admit ///
+_hosp_adm_p60d _snf_adm_p60d _hs_clms_p60d _hosp_adm_p365d _snf_adm_p365d ///
+_hs_clms_p365d pdgn dgn* uc oc cc ppc oneyr_dx
+
+duplicates drop
+
+
+save "`datapath'\surgery_hysterectomy_malignancy_dx.dta", replace
+
+use "`datapath'\surgery_hysterectomy_final_n12m.dta"
+
+rename comp_* is_comp_*
+
+merge 1:1 bid_hrs_21 using "`datapath'\surgery_hysterectomy_malignancy_dx.dta"
+
+save "`datapath'\surgery_hysterectomy_final_n12m_dx.dta.dta", replace
+
+
+/*
+capture log close
+
+clear all
+
+set more off
+
+local logpath E:\data\surgery_hysterectomy\logs
+local datapath E:\data\surgery_hysterectomy\final_2012clms
+local datapath2 E:\data\surgery_hysterectomy\int_2012clms
+
+
+log using "`logpath'\9_retrieval_of_malignancy_dx_60days.txt", text replace
+
+cd "`datapath2'"
+
+use "`datapath'\surgery_hysterectomy_final_n12m.dta"
+
+keep procedure_date bid_hrs_21 is_admit_date
+gen malignancy=0
+gen mal_uc=0
+gen mal_oc=0
+gen mal_cc=0
+gen mal_ppc=0
 
 local claims ip op sn hs hh  
  
@@ -4423,74 +5081,90 @@ local diag2 pdgns_cd dgnscd01 dgnscd02 dgnscd03 dgnscd04 dgnscd05 dgnscd06 dgnsc
 dgnscd08 dgnscd09 dgnscd10 dgnscd11 dgnscd12 
 
 foreach c of local claims {
-merge m:m bid_hrs_21 using "`c'_2000_2012.dta", keep(match master) keepusing(pdgns_cd dgnscd* admit_date)
+merge 1:m bid_hrs_21 using "`c'_2000_2012.dta", keep(match master) keepusing(pdgns_cd dgnscd* admit_date)
+
+duplicates tag bid_hrs_21, gen(dup)
 format admit_date %td
-rename admit_date `c'_admit_date
 
-
-foreach x of local diag {
-	foreach n in "179" "182" "1820" "1821" "1828" {
-		replace malignancy=1 if `x'=="`n'"
-		replace mal_uc=1 if `x'=="`n'"
+if admit_date<=procedure_date+60 & admit_date>=is_admit_date {
+	foreach x of local diag {
+		foreach n in "179" "182" "1820" "1821" "1828" {
+			replace malignancy=1 if `x'=="`n'"
+			replace mal_uc=1 if `x'=="`n'"
 }
-	foreach n in "183" "1830" "1832" "1833" "1834" "1835" "1838" "1839" {
-		replace malignancy=1 if `x'=="`n'"
-		replace mal_oc=1 if `x'=="`n'"
+		foreach n in "183" "1830" "1832" "1833" "1834" "1835" "1838" "1839" {
+			replace malignancy=1 if `x'=="`n'"
+			replace mal_oc=1 if `x'=="`n'"
 }	
-	
-	foreach n in "180" "1801" "1808" "1809" {
-		replace malignancy=1 if `x'=="`n'"
-		replace mal_cc=1 if `x'=="`n'"
+		
+		foreach n in "180" "1801" "1808" "1809" {
+			replace malignancy=1 if `x'=="`n'"
+			replace mal_cc=1 if `x'=="`n'"
 }	
-	
-	foreach n in "158" "1580" "1588" "1589" {
-		replace malignancy=1 if `x'=="`n'"
-		replace mal_ppc=1 if `x'=="`n'"
+		
+		foreach n in "158" "1580" "1588" "1589" {
+			replace malignancy=1 if `x'=="`n'"
+			replace mal_ppc=1 if `x'=="`n'"
 }
 }
-
-keep bid_hrs_21 is_admit_date procedure_date mal* *admit_date
-duplicates drop bid_hrs_21 mal*, force
-
-}
-foreach c in pb dm {
-merge m:m bid_hrs_21 using "`c'_2000_2012.dta", keep(match master) keepusing(pdgns_cd dgnscd* admit_date)
-format admit_date %td
-rename admit_date `c'_admit_date
-
-
-foreach x of local diag2 {
-	foreach n in "179" "182" "1820" "1821" "1828" {
-		replace malignancy=1 if `x'=="`n'"
-		replace mal_uc=1 if `x'=="`n'"
-}
-	foreach n in "183" "1830" "1832" "1833" "1834" "1835" "1838" "1839" {
-		replace malignancy=1 if `x'=="`n'"
-		replace mal_oc=1 if `x'=="`n'"
-}	
-	
-	foreach n in "180" "1801" "1808" "1809" {
-		replace malignancy=1 if `x'=="`n'"
-		replace mal_cc=1 if `x'=="`n'"
-}	
-	
-	foreach n in "158" "1580" "1588" "1589" {
-		replace malignancy=1 if `x'=="`n'"
-		replace mal_ppc=1 if `x'=="`n'"
-}
-}
-
-
-keep bid_hrs_21 is_admit_date procedure_date mal* *admit_date
-duplicates drop bid_hrs_21 mal*, force
 }
 
 egen uc=max(mal_uc), by(bid)
 egen oc=max(mal_oc), by(bid)
 egen cc=max(mal_cc), by(bid)
 egen ppc=max(mal_ppc), by(bid)
+
 foreach x in uc oc cc ppc {
 replace mal_`x' = `x' if mal_`x'==0
+replace malignancy=1 if mal_`x'==1
+}
+rename admit_date `c'_admit_date
+keep bid_hrs_21 is_admit_date procedure_date mal* *admit_date
+duplicates drop bid_hrs_21 mal*, force
+
+}
+
+foreach c in pb dm {
+merge 1:m bid_hrs_21 using "`c'_2000_2012.dta", keep(match master) keepusing(pdgns_cd dgnscd* admit_date)
+
+format admit_date %td
+
+if admit_date<=procedure_date+60 & admit_date>=is_admit_date {
+	foreach x of local diag2 {
+		foreach n in "179" "182" "1820" "1821" "1828" {
+			replace malignancy=1 if `x'=="`n'"
+			replace mal_uc=1 if `x'=="`n'"
+}
+		foreach n in "183" "1830" "1832" "1833" "1834" "1835" "1838" "1839" {
+			replace malignancy=1 if `x'=="`n'"
+			replace mal_oc=1 if `x'=="`n'"
+}	
+		
+		foreach n in "180" "1801" "1808" "1809" {
+			replace malignancy=1 if `x'=="`n'"
+			replace mal_cc=1 if `x'=="`n'"
+}	
+		
+		foreach n in "158" "1580" "1588" "1589" {
+			replace malignancy=1 if `x'=="`n'"
+			replace mal_ppc=1 if `x'=="`n'"
+}
+}
+}
+
+egen uc=max(mal_uc), by(bid)
+egen oc=max(mal_oc), by(bid)
+egen cc=max(mal_cc), by(bid)
+egen ppc=max(mal_ppc), by(bid)
+
+foreach x in uc oc cc ppc {
+replace mal_`x' = `x' if mal_`x'==0
+replace malignancy=1 if mal_`x'==1
+}
+
+rename admit_date `c'_admit_date
+keep bid_hrs_21 is_admit_date procedure_date mal* *admit_date
+duplicates drop bid_hrs_21 mal*, force
 }
 
 gen mal_type = 1 if mal_uc==1 
@@ -4520,6 +5194,9 @@ use "`datapath'\surgery_hysterectomy_final_n12m.dta"
 merge 1:1 bid_hrs_21 using "`datapath'\surgery_hysterectomy_malignancy_dx.dta"
 
 save "`datapath'\surgery_hysterectomy_final_n12m_dx.dta.dta", replace
+
+
+H="get complication"
 
 
 H="stata-define sample"
@@ -4782,7 +5459,7 @@ log using "`logpath'\8_Surgery_code_var_cleaning_2012_claims.txt", text replace
 cd "`datapath'"
 
 //Use sample from 12 month before surgery comorbidities
-use surgery_hysterectomy_final_n12m_sample.dta
+use surgery_hysterectomy_final_n12m_sample1.dta
 
 // list of surgeries
 tab procedure, missing
@@ -5442,6 +6119,37 @@ rename re_cat_4 re_other
 gen tics_norm_n1=tics_tot_n1>8 if tics_tot_n1!=.
 gen tics_norm_p1=tics_tot_p1>8 if tics_tot_p1!=.
 
+gen incont_yy_n1p1=incont_hrs_n1==1 & incont_hrs_p1==1
+gen incont_yn_n1p1=incont_hrs_n1==1 & incont_hrs_p1==0
+gen incont_ny_n1p1=incont_hrs_n1==0 & incont_hrs_p1==1
+gen incont_nn_n1p1=incont_hrs_n1==0 & incont_hrs_p1==0
+
+gen indep_yy_n1p1=adl_independent_core_n1==1 & adl_independent_core_p1==1
+gen indep_yn_n1p1=adl_independent_core_n1==1 & adl_independent_core_p1==0
+gen indep_ny_n1p1=adl_independent_core_n1==0 & adl_independent_core_p1==1
+gen indep_nn_n1p1=adl_independent_core_n1==0 & adl_independent_core_p1==0
+
+gen srh_pf_yy_n1p1=srh_pf_n1==1 & srh_pf_p1==1
+gen srh_pf_yn_n1p1=srh_pf_n1==1 & srh_pf_p1==0
+gen srh_pf_ny_n1p1=srh_pf_n1==0 & srh_pf_p1==1
+gen srh_pf_nn_n1p1=srh_pf_n1==0 & srh_pf_p1==0
+
+gen nhres_yy_n1p1=nhres_n1==1 & nhres_p1==1
+gen nhres_yn_n1p1=nhres_n1==1 & nhres_p1==0
+gen nhres_ny_n1p1=nhres_n1==0 & nhres_p1==1
+gen nhres_nn_n1p1=nhres_n1==0 & nhres_p1==0
+
+gen proc_to_death=death_all-procedure_date
+gen proc_to_dod_365d=(proc_to_death<366)
+gen proc_to_dod_60d=(proc_to_death<61)
+gen dod_ind=death_all!=.
+
+foreach i in 60 365 {
+	foreach x in hosp_adm_p`i' snf_adm_p`i' hs_clms_p`i' {
+		replace `x'=0 if `x'==.
+}
+}
+
 save surgery_hysterectomy_final_n12m_sample_clean.dta, replace
 
 log close
@@ -5478,7 +6186,8 @@ use surgery_hysterectomy_final_n12m_sample_clean.dta
 ***************************************************
 ***************************************************
 local comorb el_cancer comorb_1_0_n12m comorb_32_0_n12m comorb_31_0_n12m comorb_13_0_n12m el_diab
-local compl comp_any comp_uti comp_pe comp_inf comp_rf comp_mi comp_del
+local compl comp_any comp_uti comp_pe comp_inf comp_rf comp_mi comp_del comp_kf ///
+comp_deh comp_int comp_pne comp_strk comp_dvt comp_hmrg
 
 local race re_white re_black re_hisp re_other 
 local ind_demo adl_independent_core_ incont_hrs_ falls_hrs_ tics_norm_ ///
@@ -5530,7 +6239,7 @@ mat rownames tab_1="Age" "RE White" "RE Black" "RE Hispanic" "RE Other" ///
 
 frmttable using "`logpath'\surgery_hysterectomy_cohort.rtf", replace ///
 statmat(tab_1) ctitles("" "Mean/Percent n1" "N Yes" "N" ///
-"Mean/Percent n1" "N Yes" "N") sdec(2,0,0,2,0,0) title("Cohort Characteristics")
+"Mean/Percent p1" "N Yes" "N") sdec(2,0,0,2,0,0) title("Cohort Characteristics")
 
 
 
@@ -5538,18 +6247,22 @@ statmat(tab_1) ctitles("" "Mean/Percent n1" "N Yes" "N" ///
 
 
 //Second part - hospital episode
-
+local is_compl is_comp_any is_comp_uti is_comp_pe is_comp_inf is_comp_rf ///
+is_comp_mi is_comp_del is_comp_kf ///
+is_comp_deh is_comp_int is_comp_pne is_comp_strk is_comp_dvt is_comp_hmrg
+local disch dis_home dis_ltc dis_rehab dis_hs dis_oth dis_died
 
 //Table 1b Hospital Episode:
+local rn : word count `is_compl' `disch' los
 
-mat tab_1b=J(20,2,.)
+mat tab_1b=J(`=`rn'',2,.)
 sum index_los, detail
 mat tab_1b[1,1]=r(mean)
 mat tab_1b[1,2]=r(p50)
 mat list tab_1b
 
 local j=2
-foreach v in `compl' {
+foreach v in `is_compl' {
 	tab `v' , missing  matcell(m_`v')
 	sca s_`v'_n=r(N)
 	mat m_`v'_p=m_`v'/s_`v'_n
@@ -5558,9 +6271,9 @@ foreach v in `compl' {
 	local j=`j'+1
 }
 
-local disch dis_home dis_ltc dis_rehab dis_hs dis_oth dis_died
 
-local j=9
+
+
 foreach v in `disch' {
 	tab `v' , missing  matcell(m_`v')
 	sca s_`v'_n=r(N)
@@ -5570,19 +6283,34 @@ foreach v in `disch' {
 	local j=`j'+1
 }
 
+
 local mal malignancy mal_uc mal_oc mal_cc mal_ppc
+local rownum : word count `compl' `mal' one two
+local j=1
+
+mat tab_1c=J(`=`rownum'',2,.)
+
+foreach v in `compl' {
+	tab `v' , missing  matcell(m_`v')
+	sca s_`v'_n=r(N)
+	mat m_`v'_p=m_`v'/s_`v'_n
+	mat tab_1c[`j',2] = m_`v'[2,1]
+	mat tab_1c[`j',1] = m_`v'_p[2,1]*100 //in percent
+	local j=`j'+1
+}
+
 
 foreach x of local mal {
 	sum `x'
-	mat tab_1b[`j',2]=r(mean)*r(N)
-	mat tab_1b[`j',1]=r(mean)*100
+	mat tab_1c[`j',2]=r(mean)*r(N)
+	mat tab_1c[`j',1]=r(mean)*100
 	local j=`j'+1
 }
 
 sum procedure_date if mal_type==5
-mat tab_1b[`j',2]=r(N)
-mat tab_1b[`j',1]=r(N)/_N
-mat list tab_1b 
+mat tab_1c[`j',2]=r(N)
+mat tab_1c[`j',1]=r(N)/_N
+mat list tab_1c 
 
 
 
@@ -5590,11 +6318,23 @@ frmttable using "`logpath'\surgery_hysterectomy_cohort.rtf" , statmat(tab_1b) //
 	title("Hospital Episode") ///
 	ctitle("","%", "N") ///
 	rtitle("LOS - mean, median" \ "Any complication"\"UTI" \ "PE" \ "Surgical site infection" ///
-		\ "Respiratory failure" \ "MI" \ "Delirium" \"Home"\"Long term care facility"\"Rehab"\ ///
-		"Hospice"\"Other or Unknown"\"Expired"\"Any Gyn Malignancy within 60 Days" ///
-		\"Uterine Cancer"\"Ovarian/Adnexal Cancer"\"Cervical Cancer" ///
+		\ "Respiratory failure" \ "MI" \ "Delirium" \ "Kidney Failure" \ ///
+		"Dehiscence" \ "Internal" \ "Pneumonia" \ "Stroke" \ "DVT" \ ///
+		"Hemorrhage" \"Home"\"Long term care facility"\"Rehab"\ ///
+		"Hospice"\"Other or Unknown"\"Expired") ///
+	sdec(1,0 \ 2,0) addtable
+	
+frmttable using "`logpath'\surgery_hysterectomy_cohort.rtf" , statmat(tab_1c) ///
+	title("Within 60 Days") ///
+	ctitle("","%", "N") ///
+	rtitle("Any complication within 60 Days"\"UTI" \ "PE" \ "Surgical site infection" ///
+		\ "Respiratory failure" \ "MI" \ "Delirium" \ "Kidney Failure" \ ///
+		"Dehiscence" \ "Internal" \ "Pneumonia" \ "Stroke" \ "DVT" \ ///
+		"Hemorrhage" \ "Any Gyn Malignancy within 60 Days" ///
+		\"Uterine Cancer" \ "Ovarian/Adnexal Cancer"\"Cervical Cancer" ///
 		\"Primary Peritoneal Cancer"\"Mulitple Cancer Diagnoses") ///
 	sdec(1,0 \ 2,0) addtable
+
 
 *******************************************************
 *******************************************************
@@ -6149,6 +6889,74 @@ log close
  gen dod_to_exit = (  e_ivw_date_x - death_date_e)
  tab dod_to_exit if(died_ind==1), missing //all exit interviews are at least after date of death
  //there are a few though with exit interviews more than 1000 days after death
+
+
+H="tables changes n1-p1"
+capture log close
+
+clear all
+set more off
+
+local texpath E:\data\surgery_hysterectomy\logs\tex\
+local logpath E:\data\surgery_hysterectomy\logs\
+local datapath E:\data\surgery_hysterectomy\final_2012clms\
+
+
+log using `logpath'9_surgery_hysterectomy_code_tables.txt, text replace
+
+cd "`datapath'"
+
+use surgery_hysterectomy_final_n12m_sample_clean.dta
+
+preserve
+drop if c_ivw_date_p1==.
+
+local changes incont srh_pf indep nhres 
+mat change=J(4,8,.)
+local r=1
+local c=1
+foreach x of local changes {
+	foreach ch in yy yn ny nn {
+		sum `x'_`ch'_n1p1
+		mat change[`r',`c']=r(mean)*100
+		mat change[`r',`c'+1]=r(mean)*r(N)
+		local c=`c'+2
+}
+	local r=`r'+1
+	local c=1
+}
+
+mat rownames change="Incontinence" "SRH P/F" "Independent ADLs" "NH Residency"
+
+frmttable using "E:\data\surgery_hysterectomy\logs\changes_n1_p1.rtf", ///
+statmat(change) title("Changes, n1 to p1") ctitles("" "% Y both" "n" ///
+"% Y n1 only" "n" "% Y p1 only" "n" "% N both" "n") sdec(2,0,2,0,2,0,2,0) replace
+restore
+
+mat twom1yr=J(8,9,.)
+local r=1
+local c=2
+
+foreach x in hosp_adm_p snf_adm_p hs_clms_p proc_to_dod_ {
+	foreach i in 60 365 {
+		forvalues j=0/7 {
+			tab `x'`i' if `x'`i'==`j'
+			mat twom1yr[`r',1]=`i'
+			mat twom1yr[`r',`c']=r(N)
+			local c=`c'+1
+}
+		local r=`r'+1
+		local c=2
+}
+	local c=2
+}
+
+mat rownames twom1yr="Hospital Admissions" "" "SNF Admissions" "" "Hospice Claims" ///
+"" "Death" ""
+ 
+frmttable using "E:\data\surgery_hysterectomy\logs\changes_n1_p1.rtf", ///
+statmat(twom1yr) title("Utilization and Mortality") ///
+ctitles("" "Days post surgery" "0" "1" "2" "3" "4" "5" "6" "7") sdec(0) addtable
 
 
 H="xxstata code to retrieve surgeriesxx"

@@ -6768,7 +6768,7 @@ Final dataset is spo_int.hrs_elix_cc_n12m_intens*/
 %let source0=mp;
 
 proc sql;
-create table &source._meet as select a.*,b.r_death_date_e
+create table &source._meet_&days_bef_death as select a.*,b.r_death_date_e
 from medi.&source0._2000_2012(where=(trim(left(SSLSSNF))&equ.="N")) a inner join
 spo_int.r_sp_core_n1_p1_n2_ins b
 on trim(left(a.bid_hrs_21))=trim(left(b.r_BID_hrs))
@@ -6780,9 +6780,10 @@ quit;
 %mp(month_n=6,days_start=0,days_bef_death=183,source=ip,equ=~ );
 %mp(month_n=1,days_start=0,days_bef_death=30,source=ip,equ=~);
 
+%macro claims(month_n=,days=);
 /*restructures dataset so separate observation for each procedure*/
-data proc_long(keep=bid_hrs_21 pro procedure_date death_date);
-set ip_meet;
+data proc_long(keep=bid_hrs_21 pro procedure_date r_death_date_e);
+set ip_meet_183;
 array list PRCDR_CD01-PRCDR_CD25;
 array date PRCDR_DT01-PRCDR_DT25;
 do over list;
@@ -6794,6 +6795,11 @@ output;
 end;
 end;
 format procedure_date date10. death_date date10.;
+run;
+
+data proc_long1;
+set proc_long;
+if (r_death_date_e-procedure_date)<=&days;
 run;
 
 data check_miss_date;
@@ -6808,7 +6814,7 @@ run;
 
 /*identify intensive procedures and the dates for those procedures*/
 data proc_long_ba;
-set proc_long;
+set proc_long1;
 array list 
 int_intubation
 int_trach
@@ -6857,19 +6863,20 @@ Just keeps that first procedure date and count of each type of procedure
 proc sql;
 create table proc_sum_new as
 select distinct bid_hrs_21,
-min(date_proc) as first_proc_date_6m format=date10.
-max(date_proc) as last_proc_date_6m format=date10.
-label="first intensive procedure date in the last 6m,Barnato",
-sum(int_intubation) as int_intubation_6m,
-sum(int_trach) as int_trach_6m,
-sum(int_gastro_tude) as int_gastro_tude_6m,
-sum(int_hemodia) as int_hemodia_6m,
-sum(int_enteral_nut) as int_enteral_nut_6m,
-sum(int_cpr) as int_cpr_6m
+min(date_proc) as first_proc_date_&month_n. format=date10.
+label="first intensive procedure date in the last &month_n.,Barnato",
+max(date_proc) as last_proc_date_&month_n. format=date10.
+label="last intensive procedure date in the last &month_n.,Barnato",
+sum(int_intubation) as int_intubation_&month_n.,
+sum(int_trach) as int_trach_&month_n.,
+sum(int_gastro_tude) as int_gastro_tude_&month_n.,
+sum(int_hemodia) as int_hemodia_&month_n.,
+sum(int_enteral_nut) as int_enteral_nut_&month_n.,
+sum(int_cpr) as int_cpr_&month_n.
 from proc_long_ba group by bid_hrs_21;
 quit;
 
-/*identify first procedure date, excluding the hemodial procedure category*/
+/*identify first & last procedure date, excluding the hemodial procedure category*/
 data excl_hemodia_1;
 set proc_long_ba;
 if int_hemodia=0;
@@ -6878,14 +6885,16 @@ run;
 proc sql;
 create table excl_hemodia_2 as
 select distinct bid_hrs_21,
-min(date_proc) as first_proc_date_excl_hd_6m format=date10.
-label="first intensive procedure date in the last 6m,excluding hemodialysis proced."
+min(date_proc) as first_proc_date_excl_hd_&month_n. format=date10.
+label="first intensive procedure date in the last &month_n.,excluding hemodialysis proced.",
+max(date_proc) as last_proc_date_excl_hd_&month_n. format=date10.
+label="last intensive procedure date in the last &month_n.,excluding hemodialysis proced."
 from excl_hemodia_1 group by bid_hrs_21;
 quit;
 
 /*add the first date excluding hemodialysis to the rest of the procedure info*/
 proc sql;
-create table proc_sum_new_2 as select a.*,b.first_proc_date_excl_hd_6m from
+create table proc_sum_new_2 as select a.*,b.first_proc_date_excl_hd_&month_n.,b.last_proc_date_excl_hd_&month_n. from
 proc_sum_new a left join
 excl_hemodia_2 b
 on a.bid_hrs_21=b.bid_hrs_21;
@@ -6894,54 +6903,53 @@ quit;
 /*convert counts to indicator variables, add variable labels*/
 data proc_intensive_new;
 set proc_sum_new_2 ;
-array list int_intubation_6m
-int_trach_6m
-int_gastro_tude_6m
-int_hemodia_6m
-int_enteral_nut_6m
-int_cpr_6m
+array list int_intubation_&month_n.
+int_trach_&month_n.
+int_gastro_tude_&month_n.
+int_hemodia_&month_n.
+int_enteral_nut_&month_n.
+int_cpr_&month_n.
 ;
 do over list;
 if list>0 then list=1;
 if list=. then list=0;
 end;
-label int_intubation_6m="intubation/mechanic ventilation,Barnato";
-label int_trach_6m="trachostomy,Barnato";
-label int_gastro_tude_6m="gastrostomy tube,Barnato";
-label int_hemodia_6m="hemodialysis,Barnato";
-label int_enteral_nut_6m="enteral/parenteral nutrition,Barnato";
-label int_cpr_6m="CPR,Barnato";
+label int_intubation_&month_n.="intubation/mechanic ventilation,Barnato";
+label int_trach_&month_n.="trachostomy,Barnato";
+label int_gastro_tude_&month_n.="gastrostomy tube,Barnato";
+label int_hemodia_&month_n.="hemodialysis,Barnato";
+label int_enteral_nut_&month_n.="enteral/parenteral nutrition,Barnato";
+label int_cpr_&month_n.="CPR,Barnato";
 
-if int_intubation_6m=1 |
-int_trach_6m=1 |
-int_gastro_tude_6m=1 |
-int_hemodia_6m=1 |
-int_enteral_nut_6m=1 |
-int_cpr_6m=1 then int_any_6m=1;
-else int_any_6m=0;
-label int_any_6m="Any of 6 intensive procedures, 1=yes";
+if int_intubation_&month_n.=1 |
+int_trach_&month_n.=1 |
+int_gastro_tude_&month_n.=1 |
+int_hemodia_&month_n.=1 |
+int_enteral_nut_&month_n.=1 |
+int_cpr_&month_n.=1 then int_any_&month_n.=1;
+else int_any_&month_n.=0;
+label int_any_&month_n.="Any of 6 intensive procedures, 1=yes";
 run;
 
 data miss_date;
 set proc_intensive_new;
 miss_date=0;
-if first_proc_date_6m=. then miss_date=1;
+if first_proc_date_&month_n.=. then miss_date=1;
 run;
 
 proc freq;
-table int_any_6m*miss_date;
+table int_any_&month_n.*miss_date;
 run;
 
-
-/*n=1389 have at least 1 intensive procedure with date not missing in the 6m preceding death*/
+/*n=1389 have at least 1 intensive procedure with date not missing in the &month_n. preceding death*/
 proc sql;
-select count(*),count(first_proc_date_6m)
-from proc_intensive_new where (int_intubation_6m
-+int_trach_6m
-+int_gastro_tude_6m
-+int_hemodia_6m
-+int_enteral_nut_6m
-+int_cpr_6m)>0;
+select count(*),count(first_proc_date_&month_n.)
+from proc_intensive_new where (int_intubation_&month_n.
++int_trach_&month_n.
++int_gastro_tude_&month_n.
++int_hemodia_&month_n.
++int_enteral_nut_&month_n.
++int_cpr_&month_n.)>0;
 quit;
 
 proc freq data=proc_intensive_new;
@@ -6950,50 +6958,64 @@ run;
 
 /*merge with bid / death date list for those with xwalk id's*/
 proc sql;
-create table proc_intensive_6m(drop=bid_hrs_21) as select a.r_bid_hrs,a.r_death_date_e,b.*
+create table proc_intensive_&month_n.(drop=bid_hrs_21) as select a.r_bid_hrs,a.r_death_date_e,b.*
 from spo_int.r_sp_core_n1_p1_n2_ins a 
 left join 
 proc_intensive_new b
 on trim(left(a.r_bid_hrs))=trim(left(b.bid_hrs_21));
 quit;
 
+data proc_intensive_&month_n._2;
+set proc_intensive_&month_n.; 
+if r_bid_hrs~='';
+run;
+
 /*if had xwalk but no procedure, set int_ indicators=0*/
-data spo_int.proc_intensive_6m_2;
-set proc_intensive_6m;
-array list int_intubation_6m
-int_trach_6m
-int_gastro_tude_6m
-int_hemodia_6m
-int_enteral_nut_6m
-int_cpr_6m
-int_any_6m
+data spo_int.proc_intensive_&month_n._2;
+set proc_intensive_&month_n._2;
+array list int_intubation_&month_n.
+int_trach_&month_n.
+int_gastro_tude_&month_n.
+int_hemodia_&month_n.
+int_enteral_nut_&month_n.
+int_cpr_&month_n.
+int_any_&month_n.
 ;
 do over list;
 if list=. then list=0;
 end;
-days_1st_proc_death=r_death_date_e-first_proc_date_6m;
-if .<days_1st_proc_death<0 then days_1st_proc_death=0;
-label days_1st_proc_death="the days from the first procedure date in the last 6m to death";
+days_1st_proc_death_&month_n.=r_death_date_e-first_proc_date_&month_n.;
+if .<days_1st_proc_death_&month_n.<0 then days_1st_proc_death_&month_n.=0;
+label days_1st_proc_death="the days from the first procedure date in the last &month_n. to death";
 run;
 
+%mend;
 
+%claims(month_n=1m,days=30);
+%claims(month_n=6m,days=183);
 /****************************************************************/
 /*merge into full dataset, keep missing if no xwalk id*/
 /****************************************************************/
 proc sql;
-create table spo_int.hrs_elix_cc_n12m_intens(drop=bid_hrs2 death_date) as select *
+create table spo_int.proc_intensive_6m_2 as select *
+from proc_intensive_6m_2 a
+left join
+proc_intensive_1m_2 b
+on a.r_bid_hrs = b.r_bid_hrs;
+quit;
+
+proc sql;
+create table spo_int.hrs_elix_cc_n12m_intens(drop=bid_hrs2) as select *
 from 
 spo_int.hrs_elix_cc_n12m a 
 left join
 spo_int.proc_intensive_6m_2(rename=(r_bid_hrs=bid_hrs2)) b
-on a.r_bid_hrs = b.bid_hrs2 and a.r_death_date_e=b.r_death_date_e;
+on a.r_bid_hrs = b.bid_hrs2;
 quit;
-
+/*
 proc freq data=spo_int.hrs_elix_cc_n12m_intens;
 table int_:;
 run;
-
-
 
 
 
@@ -7517,9 +7539,8 @@ use `origdata'\spouse_data_full.dta
 //create variables needed to define sample
 
 //get indicator for any of 5 intensive procedures, excluding hemodialysis
-gen int_any_of5_6m = .
-replace int_any_of5_6m = 1 if int_intubation_6m==1 | int_trach_6m==1 | ///
- int_gastro_tude_6m==1 | int_enteral_nut_6m==1 | int_cpr_6m==1
+gen int_any_of5_6m = ( int_intubation_6m==1 | int_trach_6m==1 | ///
+ int_gastro_tude_6m==1 | int_enteral_nut_6m==1 | int_cpr_6m==1 )
 replace int_any_of5_6m = 0 if int_intubation_6m==0 & int_trach_6m==0 & ///
  int_gastro_tude_6m==0 & int_enteral_nut_6m==0 & int_cpr_6m==0
 la var int_any_of5_6m "Any intensive pro last 6m, excl hemodial"
@@ -8364,7 +8385,7 @@ sum hospital_beds, detail
 sum specialists, detail
 *************************************************
 //30 day indicator
-gen proc_to_death=r_death_date-first_proc_date_e
+gen proc_to_death=r_death_date-last_proc_date_excl_hd_6m
 gen int_any_30d=proc_to_death<31
 
 *************************************************
@@ -10015,7 +10036,7 @@ use spouse_intens_data_ps_matched.dta
 *merge 1:m bid_hrs_21 using "E:\data\surgery_hysterectomy\int_2012clms\death_date_2012", ///
  *keepusing(death_all) keep(match master) nogen
 
-gen proc_to_death=r_death_date-first_proc_date_e
+*gen proc_to_death=r_death_date-first_proc_date_e
 /*gen procedure_to_death=death_all-first_proc_date_e
 
 sum proc_to_death,d
@@ -10745,7 +10766,7 @@ starlevels(10 5 1) merge(res1) store(res1) summstat(N)
 //run model on post-death cesd score, controlling for pre-death score
 regress s_cesd_tot_p1 int_any_30d `rvars' `svars' s_cesd_tot_n1n2  [pw=ip_weight_cg]
 
-outreg using `logpath'\6f_ps_matched_caregivers_only, ///
+outreg using `logpath'\6f_ps_matched_caregivers_only_30d, ///
 merge(res1) replace  varlabels stats(b ci p) ///
 ctitles("","(5) Post-death CES-D score") ///
 summstat(N) landscape  
@@ -10829,18 +10850,18 @@ set more off
 local logpath E:\data\spouse_intensive\logs
 local datapath E:\data\spouse_intensive\int_data
 
-log using "`logpath'\6c-Spouse_intense_nonhospice.txt", text replace
+log using "`logpath'\6g-Spouse_intense_nonhospice.txt", text replace
 
 cd `datapath'
 
 //use dataset with no missing variables, nonhosp only
 *******************************************************************
 use spouse_intens_data_ps_set.dta 
-tab r_hs_3d_6m int_any_of5_6m, missing
+tab r_hs_3d_6m int_any_30d, missing
 
 drop if r_hs_3d_6m==1
 
-tab int_any_of5_6m, missing
+tab int_any_30d, missing
 
 tab r_s_help_dur_cat, missing
 
@@ -10866,9 +10887,9 @@ gen x=uniform()
 sort x
 
 //generate pscore variable hs_pscore
-pscore int_any_of5_6m `rvars' `svars', pscore(ip_pscore) blockid(ip_block) logit detail
+pscore int_any_30d `rvars' `svars', pscore(ip_pscore) blockid(ip_block) logit detail
 
-psgraph, treated(int_any_of5_6m) pscore(ip_pscore)
+psgraph, treated(int_any_30d) pscore(ip_pscore)
 
 *******************************************************************
 //implement radius matching
@@ -10880,19 +10901,19 @@ sca list cal_ps1
 local caliper cal_ps1 
 
 //rule of thumb 0.2*sd, try 0.02* sd
-psmatch2 int_any_of5_6m,outcome(s_cesdbetter) pscore(ip_pscore) radius caliper(`=`caliper'') logit
+psmatch2 int_any_30d,outcome(s_cesdbetter) pscore(ip_pscore) radius caliper(`=`caliper'') logit
 //note this creates varaible _weight
 
 *******************************************************************
 //look at balance of propensity score across variables
-psgraph, treated(int_any_of5_6m) pscore(ip_pscore)
+psgraph, treated(int_any_30d) pscore(ip_pscore)
 
-pstest `rvars' `svars' ,treated(int_any_of5_6m) both hist
+pstest `rvars' `svars' ,treated(int_any_30d) both hist
 
 //look at quantile-quantile plots for continuous variables
 foreach v in r_age cc_all_count_6m12m_2{
-gen `v'_treated = `v' if int_any_of5_6m==1 & _support==1
-gen `v'_comparison = `v' if int_any_of5_6m==0 & _support==1
+gen `v'_treated = `v' if int_any_30d==1 & _support==1
+gen `v'_comparison = `v' if int_any_30d==0 & _support==1
 qqplot `v'_treated `v'_comparison
 graph save `logpath'/qqplot_`v'_cg, replace
 drop `v'_t `v'_c
@@ -10902,14 +10923,14 @@ mat vr=J(34,6,.)
 //compare variance of covariates before and after matching
 local i=1
 foreach v in `rvars' `svars'  {
-sum `v' if int_any_of5_6m==1 //get variance treated before matching
+sum `v' if int_any_30d==1 //get variance treated before matching
 mat vr[`i',1]=r(Var)
-sum `v' if int_any_of5_6m==0 //get variance comparison before matching
+sum `v' if int_any_30d==0 //get variance comparison before matching
 mat vr[`i',2]=r(Var)
 mat vr[`i',3]= vr[`i',1]/vr[`i',2] //ratio
-sum `v' if int_any_of5_6m==1 & _support==1 //get variance treated after matching
+sum `v' if int_any_30d==1 & _support==1 //get variance treated after matching
 mat vr[`i',4]=r(Var)
-sum `v' if int_any_of5_6m==0 [iweight=_weight] //get variance comparison after matching
+sum `v' if int_any_30d==0 [iweight=_weight] //get variance comparison after matching
 mat vr[`i',5]=r(Var)
 mat vr[`i',6]= (vr[`i',4]) / (vr[`i',5]) //ratio
 local i=`i'+1
@@ -10921,16 +10942,16 @@ mat list vr
 
 //what gets dropped from sample using this match?
 tab _support, missing
-tab _support if int_any_of5_6m==1, missing //n=3 treated dropped, off comm support
-tab _support if int_any_of5_6m==0, missing
-tab _weight if int_any_of5_6m==1, missing
-sum _weight if int_any_of5_6m==0 //n=10 control dropped, no weight assigned
+tab _support if int_any_30d==1, missing //n=3 treated dropped, off comm support
+tab _support if int_any_30d==0, missing
+tab _weight if int_any_30d==1, missing
+sum _weight if int_any_30d==0 //n=10 control dropped, no weight assigned
 
 rename _weight ip_weight_nh
 
 *******************************************************************
 //run the doubly robust models
-la var int_any_of5_6m "Intensive procedure used"
+la var int_any_30d "Intensive procedure used"
 la var r_nhres_n1n2 "R Nursing home resident"
 la var r_srh_pf_n1n2 "R SRH Fair/Poor"
 la var r_adl_impair_n1n2 "R ADL Impaired"
@@ -10942,7 +10963,7 @@ la var s_hrs_comorb_mild_n1 "S Mild comorb."
 la var s_hrs_comorb_mod_n1 "S Moderate comorb."
 la var s_psych_overall_hrs_n1n2 "S Psych condition"
 
-logit s_cesdbetter int_any_of5_6m `rvars' `svars' [pw=ip_weight_nh], or
+logit s_cesdbetter int_any_30d `rvars' `svars' [pw=ip_weight_nh], or
 outreg, ///
 title("Impact of intensive procedure on spousal depression" \ ///
 "Propensity matched sample, Subsample with 0-2 day hospice use only") ///
@@ -10950,19 +10971,19 @@ varlabels stats(e_b e_ci p)  ///
 ctitles("","(1) Any improvement" ) ///
 starlevels(10 5 1) store(res1) summstat(N)
 
-logit s_cesd_ge3better int_any_of5_6m `rvars' `svars' [pw=ip_weight_nh], or
+logit s_cesd_ge3better int_any_30d `rvars' `svars' [pw=ip_weight_nh], or
 outreg , ///
 merge(res1) store(res1) varlabels stats(e_b e_ci p) ///
 ctitles("","(2) Clinical improvement") ///
 summstat(N)
 
-regress s_cesdchange int_any_of5_6m `rvars' `svars' [pw=ip_weight_nh]
+regress s_cesdchange int_any_30d `rvars' `svars' [pw=ip_weight_nh]
 outreg , ///
 merge(res1) store(res1) varlabels stats(b ci p) ///
 ctitles("","(3) Raw change in CES-D score") ///
 summstat(N) landscape
 
-logit s_cesdworse int_any_of5_6m `rvars' `svars' [pw=ip_weight_nh], or
+logit s_cesdworse int_any_30d `rvars' `svars' [pw=ip_weight_nh], or
 outreg, ///
 title("Impact of intensive procedure on spousal depression" \ ///
 "Propensity matched sample") ///
@@ -10972,9 +10993,9 @@ starlevels(10 5 1) merge(res1) store(res1) summstat(N)
 
 *******************************************************************
 //run model on post-death cesd score, controlling for pre-death score
-regress s_cesd_tot_p1 int_any_of5_6m `rvars' `svars' s_cesd_tot_n1n2  [pw=ip_weight_nh]
+regress s_cesd_tot_p1 int_any_30d `rvars' `svars' s_cesd_tot_n1n2  [pw=ip_weight_nh]
 
-outreg using `logpath'\6c_ps_matched_no_hospice_only, ///
+outreg using `logpath'\6g_ps_matched_no_hospice_only_30d, ///
 merge(res1) replace  varlabels stats(b ci p) ///
 ctitles("","(5) Post-death CES-D score") ///
 summstat(N) landscape  
@@ -10991,14 +11012,14 @@ local r = 1
 foreach v in s_cesd_tot_ge3_n1n2 s_cesd_tot_ge3_p1 s_cesdbetter { //indicator variables
 	local c = 1
 	foreach d in 1 0 {
-		sum `v' if int_any_of5_6m ==`d' [iweight=ip_weight_nh]
+		sum `v' if int_any_30d ==`d' [iweight=ip_weight_nh]
 		mat t2_2m[`r',`c']=r(mean)*100
 		local c = `c'+1		
 	}
 	mat t2_2m[`r',3]=(t2_2m[`r',1]/100-t2_2m[`r',2]/100)/sqrt((t2_2m[`r',1]/100* ///
 		(1-t2_2m[`r',1]/100)+t2_2m[`r',2]/100*(1-t2_2m[`r',2]/100))/2)
 		
-	logit int_any_of5_6m `v' [iw=ip_weight_nh]
+	logit int_any_30d `v' [iw=ip_weight_nh]
 	test `v'
 	mat t2_2m[`r',4] = r(p)
 	
@@ -11013,14 +11034,14 @@ local r = 1
 foreach v in s_cesd_tot_n1n2 s_cesd_tot_p1 s_cesdchange  { //continuous variables
 	local c = 1
 	foreach d in 1 0 {
-		sum `v' if int_any_of5_6m ==`d' [iweight=ip_weight_nh]
+		sum `v' if int_any_30d ==`d' [iweight=ip_weight_nh]
 		mat t2_3m[`r',`c']=r(mean)
 		mat t2_3m[`r',`c'+1]=r(sd)
 		local c = `c'+2	
 	}
 	mat t2_3m[`r',5]=(t2_3m[`r',1]-t2_3m[`r',3])/sqrt((t2_3m[`r',2]^2+t2_3m[`r',4]^2)/2) 
 	
-	logit int_any_of5_6m `v' [iw=ip_weight_nh]
+	logit int_any_30d `v' [iw=ip_weight_nh]
 	test `v'
 	mat t2_3m[`r',6] = r(p)
 	
@@ -11040,7 +11061,7 @@ frmttable, statmat(t2_3m) varlabels ///
 	dbldiv(" (") annotate(ann) asymbol(")") ///
 	store(tab2_3m) 
 
-outreg using `logpath'\6c_ps_matched_no_hospice_only, ///
+outreg using `logpath'\6g_ps_matched_no_hospice_only_30d, ///
 replay(tab2_2m) append(tab2_3m) addtable ///
 ctitles("" "Intensive procedure" "No procedure" "Std Diff." "p-value") ///
 title("Matched sample, S CES-D before and after R's death")
@@ -11048,125 +11069,6 @@ title("Matched sample, S CES-D before and after R's death")
 *******************************************************************
 log close
 
-*******************************************************************
-//run the doubly robust models
-la var int_any_of5_6m "Intensive procedure used"
-la var r_nhres_n1n2 "R Nursing home resident"
-la var r_srh_pf_n1n2 "R SRH Fair/Poor"
-la var r_adl_impair_n1n2 "R ADL Impaired"
-la var cc_all_count_6m12m_2 "R # Chronic conditions"
-la var s_race_cat1 "S White, Non-Hispanic"
-la var s_hseduc "S HS Degree"
-la var s_srh_pf_n1n2 "S SRH Fair/Poor"
-la var s_hrs_comorb_mild_n1 "S Mild comorb."
-la var s_hrs_comorb_mod_n1 "S Moderate comorb."
-la var s_psych_overall_hrs_n1n2 "S Psych condition"
-
-logit s_cesdbetter int_any_of5_6m `rvars' `svars' [pw=ip_weight_nh], or
-outreg, ///
-title("Impact of intensive procedure on spousal depression" \ ///
-"Propensity matched sample, Primary cargiver spouses only") ///
-varlabels stats(e_b e_ci p)  ///
-ctitles("","(1) Any improvement" ) ///
-starlevels(10 5 1) store(res1) summstat(N)
-
-logit s_cesd_ge3better int_any_of5_6m `rvars' `svars' [pw=ip_weight_nh], or
-outreg , ///
-merge(res1) store(res1) varlabels stats(e_b e_ci p) ///
-ctitles("","(2) Clinical improvement") ///
-summstat(N)
-
-regress s_cesdchange int_any_of5_6m `rvars' `svars' [pw=ip_weight_nh]
-outreg , ///
-merge(res1) store(res1) varlabels stats(b ci p) ///
-ctitles("","(3) Raw change in CES-D score") ///
-summstat(N) landscape
-
-logit s_cesdworse int_any_of5_6m `rvars' `svars' [pw=ip_weight_nh], or
-outreg, ///
-title("Impact of intensive procedure on spousal depression" \ ///
-"Propensity matched sample") ///
-varlabels stats(e_b e_ci p)  ///
-ctitles("","(4) Any increase in depressive symptoms" ) ///
-starlevels(10 5 1) merge(res1) store(res1) summstat(N)
-
-*******************************************************************
-//run model on post-death cesd score, controlling for pre-death score
-regress s_cesd_tot_p1 int_any_of5_6m `rvars' `svars' s_cesd_tot_n1n2  [pw=ip_weight_nh]
-
-outreg using `logpath'\6c_ps_matched_nonhosp_only, ///
-merge(res1) replace  varlabels stats(b ci p) ///
-ctitles("","(5) Post-death CES-D score") ///
-summstat(N) landscape  
-
-
-*******************************************************************
-//quick look at matched sample, outcomes univariate comparison
-la var s_cesd_tot_ge3_p1 "S Depressed CESD 3+, p1 core"
-la var s_cesd_tot_ge3_p1 "S CES-D Score, p1 core"
-
-mat t2_2m=J(3,4,.)
-
-local r = 1
-foreach v in s_cesd_tot_ge3_n1n2 s_cesd_tot_ge3_p1 s_cesdbetter { //indicator variables
-	local c = 1
-	foreach d in 1 0 {
-		sum `v' if int_any_of5_6m ==`d' [iweight=ip_weight_nh]
-		mat t2_2m[`r',`c']=r(mean)*100
-		local c = `c'+1		
-	}
-	mat t2_2m[`r',3]=(t2_2m[`r',1]/100-t2_2m[`r',2]/100)/sqrt((t2_2m[`r',1]/100* ///
-		(1-t2_2m[`r',1]/100)+t2_2m[`r',2]/100*(1-t2_2m[`r',2]/100))/2)
-		
-	logit int_any_of5_6m `v' [iw=ip_weight_nh]
-	test `v'
-	mat t2_2m[`r',4] = r(p)
-	
-	local r = `r'+1
-}
-mat rownames t2_2m=s_cesd_tot_ge3_n1n2 s_cesd_tot_ge3_p1 s_cesdbetter 
-frmttable, statmat(t2_2m) varlabels ///
-	sdec(2) store(tab2_2m) 
-
-mat t2_3m=J(3,6,.)
-local r = 1
-foreach v in s_cesd_tot_n1n2 s_cesd_tot_p1 s_cesdchange  { //continuous variables
-	local c = 1
-	foreach d in 1 0 {
-		sum `v' if int_any_of5_6m ==`d' [iweight=ip_weight_nh]
-		mat t2_3m[`r',`c']=r(mean)
-		mat t2_3m[`r',`c'+1]=r(sd)
-		local c = `c'+2	
-	}
-	mat t2_3m[`r',5]=(t2_3m[`r',1]-t2_3m[`r',3])/sqrt((t2_3m[`r',2]^2+t2_3m[`r',4]^2)/2) 
-	
-	logit int_any_of5_6m `v' [iw=ip_weight_nh]
-	test `v'
-	mat t2_3m[`r',6] = r(p)
-	
-	local r = `r'+1
-}
-mat rownames t2_3m=s_cesd_tot_n1n2 s_cesd_tot_p1 s_cesdchange 
-
-mat dmat=(0,1,0,1,0,0)
-mat ann=(1,1,0,0\1,1,0,0\1,1,0,0)
-mat list dmat
-mat list ann
-
-mat list t2_3m
-
-frmttable, statmat(t2_3m) varlabels ///
-	sdec(2) doubles(dmat) ///
-	dbldiv(" (") annotate(ann) asymbol(")") ///
-	store(tab2_3m) 
-
-outreg using `logpath'\6c_ps_matched_nonhosp_only, ///
-replay(tab2_2m) append(tab2_3m) addtable ///
-ctitles("" "Intensive procedure" "No procedure" "Std Diff." "p-value") ///
-title("Matched sample, S CES-D before and after R's death")
-
-*******************************************************************
-log close
 
 
 H="30 day gender"
@@ -12115,7 +12017,9 @@ gen died_after_2wks_30d=died_1st_m==1 & died_1st_fortnight==0
 
 gen died_after_1mo=int_any_of==1 & died_1st_mo==0
 
-mat cesd=J(7,9,.)
+gen died_same_day=proc_to_death==0
+
+mat cesd=J(9,9,.)
 
 local r=1
 local c=4
@@ -12127,7 +12031,7 @@ foreach x in 0 1 {
 	mat cesd[`r',2]=r(sd)
 	mat cesd[`r',3]=r(N)
 	foreach s in better worse same {
-		sum s_cesd`s' if int_any_30d==`x'
+		sum s_cesd`s' if int_any_of5==`x'
 		mat cesd[`r',`c']=r(mean)*100
 		mat cesd[`r',`c'+1]=r(N)*r(mean)
 		local c=`c'+2
@@ -12136,7 +12040,7 @@ foreach x in 0 1 {
 	local c=4
 }
 
-foreach x in after_1mo after_2wks_30d 1st_fortnight 1st_wk 1st_day {
+foreach x in after_1mo 1st_mo after_2wks_30d 1st_fortnight 1st_wk 1st_day same_day {
 	qui sum s_cesdchange if died_`x'==1
 	mat cesd[`r',1]=r(mean)
 	mat cesd[`r',2]=r(sd)
@@ -12151,8 +12055,9 @@ foreach x in after_1mo after_2wks_30d 1st_fortnight 1st_wk 1st_day {
 	local c=4
 }
 
-mat rownames cesd="No intensive procedure last 6m" "Intensive procedure last 6m" "Int proc 31-180 days" "Int proc 15-30 days" "Int proc last 2 wks" ///
-"Int proc last week" "Int proc w/in 1 day"
+mat rownames cesd="No intensive procedure last 6m" "Intensive procedure last 6m" ///
+"Int proc 31-183 days" "Int proc last 30 days" "Int proc 15-30 days" ///
+"Int proc last 2 wks" "Int proc last week" "Int proc w/in 1 day" "Int proc same day"
 
 frmttable, statmat(cesd) sdec(2,2,0,2,0,2,0,2,0) title("Surviving Spousal Depression and Intensive Procedure at EOL") ///
 ctitles("" "mean CESD Change" "sd" "N" "% CESD Better" "n" "% CESD Worse" "n" "CESD Unchanged" ///
@@ -12222,6 +12127,13 @@ preserve
 keep if int_any_of5==1
 local ints int_intubation_6m int_trach_6m int_gastro_tude_6m ///
  int_enteral_nut_6m int_cpr_6m
+local ints2 int_intubation_ int_trach_ int_gastro_tude_ ///
+ int_enteral_nut_ int_cpr_
+
+foreach x of local ints2 {
+	replace `x'6m=`x'1m if int_any_30d==1
+}
+ 
 local r=2 
 local c=1
 
@@ -12243,7 +12155,7 @@ foreach x of local ints {
 mat rownames proc="Total" `ints'
 
 frmttable, statmat(proc) sdec(2,0,2,0,3) title("Type of Intensive Procedure") ///
-ctitles("Procedure" "% with procs 31-180 days" "n" "% with procs last 30 days" "n" "p") varlabels store(proc)
+ctitles("Procedure" "% with procs 31d-6m" "n" "% with procs last 30 days" "n" "p") varlabels store(proc)
 
 outreg using `logpath'\cesd_last_2wks_30d.rtf, replay(proc) addtable
 

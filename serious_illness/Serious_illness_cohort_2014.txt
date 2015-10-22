@@ -8198,6 +8198,335 @@ run;
 
 
 
+H="Step 10b - Get all comparison interviews set up (2002-2010)"
+/*Creates additional dataset that is all core interviews, with
+
+Dataset saved as:
+sic_fin.n0_n1_p1_p2_criteria_2002_2010
+
+Contain the following interviews as denoted by variable suffix:
+_n0 - core year
+_n1 - interview prior to core year n0
+_p1 - interview after core year n0
+*/
+
+*****************************************************;
+*rename macro *;
+*****************************************************;
+%macro rename(lib,dsn,pre);
+options pageno=1 nodate;
+proc contents data=&lib..&dsn;
+title "Before Renaming All Variables";
+run;
+
+proc sql noprint;
+select nvar into :num_vars
+from dictionary.tables
+where libname="&LIB" and
+memname="&DSN";
+select distinct(name) into :var1-
+:var%TRIM(%LEFT(&num_vars))
+from dictionary.columns
+where libname="&LIB" and
+memname="&DSN";
+quit;
+run;
+
+proc datasets library=&LIB;
+modify &DSN;
+rename
+%do i=1 %to &num_vars;
+&&var&i=&&var&i.._&pre 
+%end;
+;
+quit;
+run;
+options pageno=1 nodate;
+proc contents data=&lib..&dsn;
+title "After Renaming All Variables";
+run;
+%mend rename;
+
+
+****************************************************************;
+/*set up dataset with reference time 0 = 2008 core
+time =0 has n0 suffix
+interviews before have n1, n2, etc suffix
+interviews after have p1, p2 suffix */
+****************************************************************;
+
+*drop variables from interview dataset that we don't need for the n1, p1, etc datasets;
+*these are variables from the restricted dataset;
+data core_to_use;
+set sic_int.ivws_crit_1(drop=birth_date death_date white black hisp_eth native_amer 
+asian_pi other_race other_na_api_race gender degree wage_index_2012
+zip_0: zip_10: zip_12: zip_98: first_ivw_year last_ivw_year restr_yes dod_claims cause_death_12_n);
+run;
+
+data core_all_drop;
+set sic_int.core_ids_1yr_criteria_6(drop=birth_date death_date white black hisp_eth native_amer 
+asian_pi other_race other_na_api_race  gender degree wage_index_2012 
+zip_0: zip_10: zip_12: zip_98: first_ivw_year last_ivw_year restr_yes dod_claims cause_death_12_n);
+rename Hospital_care_intensity_index__s=hospital_care_intensity;
+run;
+%macro getyear(year=);
+*get ids, 2010 core interviews, n=6011;
+data n0_&year._1;
+set sic_int.ivws_crit_1;
+if core_year=&year;
+run;
+%mend getyear;
+
+%getyear(year=2000);
+%getyear(year=2002);
+%getyear(year=2004);
+%getyear(year=2006);
+%getyear(year=2008);
+%getyear(year=2010);
+
+%macro ds_restr(crit=);
+
+data TEST;
+set n0_&crit._1(drop=zip_0: zip_10: zip_12: zip_98:);
+run;
+
+*add _n0 suffix for interview variables for year that first meets criteria;
+%rename(WORK,TEST,n0);
+
+data n0_&crit._3;
+set TEST;
+rename id_n0=id;
+rename bid_hrs_n0=bid_hrs;
+run;
+
+****************************************************************;
+*get n1 interview, interiew prior to meeting criteria*;
+*list of 16630 core interviews with ffs medicare 1 year prior before meeting the criteria*;
+proc sql;
+create table all_ivw_bef_meet_&crit.
+as select b.*
+ from n0_&crit._3 a 
+ inner join
+core_to_use b
+  on a.id=b.id and a.c_ivw_date_n0>b.c_ivw_date;
+  quit;
+
+proc sort data=all_ivw_bef_meet_&crit. ;
+by id c_ivw_date;
+run;
+
+*keep only the n1 core interview;
+*5357 interviews identified that have ffs medicare 1 year prior to n1 interview;
+data core_n1_&crit.;
+set all_ivw_bef_meet_&crit.;
+by id c_ivw_date;
+if last.id;
+run;
+
+proc freq;
+table core_year;
+run;
+
+*supplement the list with interviews with no or unknown ffs medicare 1 year;
+*prior to interview in order to fill in for those with interviews in 2000;
+proc sql;
+create table noffsreq_ivw_bef_meet_&crit.
+as select b.*
+ from n0_&crit._3 a 
+ inner join
+core_all_drop b
+  on a.id=b.id and a.c_ivw_date_n0>b.c_ivw_date;
+  quit;
+
+*3316 of the ivws are not in the list that already have the n1 ivw;
+proc sql;
+create table noffsreq_ivw_bef_meet_&crit._1 as select * from
+noffsreq_ivw_bef_meet_&crit.
+where id not in (select id from core_n1_&crit.);
+quit;
+
+proc sort data=noffsreq_ivw_bef_meet_&crit._1 ;
+by id c_ivw_date;
+run;
+
+*keep only the n1 core interview;
+*601 interviews identified;
+data noffsreq_core_n1_&crit.;
+set noffsreq_ivw_bef_meet_&crit._1;
+by id c_ivw_date;
+if last.id;
+run;
+
+*append to get full list of 5958 n1 interviews;
+data core_n1_&crit._1;
+set core_n1_&crit. noffsreq_core_n1_&crit.;
+run;
+
+proc sort data=core_n1_&crit._1 nodupkey;
+by id;
+run;
+
+*check on number of pre interviews present in the dataset;
+*for those that meet the criteria;
+proc sql;
+create table ivw_count_before_&crit. as select distinct id,
+count(*) as n_ivws_bef_&crit. label="n ivws before meet criteria &crit."
+from 
+all_ivw_bef_meet_&crit.  group by id;
+quit;
+
+proc freq; table n_ivws_bef_&crit.;
+run;
+
+
+****************************************************************;
+*get p1 interview, interview after meeting criteria*;
+*list of all core interviews after meeting the criteria*;
+proc sql;
+create table all_ivw_aft_meet_&crit.
+as select b.*
+ from n0_&crit._3 a 
+ inner join
+core_to_use b
+  on a.id=b.id and a.c_ivw_date_n0<b.c_ivw_date;
+  quit;
+
+proc sort data=all_ivw_aft_meet_&crit. ;
+by id c_ivw_date;
+run;
+
+*keep only the p1 core interview;
+*4684 interviews identified;
+data core_p1_&crit.;
+set all_ivw_aft_meet_&crit.;
+by id c_ivw_date;
+if first.id;
+run;
+
+proc freq;
+table core_year;
+run;
+
+*supplement the list with interviews with no or unknown ffs medicare 1 year;
+*prior to interview in order to fill in missing p1 ivws;
+proc sql;
+create table noffsreq_ivw_aft_meet_&crit.
+as select b.*
+ from n0_&crit._3 a 
+ inner join
+core_all_drop b
+  on a.id=b.id and a.c_ivw_date_n0<b.c_ivw_date;
+  quit;
+
+*487 of the ivws are not in the list that already have the p1 ivw;
+proc sql;
+create table noffsreq_ivw_aft_meet_&crit._1 as select * from
+noffsreq_ivw_aft_meet_&crit.
+where id not in (select id from core_p1_&crit.);
+quit;
+
+proc sort data=noffsreq_ivw_aft_meet_&crit._1 ;
+by id c_ivw_date;
+run;
+
+*keep only the p1 core interview;
+*487 interviews identified;
+data noffsreq_core_p1_&crit.;
+set noffsreq_ivw_aft_meet_&crit._1;
+by id c_ivw_date;
+if first.id;
+run;
+
+*append to get full list of 5171 p1 interviews;
+data core_p1_&crit._1;
+set core_p1_&crit. noffsreq_core_p1_&crit.;
+run;
+
+proc sort data=core_p1_&crit._1 nodupkey;
+by id;
+run;
+
+*check on number of post-interviews present in the dataset;
+*for those that meet the criteria;
+proc sql;
+create table ivw_count_after_&crit. as select distinct id,
+count(*) as n_ivws_after_&crit. label="n ivws after meet criteria &crit."
+from 
+all_ivw_aft_meet_&crit.  group by id;
+quit;
+
+proc freq; table n_ivws_after_&crit.;
+run;
+
+
+*rename the n1, p1 interviews*;
+
+*n1 interview;
+data TEST;
+set core_n1_&crit._1 ;
+run;
+
+%rename(WORK,TEST,n1);
+data core_n1_&crit._1;
+set TEST;
+rename id_n1=id;
+rename bid_hrs_n1=bid_hrs;
+run;
+
+*p1 interview;
+data TEST;
+set CORE_P1_&crit._1;
+run;
+%rename(WORK,TEST,p1);
+data core_p1_&crit._1;
+set TEST;
+rename id_p1=id;
+rename bid_hrs_p1=bid_hrs;
+run;
+
+
+*merge the datasets together*;
+proc sort data=n0_&crit._3 nodupkey;
+by id;
+run;
+
+proc sort data=core_n1_&crit._1 nodupkey;
+by id;
+run;
+
+proc sort data=core_p1_&crit._1 nodupkey;
+by id;
+run;
+
+data sic_fin.n0_n1_p1_p2_criteria_&crit.;
+merge n0_&crit._3 core_n1_&crit._1 core_p1_&crit._1 ;
+by id;
+run;
+
+%mend ds_restr;
+%ds_restr(crit=2000);
+%ds_restr(crit=2002);
+%ds_restr(crit=2004);
+%ds_restr(crit=2006);
+%ds_restr(crit=2008);
+%ds_restr(crit=2010);
+
+data all;
+set sic_fin.n0_n1_p1_p2_criteria_2000;
+run;
+
+proc append base=all data=sic_fin.n0_n1_p1_p2_criteria_2002; run;
+proc append base=all data=sic_fin.n0_n1_p1_p2_criteria_2004; run;
+proc append base=all data=sic_fin.n0_n1_p1_p2_criteria_2006; run;
+proc append base=all data=sic_fin.n0_n1_p1_p2_criteria_2008; run;
+proc append base=all data=sic_fin.n0_n1_p1_p2_criteria_2010; run;
+
+data sic_fin.n0_n1_p1_p2_2002_2010;
+set all;
+run;
+
+proc export data=sic_fin.n0_n1_p1_p2_2002_2010 outfile='E:\data\serious_ill\final_data\n0_n1_p1_p2_2002_2010.dta' replace; run;
+
 H="Step 11 - Add exit interviews to dataset"
 /*adds exit interview variables (with _x suffix) to the dataset that
 is formatted with the n0 as time0 interview, etc.

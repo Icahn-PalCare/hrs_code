@@ -1,0 +1,181 @@
+= V4 Outline MultiLine NoSorting TabWidth=30
+
+H="Dementia Porbability Construction"
+This code will (hopefully) construct dementia probabilities comparable to Hurd's that can be used in the larger sample (as his data is only through '06).
+
+
+
+H="sas get tics results"
+libname cogn 'E:\data\hrs_public_2012\HRS_Cog';
+
+
+%macro gettics(w=,year=);
+
+data tics1_&w;
+set cogn.cogimp9212a_r;
+keep hhid pn core_year prediction_year
+r&w.cogtot r&w.status r&w.bwc20 r&w.vp
+ r&w.ser7  r&w.scis r&w.cact r&w.pres r&w.mo r&w.dy r&w.yr r&w.dw
+ r&w.imrc r&w.dlrc r&w.vocab r&w.mstot;
+core_year=&year;
+prediction_year=&year+1;
+run;
+
+data tics2_&w;
+set tics1_&w;
+rename r&w.cogtot=TICS_tot;
+rename r&w.status=imp_elig_status;
+rename r&w.mo=mo;
+rename r&w.dy=dy;
+rename r&w.yr=yr;
+rename r&w.dw=dw;
+rename r&w.bwc20=bwc20;
+rename r&w.ser7=ser7 ;
+rename r&w.scis=scis;
+rename r&w.cact=cact;
+rename r&w.pres=pres;
+rename r&w.imrc=imrc;
+rename r&w.dlrc=dlrc;
+rename r&w.vp=vp;
+rename r&w.vocab=vocab;
+rename r&w.mstot=mstot;
+
+
+
+
+%mend;
+
+%gettics(w=4,year=1998);
+%gettics(w=5,year=2000);
+%gettics(w=6,year=2002);
+%gettics(w=7,year=2004);
+%gettics(w=8,year=2006);
+%gettics(w=9,year=2008);
+%gettics(w=10,year=2010);
+%gettics(w=11,year=2012);
+
+data tics_9812;
+set tics2_4 tics2_5 tics2_6 tics2_7 tics2_8 tics2_9 tics2_10 tics2_11;
+label TICS_tot='TICS Cognition Score, scale 0-35';
+run;
+
+proc sort nodupkey; by hhid pn core_year ; run;
+
+/*convert to stata*/
+proc export data=tics_9812 
+outfile="E:\data\hrs_cleaned\working\tics_9812.dta"
+replace;
+run;
+
+proc means data=tics_9812; run;
+
+H="stata construction"
+use "E:\data\hrs_cleaned\working\tics_9812.dta", clear
+merge 1:1 hhid pn prediction_year using  "E:\data\hrs_public_2012\dementia\pdem_withvarnames.dta", keep(match)
+drop _m
+merge m:1 hhid  pn using "E:\data\hrs_cleaned\restricted_tracker_v2012.dta", keepusing(birth_date gender)
+drop _m
+merge 1:1 hhid pn core_year using  "E:\data\hrs_cleaned\core_00_to_12.dta"
+keep if _m==3
+
+gen dem_likely=prob_>.5
+
+/*
+foreach x in imrc dlrc ser7 bwc20 mo dy yr dw scis cact pres vp adl_index_core iadl_ind_core {
+gen prev`x'=.
+forvalues i= 1998(2)2012 {
+gen `x'`i'=`x' if core_year==`i'
+replace `x'`i'=0 if `x'`i'==.
+by id, sort: egen `x'1=max(`x'`i')
+replace prev`x'=`x'`i' if core_year==`i'+2
+replace prev`x'=`x'1 if core_year==`i'+2
+drop `x'`i' `x'1
+}
+}
+
+local cogvars imrc dlrc ser7 bwc20 mo dy yr dw scis cact pres vp adl_index_core ///
+iadl_ind_core 
+
+foreach x of local cogvars {
+gen ch_`x'=`x'-prev`x'
+*replace ch_`x'=0 if ch_`x'==.
+}
+
+drop if prob==.
+
+*/
+
+local regvars imrc dlrc ser7 bwc20 mo dy yr dw scis cact pres ///
+ch_dlrc ch_ser7 ch_bwc20 ch_mo ch_dy ch_yr ch_dw ch_scis ch_cact ///
+ch_pres ch_adl_index_core ch_iadl_ind_core adl_index_core ///
+iadl_ind_core female ed_cat age_cat memory_hrs
+
+
+reg prob_ `regvars'
+local rownum : word count `regvars'
+mat dmnt=J(`rownum',4,.)
+local r=1
+
+
+/*
+foreach x of local regvars {
+	sum `x' if probp!=.
+	mat dmnt[`r',1]=r(mean)
+	sum `x' if dem_li==1 & probp==1
+	mat dmnt[`r',2]=r(mean)
+	sum `x' if dem_li==1 & probp==0
+	mat dmnt[`r',3]=r(mean)
+	ttest `x' if dem_li==1, by(probp)
+	mat dmnt[`r',4]=r(p)
+	local r=`r'+1
+	
+}
+
+
+foreach x of local regvars {
+	sum `x' if probp!=.
+	mat dmnt[`r',1]=r(mean)
+	sum `x' if dem_li==1 & probp!=.
+	mat dmnt[`r',2]=r(mean)
+	ttest `x', by(dem_li)
+	mat dmnt[`r',3]=r(p)
+	local r=`r'+1
+	
+}
+mat rownames dmnt= `regvars'
+
+frmttable, statmat(dmnt) varlabels ctitles("" "mean" "probp==1" "probp==0")
+
+
+
+
+*logit wayoff `regvars'
+
+*gen dem_likely=prob>.5
+
+glm prob_ `regvars', link(logit) fam(binomial) robust
+predict pprob
+gen probpprob=pprob>.5 if pprob!=.
+gen c1=probpprob==dem_likely if probp!=.
+
+logit dem_likely `regvars'
+predict plik
+gen problik=plik>.5 if plik!=.
+gen c2=problik==dem_likely if problik!=.
+
+sum `regvars' if proxy==0
+sum `regvars' if probp==1 & dem_l==0
+
+foreach x of local regvars {
+di "`x'"
+ttest `x', by(c1)
+}
+
+gen twrtot=tics_tot-mstot
+sum mstot
+gen d_mstot=mstot<=r(mean)-1.5*r(sd)
+sum twrto
+gen d_twrt=twrtot<=r(mean)-1.5*r(sd)
+sum tics_tot
+gen d_tics=tics_tot<=r(mean)-1.5*r(sd)
+

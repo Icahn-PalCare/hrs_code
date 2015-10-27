@@ -12418,7 +12418,7 @@ set more off
 local logpath E:\data\spouse_intensive\logs
 local datapath E:\data\spouse_intensive\int_data
 
-log using "`logpath'\9-Spouse_intensive_bar_chart.txt", text replace
+*log using "`logpath'\9-Spouse_intensive_bar_chart.txt", text replace
 
 cd `datapath'
 
@@ -12568,7 +12568,70 @@ graph save `logpath'/mean_cesd_by_proced_matched, replace
 ***************************************************************
 //clinical depression
 
-use cesd_bar_graph.dta, clear
+use spouse_intens_data_ps_matched.dta, clear
+***************************************************************
+//set time variables
+gen s_days_n_core_dead = s_days_n1_core_dead if s_ind_n1_wi_6m_dead==0
+replace s_days_n_core_dead = s_days_n2_core_dead if s_ind_n1_wi_6m_dead==1
+
+gen days_n_core_dod_cat = .
+replace days_n_core_dod_cat = 0 if 0<=s_days_n_core_dead & s_days_n_core_dead <183
+replace days_n_core_dod_cat = 1 if 183<=s_days_n_core_dead & s_days_n_core_dead <366
+replace days_n_core_dod_cat = 2 if 366<=s_days_n_core_dead & s_days_n_core_dead <548
+replace days_n_core_dod_cat = 3 if 548<=s_days_n_core_dead & s_days_n_core_dead <731
+replace days_n_core_dod_cat = 4 if 731<=s_days_n_core_dead & s_days_n_core_dead !=.
+la def days_n_core_dod_cat 0 "0-6 months" 1 "6-12 months" 2 "12-18 months" ///
+3 "18-24 months" 4 "24+ months"
+la var days_n_core_dod_cat "Days from pre-death core ivw to  R death, categorical"
+la val days_n_core_dod_cat days_n_core_dod_cat 
+tab days_n_core_dod_cat , missing
+
+tab days_p1_core_dod_cat, missing 
+
+//now create cesd variables for each of the time periods,
+//leave missing if cesd not taking within the time window
+gen cesd_1=s_cesd_tot_n1n2 if days_n_core_dod_cat==4 //n1 core 24+m
+gen cesd_2=s_cesd_tot_n1n2 if days_n_core_dod_cat==3 //n1 core 18-24m
+gen cesd_3=s_cesd_tot_n1n2 if days_n_core_dod_cat==2
+gen cesd_4=s_cesd_tot_n1n2 if days_n_core_dod_cat==1
+gen cesd_5=s_cesd_tot_n1n2 if days_n_core_dod_cat==0
+gen cesd_6=s_cesd_tot_p1 if days_p1_core_dod_cat==0
+gen cesd_7=s_cesd_tot_p1 if days_p1_core_dod_cat==1
+gen cesd_8=s_cesd_tot_p1 if days_p1_core_dod_cat==2
+gen cesd_9=s_cesd_tot_p1 if days_p1_core_dod_cat>3
+*gen cesd_10=s_cesd_tot_p1 if days_p1_core_dod_cat==4
+
+forvalues i = 1/9 {
+	gen cesd_dep_`i'=(cesd_`i'>=3)
+	replace cesd_dep_`i'=. if cesd_`i'==.
+}
+
+
+forvalues i=1/9 {
+	gen ulci_`i'=.
+	gen llci_`i'=.
+	foreach j in 0 1 {
+		sum cesd_`i' if int_any_30d==`j'
+		replace ulci_`i'=r(mean)+invttail(r(N)-1,0.025)*r(sd)/sqrt(r(N)) if int_any_30d==`j'
+		replace llci_`i'=r(mean)-invttail(r(N)-1,0.025)*r(sd)/sqrt(r(N)) if int_any_30d==`j'
+}
+	gen w_ulci_`i'=.
+	gen w_llci_`i'=.
+	foreach j in 0 1 {
+		sum cesd_`i' if int_any_30d==`j' [iw=ip_w]
+		replace w_ulci_`i'=r(mean)+invttail(r(N)-1,0.025)*r(sd)/sqrt(r(N)) if int_any_30d==`j'
+		replace w_llci_`i'=r(mean)-invttail(r(N)-1,0.025)*r(sd)/sqrt(r(N)) if int_any_30d==`j'
+}
+}
+
+
+//drop variables don't need
+keep r_id cesd_* ulci_* llci_* w_*lci* int_any_30d ip_weight
+drop cesd_miss*
+
+//restructure dataset, 2 rows per person, one before death, one after death
+reshape long cesd_ cesd_dep_ ulci_ llci_ w_ulci_ w_llci_, i(r_id) j(time)
+
 
 preserve
 
@@ -12586,8 +12649,8 @@ gen mean=time+.5 if int_any==0
 
 twoway 	(bar cesd_ time if int_any_30d==0) (bar cesd_ time if int_any_30d==1) ///
 	, xlabel(1.5 "24+" 3.7 "18-24m" 5.9 "12-18" ///
-	8.1 "6-12" 10.3 "Death" 12.5 "0-6" 14.7 "6-12" 16.9 "12-18" 19.1 "18-24" ///
-	21.3 "24+", noticks) ///
+	8.1 "6-12" 10.3 "Death" 12.5 "0-6" 14.7 "6-12" 16.9 "12-18" 19.1 "18+" ///
+	, noticks) ///
 	legend(row(1) order(1 "No intensive procedure" 2 "Intensive procedure")) ///
 	ytitle("Percentage 3+ CES_D") xtitle("") ///
 	title("% Spouse 3+ CES-D score by time of interview, unmatched") ///
@@ -12612,8 +12675,8 @@ gen mean=time+.5 if int_any==0
 
 twoway 	(bar cesd_ time if int_any_30d==0) (bar cesd_ time if int_any_30d==1) ///
 	, xlabel(1.5 "24+" 3.7 "18-24m" 5.9 "12-18" ///
-	8.1 "6-12" 10.3 "Death" 12.5 "0-6" 14.7 "6-12" 16.9 "12-18" 19.1 "18-24" ///
-	21.3 "24+", noticks) ///
+	8.1 "6-12" 10.3 "Death" 12.5 "0-6" 14.7 "6-12" 16.9 "12-18" 19.1 "18+" ///
+	, noticks) ///
 	legend(row(1) order(1 "No intensive procedure" 2 "Intensive procedure")) ///
 	ytitle("Percentage 3+ CES_D") xtitle("") ///
 	title("% Spouse 3+ CES-D score by time of interview, matched") ///

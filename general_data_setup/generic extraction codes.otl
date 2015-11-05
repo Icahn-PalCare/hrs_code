@@ -1189,350 +1189,6 @@ quit;
 
 
 
-H="outcomes from claims"
-/**********************************************************************/
-/**********************************************************************/
-/*Count of hospital admissions 1 year after interview
-Use suffix p24m to indicate post interview*/
-/**********************************************************************/
-/**********************************************************************/
-%macro admissions(days=,suffix=);
-/*pull list of ip claims from all medpar claims x days after interview*/
-data ip_meet_post_&days.;
-set proj.mp_meet3_post_&days.(where=(trim(left(SSLSSNF))~="N"));
-*if admit_date>=c_ivw_date;
-run;
-
-data ip_post_&days._2;
-set ip_meet_post_&days.;
-em_urgent_admit=0; /*Urgent , emergent admissions from admission type*/
-if type_adm in (1,2) then em_urgent_admit=1;
-em_admit=0;
-if type_adm=1 then em_admit=1;
-urgent_admit=0;
-if type_adm=2 then urgent_admit=1;
-elect_admit=0;
-if type_adm=3 then elect_admit=1;
-ind_ed_charge=0; /*ED charges as another indicator of ED use*/
-if ER_AMT>0 & ER_AMT~=. then ind_ed_charge=1;
-if ER_AMT=0 | ER_AMT=. then ind_ed_charge=0;
-
-*truncate admit and discharge dates to get all days within the window;
-admit_trunc=0;
-disch_trunc=0;
-if admit_date<c_ivw_date then do;
-	admit_date=c_ivw_date;
-	admit_trunc=1;
-end;
-if disch_date-c_ivw_date>&days. then do;
-	disch_date=c_ivw_date+&days.;
-	disch_trunc=1;
-end;
-adj_los=disch_date-admit_date;
-if disch_date-admit_date=0 then adj_los=1;
-run;
-
-proc sort data=ip_post_&days._2;
-by BID_hrs_21 core_year;
-run;
-
-proc sql;
-create table ip_post_&days._3 as select distinct BID_hrs_21,core_year,
-/*count of IP admissions, all types*/
-count(*) as n_ip_admit_&suffix. label="total n of hospital admit &suffix. after core ivw",
-/*count of nights in hospital*/
-sum(adj_los) as n_hospd_&suffix. label="total n of hospital nights &suffix. after core ivw",
-/*count urgent or emergency admissions*/
-count(case when em_urgent_admit=1 then em_urgent_admit else . end) as n_em_urgent_admit_&suffix. 
-	label="total n of urgent/emergent hospital admit &suffix. after core ivw",
-/*count of emergency admissions, from admission type code*/
-count(case when em_admit=1 then em_admit else . end) as n_em_admit_&suffix. 
-	label="total n of emergent hospital admit &suffix. after core ivw",
-/*count of urgent admissions, from admission type code*/
-count(case when urgent_admit=1 then urgent_admit else . end) as n_urgent_admit_&suffix. 
-	label="total n of urgent hospital admit &suffix. after core ivw",
-/*count of elective admissions, from admission type code*/
-count(case when elect_admit=1 then elect_admit else . end) as n_elect_admit_&suffix. 
-	label="total n of elective hospital admit &suffix. after core ivw",
-/*count of admissions with any ED charges*/
-count(case when ind_ed_charge=1 then ind_ed_charge else . end) as n_ED_ip_&suffix. 
-	label="total n of ED visits with subsequent admit &suffix. after core ivw",
-sum(admit_trunc) as adm_trunc_ind_&suffix.
-	label="admit before interview indicator, counted as both pre and post admit"
-
- from ip_post_&days._2 group by BID_hrs_21,core_year;
-quit;
-
-data ip_post_&days._4;
-set ip_post_&days._3;
-if adm_trunc_ind_&suffix.>1 then adm_trunc_ind_&suffix.=1;
-run;
-
-%mend;
-
-%admissions(days=730,suffix=p24m); /*1 year admisions details*/
-%admissions(days=365,suffix=p12m); /*1 year admisions details*/
-%admissions(days=183,suffix=p6m); /*6 months admisions details*/
-
-/*merge in new variables to full variable list*/
-proc sql;
-create table core_ids_admit_post_1 as select a.*,
-b.n_ip_admit_p24m,b.adm_trunc_ind_p24m,b.n_hospd_p24m,
-b.n_em_urgent_admit_p24m,b.n_em_admit_p24m,
-b.n_urgent_admit_p24m,b.n_elect_admit_p24m,b.n_ED_ip_p24m
-from age_ge_65_mc_ltd(drop=c_ivw_date) a
-left join
-ip_post_730_4 b 
-on trim(left(a.bid_hrs))=trim(left(b.bid_hrs_21)) and a.core_year=b.core_year;
-quit;
-
-proc sql;
-create table core_ids_admit_post_2 as select a.*,
-b.n_ip_admit_p12m,b.adm_trunc_ind_p12m,b.n_hospd_p12m,
-b.n_em_urgent_admit_p12m,b.n_em_admit_p12m,
-b.n_urgent_admit_p12m,b.n_elect_admit_p12m,b.n_ED_ip_p12m
-from age_ge_65_mc_ltd(drop=c_ivw_date) a
-left join
-ip_post_365_4 b 
-on trim(left(a.bid_hrs))=trim(left(b.bid_hrs_21)) and a.core_year=b.core_year;
-quit;
-
-proc sql;
-create table core_ids_admit_post_3 as select a.*,
-b.n_ip_admit_p6m,b.adm_trunc_ind_p6m,b.n_hospd_p6m,
-b.n_em_urgent_admit_p6m,b.n_em_admit_p6m,
-b.n_urgent_admit_p6m,b.n_elect_admit_p6m,b.n_ED_ip_p6m
-from core_ids_admit_post_2 a
-left join
-ip_post_183_4 b 
-on trim(left(a.bid_hrs))=trim(left(b.bid_hrs_21)) and a.core_year=b.core_year;
-quit;
-
-
-/*Since dataset is just those with ffs mc 1 year preceeding the
-core interview, replace admit info with 0 if missing b/c there were no ip claims*/
- data core_ids_admit_post_3;
- set core_ids_admit_post_2;
- array list 
- 	n_ip_admit_p24m n_hospd_p24m n_em_urgent_admit_p24m
-	n_em_admit_p24m n_urgent_admit_p24m n_elect_admit_p24m n_ED_ip_p24m
-	n_ip_admit_p12m n_hospd_p12m n_em_urgent_admit_p12m
-	n_em_admit_p12m n_urgent_admit_p12m n_elect_admit_p12m n_ED_ip_p12m
-	n_ip_admit_p6m n_hospd_p6m n_em_urgent_admit_p6m
-	n_em_admit_p6m n_urgent_admit_p6m n_elect_admit_p6m n_ED_ip_p6m;
- do over list;
- if list=. then list=0;
- end;
-
- if n_ip_admit_p24m=0 then ind_hosp_adm_p24m=0;
- if n_ip_admit_p24m>0 & n_ip_admit_p24m~=. then ind_hosp_adm_p24m=1;
- label ind_hosp_adm_p24m="Indicator for any hospital admission 24m after core";
-
- if n_ip_admit_p12m=0 then ind_hosp_adm_p12m=0;
- if n_ip_admit_p12m>0 & n_ip_admit_p12m~=. then ind_hosp_adm_p12m=1;
- label ind_hosp_adm_p12m="Indicator for any hospital admission 12m after core";
-
- if n_ip_admit_p6m=0 then ind_hosp_adm_p6m=0;
- if n_ip_admit_p6m>0 & n_ip_admit_p6m~=. then ind_hosp_adm_p6m=1;
- label ind_hosp_adm_p6m="Indicator for any hospital admission 6m after core";
-
- if n_em_urgent_admit_p24m=0 then ind_em_ur_adm_p24m=0;
- if n_em_urgent_admit_p24m>0 & n_em_urgent_admit_p24m~=. then ind_em_ur_adm_p24m=1;
- label ind_em_ur_adm_p24m="Ind any urgent or emergent hospital admission 24m after core";
-
- if n_em_urgent_admit_p12m=0 then ind_em_ur_adm_p12m=0;
- if n_em_urgent_admit_p12m>0 & n_em_urgent_admit_p12m~=. then ind_em_ur_adm_p12m=1;
- label ind_em_ur_adm_p12m="Ind any urgent or emergent hospital admission 12m after core";
-
- if n_em_urgent_admit_p6m=0 then ind_em_ur_adm_p6m=0;
- if n_em_urgent_admit_p6m>0 & n_em_urgent_admit_p6m~=. then ind_em_ur_adm_p6m=1;
- label ind_em_ur_adm_p6m="Ind any urgent or emergent hospital admission 6m after core";
-
- if n_em_admit_p24m=0 then ind_em_adm_p24m=0;
- if n_em_admit_p24m>0 & n_em_admit_p24m~=. then ind_em_adm_p24m=1;
- label ind_em_adm_p24m="Ind any emergency hospital admission 24m after core";
-
- if n_em_admit_p12m=0 then ind_em_adm_p12m=0;
- if n_em_admit_p12m>0 & n_em_admit_p12m~=. then ind_em_adm_p12m=1;
- label ind_em_adm_p12m="Ind any emergency hospital admission 12m after core";
-
- if n_em_admit_p6m=0 then ind_em_adm_p6m=0;
- if n_em_admit_p6m>0 & n_em_admit_p6m~=. then ind_em_adm_p6m=1;
- label ind_em_adm_p6m="Ind any emergency hospital admission 6m after core";
-
- if n_urgent_admit_p24m=0 then ind_ur_adm_p24m=0;
- if n_urgent_admit_p24m>0 & n_urgent_admit_p24m~=. then ind_ur_adm_p24m=1;
- label ind_ur_adm_p24m="Ind any urgent hospital admission 24m after core";
-
- if n_urgent_admit_p12m=0 then ind_ur_adm_p12m=0;
- if n_urgent_admit_p12m>0 & n_urgent_admit_p12m~=. then ind_ur_adm_p12m=1;
- label ind_ur_adm_p12m="Ind any urgent hospital admission 12m after core";
-
- if n_urgent_admit_p6m=0 then ind_ur_adm_p6m=0;
- if n_urgent_admit_p6m>0 & n_urgent_admit_p6m~=. then ind_ur_adm_p6m=1;
- label ind_ur_adm_p6m="Ind any urgent hospital admission 6m after core";
-
- if n_elect_admit_p24m =0 then ind_elect_adm_p24m=0;
- if n_elect_admit_p24m >0 & n_elect_admit_p24m ~=. then ind_elect_adm_p24m=1;
- label ind_elect_adm_p24m="Ind any elective hospital admission 24m after core";
-
-
- if n_elect_admit_p12m =0 then ind_elect_adm_p12m=0;
- if n_elect_admit_p12m >0 & n_elect_admit_p12m ~=. then ind_elect_adm_p12m=1;
- label ind_elect_adm_p12m="Ind any elective hospital admission 12m after core";
-
- if n_elect_admit_p6m =0 then ind_elect_adm_p6m=0;
- if n_elect_admit_p6m >0 & n_elect_admit_p6m ~=. then ind_elect_adm_p6m=1;
- label ind_elect_adm_p6m="Ind any elective hospital admission 6m after core";
-
- if (n_ip_admit_p24m - n_elect_admit_p24m)=0 then ind_nonelect_adm_p24m=0;
- if (n_ip_admit_p24m - n_elect_admit_p24m)>0 & n_elect_admit_p24m~=. then ind_nonelect_adm_p24m=1;
- label ind_nonelect_adm_p24m="Ind any non-elective hospital admission 24m after core";
-
- if (n_ip_admit_p12m - n_elect_admit_p12m)=0 then ind_nonelect_adm_p12m=0;
- if (n_ip_admit_p12m - n_elect_admit_p12m)>0 & n_elect_admit_p12m~=. then ind_nonelect_adm_p12m=1;
- label ind_nonelect_adm_p12m="Ind any non-elective hospital admission 12m after core";
-
- if (n_ip_admit_p6m - n_elect_admit_p6m)=0 then ind_nonelect_adm_p6m=0;
- if (n_ip_admit_p6m - n_elect_admit_p6m)>0 & n_elect_admit_p6m~=. then ind_nonelect_adm_p6m=1;
- label ind_nonelect_adm_p6m="Ind any non-elective hospital admission 6m after core";
-
- n_nonelect_adm_p24m=(n_ip_admit_p24m - n_elect_admit_p24m);
- label n_nonelect_adm_p24m="total n non-elective ip admit 24m after core";
-
- n_nonelect_adm_p12m=(n_ip_admit_p12m - n_elect_admit_p12m);
- label n_nonelect_adm_p12m="total n non-elective ip admit 12m after core";
-
- n_nonelect_adm_p6m=(n_ip_admit_p6m - n_elect_admit_p6m);
- label n_nonelect_adm_p6m="total n non-elective ip admit 6m after core";
-
- if n_ED_ip_p24m=0 then ind_ED_adm_p24m=0;
- if n_ED_ip_p24m>0 & n_ED_ip_p24m~=. then ind_ED_adm_p24m=1;
- label ind_ED_adm_p24m="Ind ED use with hospital admission 24m after core, from charges";
-
- if n_ED_ip_p12m=0 then ind_ED_adm_p12m=0;
- if n_ED_ip_p12m>0 & n_ED_ip_p12m~=. then ind_ED_adm_p12m=1;
- label ind_ED_adm_p12m="Ind ED use with hospital admission 12m after core, from charges";
-
- if n_ED_ip_p6m=0 then ind_ED_adm_p6m=0;
- if n_ED_ip_p6m>0 & n_ED_ip_p6m~=. then ind_ED_adm_p6m=1;
- label ind_ED_adm_p6m="Ind ED use with hospital admission 6m after core, from charges";
-
-run;
-
-proc freq;
-table n_ip_admit_p: adm_trunc_ind_p: n_hospd_p: ind_hosp_adm_p: n_em_urgent_admit_p: ind_em_ur_adm_p:
-	ind_em_adm_p: ind_ur_adm_p: ind_nonelect_adm_p: n_nonelect_adm_p: n_ED_ip_p: ind_ED_adm_p: 
-	ind_em_adm_p24m*ind_ED_adm_p24m ind_em_adm_p12m*ind_ED_adm_p12m ind_em_adm_p6m*ind_ED_adm_p6m /missprint;
-run;
-
-/**********************************************************************/
-/**********************************************************************/
-/*Indicator of any hospice enrollment after interview
-Use suffix p24m to indicate post interview*/
-/**********************************************************************/
-/**********************************************************************/
-/*check of hospice claim list*/
-data hospice_check1;
-set proj.hs_meet_post_730;
-ivw_to_admit=admit_date-c_ivw_date;
-run;
-proc means; var ivw_to_admit;run;
-
-data hospice_check;
-set proj.hs_meet_post_365;
-ivw_to_admit=admit_date-c_ivw_date;
-run;
-proc means; var ivw_to_admit;run;
-
-data hospice_check2;
-set proj.hs_meet_post_183;
-ivw_to_admit=admit_date-c_ivw_date;
-run;
-proc means; var ivw_to_admit;run;
-
-
-%macro hospice(days=,suffix=);
-
-proc sort data=proj.hs_meet_post_&days.;
-by bid_hrs_21 c_ivw_date admit_date;
-run;
-
-/*just keep 1 claim per beneficiary-interview since only need indicator of hospice use*/
-data hs_meet_post_2_&days.;
-set proj.hs_meet_post_&days.;
-by bid_hrs_21 c_ivw_date;
-if first.c_ivw_date;
-hs_admit_&suffix.=1;
-label hs_admit_&suffix.="Hospice admission &suffix. after interview";
-format admit_date date9.;
-run;
-
-%mend;
-
-%hospice(days=730,suffix=p24m);
-%hospice(days=365,suffix=p12m);
-%hospice(days=183,suffix=p6m);
-
-*merge hospice indicators with full dataset;
-proc sql;
-create table core_ids_admit_hs_post_2 as select a.*,b.hs_admit_p12m from
-core_ids_admit_post_3 a left join
-hs_meet_post_2_365 b
-on trim(left(a.bid_hrs))=trim(left(b.bid_hrs_21)) and a.core_year=b.core_year;
-quit;
-
-proc sql;
-create table core_ids_admit_hs_post_3 as select a.*,b.hs_admit_p6m from
-core_ids_admit_hs_post_2 a left join
-hs_meet_post_2_183 b
-on trim(left(a.bid_hrs))=trim(left(b.bid_hrs_21)) and a.core_year=b.core_year;
-quit;
-
-proc sql;
-create table core_ids_admit_hs_post_4 as select a.*,b.hs_admit_p24m from
-core_ids_admit_hs_post_3 a left join
-hs_meet_post_2_730 b
-on trim(left(a.bid_hrs))=trim(left(b.bid_hrs_21)) and a.core_year=b.core_year;
-quit;
-
-
-proc freq; table hs_admit_p6m*hs_admit_p12m /missprint; run;
-
-/*replace with 0 when have full info but no hospice claims
-core interview*/
-data core_ids_admit_hs_post_5 ;
-set core_ids_admit_hs_post_4 ;
-if hs_admit_p24m=. then hs_admit_p24m=0;
-if hs_admit_p12m=. then hs_admit_p12m=0;
-if hs_admit_p6m=. then hs_admit_p6m=0;
-run;
-proc freq; table hs_admit_p6m*hs_admit_p12m; run;
-
-
-/*bring new outcomes variables into full interview dataset for those with ffs medicare */
-proc sql;
-create table proj.core_ids_init_outcomes(drop=bid_hrs2 core_year2)
-as select * from
-age_ge_65_mc a left join
-core_ids_admit_hs_post_5(rename=(bid_hrs=bid_hrs2) rename=(core_year=core_year2)) b
-on a.bid_hrs=b.bid_hrs2 and a.core_year=b.core_year2;
-quit;
-
-proc contents; run;
-
-proc freq; table core_year; run;
-
-proc freq; table hs_admit_p6m*hs_admit_p12m; run;
-
-proc freq;
-table n_ip_admit_p12m adm_trunc_ind_p12m n_hospd_p12m ind_hosp_adm_p12m n_em_urgent_admit_p12m ind_em_ur_adm_p12m
-	ind_em_adm_p12m ind_ur_adm_p12m ind_nonelect_adm_p12m n_nonelect_adm_p12m n_ED_ip_p12m ind_ED_adm_p12m 
-	ind_em_adm_p12m*ind_ED_adm_p12m /missprint;
-run;
-
-
-
 H="mc payments"
 /*Add total Medicare payments from claims 1 year after interview, 2 yrs after
 and 6m after interview*/
@@ -1930,3 +1586,346 @@ quit;
 proc export data=proj.core_ids_outcomes outfile="E:\data\Evan_SAS_practice\Core_00_12_with_outcomes.dta" replace; run;
 
 proc export data=proj.core_ids_1yr outfile="E:\data\Evan_SAS_practice\Core_00_12_FFS.dta" replace; run;
+
+H="outcomes from claims"
+/**********************************************************************/
+/**********************************************************************/
+/*Count of hospital admissions 1 year after interview
+Use suffix p24m to indicate post interview*/
+/**********************************************************************/
+/**********************************************************************/
+%macro admissions(days=,suffix=);
+/*pull list of ip claims from all medpar claims x days after interview*/
+data ip_meet_post_&days.;
+set proj.mp_meet3_post_&days.(where=(trim(left(SSLSSNF))~="N"));
+*if admit_date>=c_ivw_date;
+run;
+
+data ip_post_&days._2;
+set ip_meet_post_&days.;
+em_urgent_admit=0; /*Urgent , emergent admissions from admission type*/
+if type_adm in (1,2) then em_urgent_admit=1;
+em_admit=0;
+if type_adm=1 then em_admit=1;
+urgent_admit=0;
+if type_adm=2 then urgent_admit=1;
+elect_admit=0;
+if type_adm=3 then elect_admit=1;
+ind_ed_charge=0; /*ED charges as another indicator of ED use*/
+if ER_AMT>0 & ER_AMT~=. then ind_ed_charge=1;
+if ER_AMT=0 | ER_AMT=. then ind_ed_charge=0;
+
+*truncate admit and discharge dates to get all days within the window;
+admit_trunc=0;
+disch_trunc=0;
+if admit_date<c_ivw_date then do;
+	admit_date=c_ivw_date;
+	admit_trunc=1;
+end;
+if disch_date-c_ivw_date>&days. then do;
+	disch_date=c_ivw_date+&days.;
+	disch_trunc=1;
+end;
+adj_los=disch_date-admit_date;
+if disch_date-admit_date=0 then adj_los=1;
+run;
+
+proc sort data=ip_post_&days._2;
+by BID_hrs_21 core_year;
+run;
+
+proc sql;
+create table ip_post_&days._3 as select distinct BID_hrs_21,core_year,
+/*count of IP admissions, all types*/
+count(*) as n_ip_admit_&suffix. label="total n of hospital admit &suffix. after core ivw",
+/*count of nights in hospital*/
+sum(adj_los) as n_hospd_&suffix. label="total n of hospital nights &suffix. after core ivw",
+/*count urgent or emergency admissions*/
+count(case when em_urgent_admit=1 then em_urgent_admit else . end) as n_em_urgent_admit_&suffix. 
+	label="total n of urgent/emergent hospital admit &suffix. after core ivw",
+/*count of emergency admissions, from admission type code*/
+count(case when em_admit=1 then em_admit else . end) as n_em_admit_&suffix. 
+	label="total n of emergent hospital admit &suffix. after core ivw",
+/*count of urgent admissions, from admission type code*/
+count(case when urgent_admit=1 then urgent_admit else . end) as n_urgent_admit_&suffix. 
+	label="total n of urgent hospital admit &suffix. after core ivw",
+/*count of elective admissions, from admission type code*/
+count(case when elect_admit=1 then elect_admit else . end) as n_elect_admit_&suffix. 
+	label="total n of elective hospital admit &suffix. after core ivw",
+/*count of admissions with any ED charges*/
+count(case when ind_ed_charge=1 then ind_ed_charge else . end) as n_ED_ip_&suffix. 
+	label="total n of ED visits with subsequent admit &suffix. after core ivw",
+sum(admit_trunc) as adm_trunc_ind_&suffix.
+	label="admit before interview indicator, counted as both pre and post admit"
+
+ from ip_post_&days._2 group by BID_hrs_21,core_year;
+quit;
+
+data ip_post_&days._4;
+set ip_post_&days._3;
+if adm_trunc_ind_&suffix.>1 then adm_trunc_ind_&suffix.=1;
+run;
+
+%mend;
+
+%admissions(days=730,suffix=p24m); /*1 year admisions details*/
+%admissions(days=365,suffix=p12m); /*1 year admisions details*/
+%admissions(days=183,suffix=p6m); /*6 months admisions details*/
+
+/*merge in new variables to full variable list*/
+proc sql;
+create table core_ids_admit_post_1 as select a.*,
+b.n_ip_admit_p24m,b.adm_trunc_ind_p24m,b.n_hospd_p24m,
+b.n_em_urgent_admit_p24m,b.n_em_admit_p24m,
+b.n_urgent_admit_p24m,b.n_elect_admit_p24m,b.n_ED_ip_p24m
+from age_ge_65_mc_ltd(drop=c_ivw_date) a
+left join
+ip_post_730_4 b 
+on trim(left(a.bid_hrs))=trim(left(b.bid_hrs_21)) and a.core_year=b.core_year;
+quit;
+
+proc sql;
+create table core_ids_admit_post_2 as select a.*,
+b.n_ip_admit_p12m,b.adm_trunc_ind_p12m,b.n_hospd_p12m,
+b.n_em_urgent_admit_p12m,b.n_em_admit_p12m,
+b.n_urgent_admit_p12m,b.n_elect_admit_p12m,b.n_ED_ip_p12m
+from age_ge_65_mc_ltd(drop=c_ivw_date) a
+left join
+ip_post_365_4 b 
+on trim(left(a.bid_hrs))=trim(left(b.bid_hrs_21)) and a.core_year=b.core_year;
+quit;
+
+proc sql;
+create table core_ids_admit_post_3 as select a.*,
+b.n_ip_admit_p6m,b.adm_trunc_ind_p6m,b.n_hospd_p6m,
+b.n_em_urgent_admit_p6m,b.n_em_admit_p6m,
+b.n_urgent_admit_p6m,b.n_elect_admit_p6m,b.n_ED_ip_p6m
+from core_ids_admit_post_2 a
+left join
+ip_post_183_4 b 
+on trim(left(a.bid_hrs))=trim(left(b.bid_hrs_21)) and a.core_year=b.core_year;
+quit;
+
+
+/*Since dataset is just those with ffs mc 1 year preceeding the
+core interview, replace admit info with 0 if missing b/c there were no ip claims*/
+ data core_ids_admit_post_3;
+ set core_ids_admit_post_2;
+ array list 
+ 	n_ip_admit_p24m n_hospd_p24m n_em_urgent_admit_p24m
+	n_em_admit_p24m n_urgent_admit_p24m n_elect_admit_p24m n_ED_ip_p24m
+	n_ip_admit_p12m n_hospd_p12m n_em_urgent_admit_p12m
+	n_em_admit_p12m n_urgent_admit_p12m n_elect_admit_p12m n_ED_ip_p12m
+	n_ip_admit_p6m n_hospd_p6m n_em_urgent_admit_p6m
+	n_em_admit_p6m n_urgent_admit_p6m n_elect_admit_p6m n_ED_ip_p6m;
+ do over list;
+ if list=. then list=0;
+ end;
+
+ if n_ip_admit_p24m=0 then ind_hosp_adm_p24m=0;
+ if n_ip_admit_p24m>0 & n_ip_admit_p24m~=. then ind_hosp_adm_p24m=1;
+ label ind_hosp_adm_p24m="Indicator for any hospital admission 24m after core";
+
+ if n_ip_admit_p12m=0 then ind_hosp_adm_p12m=0;
+ if n_ip_admit_p12m>0 & n_ip_admit_p12m~=. then ind_hosp_adm_p12m=1;
+ label ind_hosp_adm_p12m="Indicator for any hospital admission 12m after core";
+
+ if n_ip_admit_p6m=0 then ind_hosp_adm_p6m=0;
+ if n_ip_admit_p6m>0 & n_ip_admit_p6m~=. then ind_hosp_adm_p6m=1;
+ label ind_hosp_adm_p6m="Indicator for any hospital admission 6m after core";
+
+ if n_em_urgent_admit_p24m=0 then ind_em_ur_adm_p24m=0;
+ if n_em_urgent_admit_p24m>0 & n_em_urgent_admit_p24m~=. then ind_em_ur_adm_p24m=1;
+ label ind_em_ur_adm_p24m="Ind any urgent or emergent hospital admission 24m after core";
+
+ if n_em_urgent_admit_p12m=0 then ind_em_ur_adm_p12m=0;
+ if n_em_urgent_admit_p12m>0 & n_em_urgent_admit_p12m~=. then ind_em_ur_adm_p12m=1;
+ label ind_em_ur_adm_p12m="Ind any urgent or emergent hospital admission 12m after core";
+
+ if n_em_urgent_admit_p6m=0 then ind_em_ur_adm_p6m=0;
+ if n_em_urgent_admit_p6m>0 & n_em_urgent_admit_p6m~=. then ind_em_ur_adm_p6m=1;
+ label ind_em_ur_adm_p6m="Ind any urgent or emergent hospital admission 6m after core";
+
+ if n_em_admit_p24m=0 then ind_em_adm_p24m=0;
+ if n_em_admit_p24m>0 & n_em_admit_p24m~=. then ind_em_adm_p24m=1;
+ label ind_em_adm_p24m="Ind any emergency hospital admission 24m after core";
+
+ if n_em_admit_p12m=0 then ind_em_adm_p12m=0;
+ if n_em_admit_p12m>0 & n_em_admit_p12m~=. then ind_em_adm_p12m=1;
+ label ind_em_adm_p12m="Ind any emergency hospital admission 12m after core";
+
+ if n_em_admit_p6m=0 then ind_em_adm_p6m=0;
+ if n_em_admit_p6m>0 & n_em_admit_p6m~=. then ind_em_adm_p6m=1;
+ label ind_em_adm_p6m="Ind any emergency hospital admission 6m after core";
+
+ if n_urgent_admit_p24m=0 then ind_ur_adm_p24m=0;
+ if n_urgent_admit_p24m>0 & n_urgent_admit_p24m~=. then ind_ur_adm_p24m=1;
+ label ind_ur_adm_p24m="Ind any urgent hospital admission 24m after core";
+
+ if n_urgent_admit_p12m=0 then ind_ur_adm_p12m=0;
+ if n_urgent_admit_p12m>0 & n_urgent_admit_p12m~=. then ind_ur_adm_p12m=1;
+ label ind_ur_adm_p12m="Ind any urgent hospital admission 12m after core";
+
+ if n_urgent_admit_p6m=0 then ind_ur_adm_p6m=0;
+ if n_urgent_admit_p6m>0 & n_urgent_admit_p6m~=. then ind_ur_adm_p6m=1;
+ label ind_ur_adm_p6m="Ind any urgent hospital admission 6m after core";
+
+ if n_elect_admit_p24m =0 then ind_elect_adm_p24m=0;
+ if n_elect_admit_p24m >0 & n_elect_admit_p24m ~=. then ind_elect_adm_p24m=1;
+ label ind_elect_adm_p24m="Ind any elective hospital admission 24m after core";
+
+
+ if n_elect_admit_p12m =0 then ind_elect_adm_p12m=0;
+ if n_elect_admit_p12m >0 & n_elect_admit_p12m ~=. then ind_elect_adm_p12m=1;
+ label ind_elect_adm_p12m="Ind any elective hospital admission 12m after core";
+
+ if n_elect_admit_p6m =0 then ind_elect_adm_p6m=0;
+ if n_elect_admit_p6m >0 & n_elect_admit_p6m ~=. then ind_elect_adm_p6m=1;
+ label ind_elect_adm_p6m="Ind any elective hospital admission 6m after core";
+
+ if (n_ip_admit_p24m - n_elect_admit_p24m)=0 then ind_nonelect_adm_p24m=0;
+ if (n_ip_admit_p24m - n_elect_admit_p24m)>0 & n_elect_admit_p24m~=. then ind_nonelect_adm_p24m=1;
+ label ind_nonelect_adm_p24m="Ind any non-elective hospital admission 24m after core";
+
+ if (n_ip_admit_p12m - n_elect_admit_p12m)=0 then ind_nonelect_adm_p12m=0;
+ if (n_ip_admit_p12m - n_elect_admit_p12m)>0 & n_elect_admit_p12m~=. then ind_nonelect_adm_p12m=1;
+ label ind_nonelect_adm_p12m="Ind any non-elective hospital admission 12m after core";
+
+ if (n_ip_admit_p6m - n_elect_admit_p6m)=0 then ind_nonelect_adm_p6m=0;
+ if (n_ip_admit_p6m - n_elect_admit_p6m)>0 & n_elect_admit_p6m~=. then ind_nonelect_adm_p6m=1;
+ label ind_nonelect_adm_p6m="Ind any non-elective hospital admission 6m after core";
+
+ n_nonelect_adm_p24m=(n_ip_admit_p24m - n_elect_admit_p24m);
+ label n_nonelect_adm_p24m="total n non-elective ip admit 24m after core";
+
+ n_nonelect_adm_p12m=(n_ip_admit_p12m - n_elect_admit_p12m);
+ label n_nonelect_adm_p12m="total n non-elective ip admit 12m after core";
+
+ n_nonelect_adm_p6m=(n_ip_admit_p6m - n_elect_admit_p6m);
+ label n_nonelect_adm_p6m="total n non-elective ip admit 6m after core";
+
+ if n_ED_ip_p24m=0 then ind_ED_adm_p24m=0;
+ if n_ED_ip_p24m>0 & n_ED_ip_p24m~=. then ind_ED_adm_p24m=1;
+ label ind_ED_adm_p24m="Ind ED use with hospital admission 24m after core, from charges";
+
+ if n_ED_ip_p12m=0 then ind_ED_adm_p12m=0;
+ if n_ED_ip_p12m>0 & n_ED_ip_p12m~=. then ind_ED_adm_p12m=1;
+ label ind_ED_adm_p12m="Ind ED use with hospital admission 12m after core, from charges";
+
+ if n_ED_ip_p6m=0 then ind_ED_adm_p6m=0;
+ if n_ED_ip_p6m>0 & n_ED_ip_p6m~=. then ind_ED_adm_p6m=1;
+ label ind_ED_adm_p6m="Ind ED use with hospital admission 6m after core, from charges";
+
+run;
+
+proc freq;
+table n_ip_admit_p: adm_trunc_ind_p: n_hospd_p: ind_hosp_adm_p: n_em_urgent_admit_p: ind_em_ur_adm_p:
+	ind_em_adm_p: ind_ur_adm_p: ind_nonelect_adm_p: n_nonelect_adm_p: n_ED_ip_p: ind_ED_adm_p: 
+	ind_em_adm_p24m*ind_ED_adm_p24m ind_em_adm_p12m*ind_ED_adm_p12m ind_em_adm_p6m*ind_ED_adm_p6m /missprint;
+run;
+
+/**********************************************************************/
+/**********************************************************************/
+/*Indicator of any hospice enrollment after interview
+Use suffix p24m to indicate post interview*/
+/**********************************************************************/
+/**********************************************************************/
+/*check of hospice claim list*/
+data hospice_check1;
+set proj.hs_meet_post_730;
+ivw_to_admit=admit_date-c_ivw_date;
+run;
+proc means; var ivw_to_admit;run;
+
+data hospice_check;
+set proj.hs_meet_post_365;
+ivw_to_admit=admit_date-c_ivw_date;
+run;
+proc means; var ivw_to_admit;run;
+
+data hospice_check2;
+set proj.hs_meet_post_183;
+ivw_to_admit=admit_date-c_ivw_date;
+run;
+proc means; var ivw_to_admit;run;
+
+
+%macro hospice(days=,suffix=);
+
+proc sort data=proj.hs_meet_post_&days.;
+by bid_hrs_21 c_ivw_date admit_date;
+run;
+
+/*just keep 1 claim per beneficiary-interview since only need indicator of hospice use*/
+data hs_meet_post_2_&days.;
+set proj.hs_meet_post_&days.;
+by bid_hrs_21 c_ivw_date;
+if first.c_ivw_date;
+hs_admit_&suffix.=1;
+label hs_admit_&suffix.="Hospice admission &suffix. after interview";
+format admit_date date9.;
+run;
+
+%mend;
+
+%hospice(days=730,suffix=p24m);
+%hospice(days=365,suffix=p12m);
+%hospice(days=183,suffix=p6m);
+
+*merge hospice indicators with full dataset;
+proc sql;
+create table core_ids_admit_hs_post_2 as select a.*,b.hs_admit_p12m from
+core_ids_admit_post_3 a left join
+hs_meet_post_2_365 b
+on trim(left(a.bid_hrs))=trim(left(b.bid_hrs_21)) and a.core_year=b.core_year;
+quit;
+
+proc sql;
+create table core_ids_admit_hs_post_3 as select a.*,b.hs_admit_p6m from
+core_ids_admit_hs_post_2 a left join
+hs_meet_post_2_183 b
+on trim(left(a.bid_hrs))=trim(left(b.bid_hrs_21)) and a.core_year=b.core_year;
+quit;
+
+proc sql;
+create table core_ids_admit_hs_post_4 as select a.*,b.hs_admit_p24m from
+core_ids_admit_hs_post_3 a left join
+hs_meet_post_2_730 b
+on trim(left(a.bid_hrs))=trim(left(b.bid_hrs_21)) and a.core_year=b.core_year;
+quit;
+
+
+proc freq; table hs_admit_p6m*hs_admit_p12m /missprint; run;
+
+/*replace with 0 when have full info but no hospice claims
+core interview*/
+data core_ids_admit_hs_post_5 ;
+set core_ids_admit_hs_post_4 ;
+if hs_admit_p24m=. then hs_admit_p24m=0;
+if hs_admit_p12m=. then hs_admit_p12m=0;
+if hs_admit_p6m=. then hs_admit_p6m=0;
+run;
+proc freq; table hs_admit_p6m*hs_admit_p12m; run;
+
+
+/*bring new outcomes variables into full interview dataset for those with ffs medicare */
+proc sql;
+create table proj.core_ids_init_outcomes(drop=bid_hrs2 core_year2)
+as select * from
+age_ge_65_mc a left join
+core_ids_admit_hs_post_5(rename=(bid_hrs=bid_hrs2) rename=(core_year=core_year2)) b
+on a.bid_hrs=b.bid_hrs2 and a.core_year=b.core_year2;
+quit;
+
+proc contents; run;
+
+proc freq; table core_year; run;
+
+proc freq; table hs_admit_p6m*hs_admit_p12m; run;
+
+proc freq;
+table n_ip_admit_p12m adm_trunc_ind_p12m n_hospd_p12m ind_hosp_adm_p12m n_em_urgent_admit_p12m ind_em_ur_adm_p12m
+	ind_em_adm_p12m ind_ur_adm_p12m ind_nonelect_adm_p12m n_nonelect_adm_p12m n_ED_ip_p12m ind_ED_adm_p12m 
+	ind_em_adm_p12m*ind_ED_adm_p12m /missprint;
+run;
+

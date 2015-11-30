@@ -3765,6 +3765,8 @@ cd `projdatapath'
 
 use hrs_elix_cc_pay_out_rpay.dta
 *********************************************************
+
+replace s_age=floor((r_death_date_e-s_birth_date)/365.25)
 tab r_exit_year_x, missing
 gen deced=1	
 gen decedinscopeb=deced==1 & year(r_death_date_e)>1999
@@ -3791,21 +3793,23 @@ gen s_death_month=month(s_death_date_e)
 
 foreach x in s_part_ab_p s_hmo_d_p {
 	foreach i in 6 12 18 24 {
-		replace `x'`i'=0 if r_s_death_`i'==1
+		replace s_part_ab_p`i'=0 if r_s_death_`i'==1
 }
-	replace `x'6=0 if r_death_year==2012 & r_death_month>6
-	replace `x'18=0 if r_death_year==2012 | (r_death_year==2011 & r_death_month>6)
-	replace `x'12=0 if r_death_year==2012
-	replace `x'24=0 if r_death_year>2010
+	replace `x'6=. if r_death_year==2012 & r_death_month>6
+	replace `x'18=. if r_death_year==2012 | (r_death_year==2011 & r_death_month>6)
+	replace `x'12=. if r_death_year==2012
+	replace `x'24=. if r_death_year>2010
 }
 
 foreach x in s_part_ab_ s_hmo_d_ {
-	replace `x'6=0 if r_death_year==2000 & r_death_month<7
-	replace `x'18=0 if r_death_year==2000 | (r_death_year==2001 & r_death_month<7)
-	replace `x'12=0 if r_death_year==2000
-	replace `x'24=0 if r_death_year<2002
+	replace `x'6=. if r_death_year==2000 & r_death_month<7
+	replace `x'18=. if r_death_year==2000 | (r_death_year==2001 & r_death_month<7)
+	replace `x'12=. if r_death_year==2000
+	replace `x'24=. if r_death_year<2002
 }
 
+gen s_part_ab_0m=s_part_ab_at_death
+gen s_hmo_d_0m=s_hmo_d_at_death
 foreach x in 6 12 18 24 {
 	gen s_ins_ind_`x'm=s_part_ab_`x'm==1 & s_hmo_d_`x'm==0
 	gen s_ins_ind_p`x'm=s_part_ab_p`x'm==1 & s_hmo_d_p`x'm==0
@@ -3840,11 +3844,32 @@ gen inscope_p24m=insc_ins_p24m & s_65 & survived & s_65
 gen inscope_wide=insc_ins_0m & s_65 & survived==1
 gen inscope_mid=insc_ins_12m==1 & insc_ins_p12m==1 & s_65
 gen inscope_narrow=insc_ins_24m==1 & insc_ins_p24m==1  & s_65
+replace surv_6m=. if r_death_year==2012 & r_death_month>6
+replace surv_12m=. if r_death_year==2012
+replace surv_18m=. if r_death_year==2012 | (r_death_year==2011 & r_death_month>6)
+replace surv_24m=. if r_death_year>2010
+gen insc_time_n6m=(r_death_year>2000) | (r_death_year==2000 & r_death_month>6)
+gen insc_time_n12m=r_death_year>2000
+gen insc_time_n18m=r_death_year>2001 | (r_death_year==2001 & r_death_month>6)
+gen insc_time_n24m=r_death_year>2001
+gen insc_time_p6m=r_death_year<2012 | (r_death_year==2012 & r_death_month<7)
+gen insc_time_p12m=r_death_year<2012
+gen insc_time_p18m=r_death_year<2011 | (r_death_year==2011 & r_death_month<7)
+gen insc_time_p24m=r_death_year<2011
+gen s_65_n6m=(floor((r_death_date_e-s_birth_date-183)/365.25))>=65
+gen s_65_n12m=(floor((r_death_date_e-s_birth_date-365)/365.25))>=65
+gen s_65_n18m=(floor((r_death_date_e-s_birth_date-548)/365.25))>=65
+gen s_65_n24m=(floor((r_death_date_e-s_birth_date-730)/365.25))>=65
 
 foreach n in 6 12 18 24 {
 	label var inscope_n`n'm "FFS `n'm before R's death"
 	label var inscope_p`n'm "Surviving spouse has FFS `n'm after R's death"
+	label var s_65_n`n'm "Surviving spouse 65+ `n'm before R's death"
+	foreach x in n p {
+		label var insc_time_`x'`n'm "Available information based on timeline"
 }
+}
+
 label var inscope_0m "Surviving Spouse 65+ with FFS at time of R's death"
 label var deced "All decedents from exit interviews 2002-2012"
 label var decedinscopea "Decedents with death year 2001-2011"
@@ -4212,49 +4237,79 @@ frmttable using "`logpath'\sp_claims_sample_derivation.rtf" , statmat(sample) //
 	title("2012 sample derivation") ///
 	ctitle("","n") sdec(0) replace varlabels
 
-	
+
 
 keep if inscope_0m==1
 
 save spouse_claims_v1.dta, replace
 
-mat samptab=J(6,9,.)
+gen insc_time_0m=1
 
-local r=3 
+mat samptab=J(8,9,.)
+
+local r=7
 local c=1
 
-foreach n in n24 n18 n12 n6 0 p6 p12 p18 p24 {
-	sum r_female if inscope_`n'm==1
-	mat samptab[2,`c']=r(N)
-	local c=`c'+1
-	}
-local c=5
-foreach n in ived _6m _12m _18m _24m {
-	sum r_female if surv`n'==1
+foreach n in n24m n18m n12m n6m 0m p6m p12m p18m p24m {
+	sum r_female if insc_time_`n'==1
 	mat samptab[1,`c']=r(N)
 	local c=`c'+1
 }
+local c=1
+foreach n in n24m n18m n12m n6m 0m p6m p12m p18m p24m {
+	sum r_female if insc_time_`n'==0
+	mat samptab[2,`c']=r(N)
+	local c=`c'+1
+}
+
+local c=5
+foreach n in ived _6m _12m _18m _24m {
+	sum r_female if surv`n'==0
+	mat samptab[4,`c']=r(N)
+	local c=`c'+1
+}
+
+local c=1
+foreach n in n24m n18m n12m n6m {
+	sum r_female if s_65_`n'==0
+	mat samptab[3,`c']=r(N)
+	local c=`c'+1
+	sum r_female if s_65==0
+	mat samptab[3,5]=r(N)
+}
+
+local c=1
+foreach n in 24 18 12 6 0 p6 p12 p18 p24 {
+	sum r_female if s_hmo_d_`n'm==1
+	mat samptab[5,`c']=r(N)
+	local c=`c'+1
+}
+
+local c=1
+foreach n in 24 18 12 6 0 p6 p12 p18 p24 {
+	sum r_female if insc_ins_`n'm==1
+	mat samptab[6,`c']=r(N)
+	local c=`c'+1
+}
+
+
 foreach i in 0 1 {
+	local c=1	
 	preserve
 	keep if s_female==`i'
-	local c=5
-	foreach n in ived _6m _12m _18m _24m {
-		sum r_female if surv`n'==1
-		mat samptab[`r',`c']=r(N)
-		local c=`c'+1
-}	
-	local r=`r'+1
-	local c=1
-	foreach n in n24 n18 n12 n6 0 p6 p12 p18 p24 {
-		sum r_female if inscope_`n'm==1
+
+	foreach n in 24 18 12 6 0 p6 p12 p18 p24 {
+		sum r_female if insc_ins_`n'm==1
 		mat samptab[`r',`c']=r(N)
 		local c=`c'+1
 }
 	local r=`r'+1
 	restore
 }
-mat rownames samptab="N Surviving, All" "N FFS, All" "N Surviving, Male" "N FFS, Male" ///
-"N Surviving, Female" "N FFS, Female"
+mat rownames samptab="N with available data, timeframe" "N censored by timeframe" ///
+ "N not 65 at interval"  "N not surviving at interval" "N censored by HMO at interval" ///
+ "N FFS, All" "N FFS, Male" ///
+ "N FFS, Female"
 
 frmttable using "`logpath'\sp_claims_sample_derivation.rtf", statmat(samptab) ///
 ctitles("" "n24m" "n18m" "n12m" "n6m" "at death" "p6m" "p12m" "p18m" "p24m") ///

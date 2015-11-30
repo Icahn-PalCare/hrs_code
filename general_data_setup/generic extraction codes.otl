@@ -1929,3 +1929,407 @@ table n_ip_admit_p12m adm_trunc_ind_p12m n_hospd_p12m ind_hosp_adm_p12m n_em_urg
 	ind_em_adm_p12m*ind_ED_adm_p12m /missprint;
 run;
 
+
+
+H="********************************"
+
+
+H="The above works, now better"
+this is the perfect time for this.  I'm looking to pull claims data for men and women at the mean ages their spouses die (79 and 77, respectively, I think).  I want:
+
+to start with just a list of index dates (in this instance, it's 365.25*79+whatever the birthdate was)
+pull n2, n1, n0, p1, p2 interviews
+pull exit interviews
+pull the death date
+pull the dartmouth stuff
+check for fee for service before & after
+dementia
+helper hours
+oop
+medicare claims--$, hospitalizations, hospice, other stuff?
+
+there should be very little bundling--each duck gets lined up before any of them are combined
+
+this way, if there's a change in the HRS data, I can just update that and one or two (well marked--vimp) other bits
+***********************************************************
+
+This is built for spouse claims, so that'll be it.
+
+
+/*hrs cleaned path*/
+libname hrs_fnl 'E:\data\hrs_cleaned';
+
+/*medicare xwalk and claims path*/
+libname medi 'E:\data\cms_DUA_24548_2012';
+
+/*rand data path*/
+libname rand 'E:\data\hrs_public_2012\rand2012\main';
+
+/*dartmouth atlas data path*/
+libname dmouth "E:\data\Dartmouth_misc";
+
+
+/*project data paths*/
+libname proj 'this needs to change every time';
+
+H="get index date"
+/*this should hopefully be the only thing that needs to change between projects, besides specifications of procedures.  To move forward with the code, we need to start the next tab with a dataset named proj.index_date that includes id and the index date(s), year(s), and month(s) for each id.  In this instance, I am pulling the date when women are 77 and men are 79, so I start with the tracker.*/
+
+data date1;
+set hrs_fnl.restr_tracker_v2012(keep=birth_date id gender);
+if gender=2 then do;
+index_date=floor(birth_date+(365.25*77));
+end;
+if gender=1 then do;
+index_date=floor(birth_date+(365.25*79));
+end;
+index_year=year(index_date);
+index_month=month(index_date);
+run;
+
+data date2;
+set date1 (where=(index_year > 1999));
+run;
+
+data date3;
+set date2 (where=(index_year < 2013));
+run;
+
+data proj.index_date (keep=id index_date index_year index_month);
+set date3;
+run;
+
+
+
+
+
+
+H="HRS restricted and death date"
+/***********************************************************************/
+/*Pulls variables from restricted, cleans and formats to long datset
+  Replaces death date from tracker with death date from Karen's corrected dataset*/
+/*Uses the following datasets: 
+	hrs_fnl.core_00_to_12
+	hrs_fnl.death_date_2012
+	hrs_fnl.restr_tracker_v2012
+	
+/***********************************************************************/
+
+data date;
+set proj.index_date;
+label c_ivw_year="Core interview year";
+keep c_ivw_year core_year id c_ivw_date;
+run;
+
+proc sort data=core nodupkey;
+by id core_year;
+run;
+
+
+data death(rename=(death_all=death_date));
+set hrs_fnl.death_date_2012;
+keep id death_all;
+run;
+
+proc sort data=death nodupkey;
+by id;
+run;
+
+data restr(rename=(ZIP10_2000=ZIP10));
+set hrs_fnl.restr_tracker_v2012(keep=hhid pn id birth_date white black hisp_eth native_amer 
+asian_pi other_race other_na_api_race zip: stateusps: cause_death_12_n degree gender);
+id_c=trim(hhid)||trim(pn);
+drop id;
+rename id_c=id;
+restr_yes=1;
+run;
+
+proc sort data=restr nodupkey;
+by id;
+run;
+
+proc contents data=restr; run;
+
+proc sql;
+create table core_dob(drop=id2) as select * from core a left join
+restr(rename=(id=id2) drop=hhid pn) b 
+on a.id=b.id2;
+quit;
+
+*6 obs have no match in the restricted dataset;
+*These obs each only have 1 inteview, so can't use them anyway;
+proc freq data=core_dob; table restr_yes /missprint; run;
+
+data restr_test;
+set core_dob;
+if restr_yes=.;
+run;
+
+proc sql;
+create table core_dob1(drop=id2) as select * from core_dob a left join
+death(rename=(id=id2)) b 
+on a.id=b.id2;
+quit;
+
+data core_age_1;
+set core_dob1;
+format death_date date9.;
+age_at_core=floor((c_ivw_date-birth_date)/365.25);
+label age_at_core="Age at core interview";
+if age_at_core>=65 then age_ge_65=1;
+if age_at_core<65 then age_ge_65=0;
+label age_ge_65="Age at core interview > 65";
+
+core_to_death=(death_date-c_ivw_date)/365.25;
+label core_to_death="Time from core ivw to death, years";
+if core_to_death<=1 and core_to_death~=. then core_to_dod_1yr=1;
+if core_to_death>1 or core_to_death=. then core_to_dod_1yr=0;
+label core_to_dod_1yr="Died within 1 year of core interview";
+
+if core_to_death<=0.5 and core_to_death~=. then core_to_dod_6m=1;
+if core_to_death>0.5 or core_to_death=. then core_to_dod_6m=0;
+label core_to_dod_6m="Died within 6 months of core interview";
+
+run;
+
+proc freq data=core_age_1;
+table age_at_core*age_ge_65 core_to_dod_1yr*core_to_dod_6m /missprint;
+run;
+
+
+****************************************************************;
+*get clean zip code variable by wave;
+proc sort data=core_age_1; by id core_year; run;
+
+/*get list of first and last interview years*/
+data ivw_years_1;
+set core_age_1;
+by id; 
+if first.id then first_ivw_year=core_year;
+if last.id then last_ivw_year=core_year;
+run;
+
+data ivw_years_1a;
+set ivw_years_1;
+if first_ivw_year~=.;
+run;
+
+data ivw_years_1b;
+set ivw_years_1;
+if last_ivw_year~=.;
+run;
+
+proc sql;
+create table ivw_years_2 as select a.id,a.first_ivw_year,b.last_ivw_year
+from ivw_years_1a a left join
+ivw_years_1b b
+on a.id=b.id;
+quit;
+
+proc freq; table first_ivw_year last_ivw_year; run;
+
+*merge into overall dataset;
+proc sql;
+create table core_age_zip_1 as select
+a.*, b.first_ivw_year,b.last_ivw_year from
+core_age_1 a left join
+ivw_years_2 b
+on a.id=b.id;
+quit;
+
+proc freq; table first_ivw_year last_ivw_year; run;
+
+/*clean up missing zip variables
+1. if missing, use interview prior
+2. if still missing, use interview after
+3. if still missing, use interview 2x prior...*/
+
+data core_age_zip_2 ;
+set core_age_zip_1 ;
+/*1998 updates, use 2000 zip
+1 obs only has one interview in our dataset for 1998 and is missing zip that year, won't be
+in the final sample so leave as missing now*/
+if zip98='' & first_ivw_year<=1998<=last_ivw_year then do;
+	zip_98_imp_yes=1;
+	zip98=zip00;
+	end;
+/*2000 updates, use 1998 zip
+2 obs only have one interview in the dataset for 2000, missing zip that year, again not
+in final sample so leave missing here*/
+if zip00='' & first_ivw_year<=2000<=last_ivw_year then do;
+	zip_00_imp_yes=1;
+	zip00=zip98;
+	end;
+/*2002 updates, use 2000 or 2004 zip
+1 obs has only the 2002 interview, leave zip missing for that person*/
+if zip02='' & first_ivw_year<=2002<=last_ivw_year then do;
+	zip_02_imp_yes=1;
+	zip02=zip00;
+		if zip02='' then do;
+		zip02=zip04;
+		end;
+	end;
+/*2004 updates, use 2002 or 2006 zip
+13 obs has only the 2004 interview, leave zip missing for those observations*/
+if zip04='' & first_ivw_year<=2004<=last_ivw_year then do;
+	zip_04_imp_yes=1;
+	zip04=zip02;
+		if zip04='' then do;
+		zip04=zip06;
+		end; /*1 obs still missing, use 1998 zip for this person*/
+				if zip04='' then do;
+				zip04=zip98;
+				end; 
+	end;
+/*2006 updates, use 2004 or 2008 zip
+no observations missing*/
+if zip06='' & first_ivw_year<=2006<=last_ivw_year then do;
+	zip_06_imp_yes=1;
+	zip06=zip04;
+		if zip06='' then do;
+		zip06=zip08;
+		end; 
+	end;
+/*2008 updates, use 2006 zip
+no observations missing*/
+if zip08='' & first_ivw_year<=2008<=last_ivw_year then do;
+	zip_08_imp_yes=1;
+	zip08=zip06;
+	end;
+/*2010 updates, use 2008 zip
+1 obs has only 2010 interview and missing zip that year, so leave missing*/
+if zip10='' & first_ivw_year<=2010<=last_ivw_year then do;
+	zip_10_imp_yes=1;
+	zip10=zip08;
+	end;
+/*2012 12 observations missing, use 2010*/
+if zip12='' & first_ivw_year<=2012<=last_ivw_year then do;
+	zip_12_imp_yes=1;
+	zip12=ZIP10_2010;
+	end;
+run;
+
+****************************************************************;
+*get clean state code variable by wave;
+data core_age_zip_state;
+set core_age_zip_2;
+/*1998 state - n=1 obs only has one interview with missing zip,state, leave blank*/
+if stateusps98='' & first_ivw_year<=1998<=last_ivw_year then do;
+	st_98_imp_yes=1;
+	stateusps98=stateusps00;
+	end;
+/*2000 state - n=2 obs only single interview so leave missing*/ 
+if stateusps00='' & first_ivw_year<=2000<=last_ivw_year then do;
+	st_00_imp_yes=1;
+	stateusps00=stateusps98;
+	end;
+/*2002 state - n=1 obs only single interview so leave missing*/ 
+if stateusps02='' & first_ivw_year<=2002<=last_ivw_year then do;
+	st_02_imp_yes=1;
+	stateusps02=stateusps00;
+	if stateusps02='' then do;
+		stateusps02=stateusps04;
+		end;
+	end;
+/*2004 updates, use 2002 or 2006 state
+13 obs has only the 2004 interview, leave state missing for those observations*/
+if stateusps04='' & first_ivw_year<=2004<=last_ivw_year then do;
+	st_04_imp_yes=1;
+	stateusps04=stateusps02;
+		if stateusps04='' then do;
+		stateusps04=stateusps06;
+		end; /*1 obs still missing, use 1998 state for this person*/
+				if stateusps04='' then do;
+				stateusps04=stateusps98;
+				end; 
+	end;
+/*2006 updates, use 2004 or 2008 state
+no observations missing*/
+if stateusps06='' & first_ivw_year<=2006<=last_ivw_year then do;
+	st_06_imp_yes=1;
+	stateusps06=stateusps04;
+		if stateusps06='' then do;
+		stateusps06=stateusps08;
+		end; 
+	end;
+/*2008 updates, use 2006 state
+no observations missing*/
+if stateusps08='' & first_ivw_year<=2008<=last_ivw_year then do;
+	st_08_imp_yes=1;
+	stateusps08=stateusps06;
+	end;
+/*2010 updates, use 2008 state
+1 obs has only 2010 interview and missing state that year, so leave missing*/
+if stateusps10='' & first_ivw_year<=2010<=last_ivw_year then do;
+	st_10_imp_yes=1;
+	stateusps10=stateusps08;
+	end;
+/*2012 updates, use 2010 state
+no observations missing*/
+if stateusps12='' & first_ivw_year<=2012<=last_ivw_year then do;
+	st_12_imp_yes=1;
+	stateusps12=stateusps10;
+	end;
+run;
+
+proc sort data=core_age_zip_state; by id core_year; run;
+
+data core_age_zip;
+set core_age_zip_state;
+zip_wave=vvaluex("zip"||substr(trim(left(core_year)),3,2) );
+zip_imputed=vvaluex("zip_"||substr(trim(left(core_year)),3,2)||"_imp_yes" );
+drop zip9: zip0: zip1: ;
+label zip_wave="ZIP code, residence at time of interview";
+label zip_imputed="ZIP code imputed";
+
+state_wave=vvaluex("stateusps"||substr(trim(left(core_year)),3,2) );
+state_imputed=vvaluex("st_"||substr(trim(left(core_year)),3,2)||"_imp_yes" );
+drop stateusps: ;
+label state_wave="State, residence at time of interview";
+label state_imputed="State imputed";
+run;
+
+/*create census variables*/
+
+data core_age_zip1;
+set core_age_zip;
+
+/* create census regions */
+if state_wave in ('CT','ME','MA','NH','RI','VT','NJ','NY','PA') then REGION=1;
+   else if state_wave in ('IN','IL','MI','OH','WI','IA','KS','MN','MO','NE','ND','SD') then REGION=2;
+   else if state_wave in ('DE','DC','FL','GA','MD','NC','SC','VA','WV','AL','KY','MS','TN',
+        'AR','LA','OK','TX' ) then REGION=3;
+   else if state_wave in ('AZ','CO','ID','NM','MT','UT','NV','WY','AK','CA','HI','OR','WA') then REGION=4;
+/*create census divisions */
+if state_wave in ('CT','ME','MA','NH','RI','VT') then DIVISION=1;
+   else if state_wave in ('NJ','NY','PA') then DIVISION=2;
+   else if state_wave in ('IN','IL','MI','OH','WI') then DIVISION=3;
+   else if state_wave in ('IA','KS','MN','MO','NE','ND','SD') then DIVISION=4;
+   else if state_wave in ('DE','DC','FL','GA','MD','NC','SC','VA','WV') then DIVISION=5;
+   else if state_wave in ('AL','KY','MS','TN') then DIVISION=6;
+   else if state_wave in ('AR','LA','OK','TX' ) then DIVISION=7;
+   else if state_wave in ('AZ','CO','ID','NM','MT','UT','NV','WY') then DIVISION=8;
+   else if state_wave in ('AK','CA','HI','OR','WA') then DIVISION=9;
+
+/* create medicaid eligibility groupings: =>138% or <138% */
+if state_wave in ('AL','AK','FL','GA','ID','KS','LA','ME','MS','MO','MT','NE','NC',
+        'OK','SC','SD','TN','TX','UT','VA','WI','WY') then MEDICAID_138=0;
+   else if state_wave in ('AR','AZ','CA','CO','CT','DE','DC','HI','IN','IL','IA',
+        'KY','MA','MI','MN','MD','NH','ND','NM','NV','NJ','NY','OH','OR','PA',
+        'RI','VT','WV','WA') then MEDICAID_138=1;
+label region='Census Region: 1=NE,2=MW,3=S,4=W';
+label division='Census Division';
+label medicaid_138='Medicaid eligibility GE 138% FPL';
+run;
+
+/*save dataset and drop raw zip code variables*/
+data proj.restr_age_zip;
+set core_age_zip1;
+drop st_: zip_9: zip_0: zip_1: ;
+run;
+
+proc freq data=core_age_zip; table zip_wave state_wave  /missprint ; run;
+
+proc freq; table zip_imputed state_imputed /missprint ; run;
+
+proc contents data=proj.restr_age_zip; run;

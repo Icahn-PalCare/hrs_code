@@ -19709,7 +19709,7 @@ gen hcc_adj= score_community
 replace hcc_adj=score_institutional if nhres_n0==1 
 replace hcc_adj=score_new_enrollee if new==1 
 
-gen hcc_spend=hcc_sp_2008_adj2012* hcc_adj
+gen hcc_spend= hcc_sp_2008_adj2012 * hcc_adj
 save n0_n1_p1_p2_x_criteria_comp_hcc08, replace
 
 
@@ -19751,6 +19751,32 @@ gen group=0
    replace group=2 if criteria_b_file==1	
    replace group=3 if criteria_c_file==1	
 tab group
+
+* compute frailty adjustment : replace difficulty in/out of chairs with diffulty transfer to bed
+tab1 adl_diff_dr_n0 adl_diff_wk_n0 adl_diff_bh_n0 adl_diff_e_n0 adl_diff_t_n0 adl_diff_tx_n0, missing
+gen adl_num0=adl_diff_dr_n0 + adl_diff_wk_n0 + adl_diff_bh_n0 + adl_diff_e_n0 + adl_diff_t_n0 + adl_diff_tx_n0
+gen frailty_current= -0.141
+  replace frailty_current= 0.171 if adl_num0>0 & adl_num0<3
+  replace frailty_current= 0.344 if adl_num0>2 & adl_num0<5
+  replace frailty_current= 1.088 if adl_num0>4 
+gen frailty_nonmed= -0.089
+  replace frailty_nonmed= 0.110 if adl_num0>0 & adl_num0<3
+  replace frailty_nonmed= 0.200 if adl_num0>2 & adl_num0<5
+  replace frailty_nonmed= 0.377 if adl_num0>4 
+gen frailty_med= -0.183
+  replace frailty_med= 0.024 if adl_num0>0 & adl_num0<3
+  replace frailty_med= 0.132 if adl_num0>2 & adl_num0<5
+  replace frailty_med= 0.188 if adl_num0>4  
+gen frailty_adj=(0.90 * frailty_current) + (0.10 * frailty_nonmed) if medicaid_n0==0
+  replace frailty_adj=(0.90 * frailty_current) + (0.10 * frailty_med) if medicaid_n0==1
+gen hcc_adj_frailty=  hcc_adj + frailty_adj
+gen hcc_spend_frailty= hcc_sp_2008_adj2012 * hcc_adj_frailty
+tab frailty_adj
+sum hcc_adj_frailty hcc_adj hcc_spend hcc_spend_frailty, d
+
+* residual expenditures
+gen hcc_med_resid=tot_paid_by_mc_12m_wi_n0 - hcc_spend
+gen hcc_med_frailty_resid= tot_paid_by_mc_12m_wi_n0 - hcc_spend_frailty
 
 gen hcc_med_dif=hcc_spend - tot_paid_by_mc_12m_wi_n0
 gen hcc_med_dif100= hcc_med_dif
@@ -19813,6 +19839,10 @@ la var hcc_spend "CMS HCC Spending, mean (sd)"
 la var hcc_adj "CMS HCC Risk Adjustment Score, mean (sd)"
 la var hcc_med_dif "CMS HCC - Medicare Spending 2008"
 la var hcc_med_dif100 "CMS HCC - Medicare Spending min/max 100,000 2008"
+la var hcc_sp_2008_adj2012 "2008 Ave Medicare spending per beneficiary adj to 2012"
+la var hcc_med_resid "2008 Actual paid - HCC predicted" 
+la var hcc_med_frailty_resid "2008 Actual paid - HCC predicted adj for frailty" 
+
 
 la var ip_paid_by_mc_12m_wi_n0 "Inpatient"
 la var snf_paid_by_mc_12m_wi_n0 "SNF"
@@ -19837,6 +19867,52 @@ histogram hcc_med_dif100, percent ytitle(Percent) ///
 graph export "E:\projects\serious_illness_cohort\archive_logs\20151125\HCC Medicare difference 2008 4 groups.png", ///
  as(png) replace   
 
+bysort group: cumul hcc_med_resid, gen(percent_resid)
+bysort group: cumul hcc_med_frailty_resid, gen(percent_frail_resid) 
+twoway (scatter hcc_med_resid percent_resid, ytitle(Residual Spending) ///
+  yline(0) xtitle(Percent) msize(tiny) ///
+  by(, title(Residual Spending 2008)) by(group))
+
+** graph Spending residuals  
+separate hcc_med_resid, by(group) 
+twoway (line hcc_med_resid0 percent_resid, sort) ///
+ (line hcc_med_resid1 percent_resid, sort) ///
+ (line hcc_med_resid2 percent_resid, sort) ///
+ (line hcc_med_resid3 percent_resid, sort), ///
+  ytitle(Residual Spending) yline(0) xtitle(Percent) /// 
+  legend(order (1 "Comparison" 2 "Criteria A" 3 "Criteria B" 4 "Criteria C"))
+graph export "E:\projects\serious_illness_cohort\archive_logs\20151201\HCC Spending Residuals 2008 4 groups.png", ///
+ as(png) replace   
+** graph Spending residuals adjusted for frailty 
+separate hcc_med_frailty_resid, by(group) 
+twoway (line hcc_med_frailty_resid0 percent_frail_resid, sort) ///
+ (line hcc_med_frailty_resid1 percent_frail_resid, sort ) ///
+ (line hcc_med_frailty_resid2 percent_frail_resid, sort ) ///
+ (line hcc_med_frailty_resid3 percent_frail_resid, sort ), ///
+  ytitle(Residual Spending) yline(0) xtitle(Percent) ///
+  legend(order (1 "Comparison" 2 "Criteria A" 3 "Criteria B" 4 "Criteria C"))
+ graph export "E:\projects\serious_illness_cohort\archive_logs\20151201\HCC Spending Residuals with Frailty Adjustment 2008 4 groups.png", ///
+ as(png) replace  
+ 
+** graph spending not/adjusted for frailty
+bysort group: cumul hcc_spend, gen(percent_spend)
+bysort group: cumul hcc_spend_frailty, gen(percent_frail_spend) 
+bysort group: cumul tot_paid_by_mc_12m_wi_n0, gen(percent_actual)
+gen total_max100=tot_paid_by_mc_12m_wi_n0
+   replace total_max100=100000 if tot_paid_by_mc_12m_wi_n0>100000
+twoway  (line total_max100 percent_actual , sort ) ///
+  (line hcc_spend percent_spend , sort )  /// 
+  (line hcc_spend_frailty percent_frail_spend , sort ), ///
+  ytitle(Spending) xtitle(Percent) legend(order(1 "Actual Spending (max 100K)" ///
+  2 "HCC Estimate" 3 "HCC Adjusted for Frailty"))  ///
+  by(,title(Actual & Estimated Spending 2008)) by(group)
+graph export "E:\projects\serious_illness_cohort\archive_logs\20151201\Actual (max 100K) and Estimated Spending 2008 4 groups.png", ///
+ as(png) replace  
+ 
+
+ 
+ 
+ 
 ** top 10%  
 mat table_x=J(12,4,.) //12 rows by 4 columns
 local r=1
@@ -20077,4 +20153,6 @@ replay(table2_2) merge(table2_c) store(table2_3) ///
 	"Criteria B = Criteria A and Urgent / Emergent hospitalization and/or NH resident" \ ///
 	"Criteria C = Medical illness and ADL Impairment and hospitalization and/or NH resident" \ ///
 	"Comparison") 
+	
+
 	

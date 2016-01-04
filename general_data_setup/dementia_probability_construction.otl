@@ -485,3 +485,366 @@ frmttable, statmat(dmnt) varlabels ctitles("" "mean" "probp==1" "probp==0")
 
 
 
+
+
+H="***********************************"
+
+
+H="Look at dementia dx in ADAMS, full sample, and decents list"
+/* I want to get the dementia diagnosis for everybody one and two years before their interview date and one and two years before their death date.  I will get number of diagnoses, and number of each diagnosis type.  Do they come from inpatient or outpatient?*/
+
+libname dem 'E:\data\Evan_SAS_practice';
+
+libname medi 'E:\data\CMS_DUA_2548_2012';
+
+libname serill 'E:\data\serious_ill\int_data';
+
+libname deced 'E:\data\spouse_intensive\int_data';
+
+
+
+H="get claims & dxs"
+/*get list of ids, bids, & dates, using the intermediate datasets created for serious illness and spouse intensive procedure*/
+/* I want to get the dementia diagnosis for everybody one and two years before their interview date and one and two years before their death date.  I will get number of diagnoses, and number of each diagnosis type.  Do they come from inpatient or outpatient?*/
+
+
+proc import datafile="E:\data\serious_ill\int_data\core_ids_1yr_criteria_5_sample1.dta" 
+out=interviews1 replace;
+run;
+
+data interviews2;
+set interviews1(keep=hhid pn id c_ivw_date bid_hrs);
+index_date=c_ivw_date;
+run;
+
+data interviews;
+set interviews2(drop=c_ivw_date);
+run;
+
+proc import datafile="E:\data\spouse_intensive\int_data\spouse_data_full.dta"
+out=decedents1 replace;
+run;
+
+data decedents2;
+set decedents1(keep=r_hhid_n1 r_pn_n1 r_death_date_e r_id r_bid_hrs);
+hhid=rhhid_n1;
+pn=r_pn_n1;
+id=r_id;
+index_date=r_death_date_e;
+bid_hrs=r_bid_hrs;
+run;
+
+data decedents;
+set decedents2(keep=index_date id bid_hrs pn hhid);
+run;
+
+/*get claims 2 years before*/
+%macro claims (source=,name=,su=);
+
+proc sql;
+create table &name._&source._meet_&su.a as select *
+from medi.&source._2000_2012 a inner join
+&name. b
+on trim(left(a.bid_hrs_21))=trim(left(b.bid_hrs))
+and ((admit_date>=(index_date-&su.) and index_date>=admit_date) 
+or (disch_date>=(index_date-&su.) and disch_date<=index_date));
+quit;
+
+data &name._&source._meet_&su.;
+set &name._&source._meet_&su.a;
+source="&source";
+run;
+%mend;
+
+%claims(source=mp,name=interviews,su=365);
+%claims(source=op,name=interviews,su=365);
+%claims(source=pb,name=interviews,su=365);
+%claims(source=hh,name=interviews,su=365);
+%claims(source=hs,name=interviews,su=365);
+%claims(source=dm,name=interviews,su=365);
+%claims(source=mp,name=interviews,su=730);
+%claims(source=op,name=interviews,su=730);
+%claims(source=pb,name=interviews,su=730);
+%claims(source=hh,name=interviews,su=730);
+%claims(source=hs,name=interviews,su=730);
+%claims(source=dm,name=interviews,su=730);
+%claims(source=mp,name=decedents,su=365);
+%claims(source=op,name=decedents,su=365);
+%claims(source=pb,name=decedents,su=365);
+%claims(source=hh,name=decedents,su=365);
+%claims(source=hs,name=decedents,su=365);
+%claims(source=dm,name=decedents,su=365);
+%claims(source=mp,name=decedents,su=730);
+%claims(source=op,name=decedents,su=730);
+%claims(source=pb,name=decedents,su=730);
+%claims(source=hh,name=decedents,su=730);
+%claims(source=hs,name=decedents,su=730);
+%claims(source=dm,name=decedents,su=730);
+
+
+/**************************************************************************/
+/* ********************* S Diagnosis Lists   ******************************/
+/**************************************************************************/
+
+%macro dx_time_range (range1=,name=,su=);
+/*pulls just dx codes from carrier claims*/
+data pb_last_&su._dx(keep=bid_hrs_21 id diag source index_date);
+set &name._pb_meet_&su.(keep=bid_hrs_21 id PDGNS_CD DGNSCD01-DGNSCD12 source index_date);
+array dx PDGNS_CD DGNSCD01-DGNSCD12;
+do over dx;
+diag=dx ;
+output;
+end;
+run;
+proc sort data=pb_last_&su._dx out=pb_last_&su._dx2 nodupkey;
+by bid_hrs_21 id diag;
+run;
+
+/*outpatient claims*/
+data op_last_&su._dx(keep=bid_hrs_21 id diag source index_date);
+set &name._op_meet_&su.(keep=bid_hrs_21 id PDGNS_CD DGNSCD01-DGNSCD25 source index_date);
+array dx PDGNS_CD DGNSCD01-DGNSCD25 ;
+do over dx;
+diag=dx ;
+output;
+end;
+run;
+proc sort data=op_last_&su._dx out=op_last_&su._dx2 nodupkey;
+by bid_hrs_21 id diag;
+run;
+
+/*medpar claims*/
+data mp_last_&su._dx(keep=bid_hrs_21 id diag source index_date);
+set &name._mp_meet_&su.(keep=bid_hrs_21 id AD_DGNS DGNS_CD01-DGNS_CD25 source index_date);
+array dx D_DGNS DGNS_CD01-DGNS_CD25 ;
+do over dx;
+diag=dx ;
+output;
+end;
+run;
+proc sort data=mp_last_&su._dx out=mp_last_&su._dx2 nodupkey;
+by bid_hrs_21 id diag;
+run;
+
+/*dme claims*/
+data dm_last_&su._dx(keep=bid_hrs_21 id diag source index_date);
+set &name._dm_meet_&su.(keep=bid_hrs_21 id PDGNS_CD DGNSCD01-DGNSCD12 index_date source);
+array dx PDGNS_CD DGNSCD01-DGNSCD12 ;
+do over dx;
+diag=dx ;
+output;
+end;
+run;
+proc sort data=dm_last_&su._dx out=dm_last_&su._dx2 nodupkey;
+by bid_hrs_21 id diag;
+run;
+
+/*home health agency*/
+data hh_last_&su._dx(keep=bid_hrs_21 id diag source index_date);
+set &name._hh_meet_&su.(keep=bid_hrs_21 id PDGNS_CD DGNSCD01-DGNSCD25 index_date source);
+array dx PDGNS_CD DGNSCD01-DGNSCD25 ;
+do over dx;
+diag=dx ;
+output;
+end;
+run;
+proc sort data=hh_last_&su._dx out=hh_last_&su._dx2 nodupkey;
+by bid_hrs_21 id diag;
+run;
+
+/*hospice*/
+data hs_last_&su._dx(keep=bid_hrs_21 id diag source index_date);
+set &name._hs_meet_&su.(keep=bid_hrs_21 id PDGNS_CD DGNSCD01-DGNSCD25 index_date source);
+array dx PDGNS_CD DGNSCD01-DGNSCD25 ;
+do over dx;
+diag=dx ;
+output;
+end;
+run;
+proc sort data=hs_last_&su._dx out=hs_last_&su._dx2 nodupkey;
+by bid_hrs_21 id diag;
+run;
+
+/*set diag variable length = 7 chars since that's the max length from the mc claims
+Need to do this because length varies across the different mc claim types*/
+data hs_last_&su._dx3;
+length diag $7;
+set hs_last_&su._dx2;
+run;
+data hh_last_&su._dx3;
+length diag $7;
+set hh_last_&su._dx2;
+run;
+data mp_last_&su._dx3;
+length diag $7;
+set mp_last_&su._dx2;
+run;
+data dm_last_&su._dx3;
+length diag $7;
+set dm_last_&su._dx2;
+run;
+data op_last_&su._dx3;
+length diag $7;
+set op_last_&su._dx2;
+run;
+data pb_last_&su._dx3;
+length diag $7;
+set pb_last_&su._dx2;
+run;
+
+data dx_all_last_&su.;
+set hs_last_&su._dx3
+hh_last_&su._dx3
+mp_last_&su._dx3
+dm_last_&su._dx3
+op_last_&su._dx3
+pb_last_&su._dx3;
+run;
+
+proc sort data=dx_all_last_&su.(where=(diag~="")) out=&name._dx_&range1._&su. nodupkey;
+by bid_hrs_21 id diag;
+run;
+
+%mend;
+
+/*run macro to create data files spo_mc_i.dx_0d_n6m spo_mc_i.dx_0d_n12m and spo_mc_i.dx_0d_n24m */
+%dx_time_range (range1=0,name=interviews,su=365);
+%dx_time_range(range1=0,name=interviews,su=730);
+%dx_time_range (range1=0,name=decedents,su=365);
+%dx_time_range(range1=0,name=decedents,su=730);
+
+/*creates indicators for each of the Elixhauser comorbidities
+based on the dx codes lists 6, 12, and 24m before and after R's death
+
+resulting dataset is spo_mc_i.hrs_elix*/
+
+/*rename macro - called within the elixhauser macro
+to add time suffix to variables
+
+lib=library
+dsn=dataset name
+pre=suffix to be added to all of the variable names
+*/
+
+%macro rename(lib,dsn,pre);
+options pageno=1 nodate;
+proc contents data=&lib..&dsn;
+title "Before Renaming All Variables";
+run;
+
+proc sql noprint;
+select nvar into :num_vars
+from dictionary.tables
+where libname="&LIB" and
+memname="&DSN";
+select distinct(name) into :var1-
+:var%TRIM(%LEFT(&num_vars))
+from dictionary.columns
+where libname="&LIB" and
+memname="&DSN";
+quit;
+run;
+
+proc datasets library=&LIB;
+modify &DSN;
+rename
+%do i=1 %to &num_vars;
+&&var&i=&&var&i.._&pre 
+%end;
+;
+quit;
+run;
+options pageno=1 nodate;
+proc contents data=&lib..&dsn;
+title "After Renaming All Variables";
+run;
+%mend rename;
+
+
+
+/*Elixhauser index macro
+Note includes additional 2 comorbidities: Dementia and Coronary Artery Disease*/
+
+%macro elixhauser(range1=,name=,su=);
+
+data &name._dem_dx_comor_&su;
+set &name._dx_&range1._&su(rename=(diag=dx_0));
+dx=trim(left(dx_0));
+
+if dx~="" then do;
+
+
+dem_dx=0;
+*do over dx;
+*dementia;
+	if (substr(dx,1,4) in ('3310','3311','3312','2900','2901',
+             '2902','2903','2912','2948','2949') or
+		substr(dx,1,5) in ('29410','29411','29040','29041','29042','29043')) 
+				and dem_dx=0 
+          then dem_dx=1;
+
+
+
+
+end;
+run;
+
+%mend;
+
+
+
+
+
+
+
+
+/*calls rename macro*/
+*%rename(WORK,TEST,&range1._&su);
+
+/*rename r&s BID variables*/
+/*data spo_mc_i.elix_&range1._&su._2
+	(rename =(r_id_&range1._&su=r_id)
+	rename =(s_BID_hrs_&range1._&su=s_BID_hrs));
+set test;
+keep s_BID_hrs_&range1._&su r_id_&range1._&su s_comorb:;
+run;
+
+proc sort data=spo_mc_i.elix_&range1._&su._2;
+by s_bid_hrs r_id;
+run;
+
+%mend;
+
+/*run macro to get elixhauser comorbidities 6, 12, 24m pre and post death
+resulting datasets are spo_int.elix_0d_x#m_2
+x = n=before, p=after death
+# = 6, 12, or 24 for time window (months)*/
+
+%elixhauser(range1=0,name=decedents,su=365);
+%elixhauser(range1=0,name=decedents,su=730);
+%elixhauser(range1=0,name=interviews,su=365);
+%elixhauser(range1=0,name=interviews,su=730);
+
+
+
+proc export data=interviews_dem_dx_comor_365 outfile="E:\data\serious_ill\int_data\interviews_dem_dx.dta" replace; run;
+
+proc export data=decedents_dem_dx_comor_365 outfile="E:\data\serious_ill\int_data\decedents_dem_dx.dta" replace; run;
+
+H="stata to bring into datasets and compare"
+use "E:\data\serious_ill\int_data\interviews_dem_dx.dta", clear
+drop if dem_dx==0
+foreach x in mp op pb hs hh dm {
+gen s`x'=source=="`x'"
+by id index_date, sort: egen `x'=max(s`x')
+drop s`x'
+}
+rename index_date c_ivw_date
+drop source dx dx_0
+duplicates drop
+by id c_ivw_date: gen num=_N
+merge 1:1 id c_ivw_date using "E:\data\serious_ill\int_data\core_ids_1yr_criteria_5_sample1", gen(ivwmerge)
+gen prediction_year=core_year+1 
+merge 1:1 hhidpn prediction_year using "E:\data\hrs_public_2012\dementia\pdem_withvarnames.dta", gen(probmerge) keep(match master)
+merge 1:1 id core_year using "E:\data\hrs_public_2012\dementia\ADAMS\dementia_dx_adams_wave1_only.dta", gen(adamsmerge) 
+

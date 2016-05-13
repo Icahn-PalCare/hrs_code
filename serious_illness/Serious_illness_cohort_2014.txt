@@ -6882,6 +6882,180 @@ run;
 
 
 
+H="Step 8c - contact days"
+/*Contact days*/
+/*Use year before interview claims, then merge with main data*/
+
+data mpa;
+set sic_int.mp_meet3_365;
+run;
+
+data mpb;
+set mpa(keep=bid_hrs_21 admit_date disch_date sslssnf c_ivw_date core_year);
+if admit_date<c_ivw_date-365 then admit_date=c_ivw_date-365;
+if disch_date>c_ivw_date then disch_date=c_ivw_date;
+los=disch_date-admit_date+1;
+if los=0 then los=1;
+run;
+
+proc sort data=mpb out=mpc nodupkey; 
+by bid_hrs_21 admit_date disch_date c_ivw_date; 
+run;
+
+%macro dates();
+data mpd;
+set mpc;
+%do i=1 %to 366;
+%let l=%eval(&i-1);
+if los>=&i. then date&i.=admit_date+&l.;
+format date&i. date9.;
+%end;
+run;
+%mend;
+
+%dates();
+
+data mpe;
+set mpd;
+array adate(1:366) date1-date366;
+do datenum = 1 to 366;
+date=adate(datenum);
+output;
+end;
+format date date9.;
+drop date1-date366;
+run;
+
+data mpf;
+set mpe;
+where date~=.;
+run;
+
+proc sort data=mpf out=mpg nodupkey;
+by bid_hrs_21 date;
+run;
+
+data mp;
+set mpg(keep= bid_hrs_21 date admit_date c_ivw_date);
+where date~=.;
+mp=1;
+run;
+
+proc sql;
+create table mp_cd as select distinct
+bid_hrs_21,c_ivw_date,
+count(date) as mp_contact_days
+from mp group by bid_hrs_21, c_ivw_date;
+quit;
+
+data ip;
+set mpg;
+where sslssnf~="N";
+if date~=.;
+run;
+
+proc sql;
+create table ip_cd as select distinct
+bid_hrs_21,c_ivw_date,
+count(date) as ip_contact_days
+from ip group by bid_hrs_21,c_ivw_date;
+quit;
+
+data pba;
+set sic_int.pb_meet_365;
+run;
+
+data pbb;
+set pba(keep=bid_hrs_21 admit_date hcpscd01-hcpscd13 betos01-betos13 c_ivw_date);
+run;
+
+data pbe(keep=bid_hrs_21 date betos01 code c_ivw_date);
+set pbb;
+date=admit_date;
+code=substr(betos01,1,1);
+pb=1;
+run;
+data pbe2;
+set pbe;
+if code~="" and code~="Y" and code~="Z" and code~="O" and code~="D" and betos01~="M4A";
+run;
+proc sort data=pbe2 out=pbe3 nodupkey;
+by bid_hrs_21 date c_ivw_date; 
+run;
+
+proc sql;
+create table pb_adm as select distinct
+bid_hrs_21,c_ivw_date,
+count(date) as pb_adm_days
+from pbe3 group by bid_hrs_21,c_ivw_date;
+quit;
+
+data pbf;
+set pbe3;
+where date~=.; 
+format date date9.;
+pb=1;
+run;
+
+proc sort data=pbf out=pb nodupkey;
+by bid_hrs_21 date;
+run;
+
+proc sql;
+create table pb_cd as select distinct
+bid_hrs_21,c_ivw_date,
+count(date) as pb_contact_days
+from pb group by bid_hrs_21,c_ivw_date;
+quit;
+
+data alla;
+set mp pb;
+where date~=.;
+format date date9.;
+run;
+
+proc sort data=alla out=allb nodupkey;
+by bid_hrs_21 date;
+run;
+
+proc sql;
+create table allc as select distinct
+bid_hrs_21,c_ivw_date,
+count(date) as contact_days
+from allb group by bid_hrs_21,c_ivw_date;
+quit;
+
+data ids;
+set sic_int.core_ids_init_outcomes_2(keep=bid_hrs c_ivw_date);
+run;
+
+proc sql; 
+create table alld as select * from 
+ids a left join
+allc b
+on a.bid_hrs=b.bid_hrs_21 and a.c_ivw_date=b.c_ivw_date
+left join mp_cd c
+on a.bid_hrs=c.bid_hrs_21 and a.c_ivw_date=c.c_ivw_date
+left join pb_cd d
+on a.bid_hrs=d.bid_hrs_21 and a.c_ivw_date=d.c_ivw_date;
+run;
+
+data all;
+set alld;
+array list mp_contact_days ip_contact_days  pb_contact_days contact_days;
+do over list;
+if list=. then list=0;
+end;
+run;
+
+proc sql;
+create table sic_int.core_ids_init_outcomes_2a as select * from 
+sic_int.core_ids_init_outcomes_2 a
+left join 
+all b
+on a.bid_hrs=b.bid_hrs_21;
+quit;
+
 H="Step 9 - Identify interview where criteria is first met"
 /*create variable that identifies first interview that the criteria is met
 3 criteria used:
@@ -6907,7 +7081,7 @@ home residents but haven't had a hospitalization
 
 /***********    Criteria A    ************/
 data ivw_meet_a;
-set sic_int.core_ids_init_outcomes_2(keep=id criteria_a core_year) ;
+set sic_int.core_ids_init_outcomes_2a(keep=id criteria_a core_year) ;
 if criteria_a=1;
 run;
 
@@ -6928,7 +7102,7 @@ run;
 
 /***********    Criteria B    ************/
 data ivw_meet_b;
-set sic_int.core_ids_init_outcomes_2(keep=id criteria_b core_year) ;
+set sic_int.core_ids_init_outcomes_2a(keep=id criteria_b core_year) ;
 if criteria_b=1;
 run;
 
@@ -6949,7 +7123,7 @@ run;
 
 /***********    Criteria C    ************/
 data ivw_meet_c;
-set sic_int.core_ids_init_outcomes_2(keep=id criteria_c core_year) ;
+set sic_int.core_ids_init_outcomes_2a(keep=id criteria_c core_year) ;
 if criteria_c=1;
 run;
 
@@ -6971,7 +7145,7 @@ run;
 
 /***********    Serious medical illness    ************/
 data ivw_meet_smi;
-set sic_int.core_ids_init_outcomes_2(keep=id ser_med_illness core_year) ;
+set sic_int.core_ids_init_outcomes_2a(keep=id ser_med_illness core_year) ;
 if ser_med_illness=1;
 run;
 
@@ -6992,7 +7166,7 @@ run;
 
 /***********    ADL Impairment     ************/
 data ivw_meet_adl;
-set sic_int.core_ids_init_outcomes_2(keep=id adl_impair_core core_year) ;
+set sic_int.core_ids_init_outcomes_2a(keep=id adl_impair_core core_year) ;
 if adl_impair_core=1;
 run;
 
@@ -7013,7 +7187,7 @@ run;
 
 /***********    Serious illness and ADL Impairment     ************/
 data ivw_meet_smiadl;
-set sic_int.core_ids_init_outcomes_2(keep=id adl_impair_core ser_med_illness core_year) ;
+set sic_int.core_ids_init_outcomes_2a(keep=id adl_impair_core ser_med_illness core_year) ;
 if ser_med_illness=1 & adl_impair_core=1;
 run;
 
@@ -7034,7 +7208,7 @@ run;
 
 /***********    Serious illness and ADL Impairment and Nursing Home Resident (no hospital)   ************/
 data ivw_meet_smiadlnh;
-set sic_int.core_ids_init_outcomes_2(keep=id adl_impair_core ser_med_illness smi_nh_ind ind_em_ur_adm_12m core_year) ;
+set sic_int.core_ids_init_outcomes_2a(keep=id adl_impair_core ser_med_illness smi_nh_ind ind_em_ur_adm_12m core_year) ;
 if ser_med_illness=1 & adl_impair_core=1 & smi_nh_ind=1 & ind_em_ur_adm_12m=0;
 run;
 
@@ -7055,7 +7229,7 @@ run;
 
 /***********Serious illness and ADL Impairment and Urgent/Emergent Hospitalization (no NH) ************/
 data ivw_meet_smiadlho;
-set sic_int.core_ids_init_outcomes_2(keep=id adl_impair_core ser_med_illness ind_em_ur_adm_12m smi_nh_ind core_year) ;
+set sic_int.core_ids_init_outcomes_2a(keep=id adl_impair_core ser_med_illness ind_em_ur_adm_12m smi_nh_ind core_year) ;
 if ser_med_illness=1 & adl_impair_core=1 & ind_em_ur_adm_12m=1 & smi_nh_ind=0 ;
 run;
 
@@ -7076,7 +7250,7 @@ run;
 
 /***********Serious illness and ADL Impairment and Urgent/Emergent Hospitalization and NH ************/
 data ivw_meet_smiadlhonh;
-set sic_int.core_ids_init_outcomes_2(keep=id adl_impair_core ser_med_illness ind_em_ur_adm_12m smi_nh_ind core_year) ;
+set sic_int.core_ids_init_outcomes_2a(keep=id adl_impair_core ser_med_illness ind_em_ur_adm_12m smi_nh_ind core_year) ;
 if ser_med_illness=1 & adl_impair_core=1 & ind_em_ur_adm_12m=1 & smi_nh_ind=1 ;
 run;
 
@@ -7097,7 +7271,7 @@ run;
 
 /***********Serious illness and/or ADL Impairment and Urgent/Emergent Hospitalization (no NH) ************/
 data ivw_meet_aho;
-set sic_int.core_ids_init_outcomes_2(keep=id criteria_a ind_em_ur_adm_12m smi_nh_ind core_year) ;
+set sic_int.core_ids_init_outcomes_2a(keep=id criteria_a ind_em_ur_adm_12m smi_nh_ind core_year) ;
 if criteria_a=1 & ind_em_ur_adm_12m=1 & smi_nh_ind=0 ;
 run;
 
@@ -7128,7 +7302,7 @@ run;
 
 
 /*merge in new variables with the overall dataset*/
-proc sort data=sic_int.core_ids_init_outcomes_2 out=ivw_to_merge nodupkey; by id core_year; run;
+proc sort data=sic_int.core_ids_init_outcomes_2a out=ivw_to_merge nodupkey; by id core_year; run;
 
 proc sql;
 create table ivws_crit(drop=id2 core_year2) as select * from
@@ -9464,6 +9638,10 @@ label define util 1 "Persistent Low Utilization" ///
 
 label values tot_util_90_cat util
 label values tot_util_95_cat util
+
+foreach x of varlist contact* {
+	replace `x'=0 if `x'==.
+}
 /*
 gen h_type=h_tot_1+1
 replace h_type=3 if p_h==1

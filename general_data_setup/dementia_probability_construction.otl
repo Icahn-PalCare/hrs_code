@@ -487,6 +487,207 @@ frmttable, statmat(dmnt) varlabels ctitles("" "mean" "probp==1" "probp==0")
 
 
 
+H="Proxies"
+libname raw 'E:\data\hrs_public_2012\core';
+
+proc import datafile= "E:\data\hrs_public_2012\core\raw\H98PC_R.dta" out=h98pc_r replace; 
+run;
+
+data core1998a;
+set h98pc_r;
+keep hhid pn f1389-f1460;
+run;
+data core1998;
+set core1998a;
+core_year=1998;
+run;
+
+data core2000;
+set raw.core2000;
+keep core_year hhid pn g1543-g1614;
+core_year=2000;
+run;
+
+data core2002;
+set raw.core2002;
+keep core_year hhid pn hd506-hd554;
+core_year=2002;
+run;
+
+data core2004;
+set raw.core2004;
+keep core_year hhid pn jd506-jd554;
+core_year=2004;
+run;
+
+data core2006;
+set raw.core2006;
+keep core_year hhid pn kd506-kd554;
+core_year=2006;
+run;
+
+data core2008;
+set raw.core2008;
+keep core_year hhid pn ld506-ld554;
+core_year=2008;
+run;
+
+data core2010;
+set raw.core2010;
+keep core_year hhid pn md506-md554;
+core_year=2010;
+run;
+
+data core2012;
+set raw.core2012;
+keep core_year hhid pn nd506-nd554;
+core_year=2012;
+run;
+
+data proxy;
+set core1998 core2000 core2002 core2004 core2006 core2008 core2010 core2012;
+run;
+
+proc export data=proxy outfile="E:\data\serious_ill\int_data\proxy.dta" replace; run;
+
+H="get pdem for all and export dataset"
+/*
+use "E:\data\hrs_cleaned\working\tics_9812.dta", clear
+merge 1:1 hhid pn core_year using  "E:\data\hrs_cleaned\core_00_to_12.dta", nogen
+merge 1:1 hhid pn prediction_year using  "E:\data\hrs_public_2012\dementia\pdem_withvarnames.dta", keepusing(prob) keep(match master) nogen
+merge 1:1 hhid pn core_year using "E:\data\hrs_public_2012\dementia\ADAMS\dementia_dx_adams_wave1_only.dta", nogen
+merge m:1 hhid  pn using "E:\data\hrs_cleaned\restricted_tracker_v2012.dta", keepusing(birth_date gender) keep(match master) nogen
+
+*/
+
+
+use "E:\data\hrs_cleaned\core_00_to_12.dta", clear
+gen prediction_year=core_year+1
+merge 1:1 hhid pn core_year using "E:\data\hrs_cleaned\working\tics_9812.dta" , nogen keep(match master)
+merge 1:1 hhid pn prediction_year using  "E:\data\hrs_public_2012\dementia\pdem_withvarnames.dta", keepusing(prob)  keep(match master) nogen
+merge 1:1 hhid pn core_year using "E:\data\hrs_public_2012\dementia\ADAMS\dementia_dx_adams_wave1_only.dta", nogen
+merge m:1 hhid  pn using "E:\data\hrs_cleaned\restricted_tracker_v2012.dta", keepusing(birth_date gender) keep(match master) nogen
+merge 1:1 hhid pn core_year using "E:\data\serious_ill\int_data\proxycog.dta", nogen keep(match master) keepusing(iq*)
+
+
+
+gen twrtot=tics_tot-mstot
+sum mstot
+gen d_mstot=mstot<=r(mean)-1.5*r(sd)
+sum twrto
+gen d_twrt=twrtot<=r(mean)-1.5*r(sd)
+sum tics_tot
+gen d_tics=tics_tot<=r(mean)-1.5*r(sd)
+
+*keep if prob_!=.
+gen dem_likely=prob>.5
+
+
+
+gen age=floor((c_ivw_date-birth_date)/365.25)+1
+gen age_cat=1
+replace age_cat=2 if age>=70
+replace age_cat=3 if age>=75
+replace age_cat=4 if age>=80
+replace age_cat=5 if age>=85
+replace age_cat=6 if age>=90
+tab age_cat, gen(age_cat)
+label define age_cat 1 "Age<70" 2 "Age 70-74" 3 "Age 75-79" 4 "Age 80-84" ///
+5 "Age 85-89" 6 "Age>=90"
+label values age_cat age_cat
+
+gen ed_hs_only=educ==2
+gen ed_gt_hs=educ>2
+
+
+local cogvars imrc dlrc ser7 bwc20 mo dy yr dw scis cact pres vp adl_index_core ///
+iadl_ind_core iqtotal proxy_core 
+/*
+foreach x of local cogvars {
+gen miss`x'=`x'==.
+gen prev`x'=.
+forvalues i= 1998(2)2012 {
+gen `x'`i'=`x' if core_year==`i'
+replace `x'`i'=0 if `x'`i'==.
+by id, sort: egen `x'1=max(`x'`i')
+replace prev`x'=`x'`i' if core_year==`i'+2
+replace prev`x'=`x'1 if core_year==`i'+2
+drop `x'`i' `x'1
+}
+}
+*/
+foreach x of local cogvars {
+sort id core_year
+by id: gen prev`x'=`x'[_n-1]
+gen ch_`x'=`x'-prev`x'
+gen miss`x'=prev`x'==.
+replace ch_`x'=0 if ch_`x'==.
+replace prev`x'=0 if prev`x'==.
+}
+
+
+
+
+*drop if proxy==1
+
+gen age_cat0=age_cat<3
+gen dates=mo+dy+yr+dw
+gen missdates=dates==.
+by id: gen prevdates=dates[_n-1]
+gen ch_dates=ch_mo+ch_yr+ch_dy+ch_dw
+replace prevdates=0 if prevdates==.
+replace ch_dates=0 if ch_dates==.
+
+local regvars age_cat3 age_cat4 age_cat5 age_cat6 ed_hs_only ed_gt_hs female ///
+adl_index_core iadl_ind_core ch_adl_index_core ch_iadl_ind_core dates bwc20 ///
+ser7 sci cact pres imrc dlrc ch_dates ch_bwc20 ch_ser7 ch_sci ch_cact ch_pres ///
+ch_imrc ch_dlrc memory_hrs missbwc20 missser7 misssci misscact misspres missimrc ///
+missdlrc missdates
+
+local proxyvars age_cat3 age_cat4 age_cat5 age_cat6 ed_hs_only ed_gt_hs female ///
+adl_index_core iadl_ind_core ch_adl_index_core ch_iadl_ind_core iqtotal ch_iqtotal ///
+ch_proxy_core prevdates prevser7 prevpres previmrc prevdlrc ///
+missbwc20 missser7 misssci misscact misspres missimrc ///
+missdlrc missdates
+
+foreach x of local proxyvars {
+	sum `x' if proxy==1
+}
+
+foreach x in `regvars' {
+	*by id: replace `x'=. if _n==1
+}
+
+ologit dx `regvars' if proxy==0
+
+predict p2self
+
+ologit dx `proxyvars' if proxy==1
+predict p2 if proxy==1
+replace p2=p2self if proxy==0
+
+
+foreach x of local regvars {
+di "`x'"
+*ttest `x' if wrong==1, by(churd)
+}
+
+
+oprobit dx `regvars' if proxy==0
+predict pself if proxy==0
+oprobit dx `proxyvars' if proxy==1
+predict pdem if proxy==1
+replace pdem=pself if proxy==0
+
+gen lp=pdem>.5 & !missing(pdem)
+gen dem_l=prob>.5 & !missing(prob)
+gen c1=lp==deme if deme!=.
+gen c2=dem_l==deme if deme!=.
+
+keep id proxy pdem prob_dem dx_adams core_year
+rename prob_dem prob_hurd
+save E:\data\hrs_public_2012\dementia\pdem_withvarnames_ebl, replace
+
 H="***********************************"
 
 
@@ -512,30 +713,24 @@ proc import datafile="E:\data\serious_ill\int_data\core_ids_1yr_criteria_5_sampl
 out=interviews1 replace;
 run;
 
-data interviews2;
-set interviews1(keep=hhid pn id c_ivw_date bid_hrs);
-index_date=c_ivw_date;
+proc import datafile="E:\data\hrs_public_2012\dementia\ADAMS\dementia_dx_adams_wave1_old.dta" 
+out=interviews1a replace;
 run;
+
+proc sql;
+create table interviews2 as select a.*,b.bid_hrs
+from 
+interviews1a a 
+left join
+interviews1 b
+on a.id=b.id and a.core_year=b.core_year;
+quit;
+
+
 
 data interviews;
-set interviews2(drop=c_ivw_date);
-run;
-
-proc import datafile="E:\data\spouse_intensive\int_data\spouse_data_full.dta"
-out=decedents1 replace;
-run;
-
-data decedents2;
-set decedents1(keep=r_hhid_n1 r_pn_n1 r_death_date_e r_id r_bid_hrs);
-hhid=rhhid_n1;
-pn=r_pn_n1;
-id=r_id;
-index_date=r_death_date_e;
-bid_hrs=r_bid_hrs;
-run;
-
-data decedents;
-set decedents2(keep=index_date id bid_hrs pn hhid);
+set interviews2;
+index_date=adams_date;
 run;
 
 /*get claims 2 years before*/
@@ -562,24 +757,8 @@ run;
 %claims(source=hh,name=interviews,su=365);
 %claims(source=hs,name=interviews,su=365);
 %claims(source=dm,name=interviews,su=365);
-%claims(source=mp,name=interviews,su=730);
-%claims(source=op,name=interviews,su=730);
-%claims(source=pb,name=interviews,su=730);
-%claims(source=hh,name=interviews,su=730);
-%claims(source=hs,name=interviews,su=730);
-%claims(source=dm,name=interviews,su=730);
-%claims(source=mp,name=decedents,su=365);
-%claims(source=op,name=decedents,su=365);
-%claims(source=pb,name=decedents,su=365);
-%claims(source=hh,name=decedents,su=365);
-%claims(source=hs,name=decedents,su=365);
-%claims(source=dm,name=decedents,su=365);
-%claims(source=mp,name=decedents,su=730);
-%claims(source=op,name=decedents,su=730);
-%claims(source=pb,name=decedents,su=730);
-%claims(source=hh,name=decedents,su=730);
-%claims(source=hs,name=decedents,su=730);
-%claims(source=dm,name=decedents,su=730);
+
+
 
 
 /**************************************************************************/
@@ -709,9 +888,7 @@ run;
 
 /*run macro to create data files spo_mc_i.dx_0d_n6m spo_mc_i.dx_0d_n12m and spo_mc_i.dx_0d_n24m */
 %dx_time_range (range1=0,name=interviews,su=365);
-%dx_time_range(range1=0,name=interviews,su=730);
-%dx_time_range (range1=0,name=decedents,su=365);
-%dx_time_range(range1=0,name=decedents,su=730);
+
 
 /*creates indicators for each of the Elixhauser comorbidities
 based on the dx codes lists 6, 12, and 24m before and after R's death
@@ -820,16 +997,15 @@ resulting datasets are spo_int.elix_0d_x#m_2
 x = n=before, p=after death
 # = 6, 12, or 24 for time window (months)*/
 
-%elixhauser(range1=0,name=decedents,su=365);
-%elixhauser(range1=0,name=decedents,su=730);
+
 %elixhauser(range1=0,name=interviews,su=365);
-%elixhauser(range1=0,name=interviews,su=730);
 
 
 
-proc export data=interviews_dem_dx_comor_365 outfile="E:\data\serious_ill\int_data\interviews_dem_dx.dta" replace; run;
 
-proc export data=decedents_dem_dx_comor_365 outfile="E:\data\serious_ill\int_data\decedents_dem_dx.dta" replace; run;
+proc export data=interviews_dem_dx_comor_365 outfile="E:\data\serious_ill\int_data\adams_dem_dx.dta" replace; run;
+
+
 
 H="stata to bring into datasets and compare"
 use "E:\data\serious_ill\int_data\interviews_dem_dx.dta", clear

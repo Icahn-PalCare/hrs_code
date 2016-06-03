@@ -3609,7 +3609,7 @@ ed_op_2 b
 on trim(left(a.bid_hrs))=trim(left(b.bid_hrs_21)) and a.core_year=b.core_year;
 quit;
 
-data sic_int.core_ids_1yr_criteria_4b;
+data sic_int.core_ids_1yr_criteria_4ba;
 set core_ids_1yr_criteria_4a;
 if n_ed_op_visits_12m=. and comorb_1_0_1yr~=. then n_ed_op_visits_12m=0;
 label n_ed_op_visits_12m="Count ED OP visits, 1yr pre ivw";
@@ -3621,6 +3621,90 @@ run;
 
 proc freq;
 table n_ed_op_visits_12m*ind_ed_op_12m;
+run;
+
+/*now for the 12 months after core ivw*/
+
+/*ids of those interviews with ffs medicare year preceding interview and 65+*/
+proc sql;
+create table age_ge_65_mc as 
+select * from sic_int.core_ids_1yr_criteria_4ba 
+where age_ge_65=1 and xwalk_yes=1 and part_ab_12m=1 and hmo_d_12m=0 
+and core_year in (2000,2002,2004,2006,2008,2010,2012);
+quit;
+
+data age_ge_65_mc_ltd;
+set age_ge_65_mc(keep=bid_hrs c_ivw_date core_year);
+run;
+proc sql;
+create table op_meet_post_365 as select 
+a.*,b.c_ivw_date,b.core_year
+from medi.op_2000_2012(keep=bid_hrs_21 admit_date disch_date RVCNTR01-RVCNTR45) a inner join
+age_ge_65_mc_ltd b
+on trim(left(a.bid_hrs_21))=trim(left(b.bid_hrs))
+and 0<=a.admit_date-b.c_ivw_date<=365;
+quit;
+
+
+
+proc sort data=op_meet_post_365;
+by bid_hrs_21 admit_date;
+run;
+
+data ed_op_1;
+	set op_meet_post_365;
+	ed_op=0;
+	array list RVCNTR01-RVCNTR45;
+	do over list;
+	if list >= 450 and list < 460 and ed_op=0 then  
+	ed_op = 1;
+	end;
+run;
+
+proc freq;
+table ed_op;
+run;
+
+proc sql;
+create table ed_op_2 as select distinct bid_hrs_21,core_year,
+count(case when ed_op=1 then ed_op else . end)
+	as n_ed_op_visits_p12m
+	from ed_op_1 group by bid_hrs_21,core_year;
+quit;
+
+proc freq;
+table n_ed_op_visits_p12m;
+run;
+
+proc sort data=sic_int.core_ids_1yr_criteria_4ba out=core_ids_1yr_criteria_4;
+by bid_hrs core_year;
+run;
+
+proc sort data=ed_op_2 nodupkey;
+by bid_hrs_21 core_year;
+run;
+
+/*merge into dataset*/
+proc sql;
+create table core_ids_1yr_criteria_4a as select a.*,b.n_ed_op_visits_p12m
+from core_ids_1yr_criteria_4 a
+left join
+ed_op_2 b 
+on trim(left(a.bid_hrs))=trim(left(b.bid_hrs_21)) and a.core_year=b.core_year;
+quit;
+
+data sic_int.core_ids_1yr_criteria_4b;
+set core_ids_1yr_criteria_4a;
+if n_ed_op_visits_p12m=. and comorb_1_0_1yr~=. then n_ed_op_visits_p12m=0;
+label n_ed_op_visits_p12m="Count ED OP visits, 1yr after ivw";
+
+if n_ed_op_visits_p12m=0 then ind_ed_op_p12m=0;
+if n_ed_op_visits_p12m>0 & n_ed_op_visits_p12m~=. then ind_ed_op_p12m=1;
+label ind_ed_op_p12m="Indicator any ED OP visits, 1 yr after ivw";
+run;
+
+proc freq;
+table n_ed_op_visits_p12m*ind_ed_op_p12m;
 run;
 
 H="Step 5b - Classify serious illness based on just primary dx"
@@ -5298,6 +5382,8 @@ Note: Final dataset is set of interviews that meet ffs mc 1 year and age 65+
 with outcomes added
 */
 
+/*6/1/16-added icu days
+
 /*ids of those interviews with ffs medicare year preceding interview and 65+*/
 proc sql;
 create table age_ge_65_mc as 
@@ -5390,6 +5476,10 @@ run;
 
 data ip_post_&days._2;
 set ip_meet_post_&days.;
+if icarecnt=. then icarecnt=0; /*medpar intensive care day count*/
+if CRNRYDAY=. then CRNRYDAY=0; /*medpar coronary day count*/
+icu_days=icarecnt+CRNRYDAY;
+if icu_days>0 then icu=1;
 em_urgent_admit=0; /*Urgent , emergent admissions from admission type*/
 if type_adm in (1,2) then em_urgent_admit=1;
 em_admit=0;
@@ -5443,8 +5533,12 @@ count(case when elect_admit=1 then elect_admit else . end) as n_elect_admit_&suf
 count(case when ind_ed_charge=1 then ind_ed_charge else . end) as n_ED_ip_&suffix. 
 	label="total n of ED visits with subsequent admit &suffix. after core ivw",
 sum(admit_trunc) as adm_trunc_ind_&suffix.
-	label="admit before interview indicator, counted as both pre and post admit"
-
+	label="admit before interview indicator, counted as both pre and post admit",
+/*count of admissions with any ICU days*/
+count(case when icu=1 then icu else . end) as n_icu_admit_&suffix.
+	label="total n of hospital admit with ICU &suffix. after core ivw",
+sum(icu_days) as icu_days_&suffix.
+	label="total ICU days &suffix. after core ivw"
  from ip_post_&days._2 group by BID_hrs_21,core_year;
 quit;
 
@@ -5463,7 +5557,8 @@ proc sql;
 create table core_ids_admit_post_1 as select a.*,
 b.n_ip_admit_p12m,b.adm_trunc_ind_p12m,b.n_hospd_p12m,
 b.n_em_urgent_admit_p12m,b.n_em_admit_p12m,
-b.n_urgent_admit_p12m,b.n_elect_admit_p12m,b.n_ED_ip_p12m
+b.n_urgent_admit_p12m,b.n_elect_admit_p12m,b.n_ED_ip_p12m,
+b.n_icu_admit_p12m,b.icu_days_p12m
 from age_ge_65_mc_ltd(drop=c_ivw_date) a
 left join
 ip_post_365_4 b 
@@ -5474,7 +5569,8 @@ proc sql;
 create table core_ids_admit_post_2 as select a.*,
 b.n_ip_admit_p6m,b.adm_trunc_ind_p6m,b.n_hospd_p6m,
 b.n_em_urgent_admit_p6m,b.n_em_admit_p6m,
-b.n_urgent_admit_p6m,b.n_elect_admit_p6m,b.n_ED_ip_p6m
+b.n_urgent_admit_p6m,b.n_elect_admit_p6m,b.n_ED_ip_p6m,
+b.icu_days_p6m,b.n_icu_admit_p6m
 from core_ids_admit_post_1 a
 left join
 ip_post_183_4 b 
@@ -5490,7 +5586,8 @@ core interview, replace admit info with 0 if missing b/c there were no ip claims
 	n_ip_admit_p12m n_hospd_p12m n_em_urgent_admit_p12m
 	n_em_admit_p12m n_urgent_admit_p12m n_elect_admit_p12m n_ED_ip_p12m
 	n_ip_admit_p6m n_hospd_p6m n_em_urgent_admit_p6m
-	n_em_admit_p6m n_urgent_admit_p6m n_elect_admit_p6m n_ED_ip_p6m;
+	n_em_admit_p6m n_urgent_admit_p6m n_elect_admit_p6m n_ED_ip_p6m
+	icu_days_p6m icu_days_p12m n_icu_admit_p6m n_icu_admit_p12m;
  do over list;
  if list=. then list=0;
  end;
@@ -9642,6 +9739,12 @@ label values tot_util_95_cat util
 foreach x of varlist contact* {
 	replace `x'=0 if `x'==.
 }
+
+//set icu_days=0 if icu_days==.
+foreach x of varlist *icu* {
+	replace `x'=0 if `x'==.
+}
+
 /*
 gen h_type=h_tot_1+1
 replace h_type=3 if p_h==1
@@ -21547,3 +21650,506 @@ frmttable using "E:\data\serious_ill\logs\HCC_Medicare_spending_concordance", //
  title("Spending and HCC predicted Spending by Criteria") replace ///
  sdec(0\2\2\2\2\3\0\0\2\0\2\0\2\0\2\0\2\0\2) note("wave year 2008" ///
  "top 5% Medicare spending>=$56,262.87 top 5% HCC predicted spending>=$39,399.20")
+
+
+H="death propensity redux"
+capture log close
+
+import excel "E:\data\Dartmouth_misc\EOL_mc_2yrs_HRR\DAP_HRR_03_07_to_merge.xls", sheet("Sheet1") firstrow case(lower) clear
+keep hrr totalmedic
+rename hrr hrr_number_n0
+xtile eol_spending_quintile=tot, nq(5)
+xtile eol_spending_quartile=tot, nq(4)
+gen eol_spending_3_cat=eol_spending_quartile
+replace eol_spending_3_cat=eol_spending_3_cat-1 if inlist(eol_spending_3_cat,3,4)
+label define eol_spending_3_cat 1 "Bottome Quartile" 2 "Middle 50%" 3 "Top quartile"
+label values eol_spending_3_cat eol_spending_3_cat
+gen eol_spending_low=eol_spending_3_cat==1
+gen eol_spending_mid=eol_spending_3_cat==2
+gen eol_spending_high=eol_spending_3_cat==3
+label var eol_spending_low "Bottom Quartile EOL spending by Dartmouth HRR"
+label var eol_spending_mid "Middle 50% EOL spending by Dartmouth HRR"
+label var eol_spending_high "Top Quartile EOL spending by Dartmouth HRR"
+label var eol_spending_3_cat "EOL Spending Group by Dartmouth HRR, Adjusted"
+label var eol_spending_quintile "EOL Spending Quintile by Dartmouth HRR, Adjusted"
+tempfile temp1
+save "`temp1'"
+
+clear all
+set more off
+
+local logpath E:\data\serious_ill\logs
+local datapath E:\data\serious_ill\final_data
+
+*log using "`logpath'\tables_inc_24m_symptoms_helper", text replace
+foreach orange in 1 {
+cd `datapath'
+
+use n0_n1_p1_p2_x_criteria_a_v1.dta if core_year_n0<2012
+merge m:1 hrr_number_n0 using "`temp1'", keep(match master) nogen
+drop if hospital_care_intensity_n0==.
+gen age2=age_at_core_n0^2
+tab age_cat2_n0, gen(age_n0_ind)
+gen age_veryold=age_at_core_n0>=85
+gen religvimp_n0=1 if imprelig_n0==1
+replace religvimp_n0=0 if inlist(imprelig_n0,2,3,4)
+tab religvimp_n0, missing
+gen smi_any_n0=1 if smi_count_n0>0
+replace smi_any_n0=0 if smi_count_n0==0
+tab smi_any_n0, m
+qui xtile quint_cd_n0=contact_days_n0, nq(5)
+qui xtile quintile_dm_2yr=tot_eol_spending_hrr_n0, nq(5)
+gen notwhite=re_white==0 if re_white!=.
+label var notwhite "Not non-Hispanic White"
+tab quintile_dm_2yr, m
+la var quintile_dm_2yr "Quintiles of 2 year Dartmouth EOL Medicare Spending, HRR level (within this sample)"
+la val quintile_dm_2yr quint
+
+sum tot_eol_spending_hrr_n0 if quintile_dm_2yr==1, detail
+sum tot_eol_spending_hrr_n0 if quintile_dm_2yr==2, detail
+sum tot_eol_spending_hrr_n0 if quintile_dm_2yr==3, detail
+sum tot_eol_spending_hrr_n0 if quintile_dm_2yr==4, detail
+sum tot_eol_spending_hrr_n0 if quintile_dm_2yr==5, detail
+
+
+tab quintile_dm_2yr, gen(d_eol_spend_quint) missing
+sum hlphrs,d
+gen hlphrs_group=hlphrs>r(p50)
+replace hlphrs_group=2 if hlphrs>r(p75)
+gen hlphrs_high=hlphrs_group==2
+gen cd2=contact_days_n0^2
+log using `logpath'\propensity_crosstabs.txt, text replace
+local matchvars age_at_core_n0 female notwhite married_n0 i.nw_quartile_65_n0 ///
+hs_deg adl_stable_partial_n0n1 adl_stable_severe_n0n1 adl_change_i_m_n0n1 ///
+ adl_change_i_s_n0n1 adl_change_m_s_n0n1 ///
+smi_dem_ind_n0 smi_cancer_ind_n0 smi_esrd_ind_n0 ///
+smi_chf_ind_n0 smi_copd_ind_n0 smi_diab_compl_ind_n0 ///
+smi_liver_ind_n0  smi_hip_ind_n0 smi_nh_ind_n0 srh_pf_n0 ///
+dm_hrs_n1 cancer_hrs_n1 lung_hrs_n1 chf_hrs_n1 bmi_lt25_n0 smoke_curr_n0  ///
+adl_diff_bh_n0 iadl_diff_m_n0 fl_diff_wk_many_n0 fl_diff_push_n0 ///
+ind_em_ur_adm_12m_n0 rel_nb_n0 medicaid_n0 champus_n0 medigap_n0 ///
+adl_index_core_n0 el_ge3_comorb_1yr_n0 i.quint_cd_n0 hlphrs
+
+
+
+label var tot_paid_by_mc_12m_wi_n0 "Tot MC Payments, 12M following ivw"
+logit core_to_dod_1yr_n0 `matchvars', nolog
+
+estat ic
+predict pdeath
+drop if pdeath==.
+qui sum pdeath,d
+//regional variables, split by quartile of hrr eol spending per dm atlas
+local rvars tot_eol_spending_hrr_n0 hospital_care_intensity_n0 ///
+	physicians_n0 specialists_n0 hospital_beds_n0
+
+
+qui xtile hci=hospital_care_intensity_n0, nq(5)
+
+gen adl_stable=adl_stable_partial_n0n1
+replace adl_stable=1 if adl_stable_severe_n0n==1
+gen adl_decline=adl_change_i_m_n0n1 
+replace adl_decline=1 if adl_change_i_s_n0n1==1
+replace adl_decline=1 if adl_change_m_s_n0n1==1
+
+qui xtile pdeath_tert=pdeath,nq(3)
+gen pdeath_low=pdeath_te==1
+gen pdeath_mid=pdeath_te==2
+gen pdeath_high=pdeath_te==3
+
+local cvars age_at_core_n0
+
+local ivars female notwhite ///
+hs_deg_ind nw_lowest_n0 ///
+ smi_dem_ind_n0 smi_cancer_ind_n0 smi_esrd_ind_n0 ///
+smi_chf_ind_n0 smi_copd_ind_n0 smi_diab_compl_ind_n0 ///
+smi_liver_ind_n0  smi_hip_ind_n0 smi_nh_ind_n0 ///
+religvimp_n0 srh_pf_n0 rel_nb_n0 married_n0  ///
+medicaid_n0 champus_n0 medigap_n0 ///
+adl_stable adl_decline el_ge3_comorb_1yr_n0 /*i.core_year_n0 ///
+hlphrs_high */
+
+foreach x in `cvars' `ivars' eol_spending_quintile {
+	if "`x'"!="i.core_year_n0" {
+	qui drop if `x'==.
+}
+}
+tab core_to_dod_1yr_n0
+di "Bottom third of likelihood of death"
+sum pdeath if pdeath_low
+sum core_to_dod_1yr_n0 if pdeath_low
+di "Middle third"
+sum pdeath if pdeath_mid
+sum core_to_dod_1yr_n0 if pdeath_mid
+di "Top third"
+sum pdeath if pdeath_high
+sum core_to_dod_1yr_n0 if pdeath_high
+
+foreach x in `ivars' age_cat2_n0 eol_spending_quintile {
+	if "`x'"!="i.core_year_n0" {
+	tab `x' pdeath_tert, row column nokey
+}
+}
+capture log close
+}
+sum pdeath
+replace pdeath_low=pdeath<=r(mean)
+replace pdeath_high=pdeath>r(mean)
+
+gen pdeath_full_sample=1
+/*
+foreach i in full_sample low high {
+qui glm tot_paid_by_mc_12m_wi_n0 `cvars' `ivars' i.eol_spending_3_cat if pdeath_`i', link(log) fam(gamma) eform
+qui outreg, stat(e_b p) varlabels
+qui glm tot_paid_by_mc_12m_wi_n0 `cvars' `ivars' i.eol_spending_3_cat core_to_dod_1yr_n0 if pdeath_`i', link(log) fam(gamma) eform
+qui outreg , stat(e_b p) varlabels merge
+if "`i'"=="full_sample" {
+qui outreg using `logpath'\propensity_death_tot_spend_halves.rtf, replace varlabels replay ///
+title("Probability of death is `i'")
+}
+else {
+qui outreg using `logpath'\propensity_death_tot_spend_halves.rtf, addtable varlabels replay ///
+title("Probability of death is `i'")
+}
+}
+
+foreach i in full_sample low high {
+qui logit ind_hosp_adm_p12m_n0 `cvars' `ivars' i.eol_spending_3_cat if pdeath_`i', or
+qui outreg, stat(e_b p) varlabels
+qui logit ind_hosp_adm_p12m_n0 `cvars' `ivars' i.eol_spending_3_cat core_to_dod_1yr_n0 if pdeath_`i', or
+qui outreg , stat(e_b p) varlabels merge
+if "`i'"=="full_sample" {
+qui outreg using `logpath'\propensity_death_hosp_adm_halves.rtf, replace varlabels replay ///
+title("Probability of death is `i'")
+}
+else {
+qui outreg using `logpath'\propensity_death_hosp_adm_halves.rtf, addtable varlabels replay ///
+title("Probability of death is `i'")
+}
+}
+*/
+/*three groups: <10%,10-25, >25%*/
+
+replace pdeath_low=pdeath<.1
+replace pdeath_mid=pdeath>=.1 & pdeath<.25
+replace pdeath_high=pdeath>=.25
+
+gen pdeath_group=pdeath_low
+replace pdeath_group=2 if pdeath_mid
+replace pdeath_group=3 if pdeath_high
+label define pdeath_group 1 "Low: <10%" 2 "Mid: 10<=Prob death<25%" 3 "High: >=25%"
+label values pdeath_group pdeath_group
+foreach i in full_sample low mid high {
+qui glm tot_paid_by_mc_12m_wi_n0 `cvars' `ivars' i.eol_spending_3_cat if pdeath_`i', link(log) fam(gamma) eform
+qui outreg, stat(e_b p) varlabels
+qui glm tot_paid_by_mc_12m_wi_n0 `cvars' `ivars' i.eol_spending_3_cat core_to_dod_1yr_n0 if pdeath_`i', link(log) fam(gamma) eform
+qui outreg , stat(e_b p) varlabels merge
+if "`i'"=="full_sample" {
+qui outreg using `logpath'\propensity_death_tot_spend_lt10gt10gt25.rtf, replace varlabels replay ///
+title("Probability of death is `i'")
+}
+else {
+qui outreg using `logpath'\propensity_death_tot_spend_lt10gt10gt25.rtf, addtable varlabels replay ///
+title("Probability of death is `i'")
+}
+}
+
+foreach i in full_sample low mid high {
+qui logit ind_hosp_adm_p12m_n0 `cvars' `ivars' i.eol_spending_3_cat if pdeath_`i', or
+qui outreg, stat(e_b p) varlabels
+qui logit ind_hosp_adm_p12m_n0 `cvars' `ivars' i.eol_spending_3_cat core_to_dod_1yr_n0 if pdeath_`i', or
+qui outreg , stat(e_b p) varlabels merge
+if "`i'"=="full_sample" {
+qui outreg using `logpath'\propensity_death_hosp_adm_lt10gt10gt25.rtf, replace varlabels replay ///
+title("Probability of death is `i'")
+}
+else {
+qui outreg using `logpath'\propensity_death_hosp_adm_lt10gt10gt25.rtf, addtable varlabels replay ///
+title("Probability of death is `i'")
+}
+}
+
+foreach blue in red {
+capture log close 
+log using `logpath'\propensity_death_sum_vars.txt, text replace
+
+tab pdeath_group core_to_dod_1yr_n0, row col
+
+mat tab=J(3,9,.)
+local r=1
+local c=1
+forvalues i=1/3 {
+	foreach g in "0,1" 0 1 {
+		qui sum tot_paid_by_mc_12m_wi_n0 if pdeath_group==`i' & inlist(core_to_dod_1yr_n0,`g'),d
+		mat tab[`r',`c']=r(p50)
+		mat tab[`r',`c'+1]=r(mean)
+		mat tab[`r',`c'+2]=r(sd)
+		local r=`r'+1
+}
+	local r=1
+	local c=`c'+3
+}
+mat rownames tab="Full Sample" "Survived" "Died"
+
+frmttable, statmat(tab) title(MC Spending by death and probability of death) ///
+ctitles("""" "Low: <10%" """" "Mid: 10<=Prob death<25%" """" "High: >=25%"\"" ///
+"Median" "Mean" "SD" "Median" "Mean" "SD" "Median" "Mean" "SD") note(2012$ WI adjusted)
+}
+
+tab hs_admit_p12m_n0 
+
+gen mult_ip_adm_p12m_n0=n_ip_admit_p12m_n0>1
+gen mult_ed_vis_p12m_n0=n_ed_ip_p12m_n0+n_ed_op_visits_p12m_n0>=2
+gen ind_icu_vis_p12m_n0=n_icu_admit_p12m_n0>=1
+tab loc_hosp_x
+replace loc_hosp_x=0 if core_to_dod_1yr_n0==0
+label var loc_hosp_x "Death in the hospital within one year"
+label var mult_ip_adm_p12m_n0 "Multiple hospital admissions 12m after ivw"
+label var mult_ed_vis_p12m_n0 "Multiple ED visits 12m after ivw"
+label var ind_icu_vis_p12m_n0 "Indicator any ICU days 12m after ivw"
+local yvars hs_admit_p12m_n0 mult_ip_adm_p12m_n0 mult_ed_vis_p12m_n0 ///
+ ind_icu_vis_p12m_n0 loc_hosp_x
+tokenize yvars
+
+
+foreach x in hs_admit_p12m_n0 mult_ip_adm_p12m_n0 mult_ed_vis_p12m_n0 ///
+ ind_icu_vis_p12m_n0 loc_hosp_x {
+	if "`x'"=="hs_admit_p12m_n0" {
+		local j="hs_adm"
+}
+	else if "`x'"=="mult_ip_adm_p12m_n0"{
+		local j="mult_adm"
+}
+	else if "`x'"=="loc_hosp_x" {
+		local j="death_in_hosp"
+}
+	else if "`x'"=="mult_ed_vis_p12m_n0" {
+		local j="mult_ed"
+}
+	else if "`x'"=="ind_icu_vis_p12m_n0" {
+		local j="ind_icu"
+}
+	foreach i in full_sample low mid high {
+		qui logit `x' `cvars' `ivars' i.eol_spending_3_cat if pdeath_`i', or
+		qui outreg, stat(e_b p) varlabels
+		qui logit `x' `cvars' `ivars' i.eol_spending_3_cat core_to_dod_1yr_n0 if pdeath_`i', or
+		qui outreg , stat(e_b p) varlabels merge
+		if "`i'"=="full_sample" {
+		qui outreg using `logpath'\propensity_death_`j'_lt10gt10gt25.rtf, replace varlabels replay ///
+		title("Probability of death is `i'")
+}
+	else {
+		qui outreg using `logpath'\propensity_death_`j'_lt10gt10gt25.rtf, addtable varlabels replay ///
+		title("Probability of death is `i'")
+}
+}
+}
+
+save n0_n1_p1_p2_x_criteria_a_death_propensity.dta, replace
+
+
+H="sample chars by death propensity group"
+clear all
+set more off
+
+local logpath E:\data\serious_ill\logs
+local datapath E:\data\serious_ill\final_data
+
+cd `datapath'
+
+use  n0_n1_p1_p2_x_criteria_a_death_propensity.dta
+
+local cvars age_at_core_n0 networth_adj2012_n0
+
+local ivars female re_black re_white re_hisp re_other_unk ///
+educ_level_lt_hs educ_level_hs educ_level_somcol educ_level_col ///
+srh_pf_n0 srh_g_n0 srh_ve_n0 married_n0 smi_dem_ind_n0 smi_cancer_ind_n0 smi_esrd_ind_n0 ///
+smi_chf_ind_n0 smi_copd_ind_n0 ///
+smi_diab_compl_ind_n0 smi_liver_ind_n0 smi_als_ind_n0 smi_hip_ind_n0 el_ge3_comorb_1yr_n0 ///
+adl_stable_ind_n0n1 adl_stable_partial_n0n1 adl_stable_severe_n0n1 ///
+adl_change_i_m_n0n1 adl_change_i_s_n0n1 adl_change_m_s_n0n1 ///
+ser_med_illness_n0 adl_impair_core_n0 smi_and_adl_n0 smi_nh_ind_n0 ind_em_ur_adm_12m_n0 ///
+eol_spending_low eol_spending_mid eol_spending_high
+
+local rn : word count `cvars' `ivars' 1
+
+
+mat tab1=J(`rn',8,.)
+local r=1
+local c=1
+
+foreach i in full_sample low mid high {
+	foreach x of local cvars {
+		qui sum `x' if pdeath_`i'==1 
+		mat tab1[`r',`c']=r(mean)
+		mat tab1[`r',`c'+1]=r(sd)
+		local r=`r'+1
+}
+	foreach x of local ivars {
+		qui sum `x' if pdeath_`i'==1
+		mat tab1[`r',`c']=r(mean)*r(N)
+		mat tab1[`r',`c'+1]=r(mean)*100
+		local r=`r'+1
+}
+	mat tab1[`r',`c']=r(N)
+	local r=1
+	local c=`c'+2
+}
+mat rownames tab1=`cvars' `ivars' N
+
+frmttable using `logpath'\table_1_and_outcomes_pdeath_3_groups.doc, replace statmat(tab1) varlabels  title("Sample Characteristics by Propensity 1 yr Mortality") ///
+ ctitles("" "Full Sample Mean/N" "SD/%" "Prob death Low Mean/N" "SD/%" "Med" "SD/%" "High" "SD/%") ///
+ sdec(2,2,2,2,2,2,2,2\2,2,2,2,2,2,2,2\0,2,0,2,0,2,0,2) ///
+ note(HRR spending Quartile last two years of life 2003-2007) 
+	
+
+mat tab1=J(`rn',6,.)
+local r=1
+local c=1
+
+foreach i in low mid high {
+	foreach x of local cvars {
+		qui sum `x' if pdeath_`i'==1 
+		mat tab1[`r',`c']=r(mean)
+		capture ttest `x' if pdeath_low==1 | pdeath_`i'==1, by(pdeath_group)
+		mat tab1[`r',`c'+1]=r(p)
+		local r=`r'+1
+}
+	foreach x of local ivars {
+		qui sum `x' if pdeath_`i'==1
+		mat tab1[`r',`c']=r(mean)*100
+		qui tab `x' pdeath_group if pdeath_low==1 | pdeath_`i'==1, chi2
+		mat tab1[`r',`c'+1]=r(p)
+		local r=`r'+1
+}
+	qui sum `x' if pdeath_`i'==1
+	mat tab1[`r',`c']=r(N)
+	local r=1
+	local c=`c'+2
+}
+mat rownames tab1=`cvars' `ivars' N
+
+frmttable using `logpath'\table_1_and_outcomes_pdeath_3_groups.doc, addtable statmat(tab1) varlabels  title("Sample Characteristics by Propensity 1 yr Mortality") ///
+ ctitles("" "Prob death Low Mean/%" "" "Prob death Med" "P" "Prob death High" "P") ///
+ sdec(2,3,2,3,2,3) ///
+ note("HRR spending Quartile last two years of life 2003-2007" "P-values compared to baseline of low probability group")
+
+ 
+ 
+local outcome3 ind_hosp_adm_p12m_n0 ///
+ mult_ip_adm_p12m_n0 mult_ed_vis_p12m_n0 ///
+ ind_icu_vis_p12m_n0 hs_admit_p12m_n0 ///
+ core_to_dod_1yr_n0 loc_hosp_x
+
+local outcome2 n_hospd_p12m_n0
+
+local outcome1 ip_paid_by_mc_12m_wi_n0 snf_paid_by_mc_12m_wi_n0 hh_paid_by_mc_12m_wi_n0 ///
+ hs_paid_by_mc_12m_wi_n0 pb_paid_by_mc_12m_wi_n0 op_paid_by_mc_12m_wi_n0 ///
+ dm_paid_by_mc_12m_wi_n0 tot_paid_by_mc_12m_wi_n0   
+ 
+local rn : word count `outcome1' `outcome1' `outcome2' `outcome2' `outcome3' 1
+
+
+mat tab1=J(`rn',8,.)
+local r=1
+local c=1
+
+foreach i in full_sample low mid high {
+	foreach x in `outcome1' `outcome2' {
+		sum `x' if pdeath_`i'==1,d
+		mat tab1[`r',`c']=r(mean)
+		mat tab1[`r',`c'+1]=r(sd)
+		mat tab1[`r'+1,`c']=r(p50)
+		local r=`r'+2
+}
+	foreach x in `outcome3' {
+		qui sum `x' if pdeath_`i'==1
+		mat tab1[`r',`c']=r(mean)*r(N)
+		mat tab1[`r',`c'+1]=r(mean)*100
+		local r=`r'+1
+}
+	mat tab1[`r',`c']=r(N)
+	local r=1
+	local c=`c'+2
+}
+mat rownames tab1="IP MC payments 12m post ivw" ///
+"	Median" "SNF MC payments 12m post ivw" ///
+"	Median" "HH MC payments 12m post ivw" ///
+"	Median" "HS MC payments 12m post ivw" ///
+"	Median" "PB MC payments 12m post ivw" ///
+"	Median" "OP MC payments 12m post ivw" ///
+"	Median" "DME MC payments 12m post ivw" ///
+"	Median" "Total MC payments 12m post ivw" ///
+"	Median" "n hospital nights 12m post ivw" ///
+"	Median"  `outcome3' N
+
+frmttable using `logpath'\table_1_and_outcomes_pdeath_3_groups.doc,  addtable ///
+statmat(tab1) varlabels  title("One Year Outcomes by Propensity 1 yr Mortality") ///
+ ctitles("" "Full Sample Mean/N" "SD/%" "Prob death Low Mean/N" "SD/%" "Med" "SD/%" "High" "SD/%") ///
+ sdec(2,2,2,2,2,2,2,2\2,2,2,2,2,2,2,2\2,2,2,2,2,2,2,2\2,2,2,2,2,2,2,2\2,2,2,2,2,2,2,2\2,2,2,2,2,2,2,2\2,2,2,2,2,2,2,2\2,2,2,2,2,2,2,2\ ///
+ 2,2,2,2,2,2,2,2\2,2,2,2,2,2,2,2\2,2,2,2,2,2,2,2\2,2,2,2,2,2,2,2\2,2,2,2,2,2,2,2\2,2,2,2,2,2,2,2\2,2,2,2,2,2,2,2\2,2,2,2,2,2,2,2\ ///
+ 2,2,2,2,2,2,2,2\2,2,2,2,2,2,2,2\0,2,0,2,0,2,0,2) ///
+ /*rtitles("IP MC payments 12m post ivw (mean,SD)" \ ///
+"	Median"\"SNF MC payments 12m post ivw (mean,SD)" \ ///
+"	Median"\"HH MC payments 12m post ivw (mean,SD)" \ ///
+"	Median"\"HS MC payments 12m post ivw (mean,SD)" \ ///
+"	Median"\"PB MC payments 12m post ivw (mean,SD)" \ ///
+"	Median"\"OP MC payments 12m post ivw (mean,SD)" \ ///
+"	Median"\"DME MC payments 12m post ivw (mean,SD)" \ ///
+"	Median"\"Total MC payments 12m post ivw (mean,SD)" \ ///
+"	Median"\"n hospital nights 12m post ivw (mean,SD)" \ ///
+"	Median" ind_hosp_adm_p12m_n0\ ///
+ mult_ip_adm_p12m_n0\ mult_ed_vis_p12m_n0\ ///
+ ind_icu_vis_p12m_n0\ hs_admit_p12m_n0\ ///
+ core_to_dod_1yr_n0\ loc_hosp_x\ N) ///
+*/ note("All costs WI adjusted 2012$"\"P-values compared to baseline of low probability group") 
+local rn : word count `outcome1'  `outcome2' `outcome3' 1
+	
+
+mat tab1=J(`rn',6,.)
+local r=1
+local c=1
+
+foreach i in low mid high {
+	foreach x in `outcome1' `outcome2' {
+		qui sum `x' if pdeath_`i'==1 
+		mat tab1[`r',`c']=r(mean)
+		capture ttest `x' if pdeath_low==1 | pdeath_`i'==1, by(pdeath_group)
+		mat tab1[`r',`c'+1]=r(p)
+		local r=`r'+1
+}
+	foreach x in `outcome3' {
+		qui sum `x' if pdeath_`i'==1
+		mat tab1[`r',`c']=r(mean)*100
+		qui tab `x' pdeath_group if pdeath_low==1 | pdeath_`i'==1, chi2
+		mat tab1[`r',`c'+1]=r(p)
+		local r=`r'+1
+}
+	qui sum `x' if pdeath_`i'==1
+	mat tab1[`r',`c']=r(N)
+	local r=1
+	local c=`c'+2
+}
+mat rownames tab1=`outcome1' `outcome2' `outcome3' N
+
+frmttable using `logpath'\table_1_and_outcomes_pdeath_3_groups.doc,  addtable ///
+statmat(tab1) varlabels  title("One Year Outcomes by Propensity 1 yr Mortality") ///
+ ctitles("" "Prob death Low Mean/%" "" "Prob death Med" "P" "Prob death High" "P") ///
+ sdec(2,3,2,3,2,3) ///
+ note("All costs WI adjusted 2012$" "P-values compared to baseline of low probability group")
+preserve
+gen tot1000=tot_paid_by_mc_12m_wi_n0/1000
+collapse (mean)tot= tot1000 (sd) sd=tot1000 (count) n=tot1000, by(pdeath_group core_to_dod_1yr_n0)
+label var tot "Total paid by Medicare 12m post ivw, 1000s of WI 2012$"
+ gen hitot=tot+invttail(n-1,0.025)*(sd/sqrt(n))
+gen lotot=tot-invttail(n-1,0.025)*(sd/sqrt(n))
+graph twoway (bar tot core) (rcap hitot lotot core), by(pde)
+graph save `logpath'\mean_spend_by_pdeath_ci, replace
+graph twoway (bar tot pde) (rcap hitot lotot pde), by(core)
+graph save `logpath'\mean_spend_by_mortality_ci, replace
+
+export excel using "E:\data\serious_ill\logs\spending_means_by_group_for_bars.xls", sheetreplace firstrow(varlabels )
+restore
+foreach x in `outcome1' `outcome2' `outcome3' {
+	sum `x'
+}

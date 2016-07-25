@@ -22413,3 +22413,65 @@ foreach y in _full_sample _low _mid _high {
 	local i=`i'+1
 
 }
+
+
+H="pulling in continuous fee for service by month"
+libname ser_ill "E:\data\serious_ill\final_data";
+libname medi "E:\data\cms_DUA_24548_2012";
+proc import datafile="E:\data\serious_ill\final_data\n0_n1_p1_p2_x_criteria_a_death_propensity.dta" out=serill; 
+run;
+
+data serill2;
+set serill;
+keep bid_hrs c_ivw_year_n0 c_ivw_month_n0;
+run;
+
+data denom;
+set medi.dn_2000_2012;
+run;
+
+proc sql;
+create table dn as select 
+a.*,b.buyin12 as buyin1,b.year,b.HMOIND12 as hmoind1 from
+serill2 a 
+left join
+denom b 
+on a.bid_hrs=b.bid_hrs_21 and a.c_ivw_year_n0=b.year;
+quit;
+
+proc sql;
+create table dn2 as select 
+a.*,b.buyin12 as buyin2,b.year,b.HMOIND12 as hmoind2 from
+serill2 a 
+left join
+denom b 
+on a.bid_hrs=b.bid_hrs_21 and a.c_ivw_year_n0+1=b.year;
+quit;
+
+proc sql;
+create table dn3 as select * from
+dn a
+left join 
+dn2 b
+on a.bid_hrs=b.bid_hrs and a.c_ivw_month_n0=b.c_ivw_month_n0;
+quit;
+
+data dn4;
+set dn3;
+buyin1a=substr(buyin1,c_ivw_month_n0,13-c_ivw_month_n0);
+hmoind1a=substr(hmoind1,c_ivw_month_n0,13-c_ivw_month_n0);
+buyin_2y=trim(buyin1a) || trim(buyin2);
+hmo_2y=trim(hmoind1a) || trim(hmoind2);
+
+/*create length of continous a&b and non-hmo coverage vars*/
+if indexc(buyin_2y,"0","1","2","A","B")=0 then part_ab_p_mos=length(buyin_2y)-1;
+if indexc(buyin_2y,"0","1","2","A","B") then part_ab_p_mos=indexc(buyin_2y,"0","1","2","A","B")-2;
+if indexc(hmo_2y,"1","2","4","A","B","C")=0 then non_hmo_d_p_mos=length(hmo_2y)-1;
+if indexc(hmo_2y,"1","2","4","A","B","C") then non_hmo_d_p_mos=indexc(hmo_2y,"1","2","4","A","B","C")-2;
+if part_ab_p_mos<=non_hmo_d_p_mos then cont_ffs_p_mos=part_ab_p_mos;
+if non_hmo_d_p_mos<part_ab_p_mos then cont_ffs_p_mos=non_hmo_d_p_mos;
+if cont_ffs_p_mos>12 then cont_ffs_p_mos=12;
+if cont_ffs_p_mos<0 then cont_ffs_p_mos=0;
+run;
+
+proc export data=dn4 outfile="E:\data\serious_ill\int_data\insurance_a.dta" replace; run;

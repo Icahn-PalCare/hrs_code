@@ -14730,22 +14730,26 @@ gen core_year=round*2+1990
 rename hhidpn r_id
 rename shhidpn s_id
 sort r_id core_year
-xtset r_id core_year, delta(2)
-replace s_id=L.s_id if L.s_id==F.s_id & missing(s_id)
+/*xtset r_id core_year, delta(2)
+replace s_id=L.s_id if L.s_id==F.s_id & missing(s_id)*/
 gen knownspouse=s_id & !missing(s_id)
 keep if core_year>=1998
 drop round
-tempfile this
+tempfile temp1
 keep if knownspouse
-save `this'
+rename (hhid pn) (r_hhid r_pn)
+save `temp1'
 drop s* knownspouse
-rename (r_id hhid pn) (s_id s_hhid s_pn)
-merge 1:m s_id core_year using `this', nogen keep(match using)
+rename (r_id r_hhid r_pn) (s_id s_hhid s_pn)
+merge 1:m s_id core_year using `temp1',  keep(match)
 replace r_id=s_id if missing(r_id) 
 replace s_id=. if !knownspouse
-tempfile this 
-save `this'
-use "E:\data\serious_ill\int_data\core_ids_1yr_criteria_5.dta", clear
+drop r_id s_id
+gen r_id =r_hhid+r_pn
+gen s_id=s_hhid+s_pn
+tempfile temp1 
+save `temp1'
+use "E:\data\serious_ill\int_data\core_ids_1yr_criteria_5.dta" if xwalk_yes==1, clear
 //get cesd, will be used for outcome in pscore
 replace cesd_tot=2 if missing(cesd_tot)
 sort id core_year
@@ -14770,56 +14774,71 @@ replace age_cat=2 if age_at<=75 & age_cat==.
 replace age_cat=3 if age_at<=80 & age_cat==.
 replace age_cat=4 if age_at<=85 & age_cat==.
 replace age_cat=5 if age_at<=90 & age_cat==.
-replace age_cat=6 if age_at>=95 & age_cat==.
+replace age_cat=6 if age_at>=90 & age_cat==.
 *replace age_cat=7 if age_at>95 & age_cat==.
-drop if age_at_core<65
 tab age_cat, gen(age_cat)
 tab comor_c, gen(comorb_cat)
 replace comorb_cat3=1 if comorb_cat4==1
 local matchvars age_cat female black hisp adl_independent_core ///
-srh_pf srh_g srh_ve region northeast midwest south west ///
-age_cat1 age_cat2 age_cat3 age_cat4 age_cat5 age_cat6
+srh_pf srh_g srh_ve nw_quartile_65 region northeast midwest south west ///
+age_cat1 age_cat2 age_cat3 age_cat4 age_cat5 age_cat6 nhres
+
 local comorb cancer_hrs lung_hrs heart_hrs chf_hrs stroke_hrs memory_hrs ///
-htn_hrs dm_hrs psych_hrs comorb_cat1 comorb_cat2 comorb_cat3 
+htn_hrs dm_hrs psych_hrs 
 
-destring id, gen(r_id)
-keep r_id c_ivw_date core_year `matchvars' `comorb' age_at_core ressp comor_c_hrs cesd_tot* 
+merge m:1 id using "E:\data\hrs_cleaned\death_date_2012.dta", ///
+keepusing(death_all) keep(match master) nogen
+rename death_all r_death_date
+gen r_death_year=year(r_death_date)
+*destring id, gen(r_id)
+rename id r_id 
+gen adl_iadl_sp_helper=adl_sp_helper | iadl_sp_helper
+gen comorb_index=0
+foreach x in `comorb' {
+	replace comorb_index=comorb_index+1 if `x'==1
+}
 
-foreach x in `matchvars' `comorb' comor_c_hrs age_at_core {
+local comorb cancer_hrs lung_hrs heart_hrs chf_hrs stroke_hrs memory_hrs ///
+htn_hrs dm_hrs psych_hrs comorb_cat1 comorb_cat2 comorb_cat3 adl_iadl_sp_helper ///
+cesd_tot
+keep r_id c_ivw_date core_year `matchvars' `comorb' age_at_core ressp ///
+comor_c_hrs cesd_tot* r_death* comorb_index
+
+foreach x in `matchvars' `comorb' comorb_index comor_c_hrs age_at_core c_ivw_date ressp {
 	rename `x' r_`x'
 }
 describe
 tempfile temp2
 save `temp2'
-
 rename r_* s_*
-rename c_ivw_date s_c_ivw_date
 tempfile temp3
 save `temp3'
-use `this', clear
+use `temp1', clear
 merge 1:1 r_id core_year using `temp2', keep(match) gen(rmatch)
-merge 1:1 s_id core_year using `temp3', keep(match master) gen(smatch)
-gen id=hhid+pn
+merge 1:1 s_id core_year using `temp3', keep(match) gen(smatch)
+drop if s_age_at_core<65
+*keep if r_ressp==1 & s_ressp==1
+/*gen id=r_hhid+r_pn
 merge m:1 id using "E:\data\hrs_cleaned\death_date_2012.dta", ///
 keepusing(death_all) keep(match master) nogen
 rename death_all r_death_date
 replace id=s_hhid+s_pn
 merge m:1 id using "E:\data\hrs_cleaned\death_date_2012.dta", ///
  keepusing(death_all) keep(match master) nogen
-replace id=hhid+pn
+drop id
 rename death_all s_death_date
-gen s_death_year=year(s_death_date)
+gen s_death_year=year(s_death_date)*/
 sort r_id core_year
-gen survives_spouse=r_death_date>s_death_date if s_death_date!=.
-drop if s_death_date<c_ivw_date
-gen cy=core_year if c_ivw<s_death_date & !missing(s_death_date)
+gen survives_spouse=r_death_date<s_death_date if r_death_date!=.
+drop if s_death_date<s_c_ivw_date | r_death_date<s_c_ivw_date
+gen cy=core_year if s_c_ivw<r_death_date & !missing(r_death_date)
 by r_id s_id, sort: egen lcy=max(cy)
 gen ind_n1_ivw=core_year==lcy
 replace ind_n1_ivw=0 if survives==0
 drop cy lcy
 /*
-tempfile this
-save `this'
+tempfile temp1
+save `temp1'
 keep id
 duplicates drop*/
 gen n=1
@@ -14832,7 +14851,11 @@ foreach x in r s {
 di "`match'"
 sum `match'
 foreach x in `match' {
-sum n if `x'==.
+qui sum n if `x'==.
+if r(N)>0 {
+di "`x'"
+di r(N)
+}
 }
 
 drop if r_region==0
@@ -14844,12 +14867,10 @@ foreach x in `region' region {
 	drop s_`x'
 	rename r_`x' `x'
 }
-rename s_* sp_*
-rename r_* s_*
-rename sp_* r_*
+
 *preserve
-local match r_comorb_cat1 r_comorb_cat2 r_comorb_cat3 r_adl_independent_core ///
-r_srh_pf r_srh_g r_srh_ve s_age_cat1 s_age_cat2 s_age_cat3 s_age_cat4 s_age_cat5 s_age_cat6 ///
+local match /*r_comorb_cat1 r_comorb_cat2 r_comorb_cat3 r_adl_independent_core ///
+r_srh_pf r_srh_g r_srh_ve */s_age_cat1 s_age_cat2 s_age_cat3 s_age_cat4 s_age_cat5 s_age_cat6 ///
 s_comorb_cat1 s_comorb_cat2 s_comorb_cat3  ///
 s_female s_black s_hisp s_adl_independent_core s_srh_pf s_srh_g ///
 s_srh_ve 
@@ -14861,11 +14882,28 @@ r_srh_pf r_age_cat ///
 s_comorb_cat1 s_comorb_cat2 s_comorb_cat3  ///
 s_adl_independent_core s_srh_pf 
 */
-local match r_comorb_cat1 r_comorb_cat2 r_comorb_cat3 r_adl_independent_core ///
-r_srh_pf r_srh_g r_srh_ve s_age_at_core ///
-s_comorb_cat1 s_comorb_cat2 s_comorb_cat3  ///
+tab s_nw_q, gen(nw)
+local match r_age_cat2 r_age_cat3 r_age_cat4 r_age_cat5 r_age_cat6 /// 
+ r_comorb_cat1 r_comorb_cat2 r_comorb_cat3  r_adl_independent_core ///
+r_srh_pf r_srh_g r_srh_ve s_age_cat2 s_age_cat3 s_age_cat4 s_age_cat5 s_age_cat6 ///
+nw2 nw3 nw4 s_comorb_cat1 s_comorb_cat2 s_comorb_cat3  ///
 s_female s_black s_hisp s_adl_independent_core s_srh_pf s_srh_g ///
-s_srh_ve 
+s_srh_ve r_nhres s_nhres r_adl_iadl_sp_helper r_cesd_tot s_cesd_tot
+
+local match r_comorb_cat1 r_comorb_cat2 r_comorb_cat3  r_adl_independent_core ///
+r_srh_pf  s_age_at_core ///
+nw1 s_comorb_cat2 s_comorb_cat3  ///
+s_female s_black s_hisp s_adl_independent_core s_srh_pf ///
+r_nhres s_nhres r_adl_iadl_sp_helper r_cesd_tot s_cesd_tot
+
+gen blackhisp=s_black==1 | s_hisp==1
+
+local match r_comorb_cat2 r_comorb_cat3 r_adl_independent_core ///
+r_srh_g r_srh_v s_age_at_core ///
+nw2 nw3 nw4 s_comorb_cat2 s_comorb_cat3 ///
+s_female s_black s_hisp s_adl_independent_core s_srh_g s_srh_v ///
+r_nhres r_adl_iadl_sp_helper r_cesd_tot s_cesd_tot s_nhres
+
 capture drop pscore *
 capture drop lp 
 capture drop weight 
@@ -14873,84 +14911,1584 @@ capture drop support
 capture drop ip_bloc
 capture drop x
 
-drop if !ressp 
 drop if core_year<2000
+levelsof core_year , local(levels)
+//propensity score qui generation
+
+capture drop x weight support
+//first sort data randomly
+set seed 2001
+qui gen x=uniform()
+sort x
+
+qui gen weight=.
+qui gen support=.
+qui gen p=.
+qui gen p1=.
+qui gen p3=.
+qui gen p5=.
+capture log close
+replace cesd_tot_ge3=cesd_tot_p1>=3
+gen outcome=(rnormal(2)+ind-runiform())>=1
+foreach seven in 1 {
+log using "E:\data\spouse_claims\logs\control_ps_test.txt", text replace
+pscore ind_n1_ivw `match' `region', pscore(p_all) blockid(ip_block) logit
+foreach l of local levels {
+di "`l'" 
+qui gen lp=ln(p_all/(1-p_all))
+qui sum lp
+
+sca cal_ps1=r(sd)*0.02
+sca list cal_ps1
+local caliper cal_ps1
+
+qui psmatch2 ind_n1_ivw if core_year==`l', outcome(outcome) pscore(p_all) n(3) ///
+ caliper(`=`caliper'') logit
+qui replace weight=_w if core_year==`l'
+qui replace sup=_sup if core_year==`l'
+drop lp
+}
+pstest `match' `region' core_year,treated(ind) both hist mweight(weight) support(sup)
+drop ip_block 
+}
+/*
+foreach l of local levels {
+di "`l'"
+qui logit ind_n1_ivw `match' `region' if core_year==`l'
+linktest
+lfit, group(10) table
+
+//generate pscore variable 
+qui pscore ind_n1_ivw `match' `region' if core_year==`l', pscore(pscore`l') ///
+blockid(ip_block) logit //detail
+qui replace p=pscore`l' if missing(p)
+*psgraph, treated(ind_n1_ivw) pscore(pscore`l')
+qui di "NOW"
+*******************************************************************
+//implement radius matching
+qui gen lp=ln(pscore`l'/(1-pscore`l'))
+qui sum lp
+
+sca cal_ps1=r(sd)*0.02
+sca list cal_ps1
+local caliper cal_ps1
+
+//rule of thumb 0.2*sd, try 0.02* sd
+qui psmatch2 ind_n1_ivw if core_year==`l',outcome(cesd_tot_ge3) pscore(pscore`l') n(1) ///
+noreplace caliper(`=`caliper'') logit
+qui replace support=_sup if support==.
+qui replace weight=_weight if weight==.
+capture drop ip_block lp pscore*
+}
+di "1 to 1, no qui replacement"
+logit ind `match' `region'
+pstest `match' `region' core_year,treated(ind) both hist mweight(weight) support(sup)
+*cem `match' `region' core_year, treatment(ind_n1_ivw)
+forvalues n=1(2)5 {
+qui replace weight=.
+qui replace support=.
+foreach l of local levels {
+qui di `l'
+//generate pscore variable 
+qui pscore ind_n1_ivw `match' `region' if core_year==`l', pscore(pscore`l') ///
+blockid(ip_block) logit //detail
+qui replace p`n'=pscore`l' if missing(p`n')
+*psgraph, treated(ind_n1_ivw) pscore(pscore`l')
+qui di "NOW"
+*******************************************************************
+//implement radius matching
+qui gen lp=ln(pscore`l'/(1-pscore`l'))
+qui sum lp
+
+sca cal_ps1=r(sd)*0.02
+sca list cal_ps1
+local caliper cal_ps1
+
+//rule of thumb 0.2*sd, try 0.02* sd
+qui psmatch2 ind_n1_ivw if core_year==`l',outcome(cesd_tot_ge3) pscore(pscore`l') n(`n') ///
+caliper(`=`caliper'') logit ties
+qui replace support=_sup if support==.
+qui replace weight=_weight if weight==.
+capture drop ip_block pscore* lp
+}
+qui replace _weight=weight
+di "`n' to 1 with qui replacement"
+pstest `match' `region' core_year,treated(ind) both hist mweight(weight) support(sup)
+*cem `match' `region' core_year, treatment(ind_n1_ivw)
+qui graph save "E:\data\spouse_claims\logs\control_ps_test_`n'_to_1", replace
+qui graph export "E:\data\spouse_claims\logs\control_ps_test_`n'_to_1.pdf", replace
+}
+log close
+/*
+local match r_comorb_cat1 r_comorb_cat2 r_comorb_cat3 r_adl_independent_core ///
+r_srh_pf r_srh_g r_srh_ve s_age_at_core ///
+s_comorb_cat1 s_comorb_cat2 s_comorb_cat3  ///
+s_female s_black s_hisp s_adl_independent_core s_srh_pf s_srh_g ///
+s_srh_ve 
+local region northeast midwest south west
+
+teffects nnmatch (cesd_tot_p1 `match' `region' core_year) (ind_n), ematch(`match') ///
+osample(nomatch)
+}
+*/
+
+
+
+H="*********************************"
+
+
+H="get claims"
+
+/*data from spouse_2012.txt code - starting point for this work*/
+libname spo_fnl 'E:\data\spouse_intensive\int_data';
+
+/*data for this project with spouse medicare variables added in*/
+libname proj_int 'E:\data\spouse_claims\data\int_data';
+libname proj_fnl 'E:\data\spouse_claims\data\final_data';
+
+/*2000-2012 medicare claims*/
+libname medi 'E:\data\cms_DUA_24548_2012';
+
+/*hrs cleaned & restricted*/
+libname hrs_cln 'E:\data\hrs_cleaned'; /*(contains exit, restricted, and core ivw's)*/
+libname rand 'E:\data\hrs_public_2012\rand2012\main';
+
+/*dartmouth wage index*/
+libname dartm 'E:\data\Dartmouth_misc';
+libname dart_wi 'E:\data\Dartmouth_misc\Wage Index';
+
+
+
+H="get ffs at date of interview for everyone"
+/*determine Spouse ffs medicare before R's death using the 
+claims denominator files
+
+Several sets of variables created, looking back 6m, 12m, 18m, 24m from R's death
+
+Also pulls in spouse date of death where available in the claims s_claims_dod*/
+
+/*sort claims denominator file*/
+
+data hrs(keep=id hhid pn c_ivw_date c_ivw_year c_ivw_month core_year);
+set hrs_cln.core_00_to_12;
+run;
+
+proc sort data=hrs nodupkey;
+by id core_year;
+run;
+/*prepare xwalk id file to merge*/
+data crosswalk_1;
+set medi.cmsxref2012;
+keep bid_hrs_21 hhid pn;
+run;
+
+proc sql; 
+create table index2 as select *
+from hrs a 
+left join
+crosswalk_1 b
+on a.hhid=b.hhid and a.pn=b.pn;
+quit;
+
+
+
+proc sort data=medi.dn_2000_2012 out=dn  nodupkey;
+by bid_hrs_21 year;
+run;
+
+
+
+/*get dn just for interview year*/
+
+proc sql; 
+create table dn_c_ivw_year as select
+a.*,b.buyin12,b.year,b.hmoind12
+from index2 a inner join
+dn b
+on trim(left(a.bid_hrs_21))=trim(left(b.bid_hrs_21)) 
+and a.c_ivw_year=b.year;
+quit;
+
+proc sql;
+select count(distinct bid_hrs_21) from dn_c_ivw_year;
+quit;
+
+
+
+data dn_c_ivw_year2;
+set dn_c_ivw_year;
+if length(trim(left(buyin12)))=12 and c_ivw_month>0 then do;
+buyin_im=substr(trim(left(buyin12)),c_ivw_month,1);
+hmo_im=substr(trim(left(HMOIND12)),c_ivw_month,1);
+end;
+else do;
+buyin_im=trim(left(buyin12));
+hmo_im=trim(left(HMOIND12));
+end;
+/*create length of continous a&b and non-hmo coverage vars*/
+if indexc(buyin_im,"0","1","2","A","B")=0 then part_ab=1;
+if indexc(buyin_im,"0","1","2","A","B") then part_a=0;
+if indexc(hmo_im,"1","2","4","A","B","C")=0 then hmo=0;
+if indexc(hmo_im,"1","2","4","A","B","C") then hmo=1;
+ffs_at_ivw=part_ab=1 and hmo=0;
+run;
+
+proc export data=dn_c_ivw_year2 outfile="E:\data\spouse_claims\data\int_data\ffs_status_all_ivws.dta" replace; run;
+
+H="propensity at each core to get matched sample"
+use "E:\data\hrs_public_2012\rand2012\family\StataSE\rndfamr_c.dta", clear
+keep hhidpn s*hhidpn hhid pn
+rename s*hhidpn shhidpn* 
+reshape long shhidpn , i(hhidpn) j(round)
+gen core_year=round*2+1990
+rename hhidpn r_id
+rename shhidpn s_id
+sort r_id core_year
+/*xtset r_id core_year, delta(2)
+replace s_id=L.s_id if L.s_id==F.s_id & missing(s_id)*/
+gen knownspouse=s_id & !missing(s_id)
+keep if core_year>=1998
+drop round
+tempfile temp1
+keep if knownspouse
+rename (hhid pn) (r_hhid r_pn)
+save `temp1'
+drop s* knownspouse
+rename (r_id r_hhid r_pn) (s_id s_hhid s_pn)
+merge 1:m s_id core_year using `temp1',  keep(match)
+replace r_id=s_id if missing(r_id) 
+replace s_id=. if !knownspouse
+drop r_id s_id
+gen r_id =r_hhid+r_pn
+gen s_id=s_hhid+s_pn
+tempfile temp1 
+save `temp1'
+use "E:\data\serious_ill\int_data\core_ids_1yr_criteria_5.dta" if xwalk_yes==1, clear
+//get cesd, will be used for outcome in pscore
+replace cesd_tot=2 if missing(cesd_tot)
+sort id core_year
+by id: gen cesd_tot_p1=cesd_tot[_n+1]
+replace female=gender-1 if female==.
+replace hisp=hisp_eth if hisp_eth!=.
+gen region=inlist(state_wave,"CT","ME","MA","NH","RI","VT","NJ","NY","PA")
+replace region=2 if inlist(state_wave,"IN","IL","MI","OH","WI" ) | ///
+inlist(state_wave,"IA","KS","MN","MO","NE","ND","SD")
+replace region=3 if inlist(state_wave,"DE","DC","FL","GA","MD","SC","NC") | ///
+inlist(state_wave,"VA","WV","AL","KY","MS","TN") 
+replace region=3 if inlist(state_wave,"AR","LA","OK","TX")
+replace region=4 if inlist(state_wave,"AZ","CO","ID","NM","MT") | ///
+inlist(state_wave,"UT","NV","WY","AK","CA","HI","OR","WA")
+gen northeast=region==1
+gen midwest=region==2
+gen south=region==3
+gen west=region==4
+
+gen age_cat=1 if age_at_core<=70
+replace age_cat=2 if age_at<=75 & age_cat==.
+replace age_cat=3 if age_at<=80 & age_cat==.
+replace age_cat=4 if age_at<=85 & age_cat==.
+replace age_cat=5 if age_at<=90 & age_cat==.
+replace age_cat=6 if age_at>=90 & age_cat==.
+*replace age_cat=7 if age_at>95 & age_cat==.
+tab age_cat, gen(age_cat)
+tab comor_c, gen(comorb_cat)
+replace comorb_cat3=1 if comorb_cat4==1
+local matchvars age_cat female black hisp adl_independent_core ///
+srh_pf srh_g srh_ve nw_quartile_65 region northeast midwest south west ///
+age_cat1 age_cat2 age_cat3 age_cat4 age_cat5 age_cat6 nhres
+
+local comorb cancer_hrs lung_hrs heart_hrs chf_hrs stroke_hrs memory_hrs ///
+htn_hrs dm_hrs psych_hrs 
+
+merge m:1 id using "E:\data\hrs_cleaned\death_date_2012.dta", ///
+keepusing(death_all) keep(match master) nogen
+rename death_all r_death_date
+gen r_death_year=year(r_death_date)
+*destring id, gen(r_id)
+rename id r_id 
+gen adl_iadl_sp_helper=adl_sp_helper | iadl_sp_helper
+gen comorb_index=0
+foreach x in `comorb' {
+	replace comorb_index=comorb_index+1 if `x'==1
+}
+
+
+//get last core year
+by r_id, sort: egen lcd=max(c_ivw_date)
+sort r_id core_year
+by r_id: gen ncd=c_ivw_date[_n+1]
+local comorb cancer_hrs lung_hrs heart_hrs chf_hrs stroke_hrs memory_hrs ///
+htn_hrs dm_hrs psych_hrs comorb_cat1 comorb_cat2 comorb_cat3 adl_iadl_sp_helper ///
+cesd_tot
+keep r_id c_ivw_* core_year lcd `matchvars' `comorb' age_at_core ressp ///
+comor_c_hrs cesd_tot* r_death* comorb_index ncd
+
+foreach x in `matchvars' `comorb' ncd lcd comorb_index comor_c_hrs age_at_core c_ivw_date ///
+c_ivw_month c_ivw_year ressp {
+	rename `x' r_`x'
+}
+describe
+tempfile temp2
+save `temp2'
+rename r_* s_*
+tempfile temp3
+save `temp3'
+use `temp1', clear
+merge 1:1 r_id core_year using `temp2', keep(match) gen(rmatch)
+merge 1:1 s_id core_year using `temp3', keep(match) gen(smatch)
+drop if s_age_at_core<65
+*keep if r_ressp==1 & s_ressp==1
+/*gen id=r_hhid+r_pn
+merge m:1 id using "E:\data\hrs_cleaned\death_date_2012.dta", ///
+keepusing(death_all) keep(match master) nogen
+rename death_all r_death_date
+replace id=s_hhid+s_pn
+merge m:1 id using "E:\data\hrs_cleaned\death_date_2012.dta", ///
+ keepusing(death_all) keep(match master) nogen
+drop id
+rename death_all s_death_date
+gen s_death_year=year(s_death_date)*/
+sort r_id core_year
+gen survives_spouse=r_death_date<s_death_date if r_death_date!=.
+drop if s_death_date<s_c_ivw_date | r_death_date<s_c_ivw_date
+gen cy=core_year if s_c_ivw_date<r_death_date & !missing(r_death_date)
+by r_id s_id, sort: egen lcy=max(cy)
+gen ind_n1_ivw=core_year==lcy
+replace ind_n1_ivw=0 if survives==0
+replace ind_n1_ivw=0 if s_ncd<r_death_date
+drop *lcd cy lcy *ncd
+/*
+tempfile temp1
+save `temp1'
+keep id
+duplicates drop*/
+gen n=1
+
+foreach x in r s {
+	foreach y in `matchvars' `comorb' {
+		local match `match' `x'_`y'
+}
+}
+di "`match'"
+sum `match'
+foreach x in `match' {
+qui sum n if `x'==.
+if r(N)>0 {
+di "`x'"
+di r(N)
+}
+}
+
+drop if r_region==0
+gen same=r_region==s_region
+drop if same==0
+
+local region northeast midwest south west
+foreach x in `region' region {
+	drop s_`x'
+	rename r_`x' `x'
+}
+
+*preserve
+local match /*r_comorb_cat1 r_comorb_cat2 r_comorb_cat3 r_adl_independent_core ///
+r_srh_pf r_srh_g r_srh_ve */s_age_cat1 s_age_cat2 s_age_cat3 s_age_cat4 s_age_cat5 s_age_cat6 ///
+s_comorb_cat1 s_comorb_cat2 s_comorb_cat3  ///
+s_female s_black s_hisp s_adl_independent_core s_srh_pf s_srh_g ///
+s_srh_ve 
+/*
+local match r_age_cat ///
+r_comorb_cat1 r_comorb_cat2 r_comorb_cat3 ///
+r_female r_black r_hisp r_adl_independent_core ///
+r_srh_pf r_age_cat ///
+s_comorb_cat1 s_comorb_cat2 s_comorb_cat3  ///
+s_adl_independent_core s_srh_pf 
+*/
+tab s_nw_q, gen(nw)
+local match r_age_cat2 r_age_cat3 r_age_cat4 r_age_cat5 r_age_cat6 /// 
+ r_comorb_cat1 r_comorb_cat2 r_comorb_cat3  r_adl_independent_core ///
+r_srh_pf r_srh_g r_srh_ve s_age_cat2 s_age_cat3 s_age_cat4 s_age_cat5 s_age_cat6 ///
+nw2 nw3 nw4 s_comorb_cat1 s_comorb_cat2 s_comorb_cat3  ///
+s_female s_black s_hisp s_adl_independent_core s_srh_pf s_srh_g ///
+s_srh_ve r_nhres s_nhres r_adl_iadl_sp_helper r_cesd_tot s_cesd_tot
+
+local match r_comorb_cat1 r_comorb_cat2 r_comorb_cat3  r_adl_independent_core ///
+r_srh_pf  s_age_at_core ///
+nw1 s_comorb_cat2 s_comorb_cat3  ///
+s_female s_black s_hisp s_adl_independent_core s_srh_pf ///
+r_nhres s_nhres r_adl_iadl_sp_helper r_cesd_tot s_cesd_tot
+
+gen blackhisp=s_black==1 | s_hisp==1
+
+local match r_age_at_core r_comorb_cat2 r_comorb_cat3 r_adl_independent_core ///
+r_srh_g r_srh_v s_age_at_core ///
+nw2 nw3 nw4 s_comorb_cat2 s_comorb_cat3 ///
+s_female s_black s_hisp s_adl_independent_core s_srh_g s_srh_v ///
+r_nhres r_adl_iadl_sp_helper r_cesd_tot s_cesd_tot s_nhres
+
+capture drop pscore *
+capture drop lp 
+capture drop weight 
+capture drop support 
+capture drop ip_bloc
+capture drop x
+
+drop if core_year<2000
+levelsof core_year , local(levels)
+//propensity score qui generation
+
+capture drop x weight support
+//first sort data randomly
+set seed 2001
+qui gen x=uniform()
+sort x
+
+
+foreach x in weight support nn n1 n2 n3 id {
+qui gen `x'=.
+}
+capture log close
+replace cesd_tot_ge3=cesd_tot_p1>=3
+gen outcome=(rnormal(2)+ind-runiform())>=1
+foreach seven in 1 {
+log using "E:\data\spouse_claims\logs\control_ps_test.txt", text replace
+pscore ind_n1_ivw `match' `region', pscore(p_all) blockid(ip_block) logit
+foreach l of local levels {
+di "`l'" 
+qui gen lp=ln(p_all/(1-p_all))
+qui sum lp
+
+sca cal_ps1=r(sd)*0.02
+sca list cal_ps1
+local caliper cal_ps1
+
+qui psmatch2 ind_n1_ivw if core_year==`l', outcome(outcome) pscore(p_all) n(1) ///
+ caliper(`=`caliper'') logit noreplace
+
+foreach x in weight sup nn n1 /*n2 n3*/ id {
+	replace `x'=_`x' if core_year==`l'
+}
+drop lp
+}
+pstest `match' `region' core_year,treated(ind) both hist mweight(weight) support(sup)
+
+}
+*keep if weight==1
+gen d=r_death_date if ind==1
+gen id2=n1 if ind
+replace id2=id if !ind
+by id2 core_year, sort: egen index_date=max(d)
+gen index_year=year(index_date)
+gen index_month=month(index_date)
+by id2 core_year, sort: egen num=count(d)
+tab num
+gen pairid=id2*1000+core_year
+drop num d id2
+format index_date %td
+saveold "E:\data\spouse_claims\data\int_data\spouse_matched1.dta", replace
+
+
+H="split by gender first"
+use "E:\data\hrs_public_2012\rand2012\family\StataSE\rndfamr_c.dta", clear
+keep hhidpn s*hhidpn hhid pn
+rename s*hhidpn shhidpn* 
+reshape long shhidpn , i(hhidpn) j(round)
+gen core_year=round*2+1990
+rename hhidpn r_id
+rename shhidpn s_id
+sort r_id core_year
+/*xtset r_id core_year, delta(2)
+replace s_id=L.s_id if L.s_id==F.s_id & missing(s_id)*/
+gen knownspouse=s_id & !missing(s_id)
+keep if core_year>=1998
+drop round
+tempfile temp1
+keep if knownspouse
+rename (hhid pn) (r_hhid r_pn)
+save `temp1'
+drop s* knownspouse
+rename (r_id r_hhid r_pn) (s_id s_hhid s_pn)
+merge 1:m s_id core_year using `temp1',  keep(match)
+replace r_id=s_id if missing(r_id) 
+replace s_id=. if !knownspouse
+drop r_id s_id
+gen r_id =r_hhid+r_pn
+gen s_id=s_hhid+s_pn
+tempfile temp1 
+save `temp1'
+use "E:\data\serious_ill\int_data\core_ids_1yr_criteria_5.dta" if xwalk_yes==1, clear
+
+//no 
+/*merge 1:1 id core_year using "E:\data\spouse_claims\data\int_data\ffs_status_all_ivws.dta", ///
+keep(match) nogen keepusing(ffs_at_ivw)
+keep if ffs_at_ivw==1
+*/
+replace female=gender-1 if female==.
+replace hisp=hisp_eth if hisp_eth!=.
+gen region=inlist(state_wave,"CT","ME","MA","NH","RI","VT","NJ","NY","PA")
+replace region=2 if inlist(state_wave,"IN","IL","MI","OH","WI" ) | ///
+inlist(state_wave,"IA","KS","MN","MO","NE","ND","SD")
+replace region=3 if inlist(state_wave,"DE","DC","FL","GA","MD","SC","NC") | ///
+inlist(state_wave,"VA","WV","AL","KY","MS","TN") 
+replace region=3 if inlist(state_wave,"AR","LA","OK","TX")
+replace region=4 if inlist(state_wave,"AZ","CO","ID","NM","MT") | ///
+inlist(state_wave,"UT","NV","WY","AK","CA","HI","OR","WA")
+gen northeast=region==1
+gen midwest=region==2
+gen south=region==3
+gen west=region==4
+
+gen age_cat=1 if age_at_core<=70
+replace age_cat=2 if age_at<=75 & age_cat==.
+replace age_cat=3 if age_at<=80 & age_cat==.
+replace age_cat=4 if age_at<=85 & age_cat==.
+replace age_cat=5 if age_at<=90 & age_cat==.
+replace age_cat=6 if age_at>=90 & age_cat==.
+*replace age_cat=7 if age_at>95 & age_cat==.
+tab age_cat, gen(age_cat)
+tab comor_c, gen(comorb_cat)
+replace comorb_cat3=1 if comorb_cat4==1
+local matchvars age_cat female black hisp adl_independent_core ///
+srh_pf srh_g srh_ve nw_quartile_65 region northeast midwest south west ///
+age_cat1 age_cat2 age_cat3 age_cat4 age_cat5 age_cat6 nhres
+
+local comorb cancer_hrs lung_hrs heart_hrs chf_hrs stroke_hrs memory_hrs ///
+htn_hrs dm_hrs psych_hrs 
+
+merge m:1 id using "E:\data\hrs_cleaned\death_date_2012.dta", ///
+keepusing(death_all) keep(match master) nogen
+rename death_all r_death_date
+gen r_death_year=year(r_death_date)
+*destring id, gen(r_id)
+rename id r_id 
+gen adl_iadl_sp_helper=adl_sp_helper | iadl_sp_helper
+gen comorb_index=0
+foreach x in `comorb' {
+	replace comorb_index=comorb_index+1 if `x'==1
+}
+
+
+//get last core year
+by r_id, sort: egen lcd=max(c_ivw_date)
+sort r_id core_year
+by r_id: gen ncd=c_ivw_date[_n+1]
+local comorb cancer_hrs lung_hrs heart_hrs chf_hrs stroke_hrs memory_hrs ///
+htn_hrs dm_hrs psych_hrs comorb_cat1 comorb_cat2 comorb_cat3 adl_iadl_sp_helper ///
+cesd_tot
+keep r_id c_ivw_* core_year lcd `matchvars' `comorb' age_at_core ressp ///
+comor_c_hrs cesd_tot* r_death* comorb_index ncd
+
+foreach x in `matchvars' `comorb' ncd lcd comorb_index comor_c_hrs age_at_core c_ivw_date ///
+c_ivw_month c_ivw_year ressp {
+	rename `x' r_`x'
+}
+describe
+tempfile temp2
+save `temp2'
+rename r_* s_*
+tempfile temp3
+save `temp3'
+use `temp1', clear
+merge 1:1 r_id core_year using `temp2', keep(match) gen(rmatch)
+merge 1:1 s_id core_year using `temp3', keep(match) gen(smatch)
+drop if s_age_at_core<65
+*keep if r_ressp==1 & s_ressp==1
+/*gen id=r_hhid+r_pn
+merge m:1 id using "E:\data\hrs_cleaned\death_date_2012.dta", ///
+keepusing(death_all) keep(match master) nogen
+rename death_all r_death_date
+replace id=s_hhid+s_pn
+merge m:1 id using "E:\data\hrs_cleaned\death_date_2012.dta", ///
+ keepusing(death_all) keep(match master) nogen
+drop id
+rename death_all s_death_date
+gen s_death_year=year(s_death_date)*/
+sort r_id core_year
+gen survives_spouse=r_death_date<s_death_date if r_death_date!=.
+drop if s_death_date<s_c_ivw_date | r_death_date<s_c_ivw_date
+gen cy=core_year if s_c_ivw_date<r_death_date & !missing(r_death_date)
+by r_id s_id, sort: egen lcy=max(cy)
+gen ind_n1_ivw=core_year==lcy
+replace ind_n1_ivw=0 if survives==0
+replace ind_n1_ivw=0 if s_ncd<r_death_date
+drop *lcd cy lcy *ncd
+/*
+tempfile temp1
+save `temp1'
+keep id
+duplicates drop*/
+gen n=1
+
+foreach x in r s {
+	foreach y in `matchvars' `comorb' {
+		local match `match' `x'_`y'
+}
+}
+di "`match'"
+sum `match'
+foreach x in `match' {
+qui sum n if `x'==.
+if r(N)>0 {
+di "`x'"
+di r(N)
+}
+}
+
+local region northeast midwest south west
+foreach x in `region' region {
+	drop r_`x'
+	rename s_`x' `x'
+}
+gen s_core_year_n1=core_year
+destring s_id, replace
+//bring in ffs at death from already constructed spouse claims dataset
+*merge 1:1 s_id s_core_year_n1 using "E:\data\spouse_claims\data\int_data\spouse_claims_v1.dta", gen(sm) force
+
+*preserve
+local match /*r_comorb_cat1 r_comorb_cat2 r_comorb_cat3 r_adl_independent_core ///
+r_srh_pf r_srh_g r_srh_ve */s_age_cat1 s_age_cat2 s_age_cat3 s_age_cat4 s_age_cat5 s_age_cat6 ///
+s_comorb_cat1 s_comorb_cat2 s_comorb_cat3  ///
+s_female s_black s_hisp s_adl_independent_core s_srh_pf s_srh_g ///
+s_srh_ve 
+/*
+local match r_age_cat ///
+r_comorb_cat1 r_comorb_cat2 r_comorb_cat3 ///
+r_female r_black r_hisp r_adl_independent_core ///
+r_srh_pf r_age_cat ///
+s_comorb_cat1 s_comorb_cat2 s_comorb_cat3  ///
+s_adl_independent_core s_srh_pf 
+*/
+tab s_nw_q, gen(nw)
+local match r_age_cat2 r_age_cat3 r_age_cat4 r_age_cat5 r_age_cat6 /// 
+ r_comorb_cat1 r_comorb_cat2 r_comorb_cat3  r_adl_independent_core ///
+r_srh_pf r_srh_g r_srh_ve s_age_cat2 s_age_cat3 s_age_cat4 s_age_cat5 s_age_cat6 ///
+nw2 nw3 nw4 s_comorb_cat1 s_comorb_cat2 s_comorb_cat3  ///
+s_female s_black s_hisp s_adl_independent_core s_srh_pf s_srh_g ///
+s_srh_ve r_nhres s_nhres r_adl_iadl_sp_helper r_cesd_tot s_cesd_tot
+
+local match r_comorb_cat1 r_comorb_cat2 r_comorb_cat3  r_adl_independent_core ///
+r_srh_pf  s_age_at_core ///
+nw1 s_comorb_cat2 s_comorb_cat3  ///
+s_female s_black s_hisp s_adl_independent_core s_srh_pf ///
+r_nhres s_nhres r_adl_iadl_sp_helper r_cesd_tot s_cesd_tot
+
+gen blackhisp=s_black==1 | s_hisp==1
+
+local match r_age_at_core r_comorb_cat2 r_comorb_cat3 r_adl_independent_core ///
+r_srh_g r_srh_v s_age_at_core ///
+nw2 nw3 nw4 s_comorb_cat2 s_comorb_cat3 ///
+s_female s_black s_hisp s_adl_independent_core s_srh_g s_srh_v ///
+r_nhres r_adl_iadl_sp_helper r_cesd_tot s_cesd_tot s_nhres
+
+capture drop pscore *
+capture drop lp 
+capture drop weight 
+capture drop support 
+capture drop ip_bloc
+capture drop x
+
+drop if core_year<2000
+
 levelsof core_year , local(levels)
 //propensity score generation
 
+capture drop x weight support
 //first sort data randomly
 set seed 2001
-gen x=uniform()
+qui gen x=uniform()
 sort x
 
-gen weight=.
-gen support=.
 
+foreach x in weight support nn n1 n2 n3 id {
+qui gen `x'=.
+}
+gen id2=.
 capture log close
+
+gen outcome=(rnormal(2)+ind-runiform())>=1
+gen pscore=.
 log using "E:\data\spouse_claims\logs\control_ps_test.txt", text replace
 
-foreach l of local levels {
-qui di `l'
-//generate pscore variable 
-qui pscore ind_n1_ivw `match' `region' if core_year==`l', pscore(pscore`l') ///
-blockid(ip_block) logit //detail
 
-*psgraph, treated(ind_n1_ivw) pscore(pscore`l')
-qui di "NOW"
-*******************************************************************
-//implement radius matching
-gen lp=ln(pscore`l'/(1-pscore`l'))
-sum lp
+foreach seven in 1 {
+forvalues f=0/1 {
+pscore ind_n1_ivw `match' `region' if s_female==`f', pscore(p_all) blockid(ip_block) logit
+foreach l of local levels {
+di "`l'" 
+qui gen lp=ln(p_all/(1-p_all))
+qui sum lp //if core_year==`l'
 
 sca cal_ps1=r(sd)*0.02
 sca list cal_ps1
 local caliper cal_ps1
 
-//rule of thumb 0.2*sd, try 0.02* sd
-qui psmatch2 ind_n1_ivw if core_year==`l',outcome(cesd_tot_p1) pscore(pscore`l') n(1) ///
-noreplace caliper(`=`caliper'') logit
-replace support=1 if _sup==1
-replace weight=_weight if weight==.
-capture drop ip_block pscore* lp
-}
-di "1 to 1, no replacement"
-pstest `match' `region' core_year,treated(ind) both hist mweight(weight)
-*cem `match' `region' core_year, treatment(ind_n1_ivw)
-forvalues n=1(2)5 {
-replace weight=.
-replace support=.
-foreach l of local levels {
-qui di `l'
-//generate pscore variable 
-qui pscore ind_n1_ivw `match' `region' if core_year==`l', pscore(pscore`l') ///
-blockid(ip_block) logit //detail
+qui psmatch2 ind_n1_ivw if core_year==`l' & s_female==`f', outcome(outcome) pscore(p_all) n(1) ///
+ caliper(`=`caliper'') logit noreplace
 
-*psgraph, treated(ind_n1_ivw) pscore(pscore`l')
-qui di "NOW"
-*******************************************************************
-//implement radius matching
-gen lp=ln(pscore`l'/(1-pscore`l'))
-sum lp
+foreach x in weight sup nn n1 /*n2 n3*/ id {
+	replace `x'=_`x' if core_year==`l' & `x'==. & s_female==`f'
+}
+drop lp
+}
+replace pscore=p_all if missing(pscore)
+drop p_all ip_block
+pstest `match' `region' core_year,treated(ind) both hist mweight(weight) support(sup)
+/*gen d`f'=r_death_date if ind==1
+gen id2`f'=n1 if ind
+replace id2`f'=id if !ind*/
+}
+pstest `match' `region' core_year,treated(ind) both hist mweight(weight) support(sup)
+
+}
+
+tostring id, gen(strvar1)
+tostring n1, gen(strvar1a)
+replace strvar1=strvar1a if ind_==1 
+tostring core_year, gen(strvar2)
+tostring s_female, gen(strvar3)
+gen pairid=strvar1+strvar2+strvar3
+gen d=r_death_date if ind==1
+by pairid core_year, sort: egen index_date=max(d)
+gen index_year=year(index_date)
+gen index_month=month(index_date)
+
+format index_date %td
+saveold "E:\data\spouse_claims\data\int_data\spouse_matched1.dta", replace
+
+
+H="pre/post match comparison"
+use "E:\data\hrs_public_2012\rand2012\family\StataSE\rndfamr_c.dta", clear
+keep hhidpn s*hhidpn hhid pn
+rename s*hhidpn shhidpn* 
+reshape long shhidpn , i(hhidpn) j(round)
+gen core_year=round*2+1990
+rename hhidpn r_id
+rename shhidpn s_id
+sort r_id core_year
+/*xtset r_id core_year, delta(2)
+replace s_id=L.s_id if L.s_id==F.s_id & missing(s_id)*/
+gen knownspouse=s_id & !missing(s_id)
+keep if core_year>=1998
+drop round
+tempfile temp1
+keep if knownspouse
+rename (hhid pn) (r_hhid r_pn)
+save `temp1'
+drop s* knownspouse
+rename (r_id r_hhid r_pn) (s_id s_hhid s_pn)
+merge 1:m s_id core_year using `temp1',  keep(match)
+replace r_id=s_id if missing(r_id) 
+replace s_id=. if !knownspouse
+drop r_id s_id
+gen r_id =r_hhid+r_pn
+gen s_id=s_hhid+s_pn
+tempfile temp1 
+save `temp1'
+use "E:\data\serious_ill\int_data\core_ids_1yr_criteria_5.dta" if xwalk_yes==1, clear
+//get cesd, will be used for outcome in pscore
+replace cesd_tot=2 if missing(cesd_tot)
+sort id core_year
+by id: gen cesd_tot_p1=cesd_tot[_n+1]
+replace female=gender-1 if female==.
+replace hisp=hisp_eth if hisp_eth!=.
+gen region=inlist(state_wave,"CT","ME","MA","NH","RI","VT","NJ","NY","PA")
+replace region=2 if inlist(state_wave,"IN","IL","MI","OH","WI" ) | ///
+inlist(state_wave,"IA","KS","MN","MO","NE","ND","SD")
+replace region=3 if inlist(state_wave,"DE","DC","FL","GA","MD","SC","NC") | ///
+inlist(state_wave,"VA","WV","AL","KY","MS","TN") 
+replace region=3 if inlist(state_wave,"AR","LA","OK","TX")
+replace region=4 if inlist(state_wave,"AZ","CO","ID","NM","MT") | ///
+inlist(state_wave,"UT","NV","WY","AK","CA","HI","OR","WA")
+gen northeast=region==1
+gen midwest=region==2
+gen south=region==3
+gen west=region==4
+
+gen age_cat=1 if age_at_core<=70
+replace age_cat=2 if age_at<=75 & age_cat==.
+replace age_cat=3 if age_at<=80 & age_cat==.
+replace age_cat=4 if age_at<=85 & age_cat==.
+replace age_cat=5 if age_at<=90 & age_cat==.
+replace age_cat=6 if age_at>=90 & age_cat==.
+*replace age_cat=7 if age_at>95 & age_cat==.
+tab age_cat, gen(age_cat)
+tab comor_c, gen(comorb_cat)
+replace comorb_cat3=1 if comorb_cat4==1
+local matchvars age_cat female black hisp adl_independent_core ///
+srh_pf srh_g srh_ve nw_quartile_65 region northeast midwest south west ///
+age_cat1 age_cat2 age_cat3 age_cat4 age_cat5 age_cat6 nhres
+
+local comorb cancer_hrs lung_hrs heart_hrs chf_hrs stroke_hrs memory_hrs ///
+htn_hrs dm_hrs psych_hrs 
+
+merge m:1 id using "E:\data\hrs_cleaned\death_date_2012.dta", ///
+keepusing(death_all) keep(match master) nogen
+rename death_all r_death_date
+gen r_death_year=year(r_death_date)
+*destring id, gen(r_id)
+rename id r_id 
+gen adl_iadl_sp_helper=adl_sp_helper | iadl_sp_helper
+gen comorb_index=0
+foreach x in `comorb' {
+	replace comorb_index=comorb_index+1 if `x'==1
+}
+
+
+//get last core year
+by r_id, sort: egen lcd=max(c_ivw_date)
+sort r_id core_year
+by r_id: gen ncd=c_ivw_date[_n+1]
+local comorb cancer_hrs lung_hrs heart_hrs chf_hrs stroke_hrs memory_hrs ///
+htn_hrs dm_hrs psych_hrs comorb_cat1 comorb_cat2 comorb_cat3 adl_iadl_sp_helper ///
+cesd_tot
+
+keep bid_hrs* r_id c_ivw_* core_year lcd `matchvars' `comorb' age_at_core ressp ///
+comor_c_hrs cesd_tot* r_death* comorb_index ncd
+
+foreach x in `matchvars' `comorb' ncd lcd comorb_index comor_c_hrs age_at_core c_ivw_date ///
+c_ivw_month c_ivw_year ressp bid_hrs {
+	rename `x' r_`x'
+}
+describe
+tempfile temp2
+save `temp2'
+rename r_* s_*
+tempfile temp3
+save `temp3'
+use `temp1', clear
+merge 1:1 r_id core_year using `temp2', keep(match) gen(rmatch)
+merge 1:1 s_id core_year using `temp3', keep(match) gen(smatch)
+drop if s_age_at_core<65
+*keep if r_ressp==1 & s_ressp==1
+/*gen id=r_hhid+r_pn
+merge m:1 id using "E:\data\hrs_cleaned\death_date_2012.dta", ///
+keepusing(death_all) keep(match master) nogen
+rename death_all r_death_date
+replace id=s_hhid+s_pn
+merge m:1 id using "E:\data\hrs_cleaned\death_date_2012.dta", ///
+ keepusing(death_all) keep(match master) nogen
+drop id
+rename death_all s_death_date
+gen s_death_year=year(s_death_date)*/
+sort r_id core_year
+gen survives_spouse=r_death_date<s_death_date if r_death_date!=.
+drop if s_death_date<s_c_ivw_date | r_death_date<s_c_ivw_date
+gen cy=core_year if s_c_ivw_date<r_death_date & !missing(r_death_date)
+by r_id s_id, sort: egen lcy=max(cy)
+gen ind_n1_ivw=core_year==lcy
+replace ind_n1_ivw=0 if survives==0
+replace ind_n1_ivw=0 if s_ncd<r_death_date
+drop *lcd cy lcy *ncd
+/*
+tempfile temp1
+save `temp1'
+keep id
+duplicates drop*/
+gen n=1
+
+foreach x in r s {
+	foreach y in `matchvars' `comorb' {
+		local match `match' `x'_`y'
+}
+}
+di "`match'"
+sum `match'
+foreach x in `match' {
+qui sum n if `x'==.
+if r(N)>0 {
+di "`x'"
+di r(N)
+}
+}
+
+drop if r_region==0
+gen same=r_region==s_region
+drop if same==0
+
+local region northeast midwest south west
+foreach x in `region' region {
+	drop s_`x'
+	rename r_`x' `x'
+}
+
+*preserve
+local match /*r_comorb_cat1 r_comorb_cat2 r_comorb_cat3 r_adl_independent_core ///
+r_srh_pf r_srh_g r_srh_ve */s_age_cat1 s_age_cat2 s_age_cat3 s_age_cat4 s_age_cat5 s_age_cat6 ///
+s_comorb_cat1 s_comorb_cat2 s_comorb_cat3  ///
+s_female s_black s_hisp s_adl_independent_core s_srh_pf s_srh_g ///
+s_srh_ve 
+/*
+local match r_age_cat ///
+r_comorb_cat1 r_comorb_cat2 r_comorb_cat3 ///
+r_female r_black r_hisp r_adl_independent_core ///
+r_srh_pf r_age_cat ///
+s_comorb_cat1 s_comorb_cat2 s_comorb_cat3  ///
+s_adl_independent_core s_srh_pf 
+*/
+tab s_nw_q, gen(nw)
+local match r_age_cat2 r_age_cat3 r_age_cat4 r_age_cat5 r_age_cat6 /// 
+ r_comorb_cat1 r_comorb_cat2 r_comorb_cat3  r_adl_independent_core ///
+r_srh_pf r_srh_g r_srh_ve s_age_cat2 s_age_cat3 s_age_cat4 s_age_cat5 s_age_cat6 ///
+nw2 nw3 nw4 s_comorb_cat1 s_comorb_cat2 s_comorb_cat3  ///
+s_female s_black s_hisp s_adl_independent_core s_srh_pf s_srh_g ///
+s_srh_ve r_nhres s_nhres r_adl_iadl_sp_helper r_cesd_tot s_cesd_tot
+
+local match r_comorb_cat1 r_comorb_cat2 r_comorb_cat3  r_adl_independent_core ///
+r_srh_pf  s_age_at_core ///
+nw1 s_comorb_cat2 s_comorb_cat3  ///
+s_female s_black s_hisp s_adl_independent_core s_srh_pf ///
+r_nhres s_nhres r_adl_iadl_sp_helper r_cesd_tot s_cesd_tot
+
+gen blackhisp=s_black==1 | s_hisp==1
+
+local match r_age_at_core r_comorb_cat2 r_comorb_cat3 r_adl_independent_core ///
+r_srh_g r_srh_v s_age_at_core ///
+nw2 nw3 nw4 s_comorb_cat2 s_comorb_cat3 ///
+s_female s_black s_hisp s_adl_independent_core s_srh_g s_srh_v ///
+r_nhres r_adl_iadl_sp_helper r_cesd_tot s_cesd_tot s_nhres
+
+capture drop pscore *
+capture drop lp 
+capture drop weight 
+capture drop support 
+capture drop ip_bloc
+capture drop x
+
+drop if core_year<2000
+levelsof core_year , local(levels)
+//propensity score qui generation
+
+capture drop x weight support
+//first sort data randomly
+set seed 2001
+qui gen x=uniform()
+sort x
+
+
+foreach x in weight support nn n1 n2 n3 id {
+qui gen `x'=.
+}
+capture log close
+replace cesd_tot_ge3=cesd_tot_p1>=3
+gen outcome=(rnormal(2)+ind-runiform())>=1
+foreach seven in 1 {
+log using "E:\data\spouse_claims\logs\control_ps_test.txt", text replace
+pscore ind_n1_ivw `match' `region', pscore(p_all) blockid(ip_block) logit
+foreach l of local levels {
+di "`l'" 
+qui gen lp=ln(p_all/(1-p_all))
+qui sum lp
 
 sca cal_ps1=r(sd)*0.02
 sca list cal_ps1
 local caliper cal_ps1
 
-//rule of thumb 0.2*sd, try 0.02* sd
-qui psmatch2 ind_n1_ivw if core_year==`l',outcome(cesd_tot_p1) pscore(pscore`l') n(`n') ///
-caliper(`=`caliper'') logit ties
-replace support=1 if _sup==1
-replace weight=_weight if weight==.
-capture drop ip_block pscore* lp
-}
-replace _weight=weight
-di "`n' to 1 with replacement"
-pstest `match' `region' core_year,treated(ind) both hist 
-*cem `match' `region' core_year, treatment(ind_n1_ivw)
-graph save "E:\data\spouse_claims\logs\control_ps_test_`n'_to_1", replace
-graph export "E:\data\spouse_claims\logs\control_ps_test_`n'_to_1.pdf", replace
-}
-log close
+qui psmatch2 ind_n1_ivw if core_year==`l', outcome(outcome) pscore(p_all) n(1) ///
+ caliper(`=`caliper'') logit noreplace
 
-teffects nnmatch (`match' `region' core_year) (ind_n), ematch(`match')
+foreach x in weight sup nn n1 /*n2 n3*/ id {
+	replace `x'=_`x' if core_year==`l'
+}
+drop lp
+}
+pstest `match' `region' core_year,treated(ind) both hist mweight(weight) support(sup)
 
+}
+*keep if weight==1
+gen d=r_death_date if ind==1
+gen id2=n1 if ind
+replace id2=id if !ind
+by id2 core_year, sort: egen index_date=max(d)
+gen index_year=year(index_date)
+gen index_month=month(index_date)
+by id2 core_year, sort: egen num=count(d)
+tab num
+gen pairid=id2*1000+core_year
+drop num d id2
+format index_date %td
+saveold "E:\data\spouse_claims\data\int_data\spouse_matched1.dta", replace
+
+
+H="get index date"
+/*Import Matched sample info*/
+proc import datafile="E:\data\spouse_claims\data\int_data\spouse_matched1.dta" out=spouse replace; run;
+
+data proj_int.spouse1;
+set spouse;
+if weight=1;
+run;
+
+data index1 (keep=s_id s_hhid s_pn index_date index_month index_year);
+set proj_int.spouse1;
+run;
+
+/*prepare xwalk id file to merge*/
+data crosswalk_1;
+set medi.cmsxref2012;
+keep bid_hrs_21 hhid pn;
+run;
+
+proc sql; 
+create table index2 as select *
+from index1 a 
+left join
+crosswalk_1 b
+on a.s_hhid=b.hhid and a.s_pn=b.pn;
+quit;
+
+data proj_int.index;
+set index2;
+run;
+
+H="continuous ffs before"
+/*determine Spouse ffs medicare before R's death using the 
+claims denominator files
+
+Several sets of variables created, looking back 6m, 12m, 18m, 24m from R's death
+
+Also pulls in spouse date of death where available in the claims s_claims_dod*/
+
+/*sort claims denominator file*/
+
+proc sort data=medi.dn_2000_2012 out=dn  nodupkey;
+by bid_hrs_21 year;
+run;
+
+proc sort data=proj_int.index out=index1 nodupkey;
+by bid_hrs_21 index_year;
+run;
+
+/*get dn just for interview year*/
+
+proc sql; 
+create table dn_index_year as select
+a.*,b.buyin12,b.year,b.hmoind12
+from index1 a inner join
+dn b
+on trim(left(a.bid_hrs_21))=trim(left(b.bid_hrs_21)) 
+and a.index_year=b.year;
+quit;
+
+
+proc sql;
+select count(distinct bid_hrs_21) from dn_index_year;
+quit;
+
+
+
+data dn_index_year2;
+set dn_index_year;
+if length(trim(left(buyin12)))=12 and index_month>0 then do;
+buyin_iy=substr(trim(left(buyin12)),1,index_month);
+hmo_iy=substr(trim(left(HMOIND12)),1,index_month);
+end;
+else do;
+buyin_iy=trim(left(buyin12));
+hmo_iy=trim(left(HMOIND12));
+end;
+buyin_im=substr(trim(left(buyin12)),index_month,1);
+hmo_im=substr(trim(left(HMOIND12)),index_month,1);
+format index_date date9.;
+run;
+proc means n;
+var index_month;
+run;
+
+proc sql;
+create table dn_index_year_bef as select
+a.bid_hrs_21,a.year as index_year,
+b.year as index_year_bef,
+b.year, b.buyin12,b.HMOIND12
+from dn_index_year a inner join
+dn b
+on trim(left(a.bid_hrs_21))=trim(left(b.bid_hrs_21))
+and 0<a.year-b.year<=1 order by bid_hrs_21,year;
+quit;
+
+
+/* and the year before... 1922 have the -2 year dn file*/
+proc sql;
+create table dn_index_year_2bef as select
+a.bid_hrs_21,a.bid_hrs_21,a.index_year,a.index_year_bef,
+b.year as index_year_2bef,
+b.year,b.buyin12,b.HMOIND12
+from dn_index_year_bef a inner join
+dn b
+on trim(left(a.bid_hrs_21))=trim(left(b.bid_hrs_21))
+and 0<a.index_year_bef-b.year<=1 order by bid_hrs_21,year;
+quit;
+
+/*merge the insurance data for death year, -1 and -2 years into single dataset*/
+proc sql;
+create table all_insurance as select a.*,b.buyin12 as buyin_bef,b.HMOIND12 as hmo_bef from
+dn_index_year2 a
+left join
+dn_index_year_bef b
+on trim(left(a.bid_hrs_21))=trim(left(b.bid_hrs_21)) and a.index_year=b.index_year;
+quit;
+
+proc sql;
+create table all_insurance2 as select a.*,b.buyin12 as buyin_2bef,b.HMOIND12 as hmo_2bef from
+all_insurance a
+left join
+dn_index_year_2bef b
+on trim(left(a.bid_hrs_21))=trim(left(b.bid_hrs_21)) and a.index_year=b.index_year; 
+quit;
+
+
+/*merge death year and year before death buy-in and hmo variables
+Trim so the final variable _6m is 6 months pre-death
+Note: indicator variables for parts a and b and hmo are null if don't
+have information for full 6 months pre-death*/
+data all_insurance3;
+set all_insurance2;
+buyin_2y=trimn(left(buyin_2bef))||trimn(left(buyin_bef))||trimn(left(buyin_iy));
+hmo_2y=trimn(left(hmo_2bef))||trimn(left(hmo_bef))||trimn(left(hmo_iy));
+
+buyin_2y_r=reverse(trim(buyin_2y));
+hmo_2y_r=reverse(trim(hmo_2y));
+
+
+/*create length of continous a&b and non-hmo coverage vars*/
+if indexc(buyin_2y_r,"0","1","2","A","B")=0 then part_ab_n_mos=length(buyin_2y_r)-1;
+if indexc(buyin_2y_r,"0","1","2","A","B") then part_ab_n_mos=indexc(buyin_2y_r,"0","1","2","A","B")-1;
+if indexc(hmo_2y_r,"1","2","4","A","B","C")=0 then non_hmo_d_n_mos=length(hmo_2y_r)-1;
+if indexc(hmo_2y_r,"1","2","4","A","B","C") then non_hmo_d_n_mos=indexc(hmo_2y_r,"1","2","4","A","B","C")-1;
+if indexc(buyin_im,"0","1","2","A","B")=1 then part_ab_at_index_dt=0;
+if indexc(buyin_im,"0","1","2","A","B")=0 then part_ab_at_index_dt=1;
+if indexc(hmo_im,"1","2","4","A","B","C")=1 then hmo_d_at_index_dt=1;
+if indexc(hmo_im,"1","2","4","A","B","C")=0 then hmo_d_at_index_dt=0;
+if part_ab_n_mos<=non_hmo_d_n_mos then cont_ffs_n_mos=part_ab_n_mos;
+if non_hmo_d_n_mos<part_ab_n_mos then cont_ffs_n_mos=non_hmo_d_n_mos;
+run;
+
+
+data proj_int.ffs_before;
+set all_insurance3;
+run;
+
+
+H="continuous ffs after"
+/*determine Spouse ffs medicare before R's death using the 
+claims denominator files
+
+Several sets of variables created, looking back 6m, 12m, 18m, 24m from R's death
+
+Also pulls in spouse date of death where available in the claims s_claims_dod*/
+
+/*sort claims denominator file*/
+
+proc sort data=medi.dn_2000_2012 out=dn  nodupkey;
+by bid_hrs_21 year;
+run;
+
+proc sort data=proj_int.index out=index1 nodupkey;
+by bid_hrs_21 index_year;
+run;
+
+/*get dn just for interview year*/
+
+proc sql; 
+create table dn_index_year as select
+a.*,b.buyin12,b.year,b.hmoind12
+from index1 a inner join
+dn b
+on trim(left(a.bid_hrs_21))=trim(left(b.bid_hrs_21)) 
+and a.index_year=b.year;
+quit;
+
+
+proc sql;
+select count(distinct bid_hrs_21) from dn_index_year;
+quit;
+
+
+
+data dn_index_year2;
+set dn_index_year;
+if length(trim(left(buyin12)))=12 and index_month>0 then do;
+buyin_iy=substr(trim(left(buyin12)),index_month,13-index_month);
+hmo_dy=substr(trim(left(HMOIND12)),index_month,13-index_month);
+buyin_at_death=substr(trim(left(buyin12)),index_month,1);
+hmo_at_death=substr(trim(left(HMOIND12)),index_month,1);
+end;
+else do;
+buyin_iy=trim(left(buyin12));
+hmo_iy=trim(left(HMOIND12));
+end;
+format index_date date9.;
+run;
+proc means n;
+var index_month;
+run;
+
+
+proc sql;
+create table dn_index_year_aft as select
+a.bid_hrs_21,a.bid_hrs_21,a.year as index_year,
+b.year as index_year_aft,
+b.year,b.buyin12,b.HMOIND12
+from dn_index_year a inner join
+dn b
+on trim(left(a.bid_hrs_21))=trim(left(b.bid_hrs_21))
+and a.year-b.year=-1 order by bid_hrs_21,year;
+quit;
+
+
+/* and the year aftore... 1790 have the +2 year dn file*/
+proc sql;
+create table dn_index_year_2aft as select
+a.bid_hrs_21,a.bid_hrs_21,a.index_year,a.index_year_aft,
+b.year as index_year_2aft,
+b.year,b.buyin12,b.HMOIND12
+from dn_index_year_aft a inner join
+dn b
+on trim(left(a.bid_hrs_21))=trim(left(b.bid_hrs_21))
+and a.index_year_aft-b.year=-1 order by bid_hrs_21,year;
+quit;
+
+/*merge the insurance data for death year, +1 and +2 years into single dataset*/
+proc sql;
+create table all_insurance as select a.*,b.buyin12 as buyin_aft,b.HMOIND12 as hmo_aft from
+dn_index_year2 a
+left join
+dn_index_year_aft b
+on trim(left(a.bid_hrs_21))=trim(left(b.bid_hrs_21)) and a.index_year=b.index_year;
+quit;
+
+proc sql;
+create table all_insurance2 as select a.*,b.buyin12 as buyin_2aft,b.HMOIND12 as hmo_2aft from
+all_insurance a
+left join
+dn_index_year_2aft b
+on trim(left(a.bid_hrs_21))=trim(left(b.bid_hrs_21)) and a.index_year=b.index_year;
+quit;
+
+
+/*merge death year and year aftore death buy-in and hmo variables
+Trim so the final variable _p6m is 6 months post-death
+Note: indicator variables for parts a and b and hmo are null if don't
+have information for full 6 months post-death*/
+data all_insurance3;
+set all_insurance2;
+buyin_2y=trimn(left(buyin_iy))||trimn(left(buyin_aft))||trimn(left(buyin_2aft));
+hmo_2y=trimn(left(hmo_dy))||trimn(left(hmo_aft))||trimn(left(hmo_2aft));
+
+/*create length of continous a&b and non-hmo coverage vars*/
+if indexc(buyin_2y,"0","1","2","A","B")=0 then part_ab_p_mos=length(buyin_2y);
+if indexc(buyin_2y,"0","1","2","A","B") then part_ab_p_mos=indexc(buyin_2y,"0","1","2","A","B");
+if indexc(hmo_2y,"1","2","4","A","B","C")=0 then non_hmo_d_p_mos=length(hmo_2y);
+if indexc(hmo_2y,"1","2","4","A","B","C") then non_hmo_d_p_mos=indexc(hmo_2y,"1","2","4","A","B","C");
+if indexc(buyin_at_death,"0","1","2","A","B")=1 then part_ab_at_death=0;
+if indexc(buyin_at_death,"0","1","2","A","B")=0 then part_ab_at_death=1;
+if indexc(hmo_at_death,"1","2","4","A","B","C")=1 then hmo_d_at_death=1;
+if indexc(hmo_at_death,"1","2","4","A","B","C")=0 then hmo_d_at_death=0;
+
+if part_ab_p_mos<=non_hmo_d_p_mos then cont_ffs_p_mos=part_ab_p_mos;
+if non_hmo_d_p_mos<part_ab_p_mos then cont_ffs_p_mos=non_hmo_d_p_mos;
+run;
+
+data proj_int.ffs_after;
+set all_insurance3;
+run;
+
+H="combine with interviews into one dataset"
+
+
+proc sql; 
+create table tomerge as select * from
+proj_int.index a left join
+proj_int.ffs_before b 
+on a.bid_hrs_21=b.bid_hrs_21 and a.index_year=b.index_year
+left join 
+proj_int.ffs_after c
+on a.bid_hrs_21=c.bid_hrs_21 and a.index_year=c.index_year
+/*left join 
+proj_int.elix_0_1yr_2 d
+on a.bid_hrs_21=d.bid_hrs_21 and a.index_year=d.index_year
+left join 
+proj_int.charls_0_1yr e
+on a.bid_hrs_21=e.bid_hrs_21 and a.index_year=e.index_year
+left join 
+proj_int.chronic_21_1yr3_0 f
+on a.bid_hrs_21=f.bid_hrs_21 and a.index_year=f.index_year
+left join 
+proj_int.utilization_pre g
+on a.bid_hrs_21=g.bid_hrs_21 and a.index_year=g.index_year
+left join 
+proj_int.criteria h
+on a.bid_hrs_21=h.bid_hrs_21 and a.index_year=h.index_year
+left join 
+proj_int.utilization_post i
+on a.bid_hrs_21=i.bid_hrs_21 and a.index_year=i.index_year
+left join 
+proj_int.mc_costs_all j
+on a.bid_hrs_21=j.bid_hrs_21 and a.index_year=j.index_year*/;
+quit;
+
+proc sql;
+create table proj_int.spouse_matched_int_dataset as select * from
+proj_int.spouse1 a 
+left join
+tomerge b 
+on a.s_id=b.s_id and a.index_year=b.index_year;
+quit;
+
+proc export data=proj_int.spouse_matched_int_dataset outfile="E:\data\spouse_claims\data\int_data\spouse_matched_int_dataset.dta" replace;
+run;
+
+H="table 1"
+clear all
+set more off
+capture log close
+
+local datapath "E:\data\spouse_claims\data\int_data\"
+local logpath "E:\data\spouse_claims\logs\"
+
+cd `logpath'
+use `datapath'\spouse_matched1, clear
+
+local match r_age_at_core r_comorb_cat2 r_comorb_cat3 r_adl_independent_core ///
+r_srh_g r_srh_v s_age_at_core ///
+nw2 nw3 nw4 s_comorb_cat2 s_comorb_cat3 ///
+s_female s_black s_hisp s_adl_independent_core s_srh_g s_srh_v ///
+r_nhres r_adl_iadl_sp_helper r_cesd_tot s_cesd_tot s_nhres
+
+local rivars1 r_comorb_cat2 r_comorb_cat3 r_adl_independent_core ///
+r_srh_g r_srh_v r_nhres 
+local rivars2 r_adl_iadl_sp_helper
+local rivars3
+local rcvars1 r_age_at_core
+local rcvars2 r_cesd_tot
+local rcvars3
+local scvars1 s_age_at_core
+local scvars2 s_cesd_tot
+local scvars3 northeast midwest west south
+local rivars1 nw2 nw3 nw4 s_comorb_cat2 s_comorb_cat3 ///
+s_female s_black s_hisp s_adl_independent_core s_srh_g s_srh_v ///
+s_nhres
+
+local rivars2 
+local rivars3
+
+local vars `rcvars1' `rivars1' `rivars2'  `rcvars2' `rcvars3'`rivars3' ///
+`scvars1' `sivars1' `scvars2' `sivars2' `scvars3' `sivars3'
+local rows `vars' N
+
+local rn : word count `rows'
+di "`rn'"
+mat tab1=J(`rn',6,.)
+mat stars=J(`rn',6,0)
+local r=1
+local c=1
+
+foreach b in bonnet {
+log using pstests.txt, text replace
+
+foreach time in 0 1 {
+foreach group in "0" "1" {
+	foreach round in 1 2 3 {
+		foreach s in r s {
+			foreach x of local `s'cvars`round' {
+				qui sum `x' if inlist(ind_,`group')
+				mat tab1[`r',`c']=r(mean) 
+				*mat tab1[`r',`c'+1]=r(sd)
+				if "`group'"=="1" {
+					ttest `x', by(ind_)
+					mat tab1[`r',`c'+1]=r(p)
+					mat stars[`r',`c'+1]=(r(p)<.05)+(r(p)<.01)
+}
+				local r=`r'+1
+}
+			foreach x of local `s'ivars`round' {
+				qui sum `x' if inlist(ind_,`group')
+				mat tab1[`r',`c']=r(mean)*100
+				if "`group'"=="1" {
+					tab `x' ind_, chi2
+					mat tab1[`r',`c'+1]=r(p)
+					mat stars[`r',`c'+1]=(r(p)<.05)+(r(p)<.01)
+}
+				local r=`r'+1
+}
+}
+}
+	sum n if inlist(ind_,`group')
+	mat tab1[`r',`c']=r(N)
+	local c=`c'+1
+	if "`group'"=="1" local c=`c'+1
+	local r=1
+}
+keep if weight==1
+}
+mat rownames tab1=`rows'
+
+
+frmttable using table_1_match_vars.rtf, replace statmat(tab1) ///
+title("Matching variables, before and after match (pre FFS determination)") ///
+ctitles("" "" "Pre match" "" "" "Post match" "" \ "" "Control" "Survivors" "P" "Control" ///
+"Survivors" "P") varlabels sdec(2)
+
+use `datapath'spouse_matched_int_dataset, clear
+gen ffs_at_index=part_ab_at_index==1 & hmo_d_at_i==0
+
+mat tab1=J(`rn',6,.)
+mat stars=J(`rn',6,0)
+local r=1
+local c=1
+
+
+foreach time in 0 1 {
+preserve
+keep if s_female==`time'
+foreach group in "0" "1" {
+	foreach round in 1 2 3 {
+		foreach s in r s {
+			foreach x of local `s'cvars`round' {
+				qui sum `x' if inlist(ind_,`group')
+				mat tab1[`r',`c']=r(mean) 
+				*mat tab1[`r',`c'+1]=r(sd)
+				if "`group'"=="1" {
+					ttest `x', by(ind_)
+					mat tab1[`r',`c'+1]=r(p)
+					mat stars[`r',`c'+1]=(r(p)<.05)+(r(p)<.01)
+}
+				local r=`r'+1
+}
+			foreach x of local `s'ivars`round' {
+				qui sum `x' if inlist(ind_,`group')
+				mat tab1[`r',`c']=r(mean)*100
+				if "`group'"=="1" {
+					tab `x' ind_, chi2
+					mat tab1[`r',`c'+1]=r(p)
+					mat stars[`r',`c'+1]=(r(p)<.05)+(r(p)<.01)
+}
+				local r=`r'+1
+}
+}
+}
+	sum n if inlist(ind_,`group')
+	mat tab1[`r',`c']=r(N)
+	local c=`c'+1
+	if "`group'"=="1" local c=`c'+1
+	local r=1
+}
+restore
+}
+mat rownames tab1=`rows'
+
+frmttable using table_1_match_vars.rtf, addtable statmat(tab1) ///
+title("Matching variables, before and after match (pre FFS determination)") ///
+ctitles("" "" "Male Spouses" "" "" "Female Spouses" "" \ "" "Control" "Survivors" "P" "Control" ///
+"Survivors" "P") varlabels sdec(2)
+
+use `datapath'spouse_matched_int_dataset, clear
+gen ffs_at_index=part_ab_at_index==1 & hmo_d_at_i==0
+keep if ffs_at_index==1
+
+mat tab1=J(`rn',6,.)
+mat stars=J(`rn',6,0)
+local r=1
+local c=1
+
+
+foreach time in 0 1 {
+preserve
+keep if s_female==`time'
+foreach group in "0" "1" {
+	foreach round in 1 2 3 {
+		foreach s in r s {
+			foreach x of local `s'cvars`round' {
+				qui sum `x' if inlist(ind_,`group')
+				mat tab1[`r',`c']=r(mean) 
+				*mat tab1[`r',`c'+1]=r(sd)
+				if "`group'"=="1" {
+					ttest `x', by(ind_)
+					mat tab1[`r',`c'+1]=r(p)
+					mat stars[`r',`c'+1]=(r(p)<.05)+(r(p)<.01)
+}
+				local r=`r'+1
+}
+			foreach x of local `s'ivars`round' {
+				qui sum `x' if inlist(ind_,`group')
+				mat tab1[`r',`c']=r(mean)*100
+				if "`group'"=="1" {
+					tab `x' ind_, chi2
+					mat tab1[`r',`c'+1]=r(p)
+					mat stars[`r',`c'+1]=(r(p)<.05)+(r(p)<.01)
+}
+				local r=`r'+1
+}
+}
+}
+	sum n if inlist(ind_,`group')
+	mat tab1[`r',`c']=r(N)
+	local c=`c'+1
+	if "`group'"=="1" local c=`c'+1
+	local r=1
+}
+restore
+}
+mat rownames tab1=`rows'
+
+frmttable using table_1_match_vars.rtf, addtable statmat(tab1) ///
+title("Matching variables, before and after match (FFS at index date only)") ///
+ctitles("" "" "Male Spouses" "" "" "Female Spouses" "" \ "" "Control" "Survivors" "P" "Control" ///
+"Survivors" "P") varlabels sdec(2)
+
+di "Pstest, restricted to those with FFS at death"
+pstest `vars' core_year, treated(ind_) both hist mweight(weight) support(sup)
+
+by pairid, sort: drop if _N==1
+mat tab1=J(`rn',6,.)
+mat stars=J(`rn',6,0)
+local r=1
+local c=1
+
+
+foreach time in 0 1 {
+preserve
+keep if s_female==`time'
+foreach group in "0" "1" {
+	foreach round in 1 2 3 {
+		foreach s in r s {
+			foreach x of local `s'cvars`round' {
+				qui sum `x' if inlist(ind_,`group')
+				mat tab1[`r',`c']=r(mean) 
+				*mat tab1[`r',`c'+1]=r(sd)
+				if "`group'"=="1" {
+					ttest `x', by(ind_)
+					mat tab1[`r',`c'+1]=r(p)
+					mat stars[`r',`c'+1]=(r(p)<.05)+(r(p)<.01)
+}
+				local r=`r'+1
+}
+			foreach x of local `s'ivars`round' {
+				qui sum `x' if inlist(ind_,`group')
+				mat tab1[`r',`c']=r(mean)*100
+				if "`group'"=="1" {
+					tab `x' ind_, chi2
+					mat tab1[`r',`c'+1]=r(p)
+					mat stars[`r',`c'+1]=(r(p)<.05)+(r(p)<.01)
+}
+				local r=`r'+1
+}
+}
+}
+	sum n if inlist(ind_,`group')
+	mat tab1[`r',`c']=r(N)
+	local c=`c'+1
+	if "`group'"=="1" local c=`c'+1
+	local r=1
+}
+restore
+}
+mat rownames tab1=`rows'
+
+frmttable using table_1_match_vars.rtf, addtable statmat(tab1) ///
+title("Matching variables, before and after match (FFS at index date only)" ///
+"only keeping complete matched pairs") ///
+ctitles("" "" "Male Spouses" "" "" "Female Spouses" "" \ "" "Control" "Survivors" "P" "Control" ///
+"Survivors" "P") varlabels sdec(2)
+
+di "Pstest, restricted to matched pairs, both with FFS at death"
+pstest `vars' core_year, treated(ind_) both hist mweight(weight) support(sup)
+}

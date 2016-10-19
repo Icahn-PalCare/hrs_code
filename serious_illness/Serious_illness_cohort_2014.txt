@@ -24072,3 +24072,175 @@ H="*****************************************"
 
 
 H="gom"
+
+
+H="prior fmm"
+clear all
+capture log close
+set more off
+local logpath E:\data\serious_ill\logs
+local datapath E:\data\serious_ill\final_data
+cd `logpath'
+use `datapath'\n0_n1_p1_p2_x_criteria_a_death_propensity.dta, clear
+
+xtile cd=contact_days_n0, nq(4)
+replace cd=cd-1 if cd>2
+gen cd_low=cd==1
+gen cd_mid=cd==2
+gen cd_high=cd==3
+
+gen totplus1_wi_n0=tot_paid_by_mc_12m_wi_n0+1 //new variable amt paid +$1
+replace totplus1_wi_n0=1 if totplus1<0
+local cvars age_at_core_n0
+
+replace pain_hrs_n0=0 if missing(pain_hrs_n0)
+local ivars female re_white ///
+hs_deg_ind nw_midlow_n0 nw_midhigh_n0 nw_highest_n0 ///
+religvimp_n0 srh_pf_n0 rel_nb_n0 married_n0 smi_nh_ind_n0 ///
+medicaid_n0 champus_n0 medigap_n0 ///
+smi_any_n0 ind_em_ur_adm_12m_n0 ///
+adl_impair_core_n0
+local region midwest south west eol_spending_mid eol_spending_high
+
+local mvars  smi_dem_ind_n0 smi_cancer_ind_n0 smi_esrd_ind_n0 ///
+smi_chf_ind_n0 smi_copd_ind_n0 smi_diab_compl_ind_n0 ///
+smi_liver_ind_n0  smi_hip_ind_n0 /*smi_nh_ind_n0*/ ///
+srh_pf_n0 adl_impair_core_n0 hlphrs_i_group el_ge3_comorb_1yr_n0
+local nvars age_at_core_n0 female re_black re_hisp ///notwhite ///
+hs_deg_ind nw_lowest_n0 ///
+religvimp_n0 rel_nb_n0 married_n0 smi_nh_ind_n0 ///
+medicaid_n0 champus_n0 medigap_n0
+
+
+log using `logpath'\fmm_prior_2.txt, text replace
+
+forvalues i=2/7 {
+qui fmm totplus1_wi_n0, mix(gamma) search(on) comp(`i') diff iterate(100)
+estimates save `logpath'\est`i', replace
+qui fmm totplus1_wi_n0, mix(gamma) search(on) comp(`i') prob(`cvars' `ivars' `region') diff iter(100)
+estimates save `logpath'\est`i'prior, replace
+estimates use est`i'
+}
+
+forvalues i=2/7 {
+estimates use est`i'
+estat ic
+}
+
+
+forvalues i=2/5 {
+estimates use est`i'
+qui fmm totplus1_wi_n0, mix(gamma) search(on) comp(`i') prob(`mvars' `nvars' `region') diff iter(145)
+estimates save est`i'prior2, replace
+}
+
+forvalues i=2/5 {
+di "`i' Comp"
+foreach x in "" 2 {
+estimates use est`i'prior`x'
+estat ic
+}
+}
+
+
+
+estimates use est3
+estimates replay
+qui fmm totplus1_wi_n0, mix(gamma) search(on) comp(2) diff iter(145)
+
+qui fmm totplus1_wi_n0, mix(gamma) search(on) comp(3) diff iter(145)
+
+qui fmm totplus1_wi_n0, mix(gamma) search(on) comp(3) prob(`mvars' `nvars' `region') diff iter(145)
+predict pcomp1, prior eq(component1)
+predict pcomp2, prior eq(component2)
+predict pcomp3, prior eq(component3)
+gen n=1
+gen comp=1
+replace comp=2 if pcomp2>=pcomp1
+replace comp=3 if pcomp3>=pcomp2 & pcomp3>=pcomp1
+local mvars  smi_dem_ind_n0 smi_cancer_ind_n0 smi_esrd_ind_n0 ///
+smi_chf_ind_n0 smi_copd_ind_n0 smi_diab_compl_ind_n0 ///
+smi_liver_ind_n0  smi_hip_ind_n0 /*smi_nh_ind_n0*/ ///
+srh_pf_n0 adl_impair_core_n0 hlphrs_i_group el_ge3_comorb_1yr_n0 criteria_b_n0 criteria_c_n0
+local nvars age_at_core_n0 female re_black re_hisp ///notwhite ///
+hs_deg_ind nw_lowest_n0 ///
+religvimp_n0 rel_nb_n0 married_n0 smi_nh_ind_n0 ///
+medicaid_n0 champus_n0 medigap_n0
+local coutcomes tot_paid_by_mc_12m_wi_n0 ip_paid_by_mc_12m_wi_n0 n_hospd_p12m_n0 
+local ioutcomes ind_hosp_adm_p12m_n0 mult_ip_adm_p12m_n0 mult_ed_vis_p12m_n0 ind_icu_vis_p12m_n0 ///
+hs_admit_p12m_n0 core_to_dod_1yr_n0 loc_hosp_x
+
+
+
+local rn : word count `mvars' `nvars' `coutcomes' `ioutcomes' N
+local r=1
+local c=1
+
+mat tab=J(`rn',8,.)
+mat stars=J(`rn',8,0)
+
+foreach i in "1,2,3" 1 2 3 {
+foreach x in `nvars' `mvars' `coutcomes' `ioutcomes' {
+	sum `x' if inlist(comp,`i')
+	if !inlist("`x'","age_at_core_n0","tot_paid_by_mc_12m_wi_n0","ip_paid_by_mc_12m_wi_n0","n_hospd_p12m_n0") {
+		mat tab[`r',`c']=r(mean)*100
+		if inlist("`i'","2","3") {
+			tab `x' comp if inlist(comp,1,`i'), chi2
+			mat tab[`r',`c'+1]=r(p)
+			mat stars[`r',`c'+1]=(r(p)<.05) + (r(p)<.01)
+}
+}
+	else {
+		mat tab[`r',`c']=r(mean)
+		if inlist("`i'","2","3") {
+			ttest `x' if inlist(comp,1,`i'), by(comp)
+			mat tab[`r',`c'+1]=r(p)
+			mat stars[`r',`c'+1]=(r(p)<.05) + (r(p)<.01)
+}
+}
+	local r=`r'+1
+}
+	sum n if inlist(comp,`i')
+	mat tab[`r',`c']=r(N)
+	local r=1
+	local c=`c'+2
+}
+
+mat rownames tab=`nvars' `mvars' `coutcomes' `ioutcomes' N
+
+frmttable using FMM_prior_table1.rtf, statmat(tab) title("Characteristics, 3 comp") ///
+ ctitles("" "Full Sample" "Comp1" "Comp2" "Comp3") ///
+ varlabels substat(1) annotate(stars) asymbol(*,**) replace
+	
+local spec1 `cvars' `ivars' `region'
+local spec1 `nvars' `mvars' `region'
+local spec2 age_at_core_n0 female re_black re_hisp hs_deg_ind nw_lowest_n0 ///
+ married_n0 nhres_n0 smi_dem_ind_n0 smi_cancer_ind_n0 smi_esrd_ind_n0 ///
+smi_chf_ind_n0 smi_copd_ind_n0 smi_diab_compl_ind_n0 ///
+smi_liver_ind_n0  smi_hip_ind_n0 /*smi_nh_ind_n0*/ ///
+srh_pf_n0 adl_impair_core_n0 hlphrs_i_group el_ge3_comorb_1yr_n0 pain_hrs_n0 
+local spec3 `spec2' cd_mid cd_high 
+local spec4 `spec3' eol_spending_mid eol_spending_high
+local spec5 `spec3' `region'
+local spec6 `spec2' pain_hrs_n0 cd_mid cd_high 
+local spec7 age_at_core_n0 female re_black re_hisp hs_deg_ind nw_lowest_n0 ///
+married_n0 nhres_n0 srh_pf_n0 adl_impair_core_n0 hlphrs_i_group ///
+el_ge3_comorb_1yr_n0 pain_hrs_n0 cd_mid cd_high 
+
+
+outreg, clear
+forvalues i=1/7 {
+di "spec `i'"
+estimates use est3
+qui estimates replay
+qui fmm totplus1, mix(gamma) search(on) comp(3) prob(`spec`i'') diff  iter(100)
+estimates store spec`i'
+estat ic
+qui margins, dydx(*) predict(eq(component1) prior) post noesample
+qui outreg, merge varlabels
+
+}
+outreg, replay
+log close
+
+save `datapath'\criteria_a_fmm, replace

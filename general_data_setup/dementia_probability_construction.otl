@@ -16,7 +16,10 @@ set cogn.cogimp9212a_r;
 keep hhid pn core_year prediction_year
 r&w.cogtot r&w.status r&w.bwc20 r&w.vp
  r&w.ser7  r&w.scis r&w.cact r&w.pres r&w.mo r&w.dy r&w.yr r&w.dw
- r&w.imrc r&w.dlrc r&w.vocab r&w.mstot;
+ r&w.imrc r&w.dlrc r&w.vocab r&w.mstot 
+ r&w.fbwc20 r&w.fvp
+ r&w.fser7  r&w.fscis r&w.fcact r&w.fpres r&w.fmo r&w.fdy r&w.fyr r&w.fdw
+ r&w.fimrc r&w.fdlrc r&w.fvocab r&w.fmstot;
 core_year=&year;
 prediction_year=&year+1;
 run;
@@ -40,6 +43,20 @@ rename r&w.vp=vp;
 rename r&w.vocab=vocab;
 rename r&w.mstot=mstot;
 
+rename r&w.fmo=mo_imp;
+rename r&w.fdy=dy_imp;
+rename r&w.fyr=yr_imp;
+rename r&w.fdw=dw_imp;
+rename r&w.fbwc20=bwc20_imp;
+rename r&w.fser7=ser7_imp;
+rename r&w.fscis=scis_imp;
+rename r&w.fcact=cact_imp;
+rename r&w.fpres=pres_imp;
+rename r&w.fimrc=imrc_imp;
+rename r&w.fdlrc=dlrc_imp;
+rename r&w.fvp=vp_imp;
+rename r&w.fvocab=vocab_imp;
+rename r&w.fmstot=mstot_imp;
 
 
 
@@ -207,6 +224,7 @@ merge 1:1 hhid pn core_year using "E:\data\serious_ill\int_data\proxycog.dta", n
 replace female=gender-1 if !missing(gender)
 
 gen age=floor((c_ivw_date-birth_date)/365.25)
+keep if age>=65
 gen age_cat=1
 replace age_cat=2 if age>=70
 replace age_cat=3 if age>=75
@@ -220,51 +238,87 @@ label values age_cat age_cat
 
 gen ed_hs_only=educ==2
 gen ed_gt_hs=educ>2
-
-
-local cogvars imrc dlrc ser7 bwc20 mo dy yr dw scis cact pres vp adl_index_core ///
-iadl_ind_core iqmean proxy_core 
-
+gen n=1
+sort id core_year
+by id: gen hasn1=!missing(core_year[_n-1])
+egen adl_diff_index=rowtotal(adl_diff*)
+egen adlmiss=rowmiss(adl_diff*)
+local iadl iadl_diff_mp iadl_diff_gr iadl_diff_ph iadl_diff_rx iadl_diff_m 
+sum n `iadl'
+egen iadl_diff_index=rowtotal(`iadl')
+egen iadlmiss=rowmiss(`iadl')
+replace adlmiss=1 if adlmiss>1
+replace iadlmiss=1 if iadlmiss>1
+*replace adl_diff_index=. if missing(adl_index_core)
+gen dates=mo+dy+yr+dw
+gen dates_imp=mo_imp==1 |dy_imp==1 | yr_imp==1 | dw_imp==1
+gen iqmissany=iqmiss>0 if !missing(iqmiss)
+gen iqmissgt2=iqmiss>2 if !missing(iqmiss)
+local cogvars proxy_core  imrc dlrc ser7 bwc20 dates scis cact pres vp adl_diff_index ///
+iadl_diff_index adlmiss iadlmiss iqmean iqmissgt2 iqmissany
+sum n `cogvars' if !proxy & !missing(dx_a)
+sum n `cogvars' if proxy & !missing(dx_a)
 
 foreach x of local cogvars {
 sort id core_year
-by id: gen prev`x'=`x'[_n-1]
-gen ch_`x'=`x'-prev`x'
-gen miss`x'=prev`x'==.
-replace ch_`x'=0 if ch_`x'==.
-replace prev`x'=0 if prev`x'==.
+qui by id: gen prev`x'=`x'[_n-1]
+qui gen ch_`x'=`x'-prev`x'
+if inlist("`x'","imrc","dlrc","ser7","bwc20","dates","scis","cact","pres","vp") ///
+qui gen miss`x'=`x'_imp==1
+if !inlist("`x'","imrc","dlrc","ser7","bwc20","dates","scis","cact","pres","vp") ///
+qui gen miss`x'=`x'==.
+qui gen missprev`x'=prev`x'==.
+if inlist("`x'","imrc","dlrc","ser7","bwc20","dates","scis","cact","pres","vp") ///
+& proxy[_n-1]==0 qui replace missprev`x'=`x'_imp[_n-1]==1
+
+qui replace ch_`x'=0 if ch_`x'==.
+qui replace prev`x'=`x' if prev`x'==.
+sum prev`x' if proxy==1
+replace prev`x'=r(mean) if missprev`x' & proxy==1 & prevproxy==1
 }
-
-
-gen dates=mo+dy+yr+dw
-by id: gen prevdates=dates[_n-1]
-gen missdates=prevdates==.
-gen ch_dates=ch_mo+ch_yr+ch_dy+ch_dw
-replace prevdates=0 if prevdates==.
-replace ch_dates=0 if ch_dates==.
+gen adliadlmiss=adlmiss | iadlmiss
+*replace adl_diff_index=. if adlmiss>=2
+*replace iadl_diff_index=. if iadlmiss>=2
+tempfile this
+save `this'
 
 /*note-most missing variables excluded due to collinearity*/
-local regvars age_cat3 age_cat4 age_cat5 age_cat6 ed_hs_only ed_gt_hs female ///
-adl_index_core iadl_ind_core ch_adl_index_core ch_iadl_ind_core dates bwc20 ///
-ser7 sci cact pres imrc dlrc ch_dates ch_bwc20 ch_ser7 ch_sci ch_cact ch_pres ///
+local regvars /*c.age##c.age*/ age_cat3 age_cat4 age_cat5 age_cat6 ed_hs_only ed_gt_hs female ///
+adl_diff_index iadl_diff_index ch_adl_diff ch_iadl_diff  dates bwc20 ///
+ser7 scis cact pres imrc dlrc ch_dates ch_bwc20 ch_ser7 ch_scis ch_cact ch_pres ///
 ch_imrc ch_dlrc missbwc20 missser7 misssci misscact misspres missimrc ///
-missdlrc missdates missadl missiadl
+missdlrc missdates adliadlmiss 
 
-local proxyvars age_cat3 age_cat4 age_cat5 age_cat6 ed_hs_only ed_gt_hs female ///
-adl_index_core iadl_ind_core ch_adl_index_core ch_iadl_ind_core iqmean ch_iqmean ///
-ch_proxy_core prevdates prevser7 prevpres previmrc prevdlrc ///
-missdates missser7 misssci misscact misspres missimrc ///
-missdlrc missdates missadl missiadl
+local proxyvars /*c.age##c.age*/ age_cat3 age_cat4 age_cat5 age_cat6 ed_hs_only ed_gt_hs female ///
+adl_diff_index iadl_diff_index ch_adl_diff ch_iadl_diff iqmean /*iqmissgt2*/ iqmissany ch_iqmean ///
+prevproxy prevdates prevser7 prevpres previmrc prevdlrc ///
+/*prevcact prevscis prevbwc20*/ missprevdates missprevpres missprevimrc missprevdlrc ///
+adliadlmiss /*previqmissgt2*/ previqmissany
+
+sum `regvars' if !proxy & !missing(dx_a)
+sum `proxyvars' if proxy & !missing(dx_a)
 
 
 oprobit dx `regvars' if proxy==0
 predict pself if proxy==0
+predict pself2 if proxy==0, outcome(#2)
+predict pself3 if proxy==0, outcome(#3)
 oprobit dx `proxyvars' if proxy==1
 predict pdem if proxy==1
-replace pdem=pself if proxy==0
+predict pdem2 if proxy==1, outcome(#2)
+predict pdem3 if proxy==1, outcome(#3)
 
+replace pdem=pself if proxy==0
+replace pdem2=pself2 if proxy==0
+replace pdem3=pself3 if proxy==0
+gen ldem=1 if !missing(pdem)
+replace ldem=2 if pdem2>pdem
+replace ldem=3 if pdem3>pdem2 & pdem3>pdem
+gen likely_dem=ldem==1 if !missing(pdem)
+gen likely_cind=ldem==2
+gen likely_normal=ldem==3
 preserve
-keep id proxy pdem prob_dem dx_adams core_year
+keep id proxy pdem* prob_dem dx_adams core_year ldem likely_*
 rename prob_dem prob_hurd
 save E:\data\hrs_public_2012\dementia\pdem_withvarnames_ebl, replace
 
@@ -829,3 +883,6 @@ frmttable using "E:\data\serious_ill\logs\Dem_dx_decedents.rtf", statmat(source2
 sdec(0,2,0,2) title("Dx Source & Hurd Probability, 1yr pre death, unique diagnosis") ///
 note("Restricted to instances with 12m FFS with only one diagnosis & non-missing probability")
 }
+
+
+H="recreate hurd tables"

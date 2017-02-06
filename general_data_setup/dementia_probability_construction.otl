@@ -886,3 +886,101 @@ note("Restricted to instances with 12m FFS with only one diagnosis & non-missing
 
 
 H="recreate hurd tables"
+use  E:\data\hrs_public_2012\dementia\ADAMS\dementia_dx_adams if !missing(dx), clear
+rename dx_a dx1
+rename core_year core_prior_to_adams
+gen core_year=core_prior if adams_wave==1
+replace core_year=2*(floor(adams_year/2)) if adams_wave>1
+replace core_year=2006 if adams_wave==3
+duplicates tag id core_year, gen(dup)
+replace core_year=core_year+2 if dup==1 & adams_wave>1
+merge 1:1 id core_year using E:\data\hrs_public_2012\dementia\pdem_withvarnames_ebl, nogen keep(match)
+*merge 1:1 id core_year using E:\data\hrs_cleaned\core_00_to_12
+*merge m:1 hhid  pn using "E:\data\hrs_cleaned\restricted_tracker_v2012.dta", keepusing(birth_date gender) keep(match master) nogen
+
+gen stratum=.
+forvalues i=0/9 {
+replace stratum =`=`i'+1' if pdem>0.`i' & pdem<=0`=.`i'+.1'
+}
+
+xtile bin=pdem if adams_wave==1, nq(10)
+mat tab=J(11,6,.)
+local r=1
+local c=1
+forvalues i=1/10 {
+	mat tab[`r',1]=`i'
+	sum pdem if bin==`i'
+	mat tab[`r',2]=r(N)
+	mat tab[`r',3]=r(mean)
+	mat tab[`r',5]=r(mean)*r(N)
+	sum deme if bin==`i'
+	mat tab[`r',4]=r(mean)
+	mat tab[`r',6]=r(mean)*r(N)
+	local r=`r'+1
+}
+foreach i in 0 {
+	mat tab[`r',1]=`i'
+	sum pdem if !missing(dx_a)
+	mat tab[`r',2]=r(N)
+	mat tab[`r',3]=r(mean)
+	mat tab[`r',5]=r(mean)*r(N)
+	sum deme if !missing(dx_a) & !missing(pdem)
+	mat tab[`r',4]=r(mean)
+	mat tab[`r',6]=r(mean)*r(N)
+	local r=`r'+1
+}
+
+frmttable using "E:\data\hrs_public_2012\dementia\hurd_replication_tables.rtf", replace statmat(tab) ctitles("Bin" "N" "Fitted Prob" "Actual prob" ///
+"Estimated cases" "Actual cases") sdec(0,0,3,3,3,0) ///
+title(Replication Hurd Table S1)
+
+
+by id, sort: egen adx=max(dx_a)
+label values adx dx_adams
+preserve
+keep if adams_wave==3 & !missing(ldem)
+
+tab adx dx1, row nofreq
+tab adx ldem, row nofreq
+
+mat tab=J(3,4,.)
+local r=1
+local c=2
+
+foreach x in 3 2 "3,2" {
+	sum adx if inlist(adx,`x')
+	mat tab[`r',1]=r(N)
+	local denom=r(N)
+	foreach y in 3 2 1 {
+		sum adx if dx1==`y' & inlist(adx,`x')
+		mat tab[`r',`c']=(r(N)/`denom')*100
+		local c=`c'+1
+}
+	local r=`r'+1
+	local c=2
+}
+
+mat rownames tab=Normal CIND Total
+
+frmttable using "E:\data\hrs_public_2012\dementia\hurd_replication_tables.rtf", addtable statmat(tab) ctitles("" "" "Wave C" "" \"Wave A" "N" "Normal" "CIND" ///
+"Demented") title(Replication Hurd table S4) sdec(0,1,1,1)
+
+mat tab=J(4,3,.)
+local r=1
+local c=1
+
+foreach x in 3 2 "" {
+	foreach y in 3 2 1 "1,2,3" {
+		sum pdem`x' if inlist(dx1,`y') 
+		mat tab[`r',`c']=r(mean)*100
+		local r=`r'+1
+}
+	local c=`c'+1
+	local r=1
+}
+
+
+mat rownames tab=Normal CIND Demented Total
+
+frmttable using "E:\data\hrs_public_2012\dementia\hurd_replication_tables.rtf", addtable statmat(tab) ctitles("Wave C" "" "Model" "" \"" "Normal" "CIND" ///
+"Demented") title(Replication Hurd table S5) sdec(1)

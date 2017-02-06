@@ -24244,3 +24244,221 @@ outreg, replay
 log close
 
 save `datapath'\criteria_a_fmm, replace
+
+H="**********************************************"
+
+
+H="2010 NPI"
+/* 2010 HRS NPI */
+
+use "E:\data\serious_ill\final_data\n0_n1_p1_p2_x_criteria_2010.dta", clear
+keep bid_hrs c_ivw_date_n0
+
+****** SAS CODE **********; 
+
+*HRS CLAIMS TO EXTRACT UNIQUE NPI;
+
+libname merged "E:\data\cms_DUA_24548_2012";
+
+
+data mpwide (keep= bid_hrs_21 from_dt thru_dt NPI hcpscd01--hcpscd45);
+set merged.op_2000_2012(rename=(at_npi = NPI));
+run;
+
+/*
+data test;
+set mpwide;
+miss = 0;
+if NPI = . then miss = 1;
+run;
+
+
+proc means data = test; var miss; run;
+
+*/
+
+
+
+data opclaims (keep= bid_hrs_21 from_dt thru_dt NPI HCPCS_CD);
+set mpwide;
+array dx hcpscd01--hcpscd45;
+do over dx;
+HCPCS_CD=dx;
+output;
+end;
+run;
+
+
+data opclaims;
+set opclaims;
+cptcodes = input(compress(hcpcs_cd,'ABCDEFGHIJKLMNOPQRSTUVWXYZ/',),8.);
+run;
+
+data opclaims;
+set opclaims;
+cptflag = 0;
+IF (99200 < cptcodes= < 99206) or (99210 < cptcodes <99216) or (99380 < cptcodes <99388) or (99390 < cptcodes < 99398) or (99303 < cptcodes < 99351) THEN cptflag = 1;
+run;
+
+data opclaims;
+set opclaims;
+gflag = indexc(hcpcs_cd, "G");
+run;
+
+data opclaims;
+set opclaims;
+IF (gflag = 1) and (437 < cptcodes < 440) then cptflag = 1;
+IF (gflag = 1) and (cptcodes = 402) then cptflag = 1;
+run; 
+
+data opclaims1;
+set opclaims(rename=(from_dt = admit_date thru_dt = disch_date));
+where cptflag = 1;
+run;
+
+/*Carrier file */
+
+data carrier (keep = bid_hrs_21 admit_date disch_date prfnpi01--prfnpi13 hcpcs_cd);
+set merged.pb_2000_2012;
+array dx hcpscd01--hcpscd13;
+do over dx;
+HCPCS_CD=dx;
+output;
+end;
+run;
+
+data carrier;
+set carrier;
+cptcodes = input(compress(hcpcs_cd,'ABCDEFGHIJKLMNOPQRSTUVWXYZ/',),8.);
+run;
+
+
+/*
+
+data test1;
+set carrier;
+miss = 0;
+if prfnpi01 = . then miss = 1;
+run;
+
+proc means data = test1; var miss; run;
+
+*/
+
+
+data carrier;
+set carrier;
+cptflag = 0;
+IF (99200 < cptcodes= < 99206) or (99210 < cptcodes <99216) or (99380 < cptcodes <99388) or (99390 < cptcodes < 99398) or (99303 < cptcodes < 99351) THEN cptflag = 1;
+run;
+
+data carrier;
+set carrier;
+gflag = indexc(hcpcs_cd, "G");
+run;
+
+data carrier;
+set carrier; 
+IF (gflag = 1) and (437 < cptcodes < 440) then cptflag = 1;
+IF (gflag = 1) and (cptcodes = 402) then cptflag = 1;
+run; 
+
+data carrier;
+set carrier;
+where cptflag = 1;
+run;
+
+data carrier1 (keep = bid_hrs_21 admit_date disch_date NPI hcpcs_cd);
+set carrier;
+array dx prfnpi01--prfnpi13;
+do over dx;
+NPI=dx;
+output;
+end;
+run;
+
+proc export data=opclaims1 outfile="C:\Users\rahmao03\Documents\opclaims_hrs.dta" dbms = dta replace;
+proc export data=carrier1 outfile="C:\Users\rahmao03\Documents\carrier_hrs.dta" dbms = dta replace;
+
+
+
+******** BACK TO STATA ***********;
+
+use "C:\Users\rahmao03\Documents\opclaims_hrs.dta", clear
+
+gen date1 = date(admit_date, "YMD")
+format date1 %td
+
+gen date2 = date(admit_date, "YMD")
+format date2 %td 
+gen yr = year(admit_date)
+drop if yr < 2010 | yr > 2011
+drop yr
+
+
+drop admit_date disch_date cptflag cptcodes gflag
+rename date1 admit_date
+rename date2 disch_date
+
+save "C:\Users\rahmao03\Documents\opclaims_hrs.dta", replace
+
+use "C:\Users\rahmao03\Documents\carrier_hrs.dta", clear
+format admit_date %td
+format disch_date %td
+gen yr = year(admit_date)
+drop if yr < 2010 | yr > 2011
+drop yr
+save "C:\Users\rahmao03\Documents\carrier_hrs.dta", replace
+
+append using "C:\Users\rahmao03\Documents\opclaims_hrs.dta"
+
+saveold "C:\Users\rahmao03\Documents\npi_hrs.dta", replace
+
+
+
+/*import and merge in SAS then export back to Stata */
+
+**SAS**;
+
+proc import datafile="C:\Users\rahmao03\Documents\bid_hrs1.dta" out=bid dbms = dta replace;
+run;
+
+proc import datafile="C:\Users\rahmao03\Documents\npi_hrs.dta" out=npi dbms = dta replace;
+run;
+
+
+proc sql;
+create table npi_1 as select a.*, b.*
+from bid as a
+left join npi as b
+on a.bid_hrs = b.bid_hrs_21
+order by a.bid_hrs;
+quit;
+
+proc export data=npi_1 outfile="C:\Users\rahmao03\Documents\npi_hrs_v1.dta" dbms =dta replace;
+
+**Stata**;
+
+use "C:\Users\rahmao03\Documents\npi_hrs_v1.dta", clear
+
+format admit_date %td
+format disch_date %td
+
+
+gen count = admit_date - c_ivw_date_n0 
+keep if (count>=0 & count <=365)
+
+drop count
+duplicates drop bid_hrs npi, force
+duplicates report
+
+*bysort bid_hrs: gen npi_cnt = _N
+destring npi, replace
+
+egen npi_count = count(npi), by(bid_hrs)
+cap drop _m
+merge m:1 bid_hrs using "E:\data\serious_ill\final_data\n0_n1_p1_p2_x_criteria_2010.dta"
+duplicates drop bid_hrs ,force
+replace npi_count = 0 if npi_count==.
+
+save "E:\data\serious_ill\final_data\n0_n1_p1_p2_x_criteria_2010_npi.dta", replace

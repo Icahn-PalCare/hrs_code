@@ -3765,6 +3765,74 @@ outreg using "`logpath'\regressions_24m.rtf", replay replace
 H="***********************"
 
 
+H="pull sas outcomes--elective admissions"
+/*data from spouse_2012.txt code - starting point for this work*/
+libname spo_fnl 'E:\data\spouse_intensive\int_data';
+
+/*data for this project with spouse medicare variables added in*/
+libname proj_int 'E:\data\spouse_claims\data\int_data';
+
+/*2000-2012 medicare claims*/
+libname medi 'E:\data\cms_DUA_24548_2012';
+
+/*hrs cleaned & restricted*/
+libname hrs_cln 'E:\data\hrs_cleaned'; /*(contains exit, restricted, and core ivw's)*/
+libname rand 'E:\data\hrs_public_2012\rand2012\main';
+
+/*dartmouth wage index*/
+libname dartm 'E:\data\Dartmouth_misc';
+libname dart_wi 'E:\data\Dartmouth_misc\Wage Index';
+
+data spouse(keep=r_id s_id s_bid_hrs index_date);
+set spo_fnl.spouse_data;
+if s_bid_hrs~="";
+if s_id~=.;
+index_date=r_death_date_e;
+run;
+
+data ip;
+set medi.mp_2000_2012;
+if sslssnf~="N";
+run;
+
+%macro nonels(time=,suff=);
+proc sql;
+create table ip_match as select a.*,b.admit_date,b.type_adm,b.sslssnf from
+spouse a
+left join
+ip b
+on a.s_bid_hrs=b.bid_hrs_21 and b.admit_date>a.index_date>=b.admit_date-&time.;
+quit;
+
+data ip_m2;
+set ip_match;
+nonelect=type_adm~="3" and type_adm~="";
+run;
+
+proc sql;
+create table none_adms_&suff. as select distinct 
+s_bid_hrs,sum(nonelect) as nonelective_adms_&suff.
+	label="total n of nonelective admissions &suffix.", 
+index_date, s_id, r_id
+from ip_m2 group by s_bid_hrs, r_id, s_id;
+quit;
+
+%mend;
+
+
+%nonels(time=365,suff=p12m);
+%nonels(time=730,suff=p24m);
+
+proc sql;
+create table nonel_adms as select * from
+none_adms_p12m a 
+left join
+none_adms_p24m b
+on a.s_bid_hrs=b.s_bid_hrs and a.s_id=b.s_id and a.r_id=b.r_id;
+quit;
+
+proc export data=nonel_adms outfile="E:\data\spouse_claims\data\int_data\nonelective_admissions.dta" replace; run;
+
 H="match by full sample, top quartile & bottom 75%"
 /*Limited to decedents with FFS MC 6m prior to death, married at time of death,
 with spouse mc id*/
@@ -4163,6 +4231,15 @@ use spouse_claims_v1 if s_core_year_n1<2012 & r_death_year<=2011 //& (r_part_ab_
 merge 1:1 r_id s_id using "E:\data\spouse_intensive\int_data\spouse_data_full.dta" , gen(spmerge) keep(match)
 merge 1:1 r_id r_core_year_n1 using `temp2', gen(demmerge) keep(match master)
 merge m:1 hrrnum using `temp1', gen(hrrmerge) keep(match master)
+
+//nonelective admissions
+merge 1:1 s_id r_id using nonelective_admissions.dta, gen(nem) keep(match master)
+rename nonelective* s_n_nonelect*
+foreach x in 12m 24m {
+gen s_ind_nonelect_adm_p`x'=s_n_nonelect_adms_p`x'>=1
+label var s_ind_nonelect_adm_p`x' "Any nonelective admission `x' after R death"
+}
+
 *********************************************************
 *********************************************************
 //indicators of intensity-hospice 3+days, top quartile spending last 6m, and death in hosp (already there)
@@ -4228,7 +4305,8 @@ r_s_help_dur_ind2 r_s_help_dur_ind3 days_p1_core_dod_6_12m days_p1_core_dod_12_1
 days_p1_core_dod_18_24m days_p1_core_dod_gt2yr
 
 local rvars r_age r_nhres_n1 r_srh_pf_n1 r_advdir_x r_dexp_x r_adl_impair_n1 ///
- likely_dem r_cancer_hrs_n1 r_hrs_comorb_modsev_n1 r_hrs_comorb_mild_n1
+ likely_dem r_cancer_hrs_n1 r_hrs_comorb_modsev_n1 r_hrs_comorb_mild_n1 ///
+ r_champus_n1
 
 local svars s_age s_female s_nw_lowest_n1 /*s_nw_midlow_n1 s_nw_midhigh_n1 s_nw_highest_n1*/ s_white_e ///
 s_hseduc s_srh_pf_n1 s_hrs_comorb_modsev_n1 s_hrs_comorb_mild_n1 s_adl_impair_n1 ///
@@ -4253,6 +4331,12 @@ gen surv_12_weight=.
 gen surv_24_weight=.
 gen surv_12=s_cont_ffs_p_mos>=12 & r_s_death>=366
 gen surv_24=s_cont_ffs_p_mos>=24 & r_s_death>=731
+gen missany=0
+//added 2/13 drop if missing any vars
+foreach x in `rvars`time'' `svars`time'' `region' {
+replace missany=1 if missing(`x')
+}
+drop if missany==1
 forvalues i=1/`max' {
 di "`i'"
 log using $logpath\spouse_claims_match_``i''`time'.txt, text replace
@@ -4320,7 +4404,7 @@ sum _weight if ``i''==0 //n=9 control dropped, no weight assigned
 
 rename _weight w_``i''`time'
 
-/*
+
 forvalues quart=0/1 {
 drop ip_pscore ip_block logitpscore x
 gen x=uniform()
@@ -4352,7 +4436,7 @@ di "PS graph2"
 //look at balance of propensity score across variables
 psgraph, pscore(ip_pscore)
 di "``i''"
-di "Spending quartile pre-death=`quart'"
+di " Top Spending quartile pre-death=`quart'"
 pstest `rvars`time'' `svars`time'' `region' if spend_quart4==`quart',treated(``i'') both hist
 /*
 //look at quantile-quantile plots for continuous variables
@@ -4395,7 +4479,7 @@ sum _weight if ``i''==0 //n=9 control dropped, no weight assigned
 
 replace quartile_weight=_w if missing(quartile_we)
 }
-*/
+
 foreach quart in 12 24 {
 drop ip_pscore ip_block logitpscore x
 gen x=uniform()
@@ -4427,7 +4511,7 @@ di "PS graph2"
 //look at balance of propensity score across variables
 psgraph, pscore(ip_pscore)
 di "``i''"
-di "24m Survivors only"
+di "`quart'm Survivors only"
 pstest `rvars`time'' `svars`time'' `region' if surv_`quart'==1,treated(``i'') both hist
 /*
 //look at quantile-quantile plots for continuous variables
@@ -4526,6 +4610,14 @@ use spouse_claims_v1 if s_core_year_n1<2012 & r_death_year<=2011 //& (r_part_ab_
 merge 1:1 r_id s_id using "E:\data\spouse_intensive\int_data\spouse_data_full.dta" , gen(spmerge) keep(match)
 merge 1:1 r_id r_core_year_n1 using `temp2', gen(demmerge) keep(match master)
 merge m:1 hrrnum using `temp1', gen(hrrmerge) keep(match master)
+
+//nonelective admissions
+merge 1:1 s_id r_id using nonelective_admissions.dta, gen(nem) keep(match master)
+rename nonelective* s_n_nonelect*
+foreach x in 12m 24m {
+gen s_ind_nonelect_adm_p`x'=s_n_nonelect_adms_p`x'>=1
+label var s_ind_nonelect_adm_p`x' "Any nonelective admission `x' after R death"
+}
 *********************************************************
 *********************************************************
 //indicators of intensity-hospice 3+days, top quartile spending last 6m, and death in hosp (already there)
@@ -4596,7 +4688,8 @@ local shrscomorbs s_cancer_hrs_n1 s_lung_hrs_n1 s_heart_hrs_n1 s_chf_hrs_n1 ///
  s_stroke_hrs_n1 s_memory_hrs_n1 s_htn_hrs_n1 s_dm_hrs_n1 s_psych_hrs_n1
 
 local rvars r_age r_nhres_n1 r_srh_pf_n1 r_advdir_x r_dexp_x r_adl_impair_n1 ///
- likely_dem r_cancer_hrs_n1 r_hrs_comorb_none_n1 r_hrs_comorb_mild_n1
+ likely_dem r_cancer_hrs_n1 r_hrs_comorb_none_n1 r_hrs_comorb_mild_n1 ///
+ r_champus_n1
 
 local svars s_age s_female s_nw_lowest_n1 /*s_nw_midlow_n1 s_nw_midhigh_n1 s_nw_highest_n1*/ s_white_e ///
 s_hseduc s_srh_pf_n1 s_hrs_comorb_none_n1 s_hrs_comorb_mild_n1 s_adl_impair_n1 ///
@@ -4695,7 +4788,7 @@ sum _weight if ``i''==0 //n=9 control dropped, no weight assigned
 
 rename _weight w_``i''`time'
 
-/*
+
 forvalues quart=0/1 {
 drop ip_pscore ip_block logitpscore x
 gen x=uniform()
@@ -4727,7 +4820,7 @@ di "PS graph2"
 //look at balance of propensity score across variables
 psgraph, pscore(ip_pscore)
 di "``i''"
-di "Spending quartile pre-death=`quart'"
+di "Top Spending quartile pre-death=`quart'"
 pstest `rvars`time'' `svars`time'' `region' if spend_quart4==`quart',treated(``i'') both hist
 /*
 //look at quantile-quantile plots for continuous variables
@@ -4770,7 +4863,7 @@ sum _weight if ``i''==0 //n=9 control dropped, no weight assigned
 
 replace quartile_weight=_w if missing(quartile_we)
 }
-*/
+
 foreach quart in 12 24 {
 drop ip_pscore ip_block logitpscore x
 gen x=uniform()
@@ -4802,7 +4895,7 @@ di "PS graph2"
 //look at balance of propensity score across variables
 psgraph, pscore(ip_pscore)
 di "``i''"
-di "24m Survivors only"
+di "`quart'm Survivors only"
 pstest `rvars`time'' `svars`time'' `region' if surv_`quart'==1,treated(``i'') both hist
 /*
 //look at quantile-quantile plots for continuous variables
@@ -4873,7 +4966,8 @@ cd `datapath'
 use spouse_claims_intensmatched_fffs.dta
 ***************************************************************
 tab r_loc_hosp_x, missing
-
+gen bottomquartile_w=quartile_w if spend_quart<4
+replace topq=quartile_w if spend_quart==4
 rename r_cc_*n12mn0 r_cc_*n12m
 
 foreach d in 365 730{
@@ -4881,8 +4975,19 @@ gen s_died_`d'd=s_death_date-r_death_date_e<=`d'
 label var s_died_`d'd "S death <=`d'd after R"
 }
 ***************************************************************
+	
+local rvars r_age r_nhres_n1 r_srh_pf_n1 r_advdir_x r_dexp_x r_adl_impair_n1 ///
+ likely_dem r_cancer_hrs_n1 r_hrs_comorb_none_n1 r_hrs_comorb_mild_n1 ///
+ r_hrs_comorb_modsev_n1 r_champus_n1
+
+local svars s_age s_female s_nw_lowest_n1 /*s_nw_midlow_n1 s_nw_midhigh_n1 s_nw_highest_n1*/ s_white_e ///
+s_hseduc s_srh_pf_n1 s_hrs_comorb_none_n1 s_hrs_comorb_mild_n1 s_hrs_comorb_modsev_n1 ///
+s_adl_impair_n1 ///
 
 
+foreach x in `rvars' `svars' {
+	drop if missing(`x')
+}
 *************************************************************************************
 *************************************************************************************
 //create Table 1, overall sample characteristics
@@ -4890,7 +4995,8 @@ label var s_died_`d'd "S death <=`d'd after R"
 *************************************************************************************
 //Part 1 - Decedent char
 gen n=1
-local rcvars r_age r_networth_adj2012_n1
+
+local rcvars r_age 
 local shrscomorbs s_cancer_hrs_n1 s_lung_hrs_n1 s_heart_hrs_n1 s_chf_hrs_n1 ///
  s_stroke_hrs_n1 s_memory_hrs_n1 s_htn_hrs_n1 s_dm_hrs_n1 s_psych_hrs_n1
 local rhrscomorbs r_cancer_hrs_n1 r_lung_hrs_n1 r_heart_hrs_n1 r_chf_hrs_n1 ///
@@ -4898,30 +5004,33 @@ local rhrscomorbs r_cancer_hrs_n1 r_lung_hrs_n1 r_heart_hrs_n1 r_chf_hrs_n1 ///
 
 local rivars r_female r_white_e r_hseduc  ///
  r_medicaid_n1 r_champus_n1 r_medigap_n1 ///
- r_adl_independent_core_n1 r_srh_pf_n1 ///
- r_nhres_n1 r_hrs_comorb_none_n1 r_hrs_comorb_mild_n1 r_hrs_comorb_modsev_n1 ///
- `rhrscomorbs' r_cc_3_alzhdmta_n12mn6m ///
-r_cc_6_chrnkidn_n12mn6m r_cc_ami_isch_n12mn6m r_cc_8_chf_n12mn6m ///
-r_cc_9_diabetes_n12mn6m r_cc_7_copd_n12mn6m r_cc_16_strketia_n12mn6m ///
-r_cc_cncr_chronic_n12mn6m r_cc_4_atrialfb_n12mn6m r_cc_11_hipfrac_n12mn6m ///
-r_cc_13_depressn_n12mn6m r_cc_14_osteoprs_n12mn6m r_cc_15_ra_oa_n12mn6m r_loc_hosp_x ///
+ r_adl_impair_n1 r_srh_pf_n1 ///
+ r_nhres_n1 likely_dem r_hrs_comorb_none_n1 r_hrs_comorb_mild_n1 r_hrs_comorb_modsev_n1 ///
+ `rhrscomorbs' r_loc_hosp_x loc_home loc_asst loc_nh loc_hs loc_oth ///
 r_advdir_x r_dexp_x r_discuss_x  
 
 local scvars s_age s_networth_adj2012_n1
 
 local sivars s_female s_white_e s_hseduc  ///
  s_medicaid_n1 s_champus_n1 s_medigap_n1 ///
- s_adl_independent_core_n1 s_srh_pf_n1 ///
+ s_adl_impair_n1 s_srh_pf_n1 ///
  s_nhres_n1 s_hrs_comorb_none_n1 s_hrs_comorb_mild_n1 s_hrs_comorb_modsev_n1 ///
- `shrscomorbs' s_cc_3_alzhdmta_n12m ///
-s_cc_6_chrnkidn_n12m s_cc_ami_isch_n12m s_cc_8_chf_n12m ///
-s_cc_9_diabetes_n12m s_cc_7_copd_n12m s_cc_16_strketia_n12m ///
-s_cc_cncr_chronic_n12m s_cc_4_atrialfb_n12m s_cc_11_hipfrac_n12m ///
-s_cc_13_depressn_n12m s_cc_14_osteoprs_n12m s_cc_15_ra_oa_n12m ///
-
+ `shrscomorbs' 
 local region eol_spend_quart1 eol_spend_quart2 eol_spend_quart3 eol_spend_quart4
 
-
+gen loc_nh=r_location==2
+gen loc_home=r_location==3
+gen loc_hs=r_location==4
+gen loc_asst=r_location==5
+gen loc_oth=r_location==6
+foreach x of varlist loc_* {
+replace `x'=. if missing(r_loc_hosp)
+}
+label var loc_nh "Died in Nursing Home" 
+label var loc_home "Died at Home"
+label var loc_hs "Died at Hospice"
+label var loc_asst "Died Assisted Living or Retirement Home"
+label var loc_oth "Location of death Other/Unknown"
 la var r_age "Age at death, years"
 la var r_loc_ "Died in Hospital"
 la var r_married_x "Married at death"
@@ -4949,15 +5058,64 @@ la var s_adl_independent_core_n1 "ADL Independent"
 la var s_srh_pf_n1 "SRH poor or fair"
 la var r_s_death_24m "S death within 2 years"
 
+local rvars `rcvars' `rivars' 
+local svars `scvars' `sivars' 
+local rn : word count `rvars' `svars' `region' `coutcomes' `ioutcomes' 1 1 1 
+mat tab=J(`rn',4,.)
+mat stars=J(`rn',4,0)
+local r=1
+local c=1
 
-local rn: word count `rcvars' `rivars' n 
+sum `rvars' `svars'
+foreach loc in "0,1,." { //0 1 {
+	foreach x in `rvars' `svars' `region' `coutcomes' `ioutcomes' {
+		di "`x'"
+		if "`x'"!="r_age" & "`x'"!="s_age" & ///
+		!inlist(substr("`x'",1,6),"s_netw", "s_tot_","s_n_ho", ///
+		"s_icu_") {
+			sum `x' if inlist(r_loc_,`loc') `time'
+			mat tab[`r',`c']=r(mean)*100
+			if inlist("`loc'","1") & "`x'"!="r_loc_hosp_x" tab `x' r_loc_, chi2
+			if inlist("`loc'","1") & "`x'"!="r_loc_hosp_x" mat tab[`r',`c'+1]=r(p)
+			if inlist("`loc'","1") & "`x'"!="r_loc_hosp_x" mat stars[`r',`c'+1]=(r(p)<.05)+(r(p)<.01) 
+}
+			else {
+				if inlist("`x'","r_age","s_age","s_tot_paid_by_mc_wi_p12m") ///
+				 local r=`r'+1
+				sum `x' if inlist(r_loc_,`loc'),d 
+				mat tab[`r',`c']=r(mean)
+				mat tab[`r',`c'+1]=r(sd)
+				mat tab[`r',`c'+2]=r(p50)
+				if inlist("`loc'","1") ttest `x', by(r_loc_)
+				if inlist("`loc'","1") mat tab[`r',`c'+1]=r(p)
+				if inlist("`loc'","1") mat stars[`r',`c'+1]=(r(p)<.05)+(r(p)<.01) 
+}
+	local r = `r'+1
+}
+	sum n if inlist(r_loc_,`loc') 
+	mat tab[`r',`c']==r(N)
+	local r=1
+	local c=`c'+1
+}
+
+
+mat rownames tab="Respondent" `rvars' "Surviving Spouse" `svars' `region' ///
+ "N"
+
+frmttable using `logpath'/sample_characteristics_death_hosp_matched_fffs.rtf, ///
+statmat(tab) title("Sample Characteristics, `title'") ///
+ctitles("" "Mean/%" "SD" "Median" /*"Death not in-hospital" "R Death in Hospital" "P"*/) sdec(2) ///
+replace varlabels annotate(stars) asymbol(*,**) ///
+
+ /*
+local rn: word count `rcvars' `rivars' `region' n 
 mat tab=J(`rn',8,.)
 mat stars=J(`rn',8,0)
 local r=1
 local c=1
 
 svyset [pw=w_r_loc]
-/*foreach s in r s {
+foreach s in r s {
 	foreach loc in 0 1 {
 		foreach v in ``s'cvars' {
 			sum `v' if r_loc_==`loc' /*[aw=w_r_loc]*/
@@ -5000,7 +5158,46 @@ preserve
 replace s_tot_paid_by_mc_wi_p24m=. if !surv_12 | r_death_year==2011
 /*gen s_tot_paid_by_mc_wi_6m18m=s_tot_paid_by_mc_wi_18m-s_tot_paid_by_mc_wi_6m if ///
 s_cont_ffs_n_mos>=18*/
-mat tab=J(12,4,.)
+mat tab=J(12,8,.)
+mat stars=J(12,8,0)
+local r=1
+local c=1
+sum spend_quart
+local num=r(N)
+sum s_tot_paid_by_mc_wi_p24m if !missing(spend_quart)
+local num24=r(N)
+
+forvalues i=1/4 {
+	foreach x in 6m18m p12m p24m {
+	local r=`r'+1
+	qui ranksum s_tot_paid_by_mc_wi_`x' if spend_quart==`i', by(r_loc_hos)
+	mat tab[`r',`c'+1]=2*(normprob(-abs(r(z))))
+	mat stars[`r',`c'+1]=(2*(normprob(-abs(r(z))))<.01)+(2*(normprob(-abs(r(z))))<.05)
+	
+	foreach j in "0,1" 0 1 {	
+	qui sum s_tot_paid_by_mc_wi_`x' if spend_quart==`i' & inlist(r_loc_hos,`j') ///
+	/*[aw=w_r_loc]*/,d
+	mat tab[`r',`c']=r(p50)
+	local r=`r'+1
+}
+}
+	local c=`c'+2
+	local r=1
+
+}
+mat rownames tab="6-18m before R's death" "All" "No In-hospital death" "In-hospital death" ///
+"12m after R's death" "All" "No In-hospital death" ///
+"In-hospital death" "24m after R's death*" "All" "No In-hospital death" ///
+"In-hospital death"
+
+frmttable using `logpath'/sample_characteristics_death_hosp_matched_fffs.rtf, statmat(tab) title("Median MC Spending by Quartile of S Expenditure prior to R's death") ///
+note("Among those with 18m FFS prior to R's death only (N=`num')" ///
+"WI & inflation adjusted to 2012$" "*-Excluding those with less than 12m FFS (N=`num24')" ///
+"P-values from Wilcoxon rank-sum test") ///
+ctitles("" "Bottom" "P" "2nd" "P" "3rd" "P" "Top" "P") addtable //replace
+label var likely_dem "Pr. dementia >.5"
+
+mat tab=J(12,8,.)
 local r=1
 local c=1
 sum spend_quart
@@ -5014,11 +5211,12 @@ forvalues i=1/4 {
 	foreach j in "0,1" 0 1 {	
 	qui sum s_tot_paid_by_mc_wi_`x' if spend_quart==`i' & inlist(r_loc_hos,`j') ///
 	/*[aw=w_r_loc]*/,d
-	mat tab[`r',`c']=r(p50)
+	mat tab[`r',`c']=r(p25)
+	mat tab[`r',`c'+1]=r(p75)
 	local r=`r'+1
 }
 }
-	local c=`c'+1
+	local c=`c'+2
 	local r=1
 
 }
@@ -5027,11 +5225,26 @@ mat rownames tab="6-18m before R's death" "All" "No In-hospital death" "In-hospi
 "In-hospital death" "24m after R's death*" "All" "No In-hospital death" ///
 "In-hospital death"
 
-frmttable using `logpath'/sample_characteristics_death_hosp_matched_fffs.rtf, statmat(tab) title("Median MC Spending by Quartile of S Expenditure prior to R's death") ///
+frmttable using `logpath'/sample_characteristics_death_hosp_matched_fffs.rtf, statmat(tab) ///
+title("Within Quartile Interquartile Range") ///
 note("Among those with 18m FFS prior to R's death only (N=`num')" ///
 "WI & inflation adjusted to 2012$" "*-Excluding those with less than 12m FFS (N=`num24')") ///
-ctitles("" "Bottom" "2nd" "3rd" "Top") replace
+ctitles("" "" "Bottom" "" "2nd" "" "3rd" "" "Top" \ "" "25th" "75th" "25th" "75th" "25th" ///
+"75th" "25th" "75th") addtable //replace
 label var likely_dem "Pr. dementia >.5"
+
+mat sp=J(4,2,.)
+tab spend_quart r_loc_, matcell(sp1)
+forvalues i=1/4 {
+	foreach j in 1 2 {
+		mat sp[`i',`j']=(sp1[`i',`j']/(sp1[`i',1]+sp1[`i',2]))*100
+}
+}
+mat rownames sp="Bottom quartile" "2nd" "3rd" "Top"
+frmttable using `logpath'/sample_characteristics_death_hosp_matched_fffs.rtf, ///
+statmat(sp) title("Percentage of spending quartile, by R location") ///
+ctitles("" "No In-hospital death" "In-hospital death") sdec(2) addtable
+
 restore
 /*foreach s in r s {
 	label var `s'_hrs_comorb_mild_n1 "SR comorbidities: none"
@@ -5041,7 +5254,8 @@ restore
 	label var r_s_helper_x "Spouse R's helper, from exit"
 	
 local rvars r_age r_nhres_n1 r_srh_pf_n1 r_advdir_x r_dexp_x r_adl_impair_n1 ///
- likely_dem r_cancer_hrs_n1 r_hrs_comorb_none_n1 r_hrs_comorb_mild_n1 r_hrs_comorb_modsev_n1 
+ likely_dem r_cancer_hrs_n1 r_hrs_comorb_none_n1 r_hrs_comorb_mild_n1 ///
+ r_hrs_comorb_modsev_n1 r_champus_n1
 
 local svars s_age s_female s_nw_lowest_n1 /*s_nw_midlow_n1 s_nw_midhigh_n1 s_nw_highest_n1*/ s_white_e ///
 s_hseduc s_srh_pf_n1 s_hrs_comorb_none_n1 s_hrs_comorb_mild_n1 s_hrs_comorb_modsev_n1 ///
@@ -5055,14 +5269,22 @@ s_died_730d {
 	local lab : var label `x'
 	label var `x'_cond "`lab', conditional on 12m Survival"
 }
+
 local coutcomes s_tot_paid_by_mc_wi_p12m s_tot_paid_by_mc_wi_p24m /*s_n_hospd_p12m ///
 s_n_hospd_p24m s_icu_days_p12m s_icu_days_p24m*/ s_tot_paid_by_mc_wi_p24m_cond 
 local ioutcomes s_admit_ind_p12m s_admit_ind_p24m s_admit_ind_p24m_cond ///
-s_ed_ind_12m s_ed_ind_p24m s_ed_ind_p24m_cond ///
+s_ed_ind_p12m s_ed_ind_p24m s_ed_ind_p24m_cond ///
 s_icu_ind_p12m s_icu_ind_p24m s_icu_ind_p24m_cond s_died_365d s_died_730d s_died_730d_cond
 
+foreach weight in w_r_loc surv_12_w surv_24_w bottomquartile_w topquartile_w {
+	svyset [pw=`weight']
+	foreach x in 0 1 {
+	sum s_tot_paid_by_mc_wi_p24m_cond if r_loc_==`x' [aw=`weight']
+	local denomcond`x'=r(N)
+	sum s_tot_paid_by_mc_wi_p24m if r_loc_==`x' [aw=`weight']
+	local denom24`x'=r(N)
+}
 
-foreach weight in w_r_loc surv_12_w surv_24_w {
 	if "`weight'"=="w_r_loc" local title "Full Sample"
 	if "`weight'"=="surv_12_w" {
 		preserve
@@ -5073,8 +5295,29 @@ foreach weight in w_r_loc surv_12_w surv_24_w {
 		keep if surv_24m
 		local title "24m Survivors only"
 }
+	if "`weight'"=="bottomquartile_w" {
+		restore
+		preserve
+		keep if spend_quart<4
+		local title "Bottom 75% pre-death spending"
+}
+	if "`weight'"=="topquartile_w" {
+		restore
+		preserve
+		keep if spend_quart==4
+		foreach x in 0 1 {
+			sum s_tot_paid_by_mc_wi_p24m_cond if r_loc_==`x' [aw=`weight']
+			local denomcond`x'=r(N)
+			sum s_tot_paid_by_mc_wi_p24m if r_loc_==`x' [aw=`weight']
+			local denom24`x'=r(N)
+}
+
+		local title "Top quartile pre-death spending"
+}
+
 local rvars r_age r_nhres_n1 r_srh_pf_n1 r_advdir_x r_dexp_x r_adl_impair_n1 ///
- likely_dem r_cancer_hrs_n1 r_hrs_comorb_none_n1 r_hrs_comorb_mild_n1 r_hrs_comorb_modsev_n1 
+ likely_dem r_cancer_hrs_n1 r_hrs_comorb_none_n1 r_hrs_comorb_mild_n1 ///
+ r_hrs_comorb_modsev_n1 r_champus_n1
 
 local svars s_age s_female s_nw_lowest_n1 /*s_nw_midlow_n1 s_nw_midhigh_n1 s_nw_highest_n1*/ s_white_e ///
 s_hseduc s_srh_pf_n1 s_hrs_comorb_none_n1 s_hrs_comorb_mild_n1 s_hrs_comorb_modsev_n1 ///
@@ -5151,6 +5394,7 @@ s_hseduc s_srh_pf_n1 s_hrs_comorb_none_n1 s_hrs_comorb_mild_n1 s_hrs_comorb_mods
 s_adl_impair_n1 ///
 r_s_helper_x */
 
+
 local rvars `rcvars' `rivars' 
 local svars `scvars' `sivars' 
 local rn : word count `rvars' `svars' `region' `coutcomes' `ioutcomes' 1 1 1 1
@@ -5197,7 +5441,8 @@ frmttable using `logpath'/sample_characteristics_death_hosp_matched_fffs.rtf, //
 statmat(tab) title("Sample Characteristics, `title'") ///
 ctitles("" "Control" "R Death in Hospital" "P") sdec(2) ///
 addtable varlabels annotate(stars) asymbol(*,**) ///
- note("All 24m variables restricted to R death prior to 2011")
+ note("24m variables restricted to those with death date prior to 2011: N=`denom241' In-hospital death, `denom240' Non-hospital death" ///
+ "24m condtional on 1yr survival: N=`denomcond1' In-hospital death, `denomcond0' Non-hospital death")
 
 }
 
@@ -5263,7 +5508,7 @@ cd `projdatapath'
 use spouse_claims_intensmatched, clear
 
 local rvars r_age r_nhres_n1 r_srh_pf_n1 r_advdir_x r_dexp_x r_adl_impair_n1 ///
- likely_dem r_cancer_hrs_n1 r_hrs_comorb_modsev_n1 r_hrs_comorb_mild_n1
+ likely_dem r_cancer_hrs_n1 r_hrs_comorb_modsev_n1 r_hrs_comorb_mild_n1 r_champus_n1
 
 local svars s_age s_female s_nw_lowest_n1 /*s_nw_midlow_n1 s_nw_midhigh_n1 s_nw_highest_n1*/ s_white_e ///
 s_hseduc s_srh_pf_n1 s_hrs_comorb_none_n1 s_hrs_comorb_mild_n1 s_adl_impair_n1 ///
@@ -5283,7 +5528,7 @@ gen match02=!s_hmo_d_p24m
 gen match=!missing(w_r_loc)
 gen match2=!missing(surv_12_w)
 gen match3=!missing(surv_24_w)
-label var match0 "Complete cases--no missingness"
+label var match0 "Complete cases--no missingness on matching variables"
 label var match01 "No HMO 12m post-death"
 label var match02 "No HMO 24m post-death"
 label var match "Matched on full sample"
@@ -5325,7 +5570,8 @@ cd `datapath'
 use spouse_claims_intensmatched.dta
 ***************************************************************
 tab r_loc_hosp_x, missing
-
+gen bottomquartile_w=quartile_w if spend_quart<4
+replace topq=quartile_w if spend_quart==4
 rename r_cc_*n12mn0 r_cc_*n12m
 
 foreach d in 365 730{
@@ -5342,7 +5588,8 @@ label var s_died_`d'd "S death <=`d'd after R"
 *************************************************************************************
 //Part 1 - Decedent char
 gen n=1
-local rcvars r_age r_networth_adj2012_n1
+
+local rcvars r_age 
 local shrscomorbs s_cancer_hrs_n1 s_lung_hrs_n1 s_heart_hrs_n1 s_chf_hrs_n1 ///
  s_stroke_hrs_n1 s_memory_hrs_n1 s_htn_hrs_n1 s_dm_hrs_n1 s_psych_hrs_n1
 local rhrscomorbs r_cancer_hrs_n1 r_lung_hrs_n1 r_heart_hrs_n1 r_chf_hrs_n1 ///
@@ -5350,30 +5597,33 @@ local rhrscomorbs r_cancer_hrs_n1 r_lung_hrs_n1 r_heart_hrs_n1 r_chf_hrs_n1 ///
 
 local rivars r_female r_white_e r_hseduc  ///
  r_medicaid_n1 r_champus_n1 r_medigap_n1 ///
- r_adl_independent_core_n1 r_srh_pf_n1 ///
- r_nhres_n1 r_hrs_comorb_none_n1 r_hrs_comorb_mild_n1 r_hrs_comorb_modsev_n1 ///
- `rhrscomorbs' r_cc_3_alzhdmta_n12mn6m ///
-r_cc_6_chrnkidn_n12mn6m r_cc_ami_isch_n12mn6m r_cc_8_chf_n12mn6m ///
-r_cc_9_diabetes_n12mn6m r_cc_7_copd_n12mn6m r_cc_16_strketia_n12mn6m ///
-r_cc_cncr_chronic_n12mn6m r_cc_4_atrialfb_n12mn6m r_cc_11_hipfrac_n12mn6m ///
-r_cc_13_depressn_n12mn6m r_cc_14_osteoprs_n12mn6m r_cc_15_ra_oa_n12mn6m r_loc_hosp_x ///
+ r_adl_impair_n1 r_srh_pf_n1 ///
+ r_nhres_n1 likely_dem r_hrs_comorb_none_n1 r_hrs_comorb_mild_n1 r_hrs_comorb_modsev_n1 ///
+ `rhrscomorbs' r_loc_hosp_x loc_home loc_asst loc_nh loc_hs loc_oth ///
 r_advdir_x r_dexp_x r_discuss_x  
 
 local scvars s_age s_networth_adj2012_n1
 
 local sivars s_female s_white_e s_hseduc  ///
  s_medicaid_n1 s_champus_n1 s_medigap_n1 ///
- s_adl_independent_core_n1 s_srh_pf_n1 ///
+ s_adl_impair_n1 s_srh_pf_n1 ///
  s_nhres_n1 s_hrs_comorb_none_n1 s_hrs_comorb_mild_n1 s_hrs_comorb_modsev_n1 ///
- `shrscomorbs' s_cc_3_alzhdmta_n12m ///
-s_cc_6_chrnkidn_n12m s_cc_ami_isch_n12m s_cc_8_chf_n12m ///
-s_cc_9_diabetes_n12m s_cc_7_copd_n12m s_cc_16_strketia_n12m ///
-s_cc_cncr_chronic_n12m s_cc_4_atrialfb_n12m s_cc_11_hipfrac_n12m ///
-s_cc_13_depressn_n12m s_cc_14_osteoprs_n12m s_cc_15_ra_oa_n12m ///
-
+ `shrscomorbs' 
 local region eol_spend_quart1 eol_spend_quart2 eol_spend_quart3 eol_spend_quart4
 
-
+gen loc_nh=r_location==2
+gen loc_home=r_location==3
+gen loc_hs=r_location==4
+gen loc_asst=r_location==5
+gen loc_oth=r_location==6
+foreach x of varlist loc_* {
+replace `x'=. if missing(r_loc_hosp)
+}
+label var loc_nh "Died in Nursing Home" 
+label var loc_home "Died at Home"
+label var loc_hs "Died at Hospice"
+label var loc_asst "Died Assisted Living or Retirement Home"
+label var loc_oth "Location of death Other/Unknown"
 la var r_age "Age at death, years"
 la var r_loc_ "Died in Hospital"
 la var r_married_x "Married at death"
@@ -5401,15 +5651,64 @@ la var s_adl_independent_core_n1 "ADL Independent"
 la var s_srh_pf_n1 "SRH poor or fair"
 la var r_s_death_24m "S death within 2 years"
 
+local rvars `rcvars' `rivars' 
+local svars `scvars' `sivars' 
+local rn : word count `rvars' `svars' `region' `coutcomes' `ioutcomes' 1 1 1 
+mat tab=J(`rn',4,.)
+mat stars=J(`rn',4,0)
+local r=1
+local c=1
 
-local rn: word count `rcvars' `rivars' n 
+sum `rvars' `svars'
+foreach loc in "0,1,." { //0 1 {
+	foreach x in `rvars' `svars' `region' `coutcomes' `ioutcomes' {
+		di "`x'"
+		if "`x'"!="r_age" & "`x'"!="s_age" & ///
+		!inlist(substr("`x'",1,6),"s_netw", "s_tot_","s_n_ho", ///
+		"s_icu_") {
+			sum `x' if inlist(r_loc_,`loc') `time'
+			mat tab[`r',`c']=r(mean)*100
+			if inlist("`loc'","1") & "`x'"!="r_loc_hosp_x" tab `x' r_loc_, chi2
+			if inlist("`loc'","1") & "`x'"!="r_loc_hosp_x" mat tab[`r',`c'+1]=r(p)
+			if inlist("`loc'","1") & "`x'"!="r_loc_hosp_x" mat stars[`r',`c'+1]=(r(p)<.05)+(r(p)<.01) 
+}
+			else {
+				if inlist("`x'","r_age","s_age","s_tot_paid_by_mc_wi_p12m") ///
+				 local r=`r'+1
+				sum `x' if inlist(r_loc_,`loc'),d 
+				mat tab[`r',`c']=r(mean)
+				mat tab[`r',`c'+1]=r(sd)
+				mat tab[`r',`c'+2]=r(p50)
+				if inlist("`loc'","1") ttest `x', by(r_loc_)
+				if inlist("`loc'","1") mat tab[`r',`c'+1]=r(p)
+				if inlist("`loc'","1") mat stars[`r',`c'+1]=(r(p)<.05)+(r(p)<.01) 
+}
+	local r = `r'+1
+}
+	sum n if inlist(r_loc_,`loc') 
+	mat tab[`r',`c']==r(N)
+	local r=1
+	local c=`c'+1
+}
+
+
+mat rownames tab="Respondent" `rvars' "Surviving Spouse" `svars' `region' ///
+ "N"
+
+frmttable using `logpath'/sample_characteristics_death_hosp_matched.rtf, ///
+statmat(tab) title("Sample Characteristics, `title'") ///
+ctitles("" "Mean/%" "SD" "Median" /*"Death not in-hospital" "R Death in Hospital" "P"*/) sdec(2) ///
+replace varlabels annotate(stars) asymbol(*,**) ///
+
+ /*
+local rn: word count `rcvars' `rivars' `region' n 
 mat tab=J(`rn',8,.)
 mat stars=J(`rn',8,0)
 local r=1
 local c=1
 
 svyset [pw=w_r_loc]
-/*foreach s in r s {
+foreach s in r s {
 	foreach loc in 0 1 {
 		foreach v in ``s'cvars' {
 			sum `v' if r_loc_==`loc' /*[aw=w_r_loc]*/
@@ -5482,8 +5781,57 @@ mat rownames tab="6-18m before R's death" "All" "No In-hospital death" "In-hospi
 frmttable using `logpath'/sample_characteristics_death_hosp_matched.rtf, statmat(tab) title("Median MC Spending by Quartile of S Expenditure prior to R's death") ///
 note("Among those with 18m FFS prior to R's death only (N=`num')" ///
 "WI & inflation adjusted to 2012$" "*-Excluding those with less than 12m FFS (N=`num24')") ///
-ctitles("" "Bottom" "2nd" "3rd" "Top") replace
+ctitles("" "Bottom" "2nd" "3rd" "Top") addtable //replace
 label var likely_dem "Pr. dementia >.5"
+
+mat tab=J(12,8,.)
+local r=1
+local c=1
+sum spend_quart
+local num=r(N)
+sum s_tot_paid_by_mc_wi_p24m if !missing(spend_quart)
+local num24=r(N)
+
+forvalues i=1/4 {
+	foreach x in 6m18m p12m p24m {
+	local r=`r'+1
+	foreach j in "0,1" 0 1 {	
+	qui sum s_tot_paid_by_mc_wi_`x' if spend_quart==`i' & inlist(r_loc_hos,`j') ///
+	/*[aw=w_r_loc]*/,d
+	mat tab[`r',`c']=r(p25)
+	mat tab[`r',`c'+1]=r(p75)
+	local r=`r'+1
+}
+}
+	local c=`c'+2
+	local r=1
+
+}
+mat rownames tab="6-18m before R's death" "All" "No In-hospital death" "In-hospital death" ///
+"12m after R's death" "All" "No In-hospital death" ///
+"In-hospital death" "24m after R's death*" "All" "No In-hospital death" ///
+"In-hospital death"
+
+frmttable using `logpath'/sample_characteristics_death_hosp_matched.rtf, statmat(tab) ///
+title("Within Quartile Interquartile Range") ///
+note("Among those with 18m FFS prior to R's death only (N=`num')" ///
+"WI & inflation adjusted to 2012$" "*-Excluding those with less than 12m FFS (N=`num24')") ///
+ctitles("" "" "Bottom" "" "2nd" "" "3rd" "" "Top" \ "" "25th" "75th" "25th" "75th" "25th" ///
+"75th" "25th" "75th") addtable //replace
+label var likely_dem "Pr. dementia >.5"
+
+mat sp=J(4,2,.)
+tab spend_quart r_loc_, matcell(sp1)
+forvalues i=1/4 {
+	foreach j in 1 2 {
+		mat sp[`i',`j']=(sp1[`i',`j']/(sp1[`i',1]+sp1[`i',2]))*100
+}
+}
+mat rownames sp="Bottom quartile" "2nd" "3rd" "Top"
+frmttable using `logpath'/sample_characteristics_death_hosp_matched.rtf, ///
+statmat(sp) title("Percentage of spending quartile, by R location") ///
+ctitles("" "No In-hospital death" "In-hospital death") sdec(2) addtable
+
 restore
 /*foreach s in r s {
 	label var `s'_hrs_comorb_mild_n1 "SR comorbidities: none"
@@ -5493,7 +5841,8 @@ restore
 	label var r_s_helper_x "Spouse R's helper, from exit"
 	
 local rvars r_age r_nhres_n1 r_srh_pf_n1 r_advdir_x r_dexp_x r_adl_impair_n1 ///
- likely_dem r_cancer_hrs_n1 r_hrs_comorb_none_n1 r_hrs_comorb_mild_n1 r_hrs_comorb_modsev_n1 
+ likely_dem r_cancer_hrs_n1 r_hrs_comorb_none_n1 r_hrs_comorb_mild_n1 ///
+ r_hrs_comorb_modsev_n1 r_champus_n1
 
 local svars s_age s_female s_nw_lowest_n1 /*s_nw_midlow_n1 s_nw_midhigh_n1 s_nw_highest_n1*/ s_white_e ///
 s_hseduc s_srh_pf_n1 s_hrs_comorb_none_n1 s_hrs_comorb_mild_n1 s_hrs_comorb_modsev_n1 ///
@@ -5510,11 +5859,12 @@ s_died_730d {
 local coutcomes s_tot_paid_by_mc_wi_p12m s_tot_paid_by_mc_wi_p24m /*s_n_hospd_p12m ///
 s_n_hospd_p24m s_icu_days_p12m s_icu_days_p24m*/ s_tot_paid_by_mc_wi_p24m_cond 
 local ioutcomes s_admit_ind_p12m s_admit_ind_p24m s_admit_ind_p24m_cond ///
-s_ed_ind_12m s_ed_ind_p24m s_ed_ind_p24m_cond ///
+s_ed_ind_p12m s_ed_ind_p24m s_ed_ind_p24m_cond ///
 s_icu_ind_p12m s_icu_ind_p24m s_icu_ind_p24m_cond s_died_365d s_died_730d s_died_730d_cond
 
 
-foreach weight in w_r_loc surv_12_w surv_24_w {
+foreach weight in w_r_loc surv_12_w surv_24_w bottomquartile_w topquartile_w {
+	svyset [pw=`weight']
 	if "`weight'"=="w_r_loc" local title "Full Sample"
 	if "`weight'"=="surv_12_w" {
 		preserve
@@ -5525,8 +5875,22 @@ foreach weight in w_r_loc surv_12_w surv_24_w {
 		keep if surv_24m
 		local title "24m Survivors only"
 }
+	if "`weight'"=="bottomquartile_w" {
+		restore
+		preserve
+		keep if spend_quart<4
+		local title "Bottom 75% pre-death spending"
+}
+	if "`weight'"=="topquartile_w" {
+		restore
+		preserve
+		keep if spend_quart==4
+		local title "Top quartile pre-death spending"
+}
+
 local rvars r_age r_nhres_n1 r_srh_pf_n1 r_advdir_x r_dexp_x r_adl_impair_n1 ///
- likely_dem r_cancer_hrs_n1 r_hrs_comorb_none_n1 r_hrs_comorb_mild_n1 r_hrs_comorb_modsev_n1 
+ likely_dem r_cancer_hrs_n1 r_hrs_comorb_none_n1 r_hrs_comorb_mild_n1 ///
+ r_hrs_comorb_modsev_n1 r_champus_n1
 
 local svars s_age s_female s_nw_lowest_n1 /*s_nw_midlow_n1 s_nw_midhigh_n1 s_nw_highest_n1*/ s_white_e ///
 s_hseduc s_srh_pf_n1 s_hrs_comorb_none_n1 s_hrs_comorb_mild_n1 s_hrs_comorb_modsev_n1 ///
@@ -5690,7 +6054,8 @@ i.r_s_help_dur_ind1
 	label var r_s_helper_x "Spouse R's helper, from exit"
 
 local rvarsa2 r_age r_nhres_n1 r_srh_pf_n1 r_advdir_x r_dexp_x r_adl_impair_n1 ///
- likely_dem r_cancer_hrs_n1 /*r_hrs_comorb_none_n1*/ r_hrs_comorb_mild_n1 r_hrs_comorb_modsev_n1 
+ likely_dem r_cancer_hrs_n1 /*r_hrs_comorb_none_n1*/ r_hrs_comorb_mild_n1 ///
+ r_hrs_comorb_modsev_n1 r_champus_n1
 
 local svarsa2 s_age s_female s_nw_lowest_n1 /*s_nw_midlow_n1 s_nw_midhigh_n1 s_nw_highest_n1*/ s_white_e ///
 s_hseduc s_srh_pf_n1 /*s_hrs_comorb_none_n1*/ s_hrs_comorb_mild_n1 s_hrs_comorb_modsev_n1 ///
@@ -5887,22 +6252,22 @@ cap gen difference12=s_tot_paid_by_mc_wi_p12m-s_tot_paid_by_mc_wi_12m
 cap gen difference24=s_tot_paid_by_mc_wi_p24m-s_tot_paid_by_mc_wi_24m
 
 local rvarsa2 r_age r_nhres_n1 r_srh_pf_n1 r_advdir_x r_dexp_x r_adl_independent_core_n1 ///
- likely_dem r_hrs_comorb_mild_n1 r_hrs_comorb_mod_n1
+ likely_dem r_cancer_hrs_n1 r_champus_n1 r_hrs_comorb_mild_n1 r_hrs_comorb_modsev_n1
 
 local svarsa2 s_age s_female s_nw_lowest_n1 /*s_nw_midlow_n1 s_nw_midhigh_n1 s_nw_highest_n1*/ s_white_e ///
-s_hseduc s_srh_pf_n1 s_hrs_comorb_mild_n1 s_hrs_comorb_mod_n1 s_adl_independent_core_n1 ///
+s_hseduc s_srh_pf_n1 s_hrs_comorb_mild_n1 s_hrs_comorb_modsev_n1 s_adl_independent_core_n1 ///
 r_s_help_dur_ind1
 
 local region /*eol_spend_quart2 eol_spend_quart3*/ eol_spend_quart4
 local year "" "if r_death_year<=2010"
 local j
 foreach b in bonnet {
-log using "E:\data\spouse_claims\logs\regressions_utilization_topquartile`quart'.txt",text replace
+log using "E:\data\spouse_claims\logs\regressions_utilization_quartile`quart'.txt",text replace
 foreach num in 12 24 {
 outreg, clear
 
 foreach x in  r_loc_hos { //r_spending r_hs_3d r_spend_or {
-qui glm s_tot_paid_by_mc_wi_p`num'm `x' `rvarsa2' `svarsa2' `region' i.r_death_year `j' [pw=topquartile_w],link(log) fam(gamma) eform 
+qui glm s_tot_paid_by_mc_wi_p`num'm `x' `rvarsa2' `svarsa2' `region' i.r_death_year `j' [pw=quartile_w],link(log) fam(gamma) eform 
 qui margins, dydx(*) post
 qui outreg, stats(b p) keep(`x' /*s_tot_paid_by_mc_wi_12m*/) merge 
 }
@@ -5916,7 +6281,7 @@ foreach num in 12 24 {
 outreg, clear
 di "OLS difference `num'm spending"
 foreach x in r_loc_hos { //r_spending r_loc_hos r_hs_3d r_spend_or 
-qui reg difference`num' `x' `rvarsa2' `svarsa2' `region' i.r_death_year `j' [pw=topquartile_w] 
+qui reg difference`num' `x' `rvarsa2' `svarsa2' `region' i.r_death_year `j' [pw=quartile_w] 
 qui outreg, stats(b p) keep(`x' /*s_tot_paid_by_mc_wi_12m*/) merge
 }
 local j "if r_death_year<=2010"
@@ -5928,7 +6293,7 @@ foreach num in 12 24 {
 outreg, clear
 di "Any hospital admit `num'm"
 foreach x in r_loc_hos { //r_spending r_loc_hos r_hs_3d r_spend_or 
-qui logit s_admit_ind_p`num'm `x' `rvarsa2' `svarsa2' `region' i.r_death_year `j' [pw=topquartile_w]  
+qui logit s_admit_ind_p`num'm `x' `rvarsa2' `svarsa2' `region' i.r_death_year `j' [pw=quartile_w]  
 qui margins, dydx(*) post
 qui outreg, stats(b p) keep(`x' /*s_tot_paid_by_mc_wi_12m*/) merge
 }
@@ -5943,7 +6308,7 @@ foreach num in 12 24 {
 outreg, clear
 di "Any ED visit `num'm"
 foreach x in r_loc_hos { //r_spending r_loc_hos r_hs_3d r_spend_or 
-qui logit s_ed_ind_p`num'm `x' `rvarsa2' `svarsa2' `region' i.r_death_year `j' [pw=topquartile_w]  
+qui logit s_ed_ind_p`num'm `x' `rvarsa2' `svarsa2' `region' i.r_death_year `j' [pw=quartile_w]  
 qui margins, dydx(*) post
 qui outreg, stats(b p) keep(`x' /*s_tot_paid_by_mc_wi_12m*/) merge
 }
@@ -5956,7 +6321,7 @@ local j "if r_death_year<=2010"
 outreg, clear
 di "OLS"
 foreach x in r_loc_hos { //r_spending r_loc_hos r_hs_3d r_spend_or 
-qui reg s_tot_paid_by_mc_wi_p12m `x' `rvarsa2' `svarsa2' `region' i.r_death_year [pw=topquartile_w]  
+qui reg s_tot_paid_by_mc_wi_p12m `x' `rvarsa2' `svarsa2' `region' i.r_death_year [pw=quartile_w]  
 qui outreg, stats(e_b p) keep(`x' /*s_tot_paid_by_mc_wi_12m*/) merge
 }
 
@@ -5967,7 +6332,7 @@ qui sum s_tot_paid_by_mc_wi_p12m, d
 
 /*
 foreach x in r_loc_hos { //r_spending r_loc_hos r_hs_3d r_spend_or 
-glm difference `x' `rvarsa2' `svarsa2' `region' i.r_death_year [pw=topquartile_w],link(log) fam(gamma) eform 
+glm difference `x' `rvarsa2' `svarsa2' `region' i.r_death_year [pw=quartile_w],link(log) fam(gamma) eform 
 qui outreg, stats(e_b p) keep(`x' /*s_tot_paid_by_mc_wi_12m*/) merge or
 }
 di "GLM"
@@ -5976,7 +6341,7 @@ outreg, replay
 outreg, clear
 di "OLS difference"
 foreach x in r_loc_hos { //r_spending r_loc_hos r_hs_3d r_spend_or 
-qui reg difference `x' `rvarsa2' `svarsa2' `region' i.r_death_year [pw=topquartile_w] 
+qui reg difference `x' `rvarsa2' `svarsa2' `region' i.r_death_year [pw=quartile_w] 
 qui outreg, stats(e_b p) keep(`x' /*s_tot_paid_by_mc_wi_12m*/) merge
 }
 
@@ -5985,7 +6350,7 @@ outreg, replay
 outreg, clear
 di "logit top quartile spending"
 foreach x in r_loc_hos { //r_spending r_loc_hos r_hs_3d r_spend_or 
-qui logit s_spending_p12m_high `x' `rvarsa2' `svarsa2' `region' i.r_death_year [pw=topquartile_w] , or
+qui logit s_spending_p12m_high `x' `rvarsa2' `svarsa2' `region' i.r_death_year [pw=quartile_w] , or
 qui outreg, stats(e_b p) keep(`x' /*s_tot_paid_by_mc_wi_12m*/) merge or
 }
 
@@ -5994,7 +6359,7 @@ outreg, replay
 outreg, clear
 di "logit top quartile spending"
 foreach x in r_loc_hos { //r_spending r_loc_hos r_hs_3d r_spend_or 
-qui logit s_admit_ind_p12m `x' `rvarsa2' `svarsa2' `region' i.r_death_year [pw=topquartile_w] , or
+qui logit s_admit_ind_p12m `x' `rvarsa2' `svarsa2' `region' i.r_death_year [pw=quartile_w] , or
 qui outreg, stats(e_b p) keep(`x' /*s_tot_paid_by_mc_wi_12m*/) merge or
 }
 
@@ -6007,7 +6372,7 @@ foreach num in 12 24 {
 qui outreg, clear
 
 foreach x in r_loc_hos { //r_spending r_loc_hos r_hs_3d r_spend_or 
-glm s_tot_paid_by_mc_wi_p`num'm `x' `rvarsa2' `svarsa2' `region' i.r_death_year `j' [pw=topquartile_w],link(log) fam(gamma) eform 
+glm s_tot_paid_by_mc_wi_p`num'm `x' `rvarsa2' `svarsa2' `region' i.r_death_year `j' [pw=quartile_w],link(log) fam(gamma) eform 
 qui outreg, stats(e_b p) merge or
 }
 di "GLM `num'm spending"
@@ -6020,7 +6385,7 @@ foreach num in 12 24 {
 * qui outreg, clear
 di "OLS difference `num'm spending"
 foreach x in r_loc_hos { //r_spending r_loc_hos r_hs_3d r_spend_or 
-reg difference`num' `x' `rvarsa2' `svarsa2' `region' i.r_death_year `j' [pw=topquartile_w] 
+reg difference`num' `x' `rvarsa2' `svarsa2' `region' i.r_death_year `j' [pw=quartile_w] 
 qui outreg, stats(b p) merge
 }
 local j "if r_death_year<=2010"
@@ -6032,7 +6397,7 @@ foreach num in 12 24 {
 * qui outreg, clear
 di "Any hospital admit `num'm"
 foreach x in r_loc_hos { //r_spending r_loc_hos r_hs_3d r_spend_or 
-logit s_admit_ind_p`num'm `x' `rvarsa2' `svarsa2' `region' i.r_death_year `j' [pw=topquartile_w]  , or
+logit s_admit_ind_p`num'm `x' `rvarsa2' `svarsa2' `region' i.r_death_year `j' [pw=quartile_w]  , or
 qui outreg, stats(e_b p) merge
 }
 *outreg, replay
@@ -6046,7 +6411,7 @@ foreach num in 12 24 {
 * qui outreg, clear
 di "Any ED visit `num'm"
 foreach x in r_loc_hos { //r_spending r_loc_hos r_hs_3d r_spend_or 
-logit s_ed_ind_p`num'm `x' `rvarsa2' `svarsa2' `region' i.r_death_year `j' [pw=topquartile_w]  ,or
+logit s_ed_ind_p`num'm `x' `rvarsa2' `svarsa2' `region' i.r_death_year `j' [pw=quartile_w]  ,or
 qui outreg, stats(e_b p) merge
 }
 *outreg, replay
@@ -6969,3 +7334,2011 @@ addtable varlabels annotate(stars) asymbol(*,**)
 
 
 
+
+
+H="3 month spending graphs"
+/*General data setup for the dataset
+Limited to decedents with FFS MC 6m prior to Index Date, partner at time of Index Date,
+with mc id*/
+
+capture log close
+
+clear all
+set more off
+
+//Server file paths
+local logpath E:\data\spouse_claims\logs
+local projdatapath E:\data\spouse_claims\data\int_data
+
+
+cd `projdatapath'
+
+use spouse_claims_intensmatched.dta
+cd `logpath'
+svyset [pw=w_r_loc]
+//note-you can use these next lines to drop the top 3% of pre-Index Date_spenders
+/*
+gen perstime=s_cont_ffs_n_mos
+replace perstime=24 if perstime>24
+gen npt=s_s_tot_paid_by_mc_24m/perstime
+gen pperstime=s_cont_ffs_p_mos
+replace pperstime=24 if ppers>24
+gen ppt=s_s_tot_paid_by_mc_p24m/pperstime
+gen pt=npt+ppt
+gsort -npt
+drop if _n<50
+*/
+
+forvalues n=1(3)24 {
+	sum s_tot_paid_by_mc_wi_m_`n'_to_`=`n'+2' if inscope_n_mos>=`n' [aw=w_r_loc_]
+	gen ffs_tot`n'=. 
+	sum s_tot_paid_by_mc_wi_m_`n'_to_`=`n'+2'p if inscope_p_mos>=`n' [aw=w_r_loc_]
+	gen ffs_tot`=`n'+25'=.
+	sum s_tot_paid_by_mc_wi_m_`n'_to_`=`n'+2' if inscope_n_mos>=`n' & s_female==0 [aw=w_r_loc_]
+	gen m_ffs_tot`n'=.
+	sum s_tot_paid_by_mc_wi_m_`n'_to_`=`n'+2'p if inscope_p_mos>=`n' & s_female==0 [aw=w_r_loc_]
+	gen m_ffs_tot`=`n'+25'=.
+	sum s_tot_paid_by_mc_wi_m_`n'_to_`=`n'+2' if inscope_n_mos>=`n' & s_female==1 [aw=w_r_loc_]
+	gen f_ffs_tot`n'=.
+	sum s_tot_paid_by_mc_wi_m_`n'_to_`=`n'+2'p if inscope_p_mos>=`n' & s_female==1 [aw=w_r_loc_]
+	gen f_ffs_tot`=`n'+25'=.
+	sum s_tot_paid_by_mc_wi_m_`n'_to_`=`n'+2' if inscope_n_mos>=`n' [aw=w_r_loc_]
+	gen s_ffs_tot`n'=.
+	sum s_tot_paid_by_mc_wi_m_`n'_to_`=`n'+2'p if inscope_p_mos>=`n' [aw=w_r_loc_]
+	gen s_ffs_tot`=`n'+25'=.
+	sum s_tot_paid_by_mc_wi_m_`n'_to_`=`n'+2' if inscope_n_mos>=`n' & s_female==0 [aw=w_r_loc_]
+	gen m_s_ffs_tot`n'=.
+	sum s_tot_paid_by_mc_wi_m_`n'_to_`=`n'+2'p if inscope_p_mos>=`n' & s_female==0 [aw=w_r_loc_]
+	gen m_s_ffs_tot`=`n'+25'=.
+	sum s_tot_paid_by_mc_wi_m_`n'_to_`=`n'+2' if inscope_n_mos>=`n' & s_female==1 [aw=w_r_loc_]
+	gen f_s_ffs_tot`n'=.
+	sum s_tot_paid_by_mc_wi_m_`n'_to_`=`n'+2'p if inscope_p_mos>=`n' & s_female==1 [aw=w_r_loc_]
+	gen f_s_ffs_tot`=`n'+25'=.
+}
+
+foreach x of varlist *ffs_tot* {
+gen sd`x'=.
+}
+sort r_loc_
+foreach ind in 0 1 {
+forvalues n=1(3)24 {
+	sum s_tot_paid_by_mc_wi_m_`n'_to_`=`n'+2' if r_loc_==`ind' & inscope_n_mos>=`n' [aw=w_r_loc_]
+	replace ffs_tot`n'=r(mean) if r_loc_==`ind' & inscope_n_mos>=`n' 
+	replace sdffs_tot`n'=r(sd) if r_loc_==`ind' & inscope_n_mos>=`n'
+	sum s_tot_paid_by_mc_wi_m_`n'_to_`=`n'+2'p if r_loc_==`ind' & inscope_p_mos>=`n' [aw=w_r_loc_]
+	replace ffs_tot`=`n'+25'=r(mean) if r_loc_==`ind' & inscope_p_mos>=`n'
+	replace sdffs_tot`=`n'+25'=r(sd) if r_loc_==`ind' & inscope_p_mos>=`n'
+	sum s_tot_paid_by_mc_wi_m_`n'_to_`=`n'+2' if r_loc_==`ind' & inscope_n_mos>=`n' & s_female==0 [aw=w_r_loc_]
+	replace m_ffs_tot`n'=r(mean) if r_loc_==`ind' & inscope_n_mos>=`n' & s_female==0 
+	replace sdm_ffs_tot`n'=r(sd) if r_loc_==`ind' & inscope_n_mos>=`n' & s_female==0 
+	sum s_tot_paid_by_mc_wi_m_`n'_to_`=`n'+2'p if r_loc_==`ind' & inscope_p_mos>=`n' & s_female==0 [aw=w_r_loc_]
+	replace m_ffs_tot`=`n'+25'=r(mean) if r_loc_==`ind' & inscope_p_mos>=`n' & s_female==0 
+	replace sdm_ffs_tot`=`n'+25'=r(sd) if r_loc_==`ind' & inscope_p_mos>=`n' & s_female==0 
+	sum s_tot_paid_by_mc_wi_m_`n'_to_`=`n'+2' if r_loc_==`ind' & inscope_n_mos>=`n' & s_female==1 [aw=w_r_loc_]
+	replace f_ffs_tot`n'=r(mean) if r_loc_==`ind' & inscope_n_mos>=`n' & s_female==1 
+	replace sdf_ffs_tot`n'=r(sd) if r_loc_==`ind' & inscope_n_mos>=`n' & s_female==1 
+	sum s_tot_paid_by_mc_wi_m_`n'_to_`=`n'+2'p if r_loc_==`ind' & inscope_p_mos>=`n' & s_female==1 [aw=w_r_loc_]
+	replace f_ffs_tot`=`n'+25'=r(mean) if r_loc_==`ind' & inscope_p_mos>=`n' & s_female==1 
+	replace sdf_ffs_tot`=`n'+25'=r(sd) if r_loc_==`ind' & inscope_p_mos>=`n' & s_female==1 
+	sum s_tot_paid_by_mc_wi_m_`n'_to_`=`n'+2' if r_loc_==`ind' & inscope_p_mos>=24 [aw=w_r_loc_]
+	replace s_ffs_tot`n'=r(mean) if r_loc_==`ind' & inscope_p_mos>=24
+	replace sds_ffs_tot`n'=r(sd) if r_loc_==`ind' & inscope_p_mos>=24
+	sum s_tot_paid_by_mc_wi_m_`n'_to_`=`n'+2'p if r_loc_==`ind' & inscope_p_mos>=24 [aw=w_r_loc_]
+	replace s_ffs_tot`=`n'+25'=r(mean) if r_loc_==`ind' & inscope_p_mos>=24 
+	replace sds_ffs_tot`=`n'+25'=r(sd) if r_loc_==`ind' & inscope_p_mos>=24 
+	sum s_tot_paid_by_mc_wi_m_`n'_to_`=`n'+2' if r_loc_==`ind' & inscope_p_mos>=24 & s_female==0 [aw=w_r_loc_]
+	replace m_s_ffs_tot`n'=r(mean) if r_loc_==`ind' & inscope_p_mos>=24 & s_female==0 
+	replace sdm_s_ffs_tot`n'=r(sd) if r_loc_==`ind' & inscope_p_mos>=24 & s_female==0 
+	sum s_tot_paid_by_mc_wi_m_`n'_to_`=`n'+2'p if r_loc_==`ind' & inscope_p_mos>=24 & s_female==0 [aw=w_r_loc_]
+	replace m_s_ffs_tot`=`n'+25'=r(mean) if r_loc_==`ind' & inscope_p_mos>=24 & s_female==0 
+	replace sdm_s_ffs_tot`=`n'+25'=r(sd) if r_loc_==`ind' & inscope_p_mos>=24 & s_female==0 
+	sum s_tot_paid_by_mc_wi_m_`n'_to_`=`n'+2' if r_loc_==`ind' & inscope_p_mos>=24 & s_female==1 [aw=w_r_loc_]
+	replace f_s_ffs_tot`n'=r(mean) if r_loc_==`ind' & inscope_p_mos>=24 & s_female==1 
+	replace sdf_s_ffs_tot`n'=r(sd) if r_loc_==`ind' & inscope_p_mos>=24 & s_female==1 
+	sum s_tot_paid_by_mc_wi_m_`n'_to_`=`n'+2'p if r_loc_==`ind' & inscope_p_mos>=24 & s_female==1 [aw=w_r_loc_]
+	replace f_s_ffs_tot`=`n'+25'=r(mean) if r_loc_==`ind' & inscope_p_mos>=24 & s_female==1 
+	replace sdf_s_ffs_tot`=`n'+25'=r(sd) if r_loc_==`ind' & inscope_p_mos>=24 & s_female==1 
+}
+}
+
+
+/*
+forvalues n=1(3)24 {
+	by r_loc_, sort: gen tot_ffs_n`n'=s_tot_paid_by_mc_wi_m_`n'_to_`=`n'+2' if inscope_n_mos>=`n' 
+	by r_loc_, sort: gen tot_ffs_p`n'=s_tot_paid_by_mc_wi_m_`n'_to_`=`n'+2'p if inscope_p_mos>=`n'
+	by r_loc_, sort: egen ffs_tot`n'=mean(tot_ffs_n`n')
+	by r_loc_, sort: egen ffs_tot`=`n'+25'=mean(tot_ffs_p`n')
+	by r_loc_, sort: egen m_ffs_tot`n'=mean(tot_ffs_n`n') if s_female==0
+	by r_loc_, sort: egen m_ffs_tot`=`n'+25'=mean(tot_ffs_p`n') if s_female==0
+	by r_loc_, sort: egen f_ffs_tot`n'=mean(tot_ffs_n`n') if s_female==1
+	by r_loc_, sort: egen f_ffs_tot`=`n'+25'=mean(tot_ffs_p`n') if s_female==1
+	by r_loc_, sort: egen s_ffs_tot`n'=mean(tot_ffs_n`n') if inscope_p_mos>=24
+	by r_loc_, sort: egen s_ffs_tot`=`n'+25'=mean(tot_ffs_p`n') if inscope_p_mos>=24 
+	by r_loc_, sort: egen f_s_ffs_tot`n'=mean(tot_ffs_n`n') if inscope_p_mos>=24 & s_female==1  
+	by r_loc_, sort: egen f_s_ffs_tot`=`n'+25'=mean(tot_ffs_p`n') if inscope_p_mos>=24 & s_female==1 
+	by r_loc_, sort: egen m_s_ffs_tot`n'=mean(tot_ffs_n`n') if inscope_p_mos>=24 & s_female==0 
+	by r_loc_, sort: egen m_s_ffs_tot`=`n'+25'=mean(tot_ffs_p`n') if inscope_p_mos>=24 & s_female==0 
+
+}
+*/
+keep s_id *ffs_tot* s_female r_death_date_e r_loc_
+
+foreach x of varlist ffs* m_* f_* s_ffs* {
+	gen n`x'=.
+	foreach i in 0 1 {
+	sum `x' if r_loc_==`i'
+	replace n`x'=r(N) if r_loc_==`i' & !missing(`x')
+}
+}
+reshape long ffs_tot tot_ffs f_ffs_tot m_ffs_tot s_ffs_tot m_s_ffs_tot ///
+ f_s_ffs_tot  sdffs_tot  sdf_ffs_tot sdm_ffs_tot sds_ffs_tot sdm_s_ffs_tot ///
+ sdf_s_ffs_tot nffs_tot  nf_ffs_tot nm_ffs_tot ns_ffs_tot nm_s_ffs_tot ///
+ nf_s_ffs_tot , i(s_id r_death_date_e) j(t)
+gen source="comparison" if !r_loc_
+replace source="spouse" if r_loc_
+gen time=-(t+2)/3 if t<=24
+replace time=(t-23)/3 if t>=24
+
+label define time -8 "21-24m" -7 "19-21" -6 "16-18" -5 "13-15" -4 "9-12" ///
+ -3 "7-9" -2 "4-6" -1 "0-3" 8 "21-24m" 7 "19-21" 6 "16-18" 5 "13-15" 4 "9-12" ///
+ 3 "7-9" 2 "4-6" 1 "0-3" 
+label values time time
+preserve
+collapse m_s_ffs_tot f_s_ffs_tot ffs_tot f_ffs_tot m_ffs_tot s_ffs_tot  ///
+ sdm_s_ffs_tot sdf_s_ffs_tot sdffs_tot sdf_ffs_tot sdm_ffs_tot sds_ffs_tot ///
+ nm_s_ffs_tot nf_s_ffs_tot nffs_tot nf_ffs_tot nm_ffs_tot ns_ffs_tot, by(time source)
+
+foreach x in ffs_tot f_ffs_tot m_ffs_tot s_ffs_tot m_s_ffs_tot f_s_ffs_tot {
+by time source, sort: gen ulci`x'=`x'+invttail(n`x'-1,0.025)*(sd`x'/sqrt(n`x'))
+by time source, sort: gen llci`x'=`x'-invttail(n`x'-1,0.025)*(sd`x'/sqrt(n`x'))
+}
+label var ffs_tot "Total MC Spending, all in scope"
+label var f_ffs_tot "Total MC Spending, females"
+label var m_ffs_tot "Total MC Spending, males"
+label var s_ffs_tot "Total MC Spending, 24m Survivors only"
+gen before=time if time<0
+gen after=time if time>0
+
+
+/*
+foreach x in ffs_tot  {
+twoway (connected m_`x' time if source=="spouse") (connected f_`x' time if source=="spouse") ///
+(connected m_`x' time if source=="comparison") (connected f_`x' time if source=="comparison") , ///
+ xline(0) xtitle("Months from index date")title("Mean Medicare Costs By Time from Index Date, 3month intervals") ///
+ xlab(-8 -4 -1 1 4 8, valuelabel) ///
+ note("WI Adjusted to 2012 $") subtitle("by gender ") legend(label(1 "Male Spouses") ///
+label(2 "Female Spouses") label(3 "Male Comparison") label(4 "Female Comparison")) ///
+  
+graph save mc_costs_spouse_death_hosp_gender`x'.gph, replace
+graph export mc_costs_spouse_death_hosp_gender_tot3months.pdf, replace
+
+}
+
+foreach x in ffs_tot  {
+twoway (connected m_`x' time) (connected f_`x' time) (lfit m_`x' before) (lfit m_`x' after) ///
+(lfit f_`x' before) (lfit f_`x' after), ///
+ xline(0) xtitle("Months from index date")title("Mean Medicare Costs By Time from Index Date, 3month intervals") ///
+ xlab(-8 -4 -1 1 4 8, valuelabel) ///
+ note("WI Adjusted to 2012 $") subtitle("by gender ") legend(label(1 "Males") ///
+label(2 "Females"))   
+graph save mc_costs_spouse_death_hosp_gender`x'.gph, replace
+graph export mc_costs_spouse_death_hosp_gender_tot3months_prepost.pdf, replace
+
+}
+*/
+/*
+foreach x in s_ffs_tot {
+twoway (connected m_`x' time if source=="spouse") (connected f_`x' time if source=="spouse") ///
+(connected m_`x' time if source=="comparison") (connected f_`x' time if source=="comparison") , ///
+xline(0) xtitle("Months from index date")  ///
+ xlab(-8 -4 -1 1 4 8, valuelabel) ///
+note("WI Adjusted to 2012 $" "24m survivors only") subtitle("by gender ") ///
+legend(label(1 "Male Spouses") ///
+label(2 "Female Spouses") label(3 "Male Comparison") label(4 "Female Comparison")) ///
+  
+graph save mc_costs_spouse_death_hosp_gender`x'.gph, replace
+graph export mc_costs_spouse_death_hosp_gender_survivors3months.pdf, replace
+}
+
+foreach g in "" "m_" "f_" {
+	local gend 
+	if "`g'"=="m_" local gend "Male"
+	if "`g'"=="f_" local gend "Female"
+twoway (connected `g'ffs_tot time if source=="spouse") (connected `g'ffs_tot time if source=="comparison"),  ///
+xline(0) xtitle("Months from index date")  ///
+ xlab(-8 -4 -1 1 4 8, valuelabel)    ///
+note("WI Adjusted to 2012 $") subtitle("All `gend' Respondents")  legend(order( 1 "Bereaved Spouses" 2 "Matched Spouses")) ///
+ ytitle()
+graph save mc_costs_spouse_death_hosp_all, replace
+graph export "Non-CI graphs/mc_costs_spouse_death_hosp_`g'all3months.pdf", replace
+
+twoway (connected `g's_ffs_tot time if source=="spouse") (connected `g's_ffs_tot time if source=="comparison"), ///
+ xline(0) xtitle("Months from index date") ytitle()  ///
+ xlab(-8 -4 -1 1 4 8, valuelabel)     ///
+note("WI Adjusted to 2012 $" )  legend(order( 1 "Bereaved Spouses" 2 "Matched Spouses")) ///
+ subtitle("24m `gend' Survivors only")
+graph save mc_costs_spouse_death_hosp_24m_survivors, replace
+graph export "Non-CI graphs/mc_costs_spouse_death_hosp_24m_`g'survivors3months.pdf", replace
+}
+
+
+
+foreach g in "" "m_" "f_" {
+	local gend 
+	if "`g'"=="m_" local gend "Male"
+	if "`g'"=="f_" local gend "Female"
+twoway (connected `g'ffs_tot time if source=="spouse") (connected `g'ffs_tot time if source=="comparison") ///
+(rcap ulci`g'ffs_tot llci`g'ffs_tot time if source=="spouse") (rcap ulci`g'ffs_tot llci`g'ffs_tot time if source=="comparison"),  ///
+xline(0) xtitle("Months from index date")  ///
+ xlab(-8 -4 -1 1 4 8, valuelabel)    ///
+note("WI Adjusted to 2012 $") subtitle("All `gend' Respondents")  legend(order( 1 "Bereaved Spouses" 2 "Matched Spouses")) ///
+ ytitle()
+graph save mc_costs_spouse_death_hosp_all_ci, replace
+graph export "CI graphs/mc_costs_spouse_death_hosp_`g'all3months_ci.pdf", replace
+
+twoway (connected `g's_ffs_tot time if source=="spouse") (connected `g's_ffs_tot time if source=="comparison") ///
+(rcap ulci`g's_ffs_tot llci`g's_ffs_tot time if source=="spouse") (rcap ulci`g's_ffs_tot llci`g's_ffs_tot time if source=="comparison"),  ///
+ xline(0) xtitle("Months from index date")  ///
+ xlab(-8 -4 -1 1 4 8, valuelabel)  ytitle()    ///
+note("WI Adjusted to 2012 $")  legend(order( 1 "Bereaved Spouses" 2 "Matched Spouses")) ///
+ label(3 "") label(4 "") ) subtitle("24m `gend' Survivors only")
+graph save mc_costs_spouse_death_hosp_24m_survivors_ci, replace
+graph export "CI graphs/mc_costs_spouse_death_hosp_24m_`g'survivors3months_ci.pdf", replace
+}
+/*General data setup for the dataset
+Limited to decedents with FFS MC 6m prior to Index Date, partner at time of Index Date,
+with mc id*/
+*/
+foreach g in "" "m_" "f_" {
+	local gend 
+	if "`g'"=="m_" local gend "Male"
+	if "`g'"=="f_" local gend "Female"
+twoway (connected `g'ffs_tot time if source=="spouse") (connected `g'ffs_tot time if source=="comparison"),  ///
+xline(0) xtitle("Months from index date")  ///
+ xlab(-8 -4 -1 1 4 8, valuelabel)    ///
+note("WI Adjusted to 2012 $") subtitle("All `gend' Respondents")  legend(order( 1 "Bereaved Spouses" 2 "Matched Spouses")) ///
+
+graph save mc_costs_spouse_death_hosp_all, replace
+graph export "graphs/mc_costs_spouse_death_hosp_`g'all3months.pdf", replace
+
+twoway (connected `g's_ffs_tot time if source=="spouse") (connected `g's_ffs_tot time if source=="comparison"), ///
+ xline(0) xtitle("Months from index date")  ///
+ xlab(-8 -4 -1 1 4 8, valuelabel)     ///
+note("WI Adjusted to 2012 $" )  legend(order( 1 "Bereaved Spouses" 2 "Matched Spouses")) ///
+ subtitle("24m `gend' Survivors only")
+graph save mc_costs_spouse_death_hosp_24m_survivors, replace
+graph export "graphs/mc_costs_spouse_death_hosp_24m_`g'survivors3months.pdf", replace
+}
+
+foreach g in "" "m_" "f_" {
+	local gend 
+	if "`g'"=="m_" local gend "Male"
+	if "`g'"=="f_" local gend "Female"
+twoway (connected `g'ffs_tot time if source=="spouse") (connected `g'ffs_tot time if source=="comparison") ///
+(rcap ulci`g'ffs_tot llci`g'ffs_tot time if source=="spouse") (rcap ulci`g'ffs_tot llci`g'ffs_tot time if source=="comparison"),  ///
+xline(0) xtitle("Months from index date")  ///
+ xlab(-8 -4 -1 1 4 8, valuelabel)    ///
+note("WI Adjusted to 2012 $") subtitle("All `gend' Respondents")  legend(order( 1 "Bereaved Spouses" 2 "Matched Spouses")) ///
+
+graph save mc_costs_spouse_death_hosp_all_ci, replace
+graph export "graphs/mc_costs_spouse_death_hosp_`g'all3months_ci.pdf", replace
+
+twoway (connected `g's_ffs_tot time if source=="spouse") (connected `g's_ffs_tot time if source=="comparison") ///
+(rcap ulci`g's_ffs_tot llci`g's_ffs_tot time if source=="spouse") (rcap ulci`g's_ffs_tot llci`g's_ffs_tot time if source=="comparison"),  ///
+ xline(0) xtitle("Months from index date")  ///
+ xlab(-8 -4 -1 1 4 8, valuelabel)     ///
+note("WI Adjusted to 2012 $")  legend(order( 1 "Bereaved Spouses" 2 "Matched Spouses")) ///
+ subtitle("24m `gend' Survivors only")
+graph save mc_costs_spouse_death_hosp_24m_survivors_ci, replace
+graph export "graphs/mc_costs_spouse_death_hosp_24m_`g'survivors3months_ci.pdf", replace
+}
+
+
+H="median graphs"
+/*General data setup for the dataset
+Limited to decedents with FFS MC 6m prior to Index Date, partner at time of Index Date,
+with mc id*/
+
+capture log close
+
+clear all
+set more off
+
+//Server file paths
+local logpath E:\data\spouse_claims\logs
+local projdatapath E:\data\spouse_claims\data\int_data
+
+
+cd `projdatapath'
+
+use spouse_claims_intensmatched.dta
+cd `logpath'
+*svyset [pw=w_r_loc]
+//note-you can use these next lines to drop the top 3% of pre-Index Date_spenders
+/*
+gen perstime=s_cont_ffs_n_mos
+replace perstime=24 if perstime>24
+gen npt=s_s_tot_paid_by_mc_24m/perstime
+gen pperstime=s_cont_ffs_p_mos
+replace pperstime=24 if ppers>24
+gen ppt=s_s_tot_paid_by_mc_p24m/pperstime
+gen pt=npt+ppt
+gsort -npt
+drop if _n<50
+*/
+
+forvalues n=1(3)24 {
+	sum s_tot_paid_by_mc_wi_m_`n'_to_`=`n'+2' if inscope_n_mos>=`n' /*[aw=w_r_loc_]*/
+	gen ffs_tot`n'=. 
+	sum s_tot_paid_by_mc_wi_m_`n'_to_`=`n'+2'p if inscope_p_mos>=`n' /*[aw=w_r_loc_]*/
+	gen ffs_tot`=`n'+25'=.
+	sum s_tot_paid_by_mc_wi_m_`n'_to_`=`n'+2' if inscope_n_mos>=`n' & s_female==0 /*[aw=w_r_loc_]*/
+	gen m_ffs_tot`n'=.
+	sum s_tot_paid_by_mc_wi_m_`n'_to_`=`n'+2'p if inscope_p_mos>=`n' & s_female==0 /*[aw=w_r_loc_]*/
+	gen m_ffs_tot`=`n'+25'=.
+	sum s_tot_paid_by_mc_wi_m_`n'_to_`=`n'+2' if inscope_n_mos>=`n' & s_female==1 /*[aw=w_r_loc_]*/
+	gen f_ffs_tot`n'=.
+	sum s_tot_paid_by_mc_wi_m_`n'_to_`=`n'+2'p if inscope_p_mos>=`n' & s_female==1 /*[aw=w_r_loc_]*/
+	gen f_ffs_tot`=`n'+25'=.
+	sum s_tot_paid_by_mc_wi_m_`n'_to_`=`n'+2' if inscope_n_mos>=`n' /*[aw=w_r_loc_]*/
+	gen s_ffs_tot`n'=.
+	sum s_tot_paid_by_mc_wi_m_`n'_to_`=`n'+2'p if inscope_p_mos>=`n' /*[aw=w_r_loc_]*/
+	gen s_ffs_tot`=`n'+25'=.
+	sum s_tot_paid_by_mc_wi_m_`n'_to_`=`n'+2' if inscope_n_mos>=`n' & s_female==0 /*[aw=w_r_loc_]*/
+	gen m_s_ffs_tot`n'=.
+	sum s_tot_paid_by_mc_wi_m_`n'_to_`=`n'+2'p if inscope_p_mos>=`n' & s_female==0 /*[aw=w_r_loc_]*/
+	gen m_s_ffs_tot`=`n'+25'=.
+	sum s_tot_paid_by_mc_wi_m_`n'_to_`=`n'+2' if inscope_n_mos>=`n' & s_female==1 /*[aw=w_r_loc_]*/
+	gen f_s_ffs_tot`n'=.
+	sum s_tot_paid_by_mc_wi_m_`n'_to_`=`n'+2'p if inscope_p_mos>=`n' & s_female==1 /*[aw=w_r_loc_]*/
+	gen f_s_ffs_tot`=`n'+25'=.
+}
+
+foreach x of varlist *ffs_tot* {
+gen sd`x'=.
+}
+sort r_loc_
+foreach ind in 0 1 {
+forvalues n=1(3)24 {
+	sum s_tot_paid_by_mc_wi_m_`n'_to_`=`n'+2' if r_loc_==`ind' & inscope_n_mos>=`n' /*[aw=w_r_loc_]*/, d
+	replace ffs_tot`n'=r(p50) if r_loc_==`ind' & inscope_n_mos>=`n' 
+	replace sdffs_tot`n'=r(sd) if r_loc_==`ind' & inscope_n_mos>=`n'
+	sum s_tot_paid_by_mc_wi_m_`n'_to_`=`n'+2'p if r_loc_==`ind' & inscope_p_mos>=`n' /*[aw=w_r_loc_]*/, d
+	replace ffs_tot`=`n'+25'=r(p50) if r_loc_==`ind' & inscope_p_mos>=`n'
+	replace sdffs_tot`=`n'+25'=r(sd) if r_loc_==`ind' & inscope_p_mos>=`n'
+	sum s_tot_paid_by_mc_wi_m_`n'_to_`=`n'+2' if r_loc_==`ind' & inscope_n_mos>=`n' & s_female==0 /*[aw=w_r_loc_]*/, d
+	replace m_ffs_tot`n'=r(p50) if r_loc_==`ind' & inscope_n_mos>=`n' & s_female==0 
+	replace sdm_ffs_tot`n'=r(sd) if r_loc_==`ind' & inscope_n_mos>=`n' & s_female==0 
+	sum s_tot_paid_by_mc_wi_m_`n'_to_`=`n'+2'p if r_loc_==`ind' & inscope_p_mos>=`n' & s_female==0 /*[aw=w_r_loc_]*/, d
+	replace m_ffs_tot`=`n'+25'=r(p50) if r_loc_==`ind' & inscope_p_mos>=`n' & s_female==0 
+	replace sdm_ffs_tot`=`n'+25'=r(sd) if r_loc_==`ind' & inscope_p_mos>=`n' & s_female==0 
+	sum s_tot_paid_by_mc_wi_m_`n'_to_`=`n'+2' if r_loc_==`ind' & inscope_n_mos>=`n' & s_female==1 /*[aw=w_r_loc_]*/, d
+	replace f_ffs_tot`n'=r(p50) if r_loc_==`ind' & inscope_n_mos>=`n' & s_female==1 
+	replace sdf_ffs_tot`n'=r(sd) if r_loc_==`ind' & inscope_n_mos>=`n' & s_female==1 
+	sum s_tot_paid_by_mc_wi_m_`n'_to_`=`n'+2'p if r_loc_==`ind' & inscope_p_mos>=`n' & s_female==1 /*[aw=w_r_loc_]*/, d
+	replace f_ffs_tot`=`n'+25'=r(p50) if r_loc_==`ind' & inscope_p_mos>=`n' & s_female==1 
+	replace sdf_ffs_tot`=`n'+25'=r(sd) if r_loc_==`ind' & inscope_p_mos>=`n' & s_female==1 
+	sum s_tot_paid_by_mc_wi_m_`n'_to_`=`n'+2' if r_loc_==`ind' & inscope_p_mos>=24 /*[aw=w_r_loc_]*/, d
+	replace s_ffs_tot`n'=r(p50) if r_loc_==`ind' & inscope_p_mos>=24
+	replace sds_ffs_tot`n'=r(sd) if r_loc_==`ind' & inscope_p_mos>=24
+	sum s_tot_paid_by_mc_wi_m_`n'_to_`=`n'+2'p if r_loc_==`ind' & inscope_p_mos>=24 /*[aw=w_r_loc_]*/, d
+	replace s_ffs_tot`=`n'+25'=r(p50) if r_loc_==`ind' & inscope_p_mos>=24 
+	replace sds_ffs_tot`=`n'+25'=r(sd) if r_loc_==`ind' & inscope_p_mos>=24 
+	sum s_tot_paid_by_mc_wi_m_`n'_to_`=`n'+2' if r_loc_==`ind' & inscope_p_mos>=24 & s_female==0 /*[aw=w_r_loc_]*/, d
+	replace m_s_ffs_tot`n'=r(p50) if r_loc_==`ind' & inscope_p_mos>=24 & s_female==0 
+	replace sdm_s_ffs_tot`n'=r(sd) if r_loc_==`ind' & inscope_p_mos>=24 & s_female==0 
+	sum s_tot_paid_by_mc_wi_m_`n'_to_`=`n'+2'p if r_loc_==`ind' & inscope_p_mos>=24 & s_female==0 /*[aw=w_r_loc_]*/, d
+	replace m_s_ffs_tot`=`n'+25'=r(p50) if r_loc_==`ind' & inscope_p_mos>=24 & s_female==0 
+	replace sdm_s_ffs_tot`=`n'+25'=r(sd) if r_loc_==`ind' & inscope_p_mos>=24 & s_female==0 
+	sum s_tot_paid_by_mc_wi_m_`n'_to_`=`n'+2' if r_loc_==`ind' & inscope_p_mos>=24 & s_female==1 /*[aw=w_r_loc_]*/, d
+	replace f_s_ffs_tot`n'=r(p50) if r_loc_==`ind' & inscope_p_mos>=24 & s_female==1 
+	replace sdf_s_ffs_tot`n'=r(sd) if r_loc_==`ind' & inscope_p_mos>=24 & s_female==1 
+	sum s_tot_paid_by_mc_wi_m_`n'_to_`=`n'+2'p if r_loc_==`ind' & inscope_p_mos>=24 & s_female==1 /*[aw=w_r_loc_]*/, d
+	replace f_s_ffs_tot`=`n'+25'=r(p50) if r_loc_==`ind' & inscope_p_mos>=24 & s_female==1 
+	replace sdf_s_ffs_tot`=`n'+25'=r(sd) if r_loc_==`ind' & inscope_p_mos>=24 & s_female==1 
+}
+}
+
+
+/*
+forvalues n=1(3)24 {
+	by r_loc_, sort: gen tot_ffs_n`n'=s_tot_paid_by_mc_wi_m_`n'_to_`=`n'+2' if inscope_n_mos>=`n' 
+	by r_loc_, sort: gen tot_ffs_p`n'=s_tot_paid_by_mc_wi_m_`n'_to_`=`n'+2'p if inscope_p_mos>=`n'
+	by r_loc_, sort: egen ffs_tot`n'=mean(tot_ffs_n`n')
+	by r_loc_, sort: egen ffs_tot`=`n'+25'=mean(tot_ffs_p`n')
+	by r_loc_, sort: egen m_ffs_tot`n'=mean(tot_ffs_n`n') if s_female==0
+	by r_loc_, sort: egen m_ffs_tot`=`n'+25'=mean(tot_ffs_p`n') if s_female==0
+	by r_loc_, sort: egen f_ffs_tot`n'=mean(tot_ffs_n`n') if s_female==1
+	by r_loc_, sort: egen f_ffs_tot`=`n'+25'=mean(tot_ffs_p`n') if s_female==1
+	by r_loc_, sort: egen s_ffs_tot`n'=mean(tot_ffs_n`n') if inscope_p_mos>=24
+	by r_loc_, sort: egen s_ffs_tot`=`n'+25'=mean(tot_ffs_p`n') if inscope_p_mos>=24 
+	by r_loc_, sort: egen f_s_ffs_tot`n'=mean(tot_ffs_n`n') if inscope_p_mos>=24 & s_female==1  
+	by r_loc_, sort: egen f_s_ffs_tot`=`n'+25'=mean(tot_ffs_p`n') if inscope_p_mos>=24 & s_female==1 
+	by r_loc_, sort: egen m_s_ffs_tot`n'=mean(tot_ffs_n`n') if inscope_p_mos>=24 & s_female==0 
+	by r_loc_, sort: egen m_s_ffs_tot`=`n'+25'=mean(tot_ffs_p`n') if inscope_p_mos>=24 & s_female==0 
+
+}
+*/
+keep s_id *ffs_tot* s_female r_death_date_e r_loc_
+
+foreach x of varlist ffs* m_* f_* s_ffs* {
+	gen n`x'=.
+	foreach i in 0 1 {
+	sum `x' if r_loc_==`i'
+	replace n`x'=r(N) if r_loc_==`i' & !missing(`x')
+}
+}
+reshape long ffs_tot tot_ffs f_ffs_tot m_ffs_tot s_ffs_tot m_s_ffs_tot ///
+ f_s_ffs_tot  sdffs_tot  sdf_ffs_tot sdm_ffs_tot sds_ffs_tot sdm_s_ffs_tot ///
+ sdf_s_ffs_tot nffs_tot  nf_ffs_tot nm_ffs_tot ns_ffs_tot nm_s_ffs_tot ///
+ nf_s_ffs_tot , i(s_id r_death_date_e) j(t)
+gen source="comparison" if !r_loc_
+replace source="spouse" if r_loc_
+gen time=-(t+2)/3 if t<=24
+replace time=(t-23)/3 if t>=24
+
+label define time -8 "21-24m" -7 "19-21" -6 "16-18" -5 "13-15" -4 "9-12" ///
+ -3 "7-9" -2 "4-6" -1 "0-3" 8 "21-24m" 7 "19-21" 6 "16-18" 5 "13-15" 4 "9-12" ///
+ 3 "7-9" 2 "4-6" 1 "0-3" 
+label values time time
+preserve
+collapse m_s_ffs_tot f_s_ffs_tot ffs_tot f_ffs_tot m_ffs_tot s_ffs_tot  ///
+ sdm_s_ffs_tot sdf_s_ffs_tot sdffs_tot sdf_ffs_tot sdm_ffs_tot sds_ffs_tot ///
+ nm_s_ffs_tot nf_s_ffs_tot nffs_tot nf_ffs_tot nm_ffs_tot ns_ffs_tot, by(time source)
+
+foreach x in ffs_tot f_ffs_tot m_ffs_tot s_ffs_tot m_s_ffs_tot f_s_ffs_tot {
+by time source, sort: gen ulci`x'=`x'+invttail(n`x'-1,0.025)*(sd`x'/sqrt(n`x'))
+by time source, sort: gen llci`x'=`x'-invttail(n`x'-1,0.025)*(sd`x'/sqrt(n`x'))
+}
+label var ffs_tot "Total MC Spending, all in scope"
+label var f_ffs_tot "Total MC Spending, females"
+label var m_ffs_tot "Total MC Spending, males"
+label var s_ffs_tot "Total MC Spending, 24m Survivors only"
+gen before=time if time<0
+gen after=time if time>0
+
+
+/*
+foreach x in ffs_tot  {
+twoway (connected m_`x' time if source=="spouse") (connected f_`x' time if source=="spouse") ///
+(connected m_`x' time if source=="comparison") (connected f_`x' time if source=="comparison") , ///
+ xline(0) xtitle("Months from index date")title("Mean Medicare Costs By Time from Index Date, 3month intervals") ///
+ xlab(-8 -4 -1 1 4 8, valuelabel) ///
+ note("WI Adjusted to 2012 $") subtitle("by gender ") legend(label(1 "Male Spouses") ///
+label(2 "Female Spouses") label(3 "Male Comparison") label(4 "Female Comparison")) ///
+  
+graph save mc_costs_spouse_death_hosp_gender`x'.gph, replace
+graph export mc_costs_spouse_death_hosp_gender_tot3months_meds.pdf, replace
+
+}
+
+foreach x in ffs_tot  {
+twoway (connected m_`x' time) (connected f_`x' time) (lfit m_`x' before) (lfit m_`x' after) ///
+(lfit f_`x' before) (lfit f_`x' after), ///
+ xline(0) xtitle("Months from index date")title("Mean Medicare Costs By Time from Index Date, 3month intervals") ///
+ xlab(-8 -4 -1 1 4 8, valuelabel) ///
+ note("WI Adjusted to 2012 $") subtitle("by gender ") legend(label(1 "Males") ///
+label(2 "Females"))   
+graph save mc_costs_spouse_death_hosp_gender`x'.gph, replace
+graph export mc_costs_spouse_death_hosp_gender_tot3months_prepost_meds.pdf, replace
+
+}
+*/
+/*
+foreach x in s_ffs_tot {
+twoway (connected m_`x' time if source=="spouse") (connected f_`x' time if source=="spouse") ///
+(connected m_`x' time if source=="comparison") (connected f_`x' time if source=="comparison") , ///
+xline(0) xtitle("Months from index date")  ///
+ xlab(-8 -4 -1 1 4 8, valuelabel) ///
+note("WI Adjusted to 2012 $" "24m survivors only") subtitle("by gender ") ///
+legend(label(1 "Male Spouses") ///
+label(2 "Female Spouses") label(3 "Male Comparison") label(4 "Female Comparison")) ///
+  
+graph save mc_costs_spouse_death_hosp_gender`x'.gph, replace
+graph export mc_costs_spouse_death_hosp_gender_survivors3months_meds.pdf, replace
+}
+
+foreach g in "" "m_" "f_" {
+	local gend 
+	if "`g'"=="m_" local gend "Male"
+	if "`g'"=="f_" local gend "Female"
+twoway (connected `g'ffs_tot time if source=="spouse") (connected `g'ffs_tot time if source=="comparison"),  ///
+xline(0) xtitle("Months from index date")  ///
+ xlab(-8 -4 -1 1 4 8, valuelabel)    ///
+note("WI Adjusted to 2012 $") subtitle("All `gend' Respondents")  legend(order( 1 "In-hospital death" 2 "Non-hospital death")) ///
+ ytitle()
+graph save mc_costs_spouse_death_hosp_all, replace
+graph export "Non-CI graphs/mc_costs_spouse_death_hosp_`g'all3months_meds.pdf", replace
+
+twoway (connected `g's_ffs_tot time if source=="spouse") (connected `g's_ffs_tot time if source=="comparison"), ///
+ xline(0) xtitle("Months from index date") ytitle()  ///
+ xlab(-8 -4 -1 1 4 8, valuelabel)     ///
+note("WI Adjusted to 2012 $" )  legend(order( 1 "In-hospital death" 2 "Non-hospital death")) ///
+ subtitle("24m `gend' Survivors only")
+graph save mc_costs_spouse_death_hosp_24m_survivors, replace
+graph export "Non-CI graphs/mc_costs_spouse_death_hosp_24m_`g'survivors3months_meds.pdf", replace
+}
+
+
+
+foreach g in "" "m_" "f_" {
+	local gend 
+	if "`g'"=="m_" local gend "Male"
+	if "`g'"=="f_" local gend "Female"
+twoway (connected `g'ffs_tot time if source=="spouse") (connected `g'ffs_tot time if source=="comparison") ///
+(rcap ulci`g'ffs_tot llci`g'ffs_tot time if source=="spouse") (rcap ulci`g'ffs_tot llci`g'ffs_tot time if source=="comparison"),  ///
+xline(0) xtitle("Months from index date")  ///
+ xlab(-8 -4 -1 1 4 8, valuelabel)    ///
+note("WI Adjusted to 2012 $") subtitle("All `gend' Respondents")  legend(order( 1 "In-hospital death" 2 "Non-hospital death")) ///
+ ytitle()
+graph save mc_costs_spouse_death_hosp_all_ci, replace
+graph export "CI graphs/mc_costs_spouse_death_hosp_`g'all3months_ci_meds.pdf", replace
+
+twoway (connected `g's_ffs_tot time if source=="spouse") (connected `g's_ffs_tot time if source=="comparison") ///
+(rcap ulci`g's_ffs_tot llci`g's_ffs_tot time if source=="spouse") (rcap ulci`g's_ffs_tot llci`g's_ffs_tot time if source=="comparison"),  ///
+ xline(0) xtitle("Months from index date")  ///
+ xlab(-8 -4 -1 1 4 8, valuelabel)  ytitle()    ///
+note("WI Adjusted to 2012 $")  legend(order( 1 "In-hospital death" 2 "Non-hospital death")) ///
+ label(3 "") label(4 "") ) subtitle("24m `gend' Survivors only")
+graph save mc_costs_spouse_death_hosp_24m_survivors_ci, replace
+graph export "CI graphs/mc_costs_spouse_death_hosp_24m_`g'survivors3months_ci_meds.pdf", replace
+}
+/*General data setup for the dataset
+Limited to decedents with FFS MC 6m prior to Index Date, partner at time of Index Date,
+with mc id*/
+*/
+foreach g in "" "m_" "f_" {
+	local gend 
+	if "`g'"=="m_" local gend "Male"
+	if "`g'"=="f_" local gend "Female"
+twoway (connected `g'ffs_tot time if source=="spouse") (connected `g'ffs_tot time if source=="comparison"),  ///
+xline(0) xtitle("Months from index date")  ///
+ xlab(-8 -4 -1 1 4 8, valuelabel)    ///
+note("WI Adjusted to 2012 $") subtitle("All `gend' Respondents")  legend(order( 1 "In-hospital death" 2 "Non-hospital death")) ///
+
+graph save mc_costs_spouse_death_hosp_all, replace
+graph export "graphs/mc_costs_spouse_death_hosp_`g'all3months_meds.pdf", replace
+
+twoway (connected `g's_ffs_tot time if source=="spouse") (connected `g's_ffs_tot time if source=="comparison"), ///
+ xline(0) xtitle("Months from index date")  ///
+ xlab(-8 -4 -1 1 4 8, valuelabel)     ///
+note("WI Adjusted to 2012 $" )  legend(order( 1 "In-hospital death" 2 "Non-hospital death")) ///
+ subtitle("24m `gend' Survivors only")
+graph save mc_costs_spouse_death_hosp_24m_survivors, replace
+graph export "graphs/mc_costs_spouse_death_hosp_24m_`g'survivors3months_meds.pdf", replace
+}
+
+foreach g in "" "m_" "f_" {
+	local gend 
+	if "`g'"=="m_" local gend "Male"
+	if "`g'"=="f_" local gend "Female"
+twoway (connected `g'ffs_tot time if source=="spouse") (connected `g'ffs_tot time if source=="comparison") ///
+(rcap ulci`g'ffs_tot llci`g'ffs_tot time if source=="spouse") (rcap ulci`g'ffs_tot llci`g'ffs_tot time if source=="comparison"),  ///
+xline(0) xtitle("Months from index date")  ///
+ xlab(-8 -4 -1 1 4 8, valuelabel)    ///
+note("WI Adjusted to 2012 $") subtitle("All `gend' Respondents")  legend(order( 1 "In-hospital death" 2 "Non-hospital death")) ///
+
+graph save mc_costs_spouse_death_hosp_all_ci, replace
+graph export "graphs/mc_costs_spouse_death_hosp_`g'all3months_ci_meds.pdf", replace
+
+twoway (connected `g's_ffs_tot time if source=="spouse") (connected `g's_ffs_tot time if source=="comparison") ///
+(rcap ulci`g's_ffs_tot llci`g's_ffs_tot time if source=="spouse") (rcap ulci`g's_ffs_tot llci`g's_ffs_tot time if source=="comparison"),  ///
+ xline(0) xtitle("Months from index date")  ///
+ xlab(-8 -4 -1 1 4 8, valuelabel)     ///
+note("WI Adjusted to 2012 $")  legend(order( 1 "In-hospital death" 2 "Non-hospital death")) ///
+ subtitle("24m `gend' Survivors only")
+graph save mc_costs_spouse_death_hosp_24m_survivors_ci, replace
+graph export "graphs/mc_costs_spouse_death_hosp_24m_`g'survivors3months_ci_meds.pdf", replace
+}
+
+
+H="weighted graphs"
+/*General data setup for the dataset
+Limited to decedents with FFS MC 6m prior to Index Date, partner at time of Index Date,
+with mc id*/
+
+capture log close
+
+clear all
+set more off
+
+//Server file paths
+local logpath E:\data\spouse_claims\logs
+local projdatapath E:\data\spouse_claims\data\int_data
+
+
+cd `projdatapath'
+
+use spouse_claims_intensmatched.dta
+cd `logpath'
+svyset [pw=w_r_loc]
+//note-you can use these next lines to drop the top 3% of pre-Index Date_spenders
+/*
+gen perstime=s_cont_ffs_n_mos
+replace perstime=24 if perstime>24
+gen npt=s_s_tot_paid_by_mc_24m/perstime
+gen pperstime=s_cont_ffs_p_mos
+replace pperstime=24 if ppers>24
+gen ppt=s_s_tot_paid_by_mc_p24m/pperstime
+gen pt=npt+ppt
+gsort -npt
+drop if _n<50
+*/
+
+forvalues n=1(3)24 {
+	sum s_tot_paid_by_mc_wi_m_`n'_to_`=`n'+2' if inscope_n_mos>=`n' [aw=w_r_loc_]
+	gen ffs_tot`n'=. 
+	sum s_tot_paid_by_mc_wi_m_`n'_to_`=`n'+2'p if inscope_p_mos>=`n' [aw=w_r_loc_]
+	gen ffs_tot`=`n'+25'=.
+	sum s_tot_paid_by_mc_wi_m_`n'_to_`=`n'+2' if inscope_n_mos>=`n' & s_female==0 [aw=w_r_loc_]
+	gen m_ffs_tot`n'=.
+	sum s_tot_paid_by_mc_wi_m_`n'_to_`=`n'+2'p if inscope_p_mos>=`n' & s_female==0 [aw=w_r_loc_]
+	gen m_ffs_tot`=`n'+25'=.
+	sum s_tot_paid_by_mc_wi_m_`n'_to_`=`n'+2' if inscope_n_mos>=`n' & s_female==1 [aw=w_r_loc_]
+	gen f_ffs_tot`n'=.
+	sum s_tot_paid_by_mc_wi_m_`n'_to_`=`n'+2'p if inscope_p_mos>=`n' & s_female==1 [aw=w_r_loc_]
+	gen f_ffs_tot`=`n'+25'=.
+	sum s_tot_paid_by_mc_wi_m_`n'_to_`=`n'+2' if inscope_n_mos>=`n' [aw=w_r_loc_]
+	gen s_ffs_tot`n'=.
+	sum s_tot_paid_by_mc_wi_m_`n'_to_`=`n'+2'p if inscope_p_mos>=`n' [aw=w_r_loc_]
+	gen s_ffs_tot`=`n'+25'=.
+	sum s_tot_paid_by_mc_wi_m_`n'_to_`=`n'+2' if inscope_n_mos>=`n' & s_female==0 [aw=w_r_loc_]
+	gen m_s_ffs_tot`n'=.
+	sum s_tot_paid_by_mc_wi_m_`n'_to_`=`n'+2'p if inscope_p_mos>=`n' & s_female==0 [aw=w_r_loc_]
+	gen m_s_ffs_tot`=`n'+25'=.
+	sum s_tot_paid_by_mc_wi_m_`n'_to_`=`n'+2' if inscope_n_mos>=`n' & s_female==1 [aw=w_r_loc_]
+	gen f_s_ffs_tot`n'=.
+	sum s_tot_paid_by_mc_wi_m_`n'_to_`=`n'+2'p if inscope_p_mos>=`n' & s_female==1 [aw=w_r_loc_]
+	gen f_s_ffs_tot`=`n'+25'=.
+}
+
+foreach x of varlist *ffs_tot* {
+gen sd`x'=.
+}
+sort r_loc_
+foreach ind in 0 1 {
+forvalues n=1(3)24 {
+	sum s_tot_paid_by_mc_wi_m_`n'_to_`=`n'+2' if r_loc_==`ind' & inscope_n_mos>=`n' [aw=w_r_loc_]
+	replace ffs_tot`n'=r(mean) if r_loc_==`ind' & inscope_n_mos>=`n' 
+	replace sdffs_tot`n'=r(sd) if r_loc_==`ind' & inscope_n_mos>=`n'
+	sum s_tot_paid_by_mc_wi_m_`n'_to_`=`n'+2'p if r_loc_==`ind' & inscope_p_mos>=`n' [aw=w_r_loc_]
+	replace ffs_tot`=`n'+25'=r(mean) if r_loc_==`ind' & inscope_p_mos>=`n'
+	replace sdffs_tot`=`n'+25'=r(sd) if r_loc_==`ind' & inscope_p_mos>=`n'
+	sum s_tot_paid_by_mc_wi_m_`n'_to_`=`n'+2' if r_loc_==`ind' & inscope_n_mos>=`n' & s_female==0 [aw=w_r_loc_]
+	replace m_ffs_tot`n'=r(mean) if r_loc_==`ind' & inscope_n_mos>=`n' & s_female==0 
+	replace sdm_ffs_tot`n'=r(sd) if r_loc_==`ind' & inscope_n_mos>=`n' & s_female==0 
+	sum s_tot_paid_by_mc_wi_m_`n'_to_`=`n'+2'p if r_loc_==`ind' & inscope_p_mos>=`n' & s_female==0 [aw=w_r_loc_]
+	replace m_ffs_tot`=`n'+25'=r(mean) if r_loc_==`ind' & inscope_p_mos>=`n' & s_female==0 
+	replace sdm_ffs_tot`=`n'+25'=r(sd) if r_loc_==`ind' & inscope_p_mos>=`n' & s_female==0 
+	sum s_tot_paid_by_mc_wi_m_`n'_to_`=`n'+2' if r_loc_==`ind' & inscope_n_mos>=`n' & s_female==1 [aw=w_r_loc_]
+	replace f_ffs_tot`n'=r(mean) if r_loc_==`ind' & inscope_n_mos>=`n' & s_female==1 
+	replace sdf_ffs_tot`n'=r(sd) if r_loc_==`ind' & inscope_n_mos>=`n' & s_female==1 
+	sum s_tot_paid_by_mc_wi_m_`n'_to_`=`n'+2'p if r_loc_==`ind' & inscope_p_mos>=`n' & s_female==1 [aw=w_r_loc_]
+	replace f_ffs_tot`=`n'+25'=r(mean) if r_loc_==`ind' & inscope_p_mos>=`n' & s_female==1 
+	replace sdf_ffs_tot`=`n'+25'=r(sd) if r_loc_==`ind' & inscope_p_mos>=`n' & s_female==1 
+	sum s_tot_paid_by_mc_wi_m_`n'_to_`=`n'+2' if r_loc_==`ind' & inscope_p_mos>=24 [aw=w_r_loc_]
+	replace s_ffs_tot`n'=r(mean) if r_loc_==`ind' & inscope_p_mos>=24
+	replace sds_ffs_tot`n'=r(sd) if r_loc_==`ind' & inscope_p_mos>=24
+	sum s_tot_paid_by_mc_wi_m_`n'_to_`=`n'+2'p if r_loc_==`ind' & inscope_p_mos>=24 [aw=w_r_loc_]
+	replace s_ffs_tot`=`n'+25'=r(mean) if r_loc_==`ind' & inscope_p_mos>=24 
+	replace sds_ffs_tot`=`n'+25'=r(sd) if r_loc_==`ind' & inscope_p_mos>=24 
+	sum s_tot_paid_by_mc_wi_m_`n'_to_`=`n'+2' if r_loc_==`ind' & inscope_p_mos>=24 & s_female==0 [aw=w_r_loc_]
+	replace m_s_ffs_tot`n'=r(mean) if r_loc_==`ind' & inscope_p_mos>=24 & s_female==0 
+	replace sdm_s_ffs_tot`n'=r(sd) if r_loc_==`ind' & inscope_p_mos>=24 & s_female==0 
+	sum s_tot_paid_by_mc_wi_m_`n'_to_`=`n'+2'p if r_loc_==`ind' & inscope_p_mos>=24 & s_female==0 [aw=w_r_loc_]
+	replace m_s_ffs_tot`=`n'+25'=r(mean) if r_loc_==`ind' & inscope_p_mos>=24 & s_female==0 
+	replace sdm_s_ffs_tot`=`n'+25'=r(sd) if r_loc_==`ind' & inscope_p_mos>=24 & s_female==0 
+	sum s_tot_paid_by_mc_wi_m_`n'_to_`=`n'+2' if r_loc_==`ind' & inscope_p_mos>=24 & s_female==1 [aw=w_r_loc_]
+	replace f_s_ffs_tot`n'=r(mean) if r_loc_==`ind' & inscope_p_mos>=24 & s_female==1 
+	replace sdf_s_ffs_tot`n'=r(sd) if r_loc_==`ind' & inscope_p_mos>=24 & s_female==1 
+	sum s_tot_paid_by_mc_wi_m_`n'_to_`=`n'+2'p if r_loc_==`ind' & inscope_p_mos>=24 & s_female==1 [aw=w_r_loc_]
+	replace f_s_ffs_tot`=`n'+25'=r(mean) if r_loc_==`ind' & inscope_p_mos>=24 & s_female==1 
+	replace sdf_s_ffs_tot`=`n'+25'=r(sd) if r_loc_==`ind' & inscope_p_mos>=24 & s_female==1 
+}
+}
+
+
+/*
+forvalues n=1(3)24 {
+	by r_loc_, sort: gen tot_ffs_n`n'=s_tot_paid_by_mc_wi_m_`n'_to_`=`n'+2' if inscope_n_mos>=`n' 
+	by r_loc_, sort: gen tot_ffs_p`n'=s_tot_paid_by_mc_wi_m_`n'_to_`=`n'+2'p if inscope_p_mos>=`n'
+	by r_loc_, sort: egen ffs_tot`n'=mean(tot_ffs_n`n')
+	by r_loc_, sort: egen ffs_tot`=`n'+25'=mean(tot_ffs_p`n')
+	by r_loc_, sort: egen m_ffs_tot`n'=mean(tot_ffs_n`n') if s_female==0
+	by r_loc_, sort: egen m_ffs_tot`=`n'+25'=mean(tot_ffs_p`n') if s_female==0
+	by r_loc_, sort: egen f_ffs_tot`n'=mean(tot_ffs_n`n') if s_female==1
+	by r_loc_, sort: egen f_ffs_tot`=`n'+25'=mean(tot_ffs_p`n') if s_female==1
+	by r_loc_, sort: egen s_ffs_tot`n'=mean(tot_ffs_n`n') if inscope_p_mos>=24
+	by r_loc_, sort: egen s_ffs_tot`=`n'+25'=mean(tot_ffs_p`n') if inscope_p_mos>=24 
+	by r_loc_, sort: egen f_s_ffs_tot`n'=mean(tot_ffs_n`n') if inscope_p_mos>=24 & s_female==1  
+	by r_loc_, sort: egen f_s_ffs_tot`=`n'+25'=mean(tot_ffs_p`n') if inscope_p_mos>=24 & s_female==1 
+	by r_loc_, sort: egen m_s_ffs_tot`n'=mean(tot_ffs_n`n') if inscope_p_mos>=24 & s_female==0 
+	by r_loc_, sort: egen m_s_ffs_tot`=`n'+25'=mean(tot_ffs_p`n') if inscope_p_mos>=24 & s_female==0 
+
+}
+*/
+keep s_id *ffs_tot* s_female r_death_date_e r_loc_
+
+foreach x of varlist ffs* m_* f_* s_ffs* {
+	gen n`x'=.
+	foreach i in 0 1 {
+	sum `x' if r_loc_==`i'
+	replace n`x'=r(N) if r_loc_==`i' & !missing(`x')
+}
+}
+reshape long ffs_tot tot_ffs f_ffs_tot m_ffs_tot s_ffs_tot m_s_ffs_tot ///
+ f_s_ffs_tot  sdffs_tot  sdf_ffs_tot sdm_ffs_tot sds_ffs_tot sdm_s_ffs_tot ///
+ sdf_s_ffs_tot nffs_tot  nf_ffs_tot nm_ffs_tot ns_ffs_tot nm_s_ffs_tot ///
+ nf_s_ffs_tot , i(s_id r_death_date_e) j(t)
+gen source="comparison" if !r_loc_
+replace source="spouse" if r_loc_
+gen time=-(t+2)/3 if t<=24
+replace time=(t-23)/3 if t>=24
+
+label define time -8 "21-24m" -7 "19-21" -6 "16-18" -5 "13-15" -4 "9-12" ///
+ -3 "7-9" -2 "4-6" -1 "0-3" 8 "21-24m" 7 "19-21" 6 "16-18" 5 "13-15" 4 "9-12" ///
+ 3 "7-9" 2 "4-6" 1 "0-3" 
+label values time time
+preserve
+collapse m_s_ffs_tot f_s_ffs_tot ffs_tot f_ffs_tot m_ffs_tot s_ffs_tot  ///
+ sdm_s_ffs_tot sdf_s_ffs_tot sdffs_tot sdf_ffs_tot sdm_ffs_tot sds_ffs_tot ///
+ nm_s_ffs_tot nf_s_ffs_tot nffs_tot nf_ffs_tot nm_ffs_tot ns_ffs_tot, by(time source)
+
+foreach x in ffs_tot f_ffs_tot m_ffs_tot s_ffs_tot m_s_ffs_tot f_s_ffs_tot {
+by time source, sort: gen ulci`x'=`x'+invttail(n`x'-1,0.025)*(sd`x'/sqrt(n`x'))
+by time source, sort: gen llci`x'=`x'-invttail(n`x'-1,0.025)*(sd`x'/sqrt(n`x'))
+}
+label var ffs_tot "Total MC Spending, all in scope"
+label var f_ffs_tot "Total MC Spending, females"
+label var m_ffs_tot "Total MC Spending, males"
+label var s_ffs_tot "Total MC Spending, 24m Survivors only"
+gen before=time if time<0
+gen after=time if time>0
+
+
+/*
+foreach x in ffs_tot  {
+twoway (connected m_`x' time if source=="spouse") (connected f_`x' time if source=="spouse") ///
+(connected m_`x' time if source=="comparison") (connected f_`x' time if source=="comparison") , ///
+ xline(0) xtitle("Months from index date")title("Mean Medicare Costs By Time from Index Date, 3month intervals") ///
+ xlab(-8 -4 -1 1 4 8, valuelabel) ///
+ note("WI Adjusted to 2012 $") subtitle("by gender ") legend(label(1 "Male Spouses") ///
+label(2 "Female Spouses") label(3 "Male Comparison") label(4 "Female Comparison")) ///
+  
+graph save mc_costs_spouse_death_hosp_gender`x'.gph, replace
+graph export mc_costs_spouse_death_hosp_gender_tot3monthsweighted.pdf, replace
+
+}
+
+foreach x in ffs_tot  {
+twoway (connected m_`x' time) (connected f_`x' time) (lfit m_`x' before) (lfit m_`x' after) ///
+(lfit f_`x' before) (lfit f_`x' after), ///
+ xline(0) xtitle("Months from index date")title("Mean Medicare Costs By Time from Index Date, 3month intervals") ///
+ xlab(-8 -4 -1 1 4 8, valuelabel) ///
+ note("WI Adjusted to 2012 $") subtitle("by gender ") legend(label(1 "Males") ///
+label(2 "Females"))   
+graph save mc_costs_spouse_death_hosp_gender`x'.gph, replace
+graph export mc_costs_spouse_death_hosp_gender_tot3months_prepostweighted.pdf, replace
+
+}
+*/
+/*
+foreach x in s_ffs_tot {
+twoway (connected m_`x' time if source=="spouse") (connected f_`x' time if source=="spouse") ///
+(connected m_`x' time if source=="comparison") (connected f_`x' time if source=="comparison") , ///
+xline(0) xtitle("Months from index date")  ///
+ xlab(-8 -4 -1 1 4 8, valuelabel) ///
+note("WI Adjusted to 2012 $" "24m survivors only") subtitle("by gender ") ///
+legend(label(1 "Male Spouses") ///
+label(2 "Female Spouses") label(3 "Male Comparison") label(4 "Female Comparison")) ///
+  
+graph save mc_costs_spouse_death_hosp_gender`x'.gph, replace
+graph export mc_costs_spouse_death_hosp_gender_survivors3monthsweighted.pdf, replace
+}
+
+foreach g in "" "m_" "f_" {
+	local gend 
+	if "`g'"=="m_" local gend "Male"
+	if "`g'"=="f_" local gend "Female"
+twoway (connected `g'ffs_tot time if source=="spouse") (connected `g'ffs_tot time if source=="comparison"),  ///
+xline(0) xtitle("Months from index date")  ///
+ xlab(-8 -4 -1 1 4 8, valuelabel)    ///
+note("WI Adjusted to 2012 $") subtitle("All `gend' Respondents")  legend(order( 1 "Bereaved Spouses" 2 "Matched Spouses")) ///
+ ytitle()
+graph save mc_costs_spouse_death_hosp_all, replace
+graph export "Non-CI graphs/mc_costs_spouse_death_hosp_`g'all3monthsweighted.pdf", replace
+
+twoway (connected `g's_ffs_tot time if source=="spouse") (connected `g's_ffs_tot time if source=="comparison"), ///
+ xline(0) xtitle("Months from index date") ytitle()  ///
+ xlab(-8 -4 -1 1 4 8, valuelabel)     ///
+note("WI Adjusted to 2012 $" )  legend(order( 1 "Bereaved Spouses" 2 "Matched Spouses")) ///
+ subtitle("24m `gend' Survivors only")
+graph save mc_costs_spouse_death_hosp_24m_survivors, replace
+graph export "Non-CI graphs/mc_costs_spouse_death_hosp_24m_`g'survivors3monthsweighted.pdf", replace
+}
+
+
+
+foreach g in "" "m_" "f_" {
+	local gend 
+	if "`g'"=="m_" local gend "Male"
+	if "`g'"=="f_" local gend "Female"
+twoway (connected `g'ffs_tot time if source=="spouse") (connected `g'ffs_tot time if source=="comparison") ///
+(rcap ulci`g'ffs_tot llci`g'ffs_tot time if source=="spouse") (rcap ulci`g'ffs_tot llci`g'ffs_tot time if source=="comparison"),  ///
+xline(0) xtitle("Months from index date")  ///
+ xlab(-8 -4 -1 1 4 8, valuelabel)    ///
+note("WI Adjusted to 2012 $") subtitle("All `gend' Respondents")  legend(order( 1 "Bereaved Spouses" 2 "Matched Spouses")) ///
+ ytitle()
+graph save mc_costs_spouse_death_hosp_all_ci, replace
+graph export "CI graphs/mc_costs_spouse_death_hosp_`g'all3months_ciweighted.pdf", replace
+
+twoway (connected `g's_ffs_tot time if source=="spouse") (connected `g's_ffs_tot time if source=="comparison") ///
+(rcap ulci`g's_ffs_tot llci`g's_ffs_tot time if source=="spouse") (rcap ulci`g's_ffs_tot llci`g's_ffs_tot time if source=="comparison"),  ///
+ xline(0) xtitle("Months from index date")  ///
+ xlab(-8 -4 -1 1 4 8, valuelabel)  ytitle()    ///
+note("WI Adjusted to 2012 $")  legend(order( 1 "Bereaved Spouses" 2 "Matched Spouses")) ///
+ label(3 "") label(4 "") ) subtitle("24m `gend' Survivors only")
+graph save mc_costs_spouse_death_hosp_24m_survivors_ci, replace
+graph export "CI graphs/mc_costs_spouse_death_hosp_24m_`g'survivors3months_ciweighted.pdf", replace
+}
+/*General data setup for the dataset
+Limited to decedents with FFS MC 6m prior to Index Date, partner at time of Index Date,
+with mc id*/
+*/
+foreach g in "" "m_" "f_" {
+	local gend 
+	if "`g'"=="m_" local gend "Male"
+	if "`g'"=="f_" local gend "Female"
+twoway (connected `g'ffs_tot time if source=="spouse") (connected `g'ffs_tot time if source=="comparison"),  ///
+xline(0) xtitle("Months from index date")  ///
+ xlab(-8 -4 -1 1 4 8, valuelabel)    ///
+note("WI Adjusted to 2012 $") subtitle("All `gend' Respondents")  legend(order( 1 "Bereaved Spouses" 2 "Matched Spouses")) ///
+
+graph save mc_costs_spouse_death_hosp_all, replace
+graph export "graphs/mc_costs_spouse_death_hosp_`g'all3monthsweighted.pdf", replace
+
+twoway (connected `g's_ffs_tot time if source=="spouse") (connected `g's_ffs_tot time if source=="comparison"), ///
+ xline(0) xtitle("Months from index date")  ///
+ xlab(-8 -4 -1 1 4 8, valuelabel)     ///
+note("WI Adjusted to 2012 $" )  legend(order( 1 "Bereaved Spouses" 2 "Matched Spouses")) ///
+ subtitle("24m `gend' Survivors only")
+graph save mc_costs_spouse_death_hosp_24m_survivors, replace
+graph export "graphs/mc_costs_spouse_death_hosp_24m_`g'survivors3monthsweighted.pdf", replace
+}
+
+foreach g in "" "m_" "f_" {
+	local gend 
+	if "`g'"=="m_" local gend "Male"
+	if "`g'"=="f_" local gend "Female"
+twoway (connected `g'ffs_tot time if source=="spouse") (connected `g'ffs_tot time if source=="comparison") ///
+(rcap ulci`g'ffs_tot llci`g'ffs_tot time if source=="spouse") (rcap ulci`g'ffs_tot llci`g'ffs_tot time if source=="comparison"),  ///
+xline(0) xtitle("Months from index date")  ///
+ xlab(-8 -4 -1 1 4 8, valuelabel)    ///
+note("WI Adjusted to 2012 $") subtitle("All `gend' Respondents")  legend(order( 1 "Bereaved Spouses" 2 "Matched Spouses")) ///
+
+graph save mc_costs_spouse_death_hosp_all_ci, replace
+graph export "graphs/mc_costs_spouse_death_hosp_`g'all3months_ciweighted.pdf", replace
+
+twoway (connected `g's_ffs_tot time if source=="spouse") (connected `g's_ffs_tot time if source=="comparison") ///
+(rcap ulci`g's_ffs_tot llci`g's_ffs_tot time if source=="spouse") (rcap ulci`g's_ffs_tot llci`g's_ffs_tot time if source=="comparison"),  ///
+ xline(0) xtitle("Months from index date")  ///
+ xlab(-8 -4 -1 1 4 8, valuelabel)     ///
+note("WI Adjusted to 2012 $")  legend(order( 1 "Bereaved Spouses" 2 "Matched Spouses")) ///
+ subtitle("24m `gend' Survivors only")
+graph save mc_costs_spouse_death_hosp_24m_survivors_ci, replace
+graph export "graphs/mc_costs_spouse_death_hosp_24m_`g'survivors3months_ciweighted.pdf", replace
+}
+
+
+H="table 1 2/17/17"
+
+
+capture log close
+
+clear all
+set more off
+
+//Amy's PC
+local  logpath E:\data\spouse_claims\logs
+local datapath E:\data\spouse_claims\data\int_data
+
+log using "`logpath'\Spouse_intensive_table1.txt", text replace
+
+cd `datapath'
+
+//use sample with no missingness - saved when first round of psmatching done
+use spouse_claims_intensmatched.dta
+***************************************************************
+tab r_loc_hosp_x, missing
+gen bottomquartile_w=quartile_w if spend_quart<4
+replace topq=quartile_w if spend_quart==4
+rename r_cc_*n12mn0 r_cc_*n12m
+
+foreach d in 365 730{
+gen s_died_`d'd=s_death_date-r_death_date_e<=`d'
+label var s_died_`d'd "S death <=`d'd after R"
+}
+***************************************************************
+	
+local rvars r_age r_nhres_n1 r_srh_pf_n1 r_advdir_x r_dexp_x r_adl_impair_n1 ///
+ likely_dem r_cancer_hrs_n1 r_hrs_comorb_none_n1 r_hrs_comorb_mild_n1 ///
+ r_hrs_comorb_modsev_n1 r_champus_n1
+
+local svars s_age s_female s_nw_lowest_n1 /*s_nw_midlow_n1 s_nw_midhigh_n1 s_nw_highest_n1*/ s_white_e ///
+s_hseduc s_srh_pf_n1 s_hrs_comorb_none_n1 s_hrs_comorb_mild_n1 s_hrs_comorb_modsev_n1 ///
+s_adl_impair_n1 ///
+
+
+foreach x in `rvars' `svars' {
+	drop if missing(`x')
+}
+*************************************************************************************
+*************************************************************************************
+//create Table 1, overall sample characteristics
+*************************************************************************************
+*************************************************************************************
+//Part 1 - Decedent char
+gen n=1
+
+local rcvars r_age 
+local shrscomorbs s_cancer_hrs_n1 s_lung_hrs_n1 s_heart_hrs_n1 s_chf_hrs_n1 ///
+ s_stroke_hrs_n1 s_memory_hrs_n1 s_htn_hrs_n1 s_dm_hrs_n1 s_psych_hrs_n1
+local rhrscomorbs r_cancer_hrs_n1 r_lung_hrs_n1 r_heart_hrs_n1 r_chf_hrs_n1 ///
+ r_stroke_hrs_n1 r_memory_hrs_n1 r_htn_hrs_n1 r_dm_hrs_n1 r_psych_hrs_n1
+
+local rivars r_female r_white_e r_hseduc  ///
+ r_medicaid_n1 r_champus_n1 r_medigap_n1 ///
+ r_adl_impair_n1 r_srh_pf_n1 ///
+ r_nhres_n1 likely_dem r_hrs_comorb_none_n1 r_hrs_comorb_mild_n1 r_hrs_comorb_modsev_n1 ///
+ `rhrscomorbs' r_loc_hosp_x loc_home loc_asst loc_nh loc_hs loc_oth ///
+r_advdir_x r_dexp_x r_discuss_x  
+
+local scvars s_age s_networth_adj2012_n1
+
+local sivars s_female s_white_e s_hseduc  ///
+ s_medicaid_n1 s_champus_n1 s_medigap_n1 ///
+ s_adl_impair_n1 s_srh_pf_n1 ///
+ s_nhres_n1 s_hrs_comorb_none_n1 s_hrs_comorb_mild_n1 s_hrs_comorb_modsev_n1 ///
+ `shrscomorbs' 
+local region eol_spend_quart1 eol_spend_quart2 eol_spend_quart3 eol_spend_quart4
+
+gen loc_nh=r_location==2
+gen loc_home=r_location==3
+gen loc_hs=r_location==4
+gen loc_asst=r_location==5
+gen loc_oth=r_location==6
+foreach x of varlist loc_* {
+replace `x'=. if missing(r_loc_hosp)
+}
+label var loc_nh "Died in Nursing Home" 
+label var loc_home "Died at Home"
+label var loc_hs "Died at Hospice"
+label var loc_asst "Died Assisted Living or Retirement Home"
+label var loc_oth "Location of death Other/Unknown"
+la var r_age "Age at death, years"
+la var r_loc_ "Died in Hospital"
+la var r_married_x "Married at death"
+la var r_female "Female"
+la var r_white_e "Race, White, Non-Hispanic"
+la var r_hseduc "Education, High School Deg"
+la var r_medicaid_n1  "Medicaid"
+la var r_champus_n1  "VA Insurance"
+la var r_medigap_n1 "Medigap"
+la var r_adl_independent_core_n1 "ADL Independent"
+la var r_srh_pf_n1 "SRH poor or fair**"
+la var r_advdir_x "Had advanced directive"
+la var r_dexp_x  "Death expected by family"
+la var r_discuss_x "Discussion of EOL care"
+la var s_age "Age at death, years"
+la var s_loc_hosp_x "Died in Hospital"
+la var s_married_x "Married at death"
+la var s_female "Female"
+la var s_white "Race, White, Non-Hispanic"
+la var s_hseduc "Education, High School Deg"
+la var s_medicaid_n1  "Medicaid"
+la var s_champus_n1  "VA Insurance"
+la var s_medigap_n1 "Medigap"
+la var s_adl_independent_core_n1 "ADL Independent"
+la var s_srh_pf_n1 "SRH poor or fair"
+la var r_s_death_24m "S death within 2 years"
+
+local rvars `rcvars' `rivars' 
+local svars `scvars' `sivars' 
+local rn : word count `rvars' `svars' `region' `coutcomes' `ioutcomes' 1 1 1 
+mat tab=J(`rn',4,.)
+mat stars=J(`rn',4,0)
+local r=1
+local c=1
+
+sum `rvars' `svars'
+foreach loc in "0,1,." { //0 1 {
+	foreach x in `rvars' `svars' `region' `coutcomes' `ioutcomes' {
+		di "`x'"
+		if "`x'"!="r_age" & "`x'"!="s_age" & ///
+		!inlist(substr("`x'",1,6),"s_netw", "s_tot_","s_n_ho", ///
+		"s_icu_") {
+			sum `x' if inlist(r_loc_,`loc') `time'
+			mat tab[`r',`c']=r(mean)*100
+			if inlist("`loc'","1") & "`x'"!="r_loc_hosp_x" tab `x' r_loc_, chi2
+			if inlist("`loc'","1") & "`x'"!="r_loc_hosp_x" mat tab[`r',`c'+1]=r(p)
+			if inlist("`loc'","1") & "`x'"!="r_loc_hosp_x" mat stars[`r',`c'+1]=(r(p)<.05)+(r(p)<.01) 
+}
+			else {
+				if inlist("`x'","r_age","s_age","s_tot_paid_by_mc_wi_p12m") ///
+				 local r=`r'+1
+				sum `x' if inlist(r_loc_,`loc'),d 
+				mat tab[`r',`c']=r(mean)
+				mat tab[`r',`c'+1]=r(sd)
+				mat tab[`r',`c'+2]=r(p50)
+				if inlist("`loc'","1") ttest `x', by(r_loc_)
+				if inlist("`loc'","1") mat tab[`r',`c'+1]=r(p)
+				if inlist("`loc'","1") mat stars[`r',`c'+1]=(r(p)<.05)+(r(p)<.01) 
+}
+	local r = `r'+1
+}
+	sum n if inlist(r_loc_,`loc') 
+	mat tab[`r',`c']==r(N)
+	local r=1
+	local c=`c'+1
+}
+
+
+mat rownames tab="Respondent" `rvars' "Surviving Spouse" `svars' `region' ///
+ "N"
+
+frmttable using `logpath'/sample_characteristics_death_hosp_matched.rtf, ///
+statmat(tab) title("Sample Characteristics, `title'") ///
+ctitles("" "Mean/%" "SD" "Median" /*"Death not in-hospital" "R Death in Hospital" "P"*/) sdec(2) ///
+replace varlabels annotate(stars) asymbol(*,**) ///
+
+ /*
+local rn: word count `rcvars' `rivars' `region' n 
+mat tab=J(`rn',8,.)
+mat stars=J(`rn',8,0)
+local r=1
+local c=1
+
+svyset [pw=w_r_loc]
+foreach s in r s {
+	foreach loc in 0 1 {
+		foreach v in ``s'cvars' {
+			sum `v' if r_loc_==`loc' /*[aw=w_r_loc]*/
+			mat tab[`r',`c']=r(mean)
+			mat tab[`r',`c'+1]=r(sd)
+			if `loc'==1 {
+				/*svy: mean `v', over(r_loc_)
+				test [`v']0=[`v']1*/
+				ttest `v', by(r_loc_)
+				mat stars[`r',`c']=(r(p)<.05)+(r(p)<.01)
+}
+			local r=`r'+1
+}
+		foreach v in ``s'ivars' {
+			sum `v' if r_loc_==`loc' /*[aw=w_r_loc]*/
+			mat tab[`r',`c']=r(mean)*100
+			if `loc'==1 & "`v'"!="r_loc_hosp_x" {
+				/*svy: tab `v' r_loc_
+				mat stars[`r',`c']=(e(p_Pear)<.01)+(e(p_Pear)<.05)*/
+				tab `v' r_loc_, chi2
+				mat stars[`r',`c']=(r(p)<.05)+(r(p)<.01)
+}
+		local r=`r'+1
+}	
+	sum n if r_loc_==`loc' /*[aw=w_r_loc]*/
+	mat tab[`r',`c']==r(N)
+	local r=1
+	local c=`c'+2
+}
+}
+mat rownames tab=`rcvars' `rivars' "N"
+
+frmttable using `logpath'/sample_characteristics_death_hosp_matched.rtf, statmat(tab) title(Table 1) ///
+ctitles("" "" "Decedent variables" "" "Surviving Spouse"  \"" "Control" "R Death in Hospital" ///
+"Control" "R Death in Hospital" ) sdec(2) replace subst(1) annotate(stars) ///
+asymbol(*,**) varlabels note("*p<.05,**p<.01")
+*/
+
+preserve
+replace s_tot_paid_by_mc_wi_p24m=. if !surv_12 | r_death_year==2011
+/*gen s_tot_paid_by_mc_wi_6m18m=s_tot_paid_by_mc_wi_18m-s_tot_paid_by_mc_wi_6m if ///
+s_cont_ffs_n_mos>=18*/
+mat tab=J(12,8,.)
+mat stars=J(12,8,0)
+local r=1
+local c=1
+sum spend_quart
+local num=r(N)
+sum s_tot_paid_by_mc_wi_p24m if !missing(spend_quart)
+local num24=r(N)
+
+forvalues i=1/4 {
+	foreach x in 6m18m p12m p24m {
+	local r=`r'+1
+	qui ranksum s_tot_paid_by_mc_wi_`x' if spend_quart==`i', by(r_loc_hos)
+	mat tab[`r',`c'+1]=2*(normprob(-abs(r(z))))
+	mat stars[`r',`c'+1]=(2*(normprob(-abs(r(z))))<.01)+(2*(normprob(-abs(r(z))))<.05)
+	
+	foreach j in "0,1" 0 1 {	
+	qui sum s_tot_paid_by_mc_wi_`x' if spend_quart==`i' & inlist(r_loc_hos,`j') ///
+	/*[aw=w_r_loc]*/,d
+	mat tab[`r',`c']=r(p50)
+	local r=`r'+1
+}
+}
+	local c=`c'+2
+	local r=1
+
+}
+mat rownames tab="6-18m before R's death" "All" "No In-hospital death" "In-hospital death" ///
+"12m after R's death" "All" "No In-hospital death" ///
+"In-hospital death" "24m after R's death*" "All" "No In-hospital death" ///
+"In-hospital death"
+
+frmttable using `logpath'/sample_characteristics_death_hosp_matched.rtf, statmat(tab) title("Median MC Spending by Quartile of S Expenditure prior to R's death") ///
+note("Among those with 18m FFS prior to R's death only (N=`num')" ///
+"WI & inflation adjusted to 2012$" "*-Excluding those with less than 12m FFS (N=`num24')" ///
+"P-values from Wilcoxon rank-sum test") ///
+ctitles("" "Bottom" "P" "2nd" "P" "3rd" "P" "Top" "P") addtable //replace
+label var likely_dem "Pr. dementia >.5"
+
+mat tab=J(12,8,.)
+local r=1
+local c=1
+sum spend_quart
+local num=r(N)
+sum s_tot_paid_by_mc_wi_p24m if !missing(spend_quart)
+local num24=r(N)
+
+forvalues i=1/4 {
+	foreach x in 6m18m p12m p24m {
+	local r=`r'+1
+	foreach j in "0,1" 0 1 {	
+	qui sum s_tot_paid_by_mc_wi_`x' if spend_quart==`i' & inlist(r_loc_hos,`j') ///
+	/*[aw=w_r_loc]*/,d
+	mat tab[`r',`c']=r(p25)
+	mat tab[`r',`c'+1]=r(p75)
+	local r=`r'+1
+}
+}
+	local c=`c'+2
+	local r=1
+
+}
+mat rownames tab="6-18m before R's death" "All" "No In-hospital death" "In-hospital death" ///
+"12m after R's death" "All" "No In-hospital death" ///
+"In-hospital death" "24m after R's death*" "All" "No In-hospital death" ///
+"In-hospital death"
+
+frmttable using `logpath'/sample_characteristics_death_hosp_matched.rtf, statmat(tab) ///
+title("Within Quartile Interquartile Range") ///
+note("Among those with 18m FFS prior to R's death only (N=`num')" ///
+"WI & inflation adjusted to 2012$" "*-Excluding those with less than 12m FFS (N=`num24')") ///
+ctitles("" "" "Bottom" "" "2nd" "" "3rd" "" "Top" \ "" "25th" "75th" "25th" "75th" "25th" ///
+"75th" "25th" "75th") addtable //replace
+label var likely_dem "Pr. dementia >.5"
+
+mat sp=J(4,2,.)
+tab spend_quart r_loc_, matcell(sp1)
+forvalues i=1/4 {
+	foreach j in 1 2 {
+		mat sp[`i',`j']=(sp1[`i',`j']/(sp1[`i',1]+sp1[`i',2]))*100
+}
+}
+mat rownames sp="Bottom quartile" "2nd" "3rd" "Top"
+frmttable using `logpath'/sample_characteristics_death_hosp_matched.rtf, ///
+statmat(sp) title("Percentage of spending quartile, by R location") ///
+ctitles("" "No In-hospital death" "In-hospital death") sdec(2) addtable
+
+restore
+/*foreach s in r s {
+	label var `s'_hrs_comorb_mild_n1 "SR comorbidities: none"
+	label var `s'_hrs_comorb_mod_n1 "SR comorbidities: mild (1-3)"
+}*/
+	gen r_s_helper_x=!r_s_help_dur_ind1
+	label var r_s_helper_x "Spouse R's helper, from exit"
+	
+local rvars r_age r_nhres_n1 r_srh_pf_n1 r_advdir_x r_dexp_x r_adl_impair_n1 ///
+ likely_dem r_cancer_hrs_n1 r_hrs_comorb_none_n1 r_hrs_comorb_mild_n1 ///
+ r_hrs_comorb_modsev_n1 r_champus_n1
+
+local svars s_age s_female s_nw_lowest_n1 /*s_nw_midlow_n1 s_nw_midhigh_n1 s_nw_highest_n1*/ s_white_e ///
+s_hseduc s_srh_pf_n1 s_hrs_comorb_none_n1 s_hrs_comorb_mild_n1 s_hrs_comorb_modsev_n1 ///
+s_adl_impair_n1 ///
+r_s_helper_x 
+
+foreach x in s_tot_paid_by_mc_wi_p24m s_ed_ind_p24m s_admit_ind_p24m s_icu_ind_p24m ///
+s_died_730d s_ind_nonelect_adm_p24m {
+	replace `x'=. if r_death_year==2011
+	gen `x'_cond=`x' if surv_12 & r_death_year<2011
+	local lab : var label `x'
+	label var `x'_cond "`lab', conditional on 12m Survival"
+}
+local coutcomes
+foreach x in p12m p24m p24m_cond {
+	gen med_`x'=s_tot_paid_by_mc_wi_`x'
+	local vl : var label s_tot_paid_by_mc_wi_`x'
+	label var med_`x' "`vl', median"
+	local coutcomes `coutcomes' s_tot_paid_by_mc_wi_`x' med_`x'
+}
+
+local coutcomes s_tot_paid_by_mc_wi_p12m med_p12m s_tot_paid_by_mc_wi_p24m ///
+med_p24m /*s_n_hospd_p12m ///
+s_n_hospd_p24m s_icu_days_p12m s_icu_days_p24m*/ s_tot_paid_by_mc_wi_p24m_cond ///
+med_p24m_cond
+local ioutcomes s_admit_ind_p12m s_admit_ind_p24m s_admit_ind_p24m_cond ///
+s_ind_nonelect_adm_p12m s_ind_nonelect_adm_p24m s_ind_nonelect_adm_p24m_cond ///
+s_ed_ind_p12m s_ed_ind_p24m s_ed_ind_p24m_cond ///
+s_icu_ind_p12m s_icu_ind_p24m s_icu_ind_p24m_cond s_died_365d s_died_730d s_died_730d_cond
+
+foreach weight in w_r_loc surv_12_w surv_24_w bottomquartile_w topquartile_w {
+	svyset [pw=`weight']
+	foreach x in 0 1 {
+	sum s_tot_paid_by_mc_wi_p24m_cond if r_loc_==`x' [aw=`weight']
+	local denomcond`x'=r(N)
+	sum s_tot_paid_by_mc_wi_p24m if r_loc_==`x' [aw=`weight']
+	local denom24`x'=r(N)
+}
+
+	if "`weight'"=="w_r_loc" local title "Full Sample"
+	if "`weight'"=="surv_12_w" {
+		preserve
+		keep if surv_12m
+		local title "12m Survivors only"
+	}
+	if "`weight'"=="surv_24_w" {
+		keep if surv_24m
+		local title "24m Survivors only"
+}
+	if "`weight'"=="bottomquartile_w" {
+		restore
+		preserve
+		keep if spend_quart<4
+		local title "Bottom 75% pre-death spending"
+}
+	if "`weight'"=="topquartile_w" {
+		restore
+		preserve
+		keep if spend_quart==4
+		foreach x in 0 1 {
+			sum s_tot_paid_by_mc_wi_p24m_cond if r_loc_==`x' [aw=`weight']
+			local denomcond`x'=r(N)
+			sum s_tot_paid_by_mc_wi_p24m if r_loc_==`x' [aw=`weight']
+			local denom24`x'=r(N)
+}
+
+		local title "Top quartile pre-death spending"
+}
+
+local rvars r_age r_nhres_n1 r_srh_pf_n1 r_advdir_x r_dexp_x r_adl_impair_n1 ///
+ likely_dem r_cancer_hrs_n1 r_hrs_comorb_none_n1 r_hrs_comorb_mild_n1 ///
+ r_hrs_comorb_modsev_n1 r_champus_n1
+
+local svars s_age s_female s_nw_lowest_n1 /*s_nw_midlow_n1 s_nw_midhigh_n1 s_nw_highest_n1*/ s_white_e ///
+s_hseduc s_srh_pf_n1 s_hrs_comorb_none_n1 s_hrs_comorb_mild_n1 s_hrs_comorb_modsev_n1 ///
+s_adl_impair_n1 ///
+r_s_helper_x 
+
+
+local rn : word count `rvars' `svars' `region' 1 1 1
+mat tab=J(`rn',6,.)
+local r=1
+local c=1
+
+foreach time in "" "[aw=`weight']" {
+	foreach loc in 0 1 {
+		foreach x in `rvars' `svars' `region' {
+			if "`x'"!="r_age" & "`x'"!="s_age" {
+					sum `x' if r_loc_==`loc' `time'
+					mat tab[`r',`c']=r(mean)*100
+					if `loc'==1 mat tab[`r',`=`c'+1']=(tab[`r',`=`c'-1']/100-tab[`r',`=`c'']/100)/sqrt((tab[`r',`=`c'-1']/100* ///
+						(1-tab[`r',`=`c'-1']/100)+tab[`r',`=`c'']/100*(1-tab[`r',`=`c'']/100))/2)
+}
+			else {
+				local r=`r'+1
+				sum `x' if r_loc_==`loc' `time'
+				mat tab[`r',`c']=r(mean)
+				local loc`loc'=r(sd)
+				if `loc'==1 mat tab[`r',`=`c'+1']=(tab[`r',`c'-1]-tab[`r',`c']) ///
+				/sqrt((`loc0'^2+`loc1'^2)/2) 
+}
+	local r = `r'+1
+}
+	sum n if r_loc_==`loc' `time'
+	mat tab[`r',`c']==r(N)
+	local r=1
+	local c=`c'+1
+}
+	local c=`c'+1
+}
+
+mat rownames tab="Respondent" `rvars' "Surviving Spouse" `svars' `region' "N"
+
+frmttable using `logpath'/sample_characteristics_death_hosp_matched.rtf, ///
+statmat(tab) title("Matching Variables, `title'") ///
+ctitles("" "" "Unmatched" "" "" "Matched"  \"" "Control" "R Death in Hospital" ///
+ "Std Diff" "Control""R Death in Hospital" "Std Diff") sdec(2) ///
+addtable varlabels 
+
+local rcvars r_age 
+local shrscomorbs s_cancer_hrs_n1 s_lung_hrs_n1 s_heart_hrs_n1 s_chf_hrs_n1 ///
+ s_stroke_hrs_n1 s_memory_hrs_n1 s_htn_hrs_n1 s_dm_hrs_n1 s_psych_hrs_n1
+local rhrscomorbs r_cancer_hrs_n1 r_lung_hrs_n1 r_heart_hrs_n1 r_chf_hrs_n1 ///
+ r_stroke_hrs_n1 r_memory_hrs_n1 r_htn_hrs_n1 r_dm_hrs_n1 r_psych_hrs_n1
+
+local rivars r_female r_white_e r_hseduc  ///
+ r_medicaid_n1 r_champus_n1 r_medigap_n1 ///
+ r_adl_impair_n1 r_srh_pf_n1 ///
+ r_nhres_n1 likely_dem r_hrs_comorb_none_n1 r_hrs_comorb_mild_n1 r_hrs_comorb_modsev_n1 ///
+ `rhrscomorbs' r_loc_hosp_x ///
+r_advdir_x r_dexp_x r_discuss_x  
+
+local scvars s_age s_networth_adj2012_n1
+
+local sivars s_female s_white_e s_hseduc  ///
+ s_medicaid_n1 s_champus_n1 s_medigap_n1 ///
+ s_adl_impair_n1 s_srh_pf_n1 ///
+ s_nhres_n1 s_hrs_comorb_none_n1 s_hrs_comorb_mild_n1 s_hrs_comorb_modsev_n1 ///
+ `shrscomorbs' 
+ 
+/*local rvars r_age r_nhres_n1 r_srh_pf_n1 r_advdir_x r_dexp_x r_adl_impair_n1 ///
+ likely_dem r_cancer_hrs_n1 r_hrs_comorb_none_n1 r_hrs_comorb_mild_n1 r_hrs_comorb_modsev_n1 
+
+local svars s_age s_female s_nw_lowest_n1 /*s_nw_midlow_n1 s_nw_midhigh_n1 s_nw_highest_n1*/ s_white_e ///
+s_hseduc s_srh_pf_n1 s_hrs_comorb_none_n1 s_hrs_comorb_mild_n1 s_hrs_comorb_modsev_n1 ///
+s_adl_impair_n1 ///
+r_s_helper_x */
+
+
+local rvars `rcvars' `rivars' 
+local svars `scvars' `sivars' 
+local rn : word count `rvars' `svars' `region' `coutcomes' `ioutcomes' 1 1 1 1
+mat tab=J(`rn',3,.)
+mat stars=J(`rn',3,0)
+local r=1
+local c=1
+foreach time in "[aw=`weight']" {
+	foreach loc in 0 1 {
+		foreach x in `rvars' `svars' `region' `coutcomes' `ioutcomes'{
+		di "`x'"
+			if "`x'"!="r_age" & "`x'"!="s_age" & ///
+			!inlist(substr("`x'",1,6),"s_netw", "s_tot_","s_n_ho", ///
+			"s_icu_","med_p1","med_p2") {
+				sum `x' if r_loc_==`loc' `time'
+				mat tab[`r',`c']=r(mean)*100
+				if `loc'==1 & "`x'"!="r_loc_hosp_x" svy: tab `x' r_loc_
+				if `loc'==1 & "`x'"!="r_loc_hosp_x" mat tab[`r',`c'+1]=e(p_Pear)
+				if `loc'==1 & "`x'"!="r_loc_hosp_x" mat stars[`r',`c'+1]=(e(p_Pear)<.01)+(e(p_Pear)<.05)
+}
+			else {
+				if inlist("`x'","r_age","s_age","s_tot_paid_by_mc_wi_p12m") ///
+				 local r=`r'+1
+				if substr("`x'",1,3)!="med"	{
+				sum `x' if r_loc_==`loc' `time'
+				mat tab[`r',`c']=r(mean)
+				if `loc'==1 svy: mean `x', over(r_loc_)
+				if `loc'==1 test [`x']0=[`x']1
+				if `loc'==1 mat tab[`r',`c'+1]=r(p)
+				if `loc'==1 mat stars[`r',`c'+1]=(r(p)<.05)+(r(p)<.01) 
+}
+				else {
+				sum `x' if r_loc_==`loc' `time',d
+				mat tab[`r',`c']=r(p50)
+}
+}
+	local r = `r'+1
+}
+	sum n if r_loc_==`loc' `time'
+	mat tab[`r',`c']==r(N)
+	local r=1
+	local c=`c'+1
+}
+}
+
+mat rownames tab="Respondent" `rvars' "Surviving Spouse" `svars' `region' ///
+"Outcomes" `coutcomes' `ioutcomes' "N"
+
+frmttable using `logpath'/sample_characteristics_death_hosp_matched.rtf, ///
+statmat(tab) title("Sample Characteristics, `title'") ///
+ctitles("" "Control" "R Death in Hospital" "P") sdec(2) ///
+addtable varlabels annotate(stars) asymbol(*,**) ///
+ note("All 24m variables restricted to R death prior to 2011")
+
+}
+
+
+
+
+
+H="ffs table 1 2/17"
+
+
+capture log close
+
+clear all
+set more off
+
+//Amy's PC
+local  logpath E:\data\spouse_claims\logs
+local datapath E:\data\spouse_claims\data\int_data
+
+log using "`logpath'\Spouse_intensive_table1.txt", text replace
+
+cd `datapath'
+
+//use sample with no missingness - saved when first round of psmatching done
+use spouse_claims_intensmatched_fffs.dta
+***************************************************************
+tab r_loc_hosp_x, missing
+gen bottomquartile_w=quartile_w if spend_quart<4
+replace topq=quartile_w if spend_quart==4
+rename r_cc_*n12mn0 r_cc_*n12m
+
+foreach d in 365 730{
+gen s_died_`d'd=s_death_date-r_death_date_e<=`d'
+label var s_died_`d'd "S death <=`d'd after R"
+}
+***************************************************************
+	
+local rvars r_age r_nhres_n1 r_srh_pf_n1 r_advdir_x r_dexp_x r_adl_impair_n1 ///
+ likely_dem r_cancer_hrs_n1 r_hrs_comorb_none_n1 r_hrs_comorb_mild_n1 ///
+ r_hrs_comorb_modsev_n1 r_champus_n1
+
+local svars s_age s_female s_nw_lowest_n1 /*s_nw_midlow_n1 s_nw_midhigh_n1 s_nw_highest_n1*/ s_white_e ///
+s_hseduc s_srh_pf_n1 s_hrs_comorb_none_n1 s_hrs_comorb_mild_n1 s_hrs_comorb_modsev_n1 ///
+s_adl_impair_n1 ///
+
+
+foreach x in `rvars' `svars' {
+	drop if missing(`x')
+}
+*************************************************************************************
+*************************************************************************************
+//create Table 1, overall sample characteristics
+*************************************************************************************
+*************************************************************************************
+//Part 1 - Decedent char
+gen n=1
+
+local rcvars r_age 
+local shrscomorbs s_cancer_hrs_n1 s_lung_hrs_n1 s_heart_hrs_n1 s_chf_hrs_n1 ///
+ s_stroke_hrs_n1 s_memory_hrs_n1 s_htn_hrs_n1 s_dm_hrs_n1 s_psych_hrs_n1
+local rhrscomorbs r_cancer_hrs_n1 r_lung_hrs_n1 r_heart_hrs_n1 r_chf_hrs_n1 ///
+ r_stroke_hrs_n1 r_memory_hrs_n1 r_htn_hrs_n1 r_dm_hrs_n1 r_psych_hrs_n1
+
+local rivars r_female r_white_e r_hseduc  ///
+ r_medicaid_n1 r_champus_n1 r_medigap_n1 ///
+ r_adl_impair_n1 r_srh_pf_n1 ///
+ r_nhres_n1 likely_dem r_hrs_comorb_none_n1 r_hrs_comorb_mild_n1 r_hrs_comorb_modsev_n1 ///
+ `rhrscomorbs' r_loc_hosp_x loc_home loc_asst loc_nh loc_hs loc_oth ///
+r_advdir_x r_dexp_x r_discuss_x  
+
+local scvars s_age s_networth_adj2012_n1
+
+local sivars s_female s_white_e s_hseduc  ///
+ s_medicaid_n1 s_champus_n1 s_medigap_n1 ///
+ s_adl_impair_n1 s_srh_pf_n1 ///
+ s_nhres_n1 s_hrs_comorb_none_n1 s_hrs_comorb_mild_n1 s_hrs_comorb_modsev_n1 ///
+ `shrscomorbs' 
+local region eol_spend_quart1 eol_spend_quart2 eol_spend_quart3 eol_spend_quart4
+
+gen loc_nh=r_location==2
+gen loc_home=r_location==3
+gen loc_hs=r_location==4
+gen loc_asst=r_location==5
+gen loc_oth=r_location==6
+foreach x of varlist loc_* {
+replace `x'=. if missing(r_loc_hosp)
+}
+label var loc_nh "Died in Nursing Home" 
+label var loc_home "Died at Home"
+label var loc_hs "Died at Hospice"
+label var loc_asst "Died Assisted Living or Retirement Home"
+label var loc_oth "Location of death Other/Unknown"
+la var r_age "Age at death, years"
+la var r_loc_ "Died in Hospital"
+la var r_married_x "Married at death"
+la var r_female "Female"
+la var r_white_e "Race, White, Non-Hispanic"
+la var r_hseduc "Education, High School Deg"
+la var r_medicaid_n1  "Medicaid"
+la var r_champus_n1  "VA Insurance"
+la var r_medigap_n1 "Medigap"
+la var r_adl_independent_core_n1 "ADL Independent"
+la var r_srh_pf_n1 "SRH poor or fair**"
+la var r_advdir_x "Had advanced directive"
+la var r_dexp_x  "Death expected by family"
+la var r_discuss_x "Discussion of EOL care"
+la var s_age "Age at death, years"
+la var s_loc_hosp_x "Died in Hospital"
+la var s_married_x "Married at death"
+la var s_female "Female"
+la var s_white "Race, White, Non-Hispanic"
+la var s_hseduc "Education, High School Deg"
+la var s_medicaid_n1  "Medicaid"
+la var s_champus_n1  "VA Insurance"
+la var s_medigap_n1 "Medigap"
+la var s_adl_independent_core_n1 "ADL Independent"
+la var s_srh_pf_n1 "SRH poor or fair"
+la var r_s_death_24m "S death within 2 years"
+
+local rvars `rcvars' `rivars' 
+local svars `scvars' `sivars' 
+local rn : word count `rvars' `svars' `region' `coutcomes' `ioutcomes' 1 1 1 
+mat tab=J(`rn',4,.)
+mat stars=J(`rn',4,0)
+local r=1
+local c=1
+
+sum `rvars' `svars'
+foreach loc in "0,1,." { //0 1 {
+	foreach x in `rvars' `svars' `region' `coutcomes' `ioutcomes' {
+		di "`x'"
+		if "`x'"!="r_age" & "`x'"!="s_age" & ///
+		!inlist(substr("`x'",1,6),"s_netw", "s_tot_","s_n_ho", ///
+		"s_icu_") {
+			sum `x' if inlist(r_loc_,`loc') `time'
+			mat tab[`r',`c']=r(mean)*100
+			if inlist("`loc'","1") & "`x'"!="r_loc_hosp_x" tab `x' r_loc_, chi2
+			if inlist("`loc'","1") & "`x'"!="r_loc_hosp_x" mat tab[`r',`c'+1]=r(p)
+			if inlist("`loc'","1") & "`x'"!="r_loc_hosp_x" mat stars[`r',`c'+1]=(r(p)<.05)+(r(p)<.01) 
+}
+			else {
+				if inlist("`x'","r_age","s_age","s_tot_paid_by_mc_wi_p12m") ///
+				 local r=`r'+1
+				sum `x' if inlist(r_loc_,`loc'),d 
+				mat tab[`r',`c']=r(mean)
+				mat tab[`r',`c'+1]=r(sd)
+				mat tab[`r',`c'+2]=r(p50)
+				if inlist("`loc'","1") ttest `x', by(r_loc_)
+				if inlist("`loc'","1") mat tab[`r',`c'+1]=r(p)
+				if inlist("`loc'","1") mat stars[`r',`c'+1]=(r(p)<.05)+(r(p)<.01) 
+}
+	local r = `r'+1
+}
+	sum n if inlist(r_loc_,`loc') 
+	mat tab[`r',`c']==r(N)
+	local r=1
+	local c=`c'+1
+}
+
+
+mat rownames tab="Respondent" `rvars' "Surviving Spouse" `svars' `region' ///
+ "N"
+
+frmttable using `logpath'/sample_characteristics_death_hosp_matched_fffs.rtf, ///
+statmat(tab) title("Sample Characteristics, `title'") ///
+ctitles("" "Mean/%" "SD" "Median" /*"Death not in-hospital" "R Death in Hospital" "P"*/) sdec(2) ///
+replace varlabels annotate(stars) asymbol(*,**) ///
+
+ /*
+local rn: word count `rcvars' `rivars' `region' n 
+mat tab=J(`rn',8,.)
+mat stars=J(`rn',8,0)
+local r=1
+local c=1
+
+svyset [pw=w_r_loc]
+foreach s in r s {
+	foreach loc in 0 1 {
+		foreach v in ``s'cvars' {
+			sum `v' if r_loc_==`loc' /*[aw=w_r_loc]*/
+			mat tab[`r',`c']=r(mean)
+			mat tab[`r',`c'+1]=r(sd)
+			if `loc'==1 {
+				/*svy: mean `v', over(r_loc_)
+				test [`v']0=[`v']1*/
+				ttest `v', by(r_loc_)
+				mat stars[`r',`c']=(r(p)<.05)+(r(p)<.01)
+}
+			local r=`r'+1
+}
+		foreach v in ``s'ivars' {
+			sum `v' if r_loc_==`loc' /*[aw=w_r_loc]*/
+			mat tab[`r',`c']=r(mean)*100
+			if `loc'==1 & "`v'"!="r_loc_hosp_x" {
+				/*svy: tab `v' r_loc_
+				mat stars[`r',`c']=(e(p_Pear)<.01)+(e(p_Pear)<.05)*/
+				tab `v' r_loc_, chi2
+				mat stars[`r',`c']=(r(p)<.05)+(r(p)<.01)
+}
+		local r=`r'+1
+}	
+	sum n if r_loc_==`loc' /*[aw=w_r_loc]*/
+	mat tab[`r',`c']==r(N)
+	local r=1
+	local c=`c'+2
+}
+}
+mat rownames tab=`rcvars' `rivars' "N"
+
+frmttable using `logpath'/sample_characteristics_death_hosp_matched_fffs.rtf, statmat(tab) title(Table 1) ///
+ctitles("" "" "Decedent variables" "" "Surviving Spouse"  \"" "Control" "R Death in Hospital" ///
+"Control" "R Death in Hospital" ) sdec(2) replace subst(1) annotate(stars) ///
+asymbol(*,**) varlabels note("*p<.05,**p<.01")
+*/
+
+preserve
+replace s_tot_paid_by_mc_wi_p24m=. if !surv_12 | r_death_year==2011
+/*gen s_tot_paid_by_mc_wi_6m18m=s_tot_paid_by_mc_wi_18m-s_tot_paid_by_mc_wi_6m if ///
+s_cont_ffs_n_mos>=18*/
+mat tab=J(12,8,.)
+mat stars=J(12,8,0)
+local r=1
+local c=1
+sum spend_quart
+local num=r(N)
+sum s_tot_paid_by_mc_wi_p24m if !missing(spend_quart)
+local num24=r(N)
+
+forvalues i=1/4 {
+	foreach x in 6m18m p12m p24m {
+	local r=`r'+1
+	qui ranksum s_tot_paid_by_mc_wi_`x' if spend_quart==`i', by(r_loc_hos)
+	mat tab[`r',`c'+1]=2*(normprob(-abs(r(z))))
+	mat stars[`r',`c'+1]=(2*(normprob(-abs(r(z))))<.01)+(2*(normprob(-abs(r(z))))<.05)
+	
+	foreach j in "0,1" 0 1 {	
+	qui sum s_tot_paid_by_mc_wi_`x' if spend_quart==`i' & inlist(r_loc_hos,`j') ///
+	/*[aw=w_r_loc]*/,d
+	mat tab[`r',`c']=r(p50)
+	local r=`r'+1
+}
+}
+	local c=`c'+2
+	local r=1
+
+}
+mat rownames tab="6-18m before R's death" "All" "No In-hospital death" "In-hospital death" ///
+"12m after R's death" "All" "No In-hospital death" ///
+"In-hospital death" "24m after R's death*" "All" "No In-hospital death" ///
+"In-hospital death"
+
+frmttable using `logpath'/sample_characteristics_death_hosp_matched_fffs.rtf, statmat(tab) title("Median MC Spending by Quartile of S Expenditure prior to R's death") ///
+note("Among those with 18m FFS prior to R's death only (N=`num')" ///
+"WI & inflation adjusted to 2012$" "*-Excluding those with less than 12m FFS (N=`num24')" ///
+"P-values from Wilcoxon rank-sum test") ///
+ctitles("" "Bottom" "P" "2nd" "P" "3rd" "P" "Top" "P") addtable //replace
+label var likely_dem "Pr. dementia >.5"
+
+mat tab=J(12,8,.)
+local r=1
+local c=1
+sum spend_quart
+local num=r(N)
+sum s_tot_paid_by_mc_wi_p24m if !missing(spend_quart)
+local num24=r(N)
+
+forvalues i=1/4 {
+	foreach x in 6m18m p12m p24m {
+	local r=`r'+1
+	foreach j in "0,1" 0 1 {	
+	qui sum s_tot_paid_by_mc_wi_`x' if spend_quart==`i' & inlist(r_loc_hos,`j') ///
+	/*[aw=w_r_loc]*/,d
+	mat tab[`r',`c']=r(p25)
+	mat tab[`r',`c'+1]=r(p75)
+	local r=`r'+1
+}
+}
+	local c=`c'+2
+	local r=1
+
+}
+mat rownames tab="6-18m before R's death" "All" "No In-hospital death" "In-hospital death" ///
+"12m after R's death" "All" "No In-hospital death" ///
+"In-hospital death" "24m after R's death*" "All" "No In-hospital death" ///
+"In-hospital death"
+
+frmttable using `logpath'/sample_characteristics_death_hosp_matched_fffs.rtf, statmat(tab) ///
+title("Within Quartile Interquartile Range") ///
+note("Among those with 18m FFS prior to R's death only (N=`num')" ///
+"WI & inflation adjusted to 2012$" "*-Excluding those with less than 12m FFS (N=`num24')") ///
+ctitles("" "" "Bottom" "" "2nd" "" "3rd" "" "Top" \ "" "25th" "75th" "25th" "75th" "25th" ///
+"75th" "25th" "75th") addtable //replace
+label var likely_dem "Pr. dementia >.5"
+
+mat sp=J(4,2,.)
+tab spend_quart r_loc_, matcell(sp1)
+forvalues i=1/4 {
+	foreach j in 1 2 {
+		mat sp[`i',`j']=(sp1[`i',`j']/(sp1[`i',1]+sp1[`i',2]))*100
+}
+}
+mat rownames sp="Bottom quartile" "2nd" "3rd" "Top"
+frmttable using `logpath'/sample_characteristics_death_hosp_matched_fffs.rtf, ///
+statmat(sp) title("Percentage of spending quartile, by R location") ///
+ctitles("" "No In-hospital death" "In-hospital death") sdec(2) addtable
+
+restore
+/*foreach s in r s {
+	label var `s'_hrs_comorb_mild_n1 "SR comorbidities: none"
+	label var `s'_hrs_comorb_mod_n1 "SR comorbidities: mild (1-3)"
+}*/
+	gen r_s_helper_x=!r_s_help_dur_ind1
+	label var r_s_helper_x "Spouse R's helper, from exit"
+	
+local rvars r_age r_nhres_n1 r_srh_pf_n1 r_advdir_x r_dexp_x r_adl_impair_n1 ///
+ likely_dem r_cancer_hrs_n1 r_hrs_comorb_none_n1 r_hrs_comorb_mild_n1 ///
+ r_hrs_comorb_modsev_n1 r_champus_n1
+
+local svars s_age s_female s_nw_lowest_n1 /*s_nw_midlow_n1 s_nw_midhigh_n1 s_nw_highest_n1*/ s_white_e ///
+s_hseduc s_srh_pf_n1 s_hrs_comorb_none_n1 s_hrs_comorb_mild_n1 s_hrs_comorb_modsev_n1 ///
+s_adl_impair_n1 ///
+r_s_helper_x 
+
+foreach x in s_tot_paid_by_mc_wi_p24m s_ed_ind_p24m s_admit_ind_p24m s_icu_ind_p24m ///
+s_died_730d s_ind_nonelect_adm_p24m {
+	replace `x'=. if r_death_year==2011
+	gen `x'_cond=`x' if surv_12 & r_death_year<2011
+	local lab : var label `x'
+	label var `x'_cond "`lab', conditional on 12m Survival"
+}
+local coutcomes
+foreach x in p12m p24m p24m_cond {
+	gen med_`x'=s_tot_paid_by_mc_wi_`x'
+	local vl : var label s_tot_paid_by_mc_wi_`x'
+	label var med_`x' "`vl', median"
+	local coutcomes `coutcomes' s_tot_paid_by_mc_wi_`x' med_`x'
+}
+
+local coutcomes s_tot_paid_by_mc_wi_p12m med_p12m s_tot_paid_by_mc_wi_p24m ///
+med_p24m /*s_n_hospd_p12m ///
+s_n_hospd_p24m s_icu_days_p12m s_icu_days_p24m*/ s_tot_paid_by_mc_wi_p24m_cond ///
+med_p24m_cond
+local ioutcomes s_admit_ind_p12m s_admit_ind_p24m s_admit_ind_p24m_cond ///
+s_ind_nonelect_adm_p12m s_ind_nonelect_adm_p24m s_ind_nonelect_adm_p24m_cond ///
+s_ed_ind_p12m s_ed_ind_p24m s_ed_ind_p24m_cond ///
+s_icu_ind_p12m s_icu_ind_p24m s_icu_ind_p24m_cond s_died_365d s_died_730d s_died_730d_cond
+
+foreach weight in w_r_loc surv_12_w surv_24_w bottomquartile_w topquartile_w {
+	svyset [pw=`weight']
+	foreach x in 0 1 {
+	sum s_tot_paid_by_mc_wi_p24m_cond if r_loc_==`x' [aw=`weight']
+	local denomcond`x'=r(N)
+	sum s_tot_paid_by_mc_wi_p24m if r_loc_==`x' [aw=`weight']
+	local denom24`x'=r(N)
+}
+
+	if "`weight'"=="w_r_loc" local title "Full Sample"
+	if "`weight'"=="surv_12_w" {
+		preserve
+		keep if surv_12m
+		local title "12m Survivors only"
+	}
+	if "`weight'"=="surv_24_w" {
+		keep if surv_24m
+		local title "24m Survivors only"
+}
+	if "`weight'"=="bottomquartile_w" {
+		restore
+		preserve
+		keep if spend_quart<4
+		local title "Bottom 75% pre-death spending"
+}
+	if "`weight'"=="topquartile_w" {
+		restore
+		preserve
+		keep if spend_quart==4
+		foreach x in 0 1 {
+			sum s_tot_paid_by_mc_wi_p24m_cond if r_loc_==`x' [aw=`weight']
+			local denomcond`x'=r(N)
+			sum s_tot_paid_by_mc_wi_p24m if r_loc_==`x' [aw=`weight']
+			local denom24`x'=r(N)
+}
+
+		local title "Top quartile pre-death spending"
+}
+
+local rvars r_age r_nhres_n1 r_srh_pf_n1 r_advdir_x r_dexp_x r_adl_impair_n1 ///
+ likely_dem r_cancer_hrs_n1 r_hrs_comorb_none_n1 r_hrs_comorb_mild_n1 ///
+ r_hrs_comorb_modsev_n1 r_champus_n1
+
+local svars s_age s_female s_nw_lowest_n1 /*s_nw_midlow_n1 s_nw_midhigh_n1 s_nw_highest_n1*/ s_white_e ///
+s_hseduc s_srh_pf_n1 s_hrs_comorb_none_n1 s_hrs_comorb_mild_n1 s_hrs_comorb_modsev_n1 ///
+s_adl_impair_n1 ///
+r_s_helper_x 
+
+
+local rn : word count `rvars' `svars' `region' 1 1 1
+mat tab=J(`rn',6,.)
+local r=1
+local c=1
+
+foreach time in "" "[aw=`weight']" {
+	foreach loc in 0 1 {
+		foreach x in `rvars' `svars' `region' {
+			if "`x'"!="r_age" & "`x'"!="s_age" {
+					sum `x' if r_loc_==`loc' `time'
+					mat tab[`r',`c']=r(mean)*100
+					if `loc'==1 mat tab[`r',`=`c'+1']=(tab[`r',`=`c'-1']/100-tab[`r',`=`c'']/100)/sqrt((tab[`r',`=`c'-1']/100* ///
+						(1-tab[`r',`=`c'-1']/100)+tab[`r',`=`c'']/100*(1-tab[`r',`=`c'']/100))/2)
+}
+			else {
+				local r=`r'+1
+				sum `x' if r_loc_==`loc' `time'
+				mat tab[`r',`c']=r(mean)
+				local loc`loc'=r(sd)
+				if `loc'==1 mat tab[`r',`=`c'+1']=(tab[`r',`c'-1]-tab[`r',`c']) ///
+				/sqrt((`loc0'^2+`loc1'^2)/2) 
+}
+	local r = `r'+1
+}
+	sum n if r_loc_==`loc' `time'
+	mat tab[`r',`c']==r(N)
+	local r=1
+	local c=`c'+1
+}
+	local c=`c'+1
+}
+
+mat rownames tab="Respondent" `rvars' "Surviving Spouse" `svars' `region' "N"
+
+frmttable using `logpath'/sample_characteristics_death_hosp_matched_fffs.rtf, ///
+statmat(tab) title("Matching Variables, `title'") ///
+ctitles("" "" "Unmatched" "" "" "Matched"  \"" "Control" "R Death in Hospital" ///
+ "Std Diff" "Control""R Death in Hospital" "Std Diff") sdec(2) ///
+addtable varlabels 
+
+local rcvars r_age 
+local shrscomorbs s_cancer_hrs_n1 s_lung_hrs_n1 s_heart_hrs_n1 s_chf_hrs_n1 ///
+ s_stroke_hrs_n1 s_memory_hrs_n1 s_htn_hrs_n1 s_dm_hrs_n1 s_psych_hrs_n1
+local rhrscomorbs r_cancer_hrs_n1 r_lung_hrs_n1 r_heart_hrs_n1 r_chf_hrs_n1 ///
+ r_stroke_hrs_n1 r_memory_hrs_n1 r_htn_hrs_n1 r_dm_hrs_n1 r_psych_hrs_n1
+
+local rivars r_female r_white_e r_hseduc  ///
+ r_medicaid_n1 r_champus_n1 r_medigap_n1 ///
+ r_adl_impair_n1 r_srh_pf_n1 ///
+ r_nhres_n1 likely_dem r_hrs_comorb_none_n1 r_hrs_comorb_mild_n1 r_hrs_comorb_modsev_n1 ///
+ `rhrscomorbs' r_loc_hosp_x ///
+r_advdir_x r_dexp_x r_discuss_x  
+
+local scvars s_age s_networth_adj2012_n1
+
+local sivars s_female s_white_e s_hseduc  ///
+ s_medicaid_n1 s_champus_n1 s_medigap_n1 ///
+ s_adl_impair_n1 s_srh_pf_n1 ///
+ s_nhres_n1 s_hrs_comorb_none_n1 s_hrs_comorb_mild_n1 s_hrs_comorb_modsev_n1 ///
+ `shrscomorbs' 
+ 
+/*local rvars r_age r_nhres_n1 r_srh_pf_n1 r_advdir_x r_dexp_x r_adl_impair_n1 ///
+ likely_dem r_cancer_hrs_n1 r_hrs_comorb_none_n1 r_hrs_comorb_mild_n1 r_hrs_comorb_modsev_n1 
+
+local svars s_age s_female s_nw_lowest_n1 /*s_nw_midlow_n1 s_nw_midhigh_n1 s_nw_highest_n1*/ s_white_e ///
+s_hseduc s_srh_pf_n1 s_hrs_comorb_none_n1 s_hrs_comorb_mild_n1 s_hrs_comorb_modsev_n1 ///
+s_adl_impair_n1 ///
+r_s_helper_x */
+
+
+local rvars `rcvars' `rivars' 
+local svars `scvars' `sivars' 
+local rn : word count `rvars' `svars' `region' `coutcomes' `ioutcomes' 1 1 1 1
+mat tab=J(`rn',3,.)
+mat stars=J(`rn',3,0)
+local r=1
+local c=1
+foreach time in "[aw=`weight']" {
+	foreach loc in 0 1 {
+		foreach x in `rvars' `svars' `region' `coutcomes' `ioutcomes'{
+		di "`x'"
+			if "`x'"!="r_age" & "`x'"!="s_age" & ///
+			!inlist(substr("`x'",1,6),"s_netw", "s_tot_","s_n_ho", ///
+			"s_icu_","med_p1","med_p2") {
+				sum `x' if r_loc_==`loc' `time'
+				mat tab[`r',`c']=r(mean)*100
+				if `loc'==1 & "`x'"!="r_loc_hosp_x" svy: tab `x' r_loc_
+				if `loc'==1 & "`x'"!="r_loc_hosp_x" mat tab[`r',`c'+1]=e(p_Pear)
+				if `loc'==1 & "`x'"!="r_loc_hosp_x" mat stars[`r',`c'+1]=(e(p_Pear)<.01)+(e(p_Pear)<.05)
+}
+			else {
+				if inlist("`x'","r_age","s_age","s_tot_paid_by_mc_wi_p12m") ///
+				 local r=`r'+1
+				if substr("`x'",1,3)!="med"	{
+				sum `x' if r_loc_==`loc' `time'
+				mat tab[`r',`c']=r(mean)
+				if `loc'==1 svy: mean `x', over(r_loc_)
+				if `loc'==1 test [`x']0=[`x']1
+				if `loc'==1 mat tab[`r',`c'+1]=r(p)
+				if `loc'==1 mat stars[`r',`c'+1]=(r(p)<.05)+(r(p)<.01) 
+}
+				else {
+				sum `x' if r_loc_==`loc' `time',d
+				mat tab[`r',`c']=r(p50)
+}
+}
+	local r = `r'+1
+}
+	sum n if r_loc_==`loc' `time'
+	mat tab[`r',`c']==r(N)
+	local r=1
+	local c=`c'+1
+}
+}
+
+mat rownames tab="Respondent" `rvars' "Surviving Spouse" `svars' `region' ///
+"Outcomes" `coutcomes' `ioutcomes' "N"
+
+frmttable using `logpath'/sample_characteristics_death_hosp_matched_fffs.rtf, ///
+statmat(tab) title("Sample Characteristics, `title'") ///
+ctitles("" "Control" "R Death in Hospital" "P") sdec(2) ///
+addtable varlabels annotate(stars) asymbol(*,**) ///
+ note("All 24m variables restricted to R death prior to 2011")
+
+}
+
+
+
+
+
+H="quarterly table"
+
+
+capture log close
+
+clear all
+set more off
+
+//Amy's PC
+local  logpath E:\data\spouse_claims\logs
+local datapath E:\data\spouse_claims\data\int_data
+
+log using "`logpath'\Spouse_intensive_table1.txt", text replace
+
+cd `datapath'
+
+//use sample with no missingness - saved when first round of psmatching done
+use spouse_claims_intensmatched.dta
+
+
+mat tab=J(50,6,.)
+mat stars=J(50,6,0)
+local r=3
+local c=1
+
+forvalues i=22(-3)1 {
+forvalues j=0/1 {
+	sum s_tot_paid_by_mc_wi_m_`i'_to_`=`i'+2' if r_loc_==`j',d
+	local n`j'=r(N)
+	mat tab[`r',`=`j'+2']=r(mean)
+	mat tab[`r'+1,`j'+2]=r(p50)
+}
+	mat tab[`r',1]=`n0'+`n1'
+	ttest s_tot_paid_by_mc_wi_m_`i'_to_`=`i'+2',by(r_loc_)
+	mat tab[`r',4]=r(p)
+	mat stars[`r',4]=(r(p)<.01)+(r(p)<.05)
+	ranksum s_tot_paid_by_mc_wi_m_`i'_to_`=`i'+2', by(r_loc_)
+	mat tab[`r',5]=2*(normprob(-abs(r(z))))
+	mat stars[`r',5]=(2*(normprob(-abs(r(z))))<.01)+(2*(normprob(-abs(r(z))))<.05)	
+	glm s_tot_paid_by_mc_wi_m_`i'_to_`=`i'+2' r_loc_, link(log) fam(gamma)
+	mat tab[`r',6]=e(p)
+	mat stars[`r',6]=(e(p)<.01)+(e(p)<.05)	
+	local r=`r'+3
+}
+local r=`r'+1
+forvalues i=1(3)24 {
+forvalues j=0/1 {
+	sum s_tot_paid_by_mc_wi_m_`i'_to_`=`i'+2'p if r_loc_==`j',d
+	local n`j'=r(N)
+	mat tab[`r',`=`j'+2']=r(mean)
+	mat tab[`r'+1,`j'+2]=r(p50)
+}
+	mat tab[`r',1]=`n0'+`n1'
+	ttest s_tot_paid_by_mc_wi_m_`i'_to_`=`i'+2'p,by(r_loc_)
+	mat tab[`r',4]=r(p)
+	mat stars[`r',4]=(r(p)<.01)+(r(p)<.05)
+	ranksum s_tot_paid_by_mc_wi_m_`i'_to_`=`i'+2'p, by(r_loc_)
+	mat tab[`r',5]=2*(normprob(-abs(r(z))))
+	mat stars[`r',5]=(2*(normprob(-abs(r(z))))<.01)+(2*(normprob(-abs(r(z))))<.05)	
+	glm s_tot_paid_by_mc_wi_m_`i'_to_`=`i'+2'p r_loc_, link(log) fam(gamma)
+	mat tab[`r',6]=e(p)
+	mat stars[`r',6]=(e(p)<.01)+(e(p)<.05)
+	local r=`r'+3
+}
+
+mat rownames tab= "Quarters pre R death" 8 mean median 7 mean median 6 mean median 5 mean median ///
+4 mean median 3 mean median 2 mean median 1 mean median "Quarters post R death" 1 mean median ///
+2 mean median 3 mean median 4 mean median 5 mean median 6 mean median 7 ///
+mean median 8 mean median
+
+frmttable using "`logpath'\quarterly_spending.rtf", replace statmat(tab) ctitles("" "N contributing" "Non-hospital death"  ///
+"In-hospital death" "" "P-value" ""\"" "" "" "T-test" "Rank sum" "GLM") sdec(0,2,2,2) annotate(stars) asymbol(*,**) ///
+title(Quarterly MC Expenditures) note("S included if has FFS for the first month (closest to index date) in period" ///
+"Bivariate GLM with log link and gamma family") 

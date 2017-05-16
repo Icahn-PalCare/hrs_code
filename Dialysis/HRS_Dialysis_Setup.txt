@@ -1,0 +1,6985 @@
+= V4 Outline MultiLine NoSorting TabWidth=30
+
+H="Libraries"
+/* Run everything sequentially starting with 1st header. All work is done in SAS unless otherwise stated */ 
+
+
+/*data from spouse_2012.txt code - starting point for this work*/
+libname spo_fnl 'E:\data\spouse_intensive\int_data';
+
+/*data for this project with spouse medicare variables added in*/
+libname proj_int 'E:\data\Dialysis\int_data';
+*libname proj_fnl 'E:\data\spouse_claims\spouse_claims_comparison\final_data';
+
+/*2000-2012 medicare claims*/
+libname medi 'E:\data\cms_DUA_24548_2012';
+
+/*hrs cleaned & restricted*/
+libname hrs_cln 'E:\data\hrs_cleaned'; /*(contains exit, restricted, and core ivw's)*/
+libname rand 'E:\data\hrs_public_2012\rand2012\main';
+
+/*dartmouth wage index*/
+libname dartm 'E:\data\Dartmouth_misc';
+libname dart_wi 'E:\data\Dartmouth_misc\Wage Index';
+
+
+H="Extract Claims Based on Dialysis Code - outdated"
+libname merged "E:\data\cms_DUA_24548_2012";
+libname death "E:\data\hrs_cleaned";
+libname medi 'E:\data\cms_DUA_24548_2012';
+
+/* Inpatient Claims */
+
+data ip_claims (keep = BID_HRS_21 admit_dateip disch_dateip admit_year HCPCS_CD stus_cd);
+set merged.ip_2000_2012 (rename=(from_dt = admit_dateip thru_dt = disch_dateip));
+array dx PRCDRCD01--PRCDRCD25;
+do over dx;
+HCPCS_CD=dx;
+output;
+end;
+run;
+
+data ip_claims;
+set ip_claims;
+cptcodes = input(compress(hcpcs_cd,'ABCDEFGHIJKLMNOPQRSTUVWXYZ/',),8.);
+admit_ip = input(admit_dateip, yymmdd8.);
+disch_ip = input(disch_dateip, yymmdd8.);
+format admit_ip disch_ip date10.;
+run;
+
+data ip_claims;
+set ip_claims;
+where cptcodes = 3995 or cptcodes = 5498;
+ip_flag = 1;
+run;
+
+/*
+
+data ip_claims;
+set ip_claims;
+where cptcodes = 3995 or cptcodes = 5498 or cptcodes = 3895;
+ip_flag = 1;
+run;
+
+*/
+
+/* Pull Claims from Outpatient */
+
+data mpwide (keep= bid_hrs_21 from_dt thru_dt admit_date disch_date admit_year hcpscd01--hcpscd45 DGNSCD01-DGNSCD25);
+set merged.op_2000_2012;
+run;
+
+
+data opclaims (keep= bid_hrs_21 from_dt thru_dt admit_op disch_op admit_year HCPCS_CD);
+set mpwide (rename=(admit_date = admit_op disch_date = disch_op));
+array dx hcpscd01--hcpscd45;
+do over dx;
+HCPCS_CD=dx;
+output;
+end;
+run;
+
+data opclaims;
+set opclaims;
+cptcodes = input(compress(hcpcs_cd,'ABCDEFGHIJKLMNOPQRSTUVWXYZ/',),8.);
+run;
+
+data opclaims;
+set opclaims;
+hemoflag = 0;
+periflag = 0;
+gflag = indexc(hcpcs_cd, "G");
+IF (cptcodes = 90935) or (cptcodes = 90937) or (cptcodes = 90999) THEN hemoflag = 1;
+IF (cptcodes = 90945) or (cptcodes = 90947) then periflag = 1;
+IF (gflag = 1) and (cptcodes = 257) then periflag = 1;
+run;
+
+data opclaims (drop = hemoflag periflag);
+set opclaims;
+where hemoflag = 1 or periflag = 1;
+op_flag = 1;
+format admit_op disch_op date10.;
+run;
+
+/* Pull claims from carrier file */
+
+data pb_claims (keep = bid_hrs_21 admit_pb disch_pb admit_year hcpcs_cd);
+set merged.pb_2000_2012 (rename = (admit_date = admit_pb disch_date = disch_pb));
+array dx hcpscd01--hcpscd13;
+do over dx;
+HCPCS_CD=dx;
+output;
+end;
+run;
+
+data pb_claims;
+set pb_claims;
+cptcodes = input(compress(hcpcs_cd,'ABCDEFGHIJKLMNOPQRSTUVWXYZ/',),8.);
+run;
+
+
+data pb_claims;
+set pb_claims;
+hemoflag = 0;
+periflag = 0;
+gflag = indexc(hcpcs_cd, "G");
+IF (cptcodes = 90935) or (cptcodes = 90937) or (cptcodes = 90999) THEN hemoflag = 1;
+IF (cptcodes = 90945) or (cptcodes = 90947) then periflag = 1;
+IF (gflag = 1) and (cptcodes = 257) then periflag = 1;
+run;
+
+data pb_claims;
+set pb_claims;
+where hemoflag = 1 or periflag = 1;
+pb_flag = 1;
+format admit_pb disch_pb date10.;
+run;
+
+/*Determine if Carrier claims overlap with inpatient stay */
+
+proc sort data=pb_claims nodupkey out=pb_ipcheck; by bid_hrs_21 admit_pb disch_pb; run;
+proc sort data=ip_claims nodupkey out = ip_check; by bid_hrs_21 admit_ip disch_ip; run;
+/*
+data ip_claims1 (keep = bid_hrs_21 admit_ip disch_ip ip_flag1);
+set ip_claims1 (rename=(ip_flag = ip_flag1));
+run;
+
+proc sort data= ip_claims; by bid_hrs_21 admit_ip disch_ip; run;
+proc sort data= ip_claims1; by bid_hrs_21 admit_ip disch_ip; run;
+
+data ip_claims;
+merge ip_claims ip_claims1;
+by bid_hrs_21 admit_ip disch_ip;
+IF ip_flag1 = . then ip_flag1=0;
+run;
+*/
+proc sql;
+create table matched as select a.bid_hrs_21, a.admit_pb, a.pb_flag, a.disch_pb, b.*
+from pb_ipcheck a
+left join ip_check b
+on a.bid_hrs_21=b.bid_hrs_21 and b.admit_ip<=a.admit_pb<=b.disch_ip;
+quit;
+
+data pb_ipcheck (keep = bid_hrs_21 admit_pb disch_pb no_ip);
+set matched;
+no_ip = 0;
+if ip_flag=. then no_ip = 1;
+run;
+
+proc sort data=pb_ipcheck; by bid_hrs_21 admit_pb disch_pb; run;
+proc sort data=pb_claims; by bid_hrs_21 admit_pb disch_pb; run;
+
+/* Merge back with carrier claims */
+
+data pbclaims1 (keep = bid_hrs_21 admit_pb disch_pb no_ip);
+merge pb_claims pb_ipcheck;
+by bid_hrs_21 admit_pb disch_pb;
+run;
+
+
+proc sort data=pbclaims1 nodupkey; by bid_hrs_21 admit_pb disch_pb; run;
+
+data pb_claims;
+merge pb_claims pbclaims1;
+by bid_hrs_21 admit_pb disch_pb;
+run;
+
+proc freq data=pb_claims; tables no_ip / missprint; run;
+
+/*Append all 3 datasets */
+
+data dialysis (drop = periflag hemoflag gflag);
+set ip_claims opclaims pb_claims;
+run;
+
+data dialysis;
+set dialysis;
+admit_date = .;
+disch_date = .;
+IF ip_flag = 1 then do;
+admit_date = admit_ip;
+disch_date = disch_ip;
+end;
+IF op_flag = 1 then do;
+admit_date = admit_op;
+disch_date = disch_op;
+end;
+IF pb_flag = 1 then do;
+admit_date = admit_pb;
+disch_date = disch_pb;
+end;
+format admit_date disch_date date10.;
+run;
+
+proc sort data=dialysis; by bid_hrs_21 admit_date; run;
+
+data dialysis; /* Flag first incident of any dialysis, prioritizing IP dates over overlapping claims */
+set dialysis;
+by bid_hrs_21 admit_date;
+first_occur = first.bid_hrs_21;
+run;
+
+data dialysis1; /* Index date for all dialysis claims */
+set dialysis;
+where first_occur = 1;
+run;
+
+proc freq data=dialysis1; tables ip_flag op_flag pb_flag ; run; 
+
+/********* flagging whether each person can be found in op, pb, or ip *************/
+
+/* op flag */ /* Need to tweak for after disch date */
+data dialysis1_b (keep = bid_hrs_21 op_claim admit_date disch_date);
+set dialysis1;
+op_claim = 1;
+run;
+
+proc sort data= dialysis1_b; by bid_hrs_21; run;
+proc sort data = opclaims out=opclaims1(keep=bid_hrs_21 admit_op disch_op); by bid_hrs_21; run;
+
+data dialysis1_c;
+merge opclaims1 dialysis1_b;
+by bid_hrs_21;
+run;
+
+data dialysis1_op;
+set dialysis1_c;
+if admit_op = . then op_claim = 0;
+run;
+
+data dialysis1_op;
+set dialysis1_op;
+if admit_op <= admit_date <= disch_op then delete;
+run;
+
+data dialysis1_op (keep = bid_hrs_21 op_claim);
+set dialysis1_op;
+where op_claim = 0;
+run;
+
+proc freq data=dialysis1_op; tables op_claim; run;
+
+data dialysis1;
+merge dialysis1 dialysis1_op;
+by bid_hrs_21;
+IF op_claim = . then op_claim = 1;
+run;
+
+proc freq data=dialysis1; tables op_claim; run;
+
+/* ip flag */
+
+data dialysis1_b (keep = bid_hrs_21 ip_claim admit_date disch_date);
+set dialysis1;
+ip_claim = 1;
+run;
+
+proc sort data= dialysis1_b; by bid_hrs_21; run;
+proc sort data = ip_claims out=ip_claims1(keep=bid_hrs_21 admit_ip disch_ip); by bid_hrs_21; run;
+
+data dialysis1_c;
+merge ip_claims1 dialysis1_b;
+by bid_hrs_21;
+run;
+
+data dialysis1_ip;
+set dialysis1_c;
+if admit_ip = . then ip_claim = 0;
+run;
+
+data dialysis1_ip;
+set dialysis1_ip;
+if admit_ip <= admit_date <=disch_ip then delete;
+run;
+
+data dialysis1_ip (keep=bid_hrs_21 ip_claim);
+set dialysis1_ip;
+where ip_claim = 0;
+run;
+
+data dialysis1;
+merge dialysis1 dialysis1_ip;
+by bid_hrs_21;
+IF ip_claim = . then ip_claim = 1;
+run;
+
+
+/* pb flag */
+
+data dialysis1_b (keep = bid_hrs_21 pb_claim admit_date disch_date);
+set dialysis1;
+pb_claim = 1;
+run;
+
+proc sort data= dialysis1_b; by bid_hrs_21; run;
+proc sort data = pbclaims1(keep=bid_hrs_21 admit_pb disch_pb); by bid_hrs_21; run;
+
+
+data dialysis1_c;
+merge pbclaims1 dialysis1_b;
+by bid_hrs_21;
+run;
+
+data dialysis1_pb;
+set dialysis1_c;
+if admit_pb = . then pb_claim = 0;
+run;
+
+data dialysis1_pb;
+set dialysis1_pb;
+if admit_pb <= admit_date <=disch_pb then delete;
+run;
+
+data dialysis1_pb (keep=bid_hrs_21 pb_claim);
+set dialysis1_pb;
+where pb_claim = 0;
+run;
+
+data dialysis1;
+merge dialysis1 dialysis1_pb;
+by bid_hrs_21;
+IF pb_claim = . then pb_claim = 1;
+run;                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             
+
+data dialysis1; /* Flagging those with IP start date */
+set dialysis1;
+ip_start = 0;
+IF ip_flag = 1 then ip_start = 1;
+run;
+
+
+/****** Check whether carrier/ip overlap claims have the same admit date ********/
+
+data matched_v2;
+set matched;
+where admit_ip ~= .;
+run;
+
+data matched_v2;
+set matched_v2;
+ippb_same = 0;
+IF admit_ip = admit_pb then ippb_same = 1;
+run;
+
+
+proc sort data = matched_v2; by bid_hrs_21 admit_pb; run;
+
+data matched_v2;
+set matched_v2;
+by bid_hrs_21 admit_pb;
+first = first.bid_hrs_21;
+run;
+
+data matched_v3;
+set matched_v2;
+where first = 1;
+run;
+
+proc freq data = matched_v3; tables ippb_same; run;
+
+* Merge with Dialysis1 index date;
+
+proc sql;
+
+create table datecheck as select 
+a.bid_hrs_21, a.admit_date, a.ip_flag, a.pb_flag, a.op_flag, b.ippb_same from dialysis1 a
+inner join 
+matched_v3 b
+on a.bid_hrs_21 = b.bid_hrs_21 and a.admit_date = b.admit_ip;
+quit;
+
+proc freq data= datecheck; tables ippb_same; run;
+
+
+data datecheck1 (keep = bid_hrs_21 ippb_same);
+set datecheck;
+run;
+
+data dialysis1;
+merge dialysis1 datecheck1;
+by bid_hrs_21;
+run;
+
+
+/* Check inpatient claims for subsequent OP/Carrier claims */
+
+data dialysis2 (drop = admit_op disch_op no_ip); 
+set dialysis1;
+where ip_start = 1;
+run;
+
+data op_pb;
+set dialysis;
+where ip_flag = .;
+run;
+
+proc sql;
+create table ipop_check as select
+a.*,b.* from dialysis2 a inner join
+op_pb b
+on a.bid_hrs_21 = b.bid_hrs_21;
+quit;
+
+
+data ipop_check;
+set ipop_check;
+ip_only = 1;
+IF admit_op => admit_ip then ip_only = 0; 
+run;
+
+data ipop_check;
+set ipop_check;
+IF admit_pb => admit_ip and no_ip=1 then ip_only = 0;
+run;
+
+/* IP start, subsequent OP */
+
+data ipop_check (keep = bid_hrs_21 ip_only);
+set ipop_check;
+where ip_only = 0;
+run;
+
+proc sort data=ipop_check nodupkey out=ipop_start; by bid_hrs_21; run; /* 142? */
+
+proc freq data=ipop_check; tables ip_only; run;
+
+
+data ipop_start (keep = bid_hrs_21 ip_only);
+set ipop_start;
+run;
+
+data dialysis1;
+merge dialysis1 ipop_start;
+by bid_hrs_21;
+IF ip_only = . then ip_only = 1;
+run;
+
+proc freq data=dialysis1; where ip_start=1; tables ip_only; run;
+/*
+data ip_index;
+merge dialysis2 ipop_start;
+by bid_hrs_21;
+run;
+
+data ip_index;
+set ip_index;
+if ip_start = . then ip_start = 0;
+run;
+
+proc freq data=ip_index; tables ip_start; run;
+
+
+data op_index;
+set dialysis1;
+where op_flag = 1;
+run;
+
+
+proc freq data=dialysis1; tables pb_flag ip_flag op_flag; run;
+
+*/
+
+
+/* Check discharge status for IP only dialysis group */
+
+data ip_only1 (keep=bid_hrs_21);
+set dialysis1;
+where ip_only = 1 and ip_start=1 and stus_cd = "20";
+run;
+
+
+data ip_status (keep = bid_hrs_21 stus_cd);
+set ip_claims;
+where stus_cd = "20";
+run;
+
+proc sort data=ip_status nodupkey; by bid_hrs_21; run;
+
+proc sql;
+create table ip_only2 as select a.*,b.*
+from ip_only1 a
+inner join ip_status b
+on a.bid_hrs_21=b.bid_hrs_21;
+quit;
+
+
+proc sort data=ip_only2 nodupkey; by bid_hrs_21; run;
+proc freq data=ip_only2; tables stus_cd / missprint; run;
+
+data ip_only2; 
+set ip_only2;
+where stus_cd;
+run;
+
+
+
+data first_dial (drop = admit_ip disch_ip admit_op disch_op admit_pb disch_pb);
+set dialysis1;
+run;
+
+
+proc sort data = first_dial; by bid_hrs_21 admit_year; run;
+
+data first_dial_v2;
+set first_dial;
+admit_year = admit_year + 1;
+run;
+
+/* ----------------------------merge with dn file to check for ffs */
+
+
+data dn_file (keep = bid_hrs_21 admit_year buyin12 hmoind12 hmo_mo buyin_mo age orec esrd_ind bene_dob);
+set merged.dn_2000_2012 (rename=(year = admit_year));
+run;
+
+proc freq data=dn_file; tables esrd_ind; run;
+
+/*
+
+*/
+
+proc sort data=dn_file; by bid_hrs_21 admit_year; run;
+
+data hrs_dial_final;
+merge first_dial dn_file;
+by bid_hrs_21 admit_year;
+run;
+
+data hrs_dial_final;
+set hrs_dial_final;
+where admit_date ~= .;
+format admit_date date10.;
+run;
+
+
+
+
+/* Trim buyin and hmo variables to only reflect time before dialysis */
+data hrs_dial_y2;
+set hrs_dial_final;
+surg_month=month(admit_date);
+if length(trim(left(buyin12)))=12 and surg_month>0 then do;
+buyin_sy=substr(trim(left(buyin12)),1,surg_month); * creating buyin/hmo variable for the months before index date in same year;
+hmo_sy=substr(trim(left(HMOIND12)),1,surg_month);
+end;
+else do;
+buyin_sy=trim(left(buyin12));
+hmo_sy=trim(left(HMOIND12));
+end;
+run;
+proc means n;
+var  surg_month;
+run;
+
+
+proc sql;
+create table dn_surg_y_bef as select
+a.bid_hrs_21,a.admit_year as surg_year,b.year as surg_year_bef,b.year,b.buyin12,b.HMOIND12
+from hrs_dial_final a inner join
+merged.dn_2000_2012 b
+on trim(left(a.bid_hrs_21))=trim(left(b.bid_hrs_21))
+and 0<a.admit_year-b.year<=1 order by bid_hrs_21,admit_year;
+quit;
+
+
+proc sql;
+create table all_insurance as select a.*,b.buyin12 as buyin_bef,b.HMOIND12 as hmo_bef from
+hrs_dial_y2 a
+left join
+dn_surg_y_bef b
+on trim(left(a.bid_hrs_21))=trim(left(b.bid_hrs_21));
+quit;
+
+
+data all_insurance2;
+set all_insurance;
+buyin_2y=trim(left(buyin_bef))||trim(left(buyin_sy));
+hmo_2y=trim(left(hmo_bef))||trim(left(hmo_sy));
+
+/*create 12 month variables*/
+buyin_2y_r=reverse(trim(buyin_2y));
+hmo_2y_r=reverse(trim(hmo_2y));
+
+if length(buyin_2y_r)>11 then buyin_1y_r=substr(trim(left(buyin_2y)),1,12);
+if length(hmo_2y_r)>11 then hmo_1y_r=substr(trim(left(hmo_2y)),1,12);
+
+if length(buyin_2y_r)<12 then buyin_1y_r="";
+if length(hmo_2y_r)<12 then hmo_1y_r="";
+
+buyin_1y=reverse(trim(buyin_1y_r));
+hmo_1y=reverse(trim(hmo_1y_r));
+
+/*create indicator variable for mc coverage 0=no, 1=yes*/
+if length(buyin_1y)=12 then do;
+if indexc(buyin_1y,"0","1","2","A","B") then part_ab_1y=0;
+if indexc(buyin_1y,"0","1","2","A","B")=0 then part_ab_1y=1;
+end;
+/*create indicator variable for hmo coverage 0=no, 1=yes*/
+if length(hmo_1y)=12 then do;
+if index(hmo_1y,"00000000000") then hmo_d_1y=0;
+if index(hmo_1y,"00000000000")=0 then hmo_d_1y=1;
+end;
+
+/*create 1 month variable*/
+if length(buyin_2y_r)>0 then buyin_6m_r=substr(trim(left(buyin_2y)),1,1);
+if length(hmo_2y_r)>0 then hmo_6m_r=substr(trim(left(hmo_2y)),1,1);
+
+if length(buyin_2y_r)<1 then buyin_6m_r="";
+if length(hmo_2y_r)<1 then hmo_6m_r="";
+
+buyin_6m=reverse(trim(buyin_6m_r));
+hmo_6m=reverse(trim(hmo_6m_r));
+
+/*create indicator variable for mc coverage 6 mo. 0=no, 1=yes*/
+if length(buyin_6m)=1 then do;
+if indexc(buyin_6m,"0","1","2","A","B") then part_ab_6m=0;
+if indexc(buyin_6m,"0","1","2","A","B")=0 then part_ab_6m=1;
+end;
+if length(hmo_6m)=1 then do;
+if index(hmo_6m,"0") then hmo_d_6m=0;
+if index(hmo_6m,"0")=0 then hmo_d_6m=1;
+end;
+
+run;
+
+
+data final;
+set all_insurance2;
+*where part_ab_6m= 1; 
+run;
+
+
+data final;
+set final;
+DOB= input(bene_dob, yymmdd8.) ;
+   format DOB date10.;
+run;
+
+data final;
+set final;
+sixback = intnx('month',admit_date,-1); /*one month window to check age/ffs */
+sixback6 = intnx('month',admit_date,-6); /*six month check for IP Dialysis */
+run;
+
+data final;
+set final;
+age_6m = yrdif(DOB, sixback, 'AGE'); *Age 1 month prior to first dialysis;
+age_6_back = int(age_6m);
+run;
+
+data final;
+set final;
+underage = 0;
+If age_6_back < 65 then underage = 1;
+run;
+
+/*-------------------------to determine if underage had continous ffs create replica dataset and increment year*/
+
+proc sort data=first_dial_v2; by bid_hrs_21 admit_year; run;
+proc sort data=dn_file; by bid_hrs_21 admit_year; run;
+
+
+data hrs_dial_final;
+merge first_dial_v2 dn_file;
+by bid_hrs_21 admit_year;
+run;
+
+
+data hrs_dial_final;
+set hrs_dial_final;
+where admit_date ~= .;
+format admit_date date10.;
+run;
+
+
+data death_file; /*Get death date to check for people who die within first year of ffs */
+set death.death_date_2012;
+run;
+
+
+data death_file (keep = id bid_hrs_21 death_year death_month);
+set death_file;
+run;
+
+proc sql;
+create table hrs_death as select a.*,b.*
+from hrs_dial_final a left join
+death_file b
+on a.bid_hrs_21 = b.bid_hrs_21;
+quit;
+
+data hrs_dial_final;
+set hrs_death;
+trudate = admit_year - 1;
+run;
+
+
+/* Trim buyin and hmo variables to only reflect time before dialysis */
+data hrs_dial_y2;
+set hrs_dial_final;
+surg_month=month(admit_date);
+if length(trim(left(buyin12)))=12 and surg_month>0 then do;
+buyin_sy=substr(trim(left(buyin12)),1,surg_month);
+hmo_sy=substr(trim(left(HMOIND12)),1,surg_month);
+end;
+else do;
+buyin_sy=trim(left(buyin12));
+hmo_sy=trim(left(HMOIND12));
+end;
+run;
+proc means n;
+var  surg_month;
+run;
+
+
+proc sql;
+create table dn_surg_y_bef as select
+a.bid_hrs_21,a.admit_year as surg_year,b.year as surg_year_bef,b.year,b.buyin12,b.HMOIND12
+from hrs_dial_final a inner join
+merged.dn_2000_2012 b
+on trim(left(a.bid_hrs_21))=trim(left(b.bid_hrs_21))
+and 0<a.admit_year-b.year<=1 order by bid_hrs_21,admit_year;
+quit;
+
+
+proc sql;
+create table all_insurance as select a.*,b.buyin12 as buyin_bef,b.HMOIND12 as hmo_bef from
+hrs_dial_y2 a
+left join
+dn_surg_y_bef b
+on trim(left(a.bid_hrs_21))=trim(left(b.bid_hrs_21));
+quit;
+
+
+data all_insurance2;
+set all_insurance;
+death_diff = surg_month - death_month;
+time2death = 12 - surg_month + death_month;
+buyin_2y=trim(left(buyin_bef))||trim(left(buyin_sy));
+hmo_2y=trim(left(hmo_bef))||trim(left(hmo_sy));
+
+/*create 12 month variables*/
+buyin_2y_r=reverse(trim(buyin_2y));
+hmo_2y_r=reverse(trim(hmo_2y));
+
+if length(buyin_2y_r)>11 then buyin_1y_r=substr(trim(left(buyin_2y_r)),1,12);
+if length(hmo_2y_r)>11 then hmo_1y_r=substr(trim(left(hmo_2y_r)),1,12);
+
+if length(buyin_2y_r)<12 then buyin_1y_r="";
+if length(hmo_2y_r)<12 then hmo_1y_r="";
+
+buyin_1y=reverse(trim(buyin_1y_r));
+hmo_1y=reverse(trim(hmo_1y_r));
+
+/*create indicator variable for mc coverage 0=no, 1=yes*/
+if length(buyin_1y)=12 then do;
+if indexc(buyin_1y,"0","1","2","A","B") then part_ab_1y=0;
+if indexc(buyin_1y,"0","1","2","A","B")=0 then part_ab_1y=1;
+end;
+
+if death_diff>=0 then buyin_1y = substr(trim(left(buyin_1y)),1,time2death);
+if death_diff>=0 and indexc(buyin_1y,"0","1","2","A","B")=0 then part_ab_1y=1;
+
+/*create indicator variable for hmo coverage 0=no, 1=yes*/
+if length(hmo_1y)=12 then do;
+if index(hmo_1y,"00000000000") then hmo_d_1y=0;
+if index(hmo_1y,"00000000000")=0 then hmo_d_1y=1;
+end;
+
+/*create 6 month variable*/
+if length(buyin_2y_r)>5 then buyin_6m_r=substr(trim(left(buyin_2y)),1,6);
+if length(hmo_2y_r)>5 then hmo_6m_r=substr(trim(left(hmo_2y)),1,6);
+
+if length(buyin_2y_r)<6 then buyin_6m_r="";
+if length(hmo_2y_r)<6 then hmo_6m_r="";
+
+buyin_6m=reverse(trim(buyin_6m_r));
+hmo_6m=reverse(trim(hmo_6m_r));
+
+/*create indicator variable for mc coverage 6 mo. 0=no, 1=yes*/
+if length(buyin_6m)=6 then do;
+if indexc(buyin_6m,"0","1","2","A","B") then part_ab_6m=0;
+if indexc(buyin_6m,"0","1","2","A","B")=0 then part_ab_6m=1;
+end;
+if length(hmo_6m)=6 then do;
+if index(hmo_6m,"00000") then hmo_d_6m=0;
+if index(hmo_6m,"00000")=0 then hmo_d_6m=1;
+end;
+
+run;
+
+data finalv2; /* has ffs 1yr post dialysis */
+set all_insurance2;
+where part_ab_1y=1 and hmo_d_1y=0;
+run;
+
+data finalv2 (keep = bid_hrs_21 part_ab_1y hmo_d_1y);
+set finalv2;
+run;
+
+data final;
+merge final finalv2;
+by bid_hrs_21;
+run;
+
+proc sort data=final; by bid_hrs_21 admit_year; run;
+
+proc sort data=final; by bid_hrs_21 admit_year; run;
+
+/*merge with esrd_flag */
+
+data esrd_flag (keep = bid_hrs_21 admit_year esrd_ind);
+set dn_file;
+where esrd_ind = "Y";
+run;
+
+proc sort data=esrd_flag nodupkey; by bid_hrs_21 admit_year; run; 
+
+data final_esrd;
+merge final esrd_flag;
+by bid_hrs_21 admit_year;
+run;
+
+data final;
+set final_esrd;
+IF admit_date ~= .;
+run;
+
+
+/****************************************************************/
+/*Add HRS xwalk ID to the claims datasets
+Creates 2 datasets, one with the 6 month cc and elix 
+and one with 12 month cc and elix */
+/****************************************************************/
+
+/*HRS - CMS crosswalk initial processing*/
+data crosswalk_1;
+set merged.cmsxref2012;
+keep bid_hrs_21 hhid pn hhidpn hhidnew pnnew;
+/*create id variable as concat of hhid and pn*/
+length hhidpn $9 hhidnew $6 pnnew $3;
+hhidnew=trim(hhid);
+pnnew=trim(pn);
+hhidpn=hhidnew||pnnew;
+run;
+
+data crosswalk_1a;
+set crosswalk_1(keep=bid_hrs_21 hhidpn);
+run;
+
+data crosswalk_2;
+set crosswalk_1a;
+bid_hrs=bid_hrs_21;
+id=hhidpn;
+drop hhidpn;
+drop bid_hrs_21;
+run;
+
+proc sort data= crosswalk_2;
+by bid_hrs;
+run;
+
+proc sort data = final; by bid_hrs_21; run; 
+
+data final;
+set final (rename=(bid_hrs_21 = bid_hrs));
+run;
+
+
+proc freq data = final; tables age; run;
+
+data final_dial;
+merge final crosswalk_2;
+by bid_hrs;
+run;
+
+data final; /* need to merge with tracker file to get dob */
+set final_dial;
+if admit_date ~= .;
+run;
+
+
+data tracker (keep = id_num birthmo birthday birthyr);
+set death.restr_tracker_v2012;
+id_num = id + 0;
+run;
+
+
+data final1;
+set final;
+id_num = id + 0;
+run;
+
+proc sort data=tracker; by id_num; run;
+proc sort data=final1; by id_num; run;
+
+data final2;
+merge final1 tracker;
+by id_num;
+run;
+
+data final2;
+set final2;
+if admit_date ~=.;
+run;
+
+
+data final2;
+set final2;
+if age = . then bene_dob=mdy(birthmo,birthday,birthyr);
+run;
+
+data final2;
+set final2;
+if age = . then dob=bene_dob;
+run;
+
+data final2;
+set final2;
+sixback = intnx('month',admit_date,-1); /*one month window to check age/ffs */
+sixback6 = intnx('month',admit_date,-6); /*six month check for IP Dialysis */
+run;
+
+data final2;
+set final2;
+age_6m = yrdif(DOB, sixback, 'AGE'); *Age 1 month prior to first dialysis;
+age_6_back = int(age_6m);
+If age = . then age = yrdif(DOB, admit_date, 'AGE'); *Age 1 month prior to first dialysis;
+run;
+
+data final (keep = bid_hrs admit_date disch_date admit_year age orec underage sixback sixback6 part_ab_1y part_ab_6m hmo_d_6m hmo_d_1y id esrd_ind ip_start ip_only cptflag cptcodes ip_claim pb_claim op_claim ip_flag pb_flag op_flag stus_cd ippb_same);
+set final2;
+underage = 0;
+If age_6_back < 65 then underage = 1;
+run;
+
+data final;
+set final;
+periflag = 0;
+hemoflag = 0;
+*ip_overlap = 0;
+IF (cptcodes = 90935) or (cptcodes = 90937) or (cptcodes = 90999) or (cptcodes=3995) THEN hemoflag = 1;
+IF (cptcodes = 90945) or (cptcodes = 90947) or (cptcodes = 5498) then periflag = 1;
+IF (cptcodes = 257) then periflag = 1;
+*IF ip_start = 1 and ip_only = 0 then ip_overlap = 1;
+run;
+
+/*
+data final;
+set final;
+true_op = 0;
+IF ip_overlap = 0 and ip_only = 0 then true_op = 1;
+run;
+
+
+
+proc freq data=final; tables ip_overlap / missprint; run;
+*/
+
+proc export data = final outfile="E:\data\Dialysis\int_data\hrs_dial_claims.dta" replace; run;
+
+
+
+libname proj_int 'E:\data\Dialysis\int_data';
+
+data proj_int.hrs_dial_claims;
+set final;
+run;
+
+data index1 (keep= bid_hrs_21 id index_date index_year index_month);
+set proj_int.hrs_dial_claims(rename=(bid_hrs = bid_hrs_21 admit_date = index_date admit_year = index_year)) ;
+index_month = month(index_date);
+run;
+
+data proj_int.index;
+set index1;
+run;
+
+
+H="Extract Claims Based on Dialysis Code - 4/12/17"
+libname merged "E:\data\cms_DUA_24548_2012";
+libname death "E:\data\hrs_cleaned";
+libname medi 'E:\data\cms_DUA_24548_2012';
+
+/* Inpatient Claims */
+
+data ip_claims (keep = BID_HRS_21 admit_dateip disch_dateip admit_year HCPCS_CD stus_cd);
+set merged.ip_2000_2012 (rename=(from_dt = admit_dateip thru_dt = disch_dateip));
+array dx PRCDRCD01--PRCDRCD25;
+do over dx;
+HCPCS_CD=dx;
+output;
+end;
+run;
+
+data ip_claims;
+set ip_claims;
+cptcodes = input(compress(hcpcs_cd,'ABCDEFGHIJKLMNOPQRSTUVWXYZ/',),8.);
+admit_ip = input(admit_dateip, yymmdd8.);
+disch_ip = input(disch_dateip, yymmdd8.);
+format admit_ip disch_ip date10.;
+run;
+
+data ip_claims;
+set ip_claims;
+where cptcodes = 3995 or cptcodes = 5498;
+ip_flag = 1;
+run;
+
+/*
+
+data ip_claims;
+set ip_claims;
+where cptcodes = 3995 or cptcodes = 5498 or cptcodes = 3895;
+ip_flag = 1;
+run;
+
+*/
+
+/* Pull Claims from Outpatient */
+
+data mpwide (keep= bid_hrs_21 from_dt thru_dt admit_date disch_date admit_year hcpscd01--hcpscd45 DGNSCD01-DGNSCD25);
+set merged.op_2000_2012;
+run;
+
+
+data opclaims (keep= bid_hrs_21 from_dt thru_dt admit_op disch_op admit_year HCPCS_CD);
+set mpwide (rename=(admit_date = admit_op disch_date = disch_op));
+array dx hcpscd01--hcpscd45;
+do over dx;
+HCPCS_CD=dx;
+output;
+end;
+run;
+
+data opclaims;
+set opclaims;
+cptcodes = input(compress(hcpcs_cd,'ABCDEFGHIJKLMNOPQRSTUVWXYZ/',),8.);
+run;
+
+data opclaims;
+set opclaims;
+hemoflag = 0;
+periflag = 0;
+gflag = indexc(hcpcs_cd, "G");
+IF (cptcodes = 90935) or (cptcodes = 90937) or (cptcodes = 90999) THEN hemoflag = 1;
+IF (cptcodes = 90945) or (cptcodes = 90947) then periflag = 1;
+IF (gflag = 1) and (cptcodes = 257) then periflag = 1;
+run;
+
+data opclaims (drop = hemoflag periflag);
+set opclaims;
+where hemoflag = 1 or periflag = 1;
+op_flag = 1;
+format admit_op disch_op date10.;
+run;
+
+/* Pull claims from carrier file */
+
+data pb_claims (keep = bid_hrs_21 admit_pb disch_pb admit_year hcpcs_cd);
+set merged.pb_2000_2012 (rename = (admit_date = admit_pb disch_date = disch_pb));
+array dx hcpscd01--hcpscd13;
+do over dx;
+HCPCS_CD=dx;
+output;
+end;
+run;
+
+data pb_claims;
+set pb_claims;
+cptcodes = input(compress(hcpcs_cd,'ABCDEFGHIJKLMNOPQRSTUVWXYZ/',),8.);
+run;
+
+
+data pb_claims;
+set pb_claims;
+hemoflag = 0;
+periflag = 0;
+gflag = indexc(hcpcs_cd, "G");
+IF (cptcodes = 90935) or (cptcodes = 90937) or (cptcodes = 90999) THEN hemoflag = 1;
+IF (cptcodes = 90945) or (cptcodes = 90947) then periflag = 1;
+IF (gflag = 1) and (cptcodes = 257) then periflag = 1;
+run;
+
+data pb_claims;
+set pb_claims;
+where hemoflag = 1 or periflag = 1;
+pb_flag = 1;
+format admit_pb disch_pb date10.;
+run;
+
+/*Determine if Carrier claims overlap with inpatient stay */
+
+proc sort data=pb_claims nodupkey out=pb_ipcheck; by bid_hrs_21 admit_pb disch_pb; run;
+proc sort data=ip_claims nodupkey out = ip_check; by bid_hrs_21 admit_ip disch_ip; run;
+/*
+data ip_claims1 (keep = bid_hrs_21 admit_ip disch_ip ip_flag1);
+set ip_claims1 (rename=(ip_flag = ip_flag1));
+run;
+
+proc sort data= ip_claims; by bid_hrs_21 admit_ip disch_ip; run;
+proc sort data= ip_claims1; by bid_hrs_21 admit_ip disch_ip; run;
+
+data ip_claims;
+merge ip_claims ip_claims1;
+by bid_hrs_21 admit_ip disch_ip;
+IF ip_flag1 = . then ip_flag1=0;
+run;
+*/
+proc sql;
+create table matched as select a.bid_hrs_21, a.admit_pb, a.pb_flag, a.disch_pb, b.*
+from pb_ipcheck a
+left join ip_check b
+on a.bid_hrs_21=b.bid_hrs_21 and b.admit_ip<=a.admit_pb<=b.disch_ip;
+quit;
+
+data pb_ipcheck (keep = bid_hrs_21 admit_pb disch_pb no_ip);
+set matched;
+no_ip = 0;
+if ip_flag=. then no_ip = 1;
+run;
+
+proc sort data=pb_ipcheck; by bid_hrs_21 admit_pb disch_pb; run;
+proc sort data=pb_claims; by bid_hrs_21 admit_pb disch_pb; run;
+
+/* Merge back with carrier claims */
+
+data pbclaims1 (keep = bid_hrs_21 admit_pb disch_pb no_ip);
+merge pb_claims pb_ipcheck;
+by bid_hrs_21 admit_pb disch_pb;
+run;
+
+
+proc sort data=pbclaims1 nodupkey; by bid_hrs_21 admit_pb disch_pb; run;
+
+data pb_claims;
+merge pb_claims pbclaims1;
+by bid_hrs_21 admit_pb disch_pb;
+run;
+
+proc freq data=pb_claims; tables no_ip / missprint; run;
+
+/*Append all 3 datasets */
+
+data dialysis (drop = periflag hemoflag gflag);
+set ip_claims opclaims pb_claims;
+run;
+
+data dialysis;
+set dialysis;
+admit_date = .;
+disch_date = .;
+IF ip_flag = 1 then do;
+admit_date = admit_ip;
+disch_date = disch_ip;
+end;
+IF op_flag = 1 then do;
+admit_date = admit_op;
+disch_date = disch_op;
+end;
+IF pb_flag = 1 then do;
+admit_date = admit_pb;
+disch_date = disch_pb;
+end;
+format admit_date disch_date date10.;
+run;
+
+proc sort data=dialysis; by bid_hrs_21 admit_date; run;
+
+data dialysis; /* Flag first incident of any dialysis, prioritizing IP dates over overlapping claims */
+set dialysis;
+by bid_hrs_21 admit_date;
+first_occur = first.bid_hrs_21;
+run;
+
+data dialysis1; /* Index date for all dialysis claims */
+set dialysis;
+where first_occur = 1;
+run;
+
+proc freq data=dialysis1; tables ip_flag op_flag pb_flag ; run; 
+
+/********* flagging whether each person can be found in op, pb, or ip *************/
+
+/* op flag */ /* Need to tweak for after disch date */
+data dialysis1_b (keep = bid_hrs_21 op_claim admit_date disch_date);
+set dialysis1;
+op_claim = 1;
+run;
+
+proc sort data= dialysis1_b; by bid_hrs_21; run;
+proc sort data = opclaims out=opclaims1(keep=bid_hrs_21 admit_op disch_op); by bid_hrs_21; run;
+
+data dialysis1_c;
+merge opclaims1 dialysis1_b;
+by bid_hrs_21;
+run;
+
+data dialysis1_op;
+set dialysis1_c;
+if admit_op = . then op_claim = 0;
+run;
+
+data dialysis1_op;
+set dialysis1_op;
+if admit_op <= admit_date <= disch_op then delete;
+run;
+
+data dialysis1_op (keep = bid_hrs_21 op_claim);
+set dialysis1_op;
+where op_claim = 0;
+run;
+
+proc freq data=dialysis1_op; tables op_claim; run;
+
+data dialysis1;
+merge dialysis1 dialysis1_op;
+by bid_hrs_21;
+IF op_claim = . then op_claim = 1;
+run;
+
+proc freq data=dialysis1; tables op_claim; run;
+
+/* ip flag */
+
+data dialysis1_b (keep = bid_hrs_21 ip_claim admit_date disch_date);
+set dialysis1;
+ip_claim = 1;
+run;
+
+proc sort data= dialysis1_b; by bid_hrs_21; run;
+proc sort data = ip_claims out=ip_claims1(keep=bid_hrs_21 admit_ip disch_ip); by bid_hrs_21; run;
+
+data dialysis1_c;
+merge ip_claims1 dialysis1_b;
+by bid_hrs_21;
+run;
+
+data dialysis1_ip;
+set dialysis1_c;
+if admit_ip = . then ip_claim = 0;
+run;
+
+data dialysis1_ip;
+set dialysis1_ip;
+if admit_ip <= admit_date <=disch_ip then delete;
+run;
+
+data dialysis1_ip (keep=bid_hrs_21 ip_claim);
+set dialysis1_ip;
+where ip_claim = 0;
+run;
+
+data dialysis1;
+merge dialysis1 dialysis1_ip;
+by bid_hrs_21;
+IF ip_claim = . then ip_claim = 1;
+run;
+
+
+/* pb flag */
+
+data dialysis1_b (keep = bid_hrs_21 pb_claim admit_date disch_date);
+set dialysis1;
+pb_claim = 1;
+run;
+
+proc sort data= dialysis1_b; by bid_hrs_21; run;
+proc sort data = pbclaims1(keep=bid_hrs_21 admit_pb disch_pb); by bid_hrs_21; run;
+
+
+data dialysis1_c;
+merge pbclaims1 dialysis1_b;
+by bid_hrs_21;
+run;
+
+data dialysis1_pb;
+set dialysis1_c;
+if admit_pb = . then pb_claim = 0;
+run;
+
+data dialysis1_pb;
+set dialysis1_pb;
+if admit_pb <= admit_date <=disch_pb then delete;
+run;
+
+data dialysis1_pb (keep=bid_hrs_21 pb_claim);
+set dialysis1_pb;
+where pb_claim = 0;
+run;
+
+data dialysis1;
+merge dialysis1 dialysis1_pb;
+by bid_hrs_21;
+IF pb_claim = . then pb_claim = 1;
+run;                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             
+
+data dialysis1; /* Flagging those with IP start date */
+set dialysis1;
+ip_start = 0;
+IF ip_flag = 1 then ip_start = 1;
+run;
+
+
+/****** Check whether carrier/ip overlap claims have the same admit date ********/
+
+data matched_v2;
+set matched;
+where admit_ip ~= .;
+run;
+
+data matched_v2;
+set matched_v2;
+ippb_same = 0;
+IF admit_ip = admit_pb then ippb_same = 1;
+run;
+
+
+proc sort data = matched_v2; by bid_hrs_21 admit_pb; run;
+
+data matched_v2;
+set matched_v2;
+by bid_hrs_21 admit_pb;
+first = first.bid_hrs_21;
+run;
+
+data matched_v3;
+set matched_v2;
+where first = 1;
+run;
+
+proc freq data = matched_v3; tables ippb_same; run;
+
+* Merge with Dialysis1 index date;
+
+proc sql;
+
+create table datecheck as select 
+a.bid_hrs_21, a.admit_date, a.ip_flag, a.pb_flag, a.op_flag, b.ippb_same from dialysis1 a
+inner join 
+matched_v3 b
+on a.bid_hrs_21 = b.bid_hrs_21 and a.admit_date = b.admit_ip;
+quit;
+
+proc freq data= datecheck; tables ippb_same; run;
+
+
+data datecheck1 (keep = bid_hrs_21 ippb_same);
+set datecheck;
+run;
+
+data dialysis1;
+merge dialysis1 datecheck1;
+by bid_hrs_21;
+run;
+
+
+/* Check inpatient claims for subsequent OP/Carrier claims */
+
+data dialysis2 (drop = admit_op disch_op no_ip); 
+set dialysis1;
+where ip_start = 1;
+run;
+
+data op_pb;
+set dialysis;
+where ip_flag = .;
+run;
+
+proc sql;
+create table ipop_check as select
+a.*,b.* from dialysis2 a inner join
+op_pb b
+on a.bid_hrs_21 = b.bid_hrs_21;
+quit;
+
+
+data ipop_check;
+set ipop_check;
+ip_only = 1;
+IF admit_op => admit_ip then ip_only = 0; 
+run;
+
+data ipop_check;
+set ipop_check;
+IF admit_pb => admit_ip and no_ip=1 then ip_only = 0;
+run;
+
+/* IP start, subsequent OP */
+
+data ipop_check (keep = bid_hrs_21 ip_only);
+set ipop_check;
+where ip_only = 0;
+run;
+
+proc sort data=ipop_check nodupkey out=ipop_start; by bid_hrs_21; run; /* 142? */
+
+proc freq data=ipop_check; tables ip_only; run;
+
+
+data ipop_start (keep = bid_hrs_21 ip_only);
+set ipop_start;
+run;
+
+data dialysis1;
+merge dialysis1 ipop_start;
+by bid_hrs_21;
+IF ip_only = . then ip_only = 1;
+run;
+
+proc freq data=dialysis1; where ip_start=1; tables ip_only; run;
+/*
+data ip_index;
+merge dialysis2 ipop_start;
+by bid_hrs_21;
+run;
+
+data ip_index;
+set ip_index;
+if ip_start = . then ip_start = 0;
+run;
+
+proc freq data=ip_index; tables ip_start; run;
+
+
+data op_index;
+set dialysis1;
+where op_flag = 1;
+run;
+
+
+proc freq data=dialysis1; tables pb_flag ip_flag op_flag; run;
+
+*/
+
+
+/* Check discharge status for IP only dialysis group */
+
+data ip_only1 (keep=bid_hrs_21);
+set dialysis1;
+where ip_only = 1 and ip_start=1 and stus_cd = "20";
+run;
+
+
+data ip_status (keep = bid_hrs_21 stus_cd);
+set ip_claims;
+where stus_cd = "20";
+run;
+
+proc sort data=ip_status nodupkey; by bid_hrs_21; run;
+
+proc sql;
+create table ip_only2 as select a.*,b.*
+from ip_only1 a
+inner join ip_status b
+on a.bid_hrs_21=b.bid_hrs_21;
+quit;
+
+
+proc sort data=ip_only2 nodupkey; by bid_hrs_21; run;
+proc freq data=ip_only2; tables stus_cd / missprint; run;
+
+data ip_only2; 
+set ip_only2;
+where stus_cd;
+run;
+
+
+
+data first_dial (drop = admit_ip disch_ip admit_op disch_op admit_pb disch_pb);
+set dialysis1;
+run;
+
+
+proc sort data = first_dial; by bid_hrs_21 admit_year; run;
+
+data first_dial_v2;
+set first_dial;
+admit_year = admit_year + 1;
+run;
+
+/* ----------------------------merge with dn file to check for ffs */
+
+
+data dn_file (keep = bid_hrs_21 admit_year buyin12 hmoind12 hmo_mo buyin_mo age orec esrd_ind bene_dob);
+set merged.dn_2000_2012 (rename=(year = admit_year));
+run;
+
+proc freq data=dn_file; tables esrd_ind; run;
+
+/*
+
+*/
+
+proc sort data=dn_file; by bid_hrs_21 admit_year; run;
+
+data hrs_dial_final;
+merge first_dial dn_file;
+by bid_hrs_21 admit_year;
+run;
+
+data hrs_dial_final;
+set hrs_dial_final;
+where admit_date ~= .;
+format admit_date date10.;
+run;
+
+
+
+/* Trim buyin and hmo variables to only reflect time before dialysis */
+data hrs_dial_y2;
+set hrs_dial_final;
+surg_month=month(admit_date);
+if length(trim(left(buyin12)))=12 and surg_month>0 then do;
+buyin_sy=substr(trim(left(buyin12)),1,surg_month); * creating buyin/hmo variable for the months before index date in same year;
+hmo_sy=substr(trim(left(HMOIND12)),1,surg_month);
+end;
+else do;
+buyin_sy=trim(left(buyin12));
+hmo_sy=trim(left(HMOIND12));
+end;
+run;
+proc means n;
+var surg_month;
+run;
+
+
+proc sql;
+create table dn_surg_y_bef as select
+a.bid_hrs_21,a.admit_year as surg_year,b.year as surg_year_bef,b.year,b.buyin12,b.HMOIND12
+from hrs_dial_final a inner join
+merged.dn_2000_2012 b
+on trim(left(a.bid_hrs_21))=trim(left(b.bid_hrs_21))
+and 0<a.admit_year-b.year<=1 order by bid_hrs_21,admit_year;
+quit;
+
+
+proc sql;
+create table all_insurance as select a.*,b.buyin12 as buyin_bef,b.HMOIND12 as hmo_bef from
+hrs_dial_y2 a
+left join
+dn_surg_y_bef b
+on trim(left(a.bid_hrs_21))=trim(left(b.bid_hrs_21));
+quit;
+
+
+data all_insurance2;
+set all_insurance;
+buyin_2y=trim(left(buyin_bef))||trim(left(buyin_sy));
+hmo_2y=trim(left(hmo_bef))||trim(left(hmo_sy));
+
+/*create 12 month variables*/
+buyin_2y_r=reverse(trim(buyin_2y));
+hmo_2y_r=reverse(trim(hmo_2y));
+
+if length(buyin_2y_r)>11 then buyin_1y_r=substr(trim(left(buyin_2y)),1,12);
+if length(hmo_2y_r)>11 then hmo_1y_r=substr(trim(left(hmo_2y)),1,12);
+
+if length(buyin_2y_r)<12 then buyin_1y_r="";
+if length(hmo_2y_r)<12 then hmo_1y_r="";
+
+buyin_1y=reverse(trim(buyin_1y_r));
+hmo_1y=reverse(trim(hmo_1y_r));
+
+/*create indicator variable for mc coverage 0=no, 1=yes*/
+if length(buyin_1y)=12 then do;
+if indexc(buyin_1y,"0","1","2","A","B") then part_ab_1y=0;
+if indexc(buyin_1y,"0","1","2","A","B")=0 then part_ab_1y=1;
+end;
+/*create indicator variable for hmo coverage 0=no, 1=yes*/
+if length(hmo_1y)=12 then do;
+if index(hmo_1y,"00000000000") then hmo_d_1y=0;
+if index(hmo_1y,"00000000000")=0 then hmo_d_1y=1;
+end;
+
+/*create 6 month variable*/
+if length(buyin_2y_r)>0 then buyin_6m_r=substr(trim(left(buyin_2y)),1,6);
+if length(hmo_2y_r)>0 then hmo_6m_r=substr(trim(left(hmo_2y)),1,6);
+
+if length(buyin_2y_r)<1 then buyin_6m_r="";
+if length(hmo_2y_r)<1 then hmo_6m_r="";
+
+buyin_6m=reverse(trim(buyin_6m_r));
+hmo_6m=reverse(trim(hmo_6m_r));
+
+/*create indicator variable for mc coverage 6 mo. 0=no, 1=yes*/
+if length(buyin_6m)=1 then do;
+if indexc(buyin_6m,"0","1","2","A","B") then part_ab_6m=0;
+if indexc(buyin_6m,"0","1","2","A","B")=0 then part_ab_6m=1;
+end;
+if length(hmo_6m)=1 then do;
+if index(hmo_6m,"0") then hmo_d_6m=0;
+if index(hmo_6m,"0")=0 then hmo_d_6m=1;
+end;
+
+run;
+
+
+data final;
+set all_insurance2;
+*where part_ab_6m= 1; 
+run;
+
+
+data final;
+set final;
+DOB= input(bene_dob, yymmdd8.) ;
+   format DOB date10.;
+run;
+
+data final;
+set final;
+sixback = intnx('month',admit_date,-1); /*one month window to check age/ffs */
+sixback6 = intnx('month',admit_date,-6); /*six month check for IP Dialysis */
+run;
+
+data final;
+set final;
+age_6m = yrdif(DOB, sixback, 'AGE'); *Age 1 month prior to first dialysis;
+age_6_back = int(age_6m);
+run;
+
+data final;
+set final;
+underage = 0;
+If age_6_back < 65 then underage = 1;
+run;
+
+
+/*merge with esrd_flag */
+
+data esrd_flag (keep = bid_hrs_21 admit_year esrd_ind);
+set dn_file;
+where esrd_ind = "Y";
+run;
+
+proc sort data=esrd_flag nodupkey; by bid_hrs_21 admit_year; run; 
+
+data final_esrd;
+merge final esrd_flag;
+by bid_hrs_21 admit_year;
+run;
+
+data final;
+set final_esrd;
+IF admit_date ~= .;
+run;
+
+
+/****************************************************************/
+/*Add HRS xwalk ID to the claims datasets
+Creates 2 datasets, one with the 6 month cc and elix 
+and one with 12 month cc and elix */
+/****************************************************************/
+
+/*HRS - CMS crosswalk initial processing*/
+data crosswalk_1;
+set merged.cmsxref2012;
+keep bid_hrs_21 hhid pn hhidpn hhidnew pnnew;
+/*create id variable as concat of hhid and pn*/
+length hhidpn $9 hhidnew $6 pnnew $3;
+hhidnew=trim(hhid);
+pnnew=trim(pn);
+hhidpn=hhidnew||pnnew;
+run;
+
+data crosswalk_1a;
+set crosswalk_1(keep=bid_hrs_21 hhidpn);
+run;
+
+data crosswalk_2;
+set crosswalk_1a;
+bid_hrs=bid_hrs_21;
+id=hhidpn;
+drop hhidpn;
+drop bid_hrs_21;
+run;
+
+proc sort data= crosswalk_2;
+by bid_hrs;
+run;
+
+proc sort data = final; by bid_hrs_21; run; 
+
+data final;
+set final (rename=(bid_hrs_21 = bid_hrs));
+run;
+
+
+proc freq data = final; tables age; run;
+
+data final_dial;
+merge final crosswalk_2;
+by bid_hrs;
+run;
+
+data final; /* need to merge with tracker file to get dob */
+set final_dial;
+if admit_date ~= .;
+run;
+
+
+data tracker (keep = id_num birthmo birthday birthyr);
+set death.restr_tracker_v2012;
+id_num = id + 0;
+run;
+
+
+data final1;
+set final;
+id_num = id + 0;
+run;
+
+proc sort data=tracker; by id_num; run;
+proc sort data=final1; by id_num; run;
+
+data final2;
+merge final1 tracker;
+by id_num;
+run;
+
+data final2;
+set final2;
+if admit_date ~=.;
+run;
+
+
+data final2;
+set final2;
+if age = . then bene_dob=mdy(birthmo,birthday,birthyr);
+run;
+
+data final2;
+set final2;
+if age = . then dob=bene_dob;
+run;
+
+data final2;
+set final2;
+sixback = intnx('month',admit_date,-1); /*one month window to check age/ffs */
+sixback6 = intnx('month',admit_date,-6); /*six month check for IP Dialysis */
+run;
+
+data final2;
+set final2;
+age_6m = yrdif(DOB, sixback, 'AGE'); *Age 1 month prior to first dialysis;
+age_6_back = int(age_6m);
+If age = . then age = yrdif(DOB, admit_date, 'AGE'); *Age 1 month prior to first dialysis;
+run;
+
+data final (keep = bid_hrs admit_date disch_date admit_year age orec underage sixback sixback6 part_ab_1y part_ab_6m hmo_d_6m hmo_d_1y id esrd_ind ip_start ip_only cptflag cptcodes ip_claim pb_claim op_claim ip_flag pb_flag op_flag stus_cd ippb_same);
+set final2;
+underage = 0;
+If age_6_back < 65 then underage = 1;
+run;
+
+data final;
+set final;
+periflag = 0;
+hemoflag = 0;
+*ip_overlap = 0;
+IF (cptcodes = 90935) or (cptcodes = 90937) or (cptcodes = 90999) or (cptcodes=3995) THEN hemoflag = 1;
+IF (cptcodes = 90945) or (cptcodes = 90947) or (cptcodes = 5498) then periflag = 1;
+IF (cptcodes = 257) then periflag = 1;
+*IF ip_start = 1 and ip_only = 0 then ip_overlap = 1;
+run;
+
+/*
+data final;
+set final;
+true_op = 0;
+IF ip_overlap = 0 and ip_only = 0 then true_op = 1;
+run;
+
+
+
+proc freq data=final; tables ip_overlap / missprint; run;
+*/
+
+proc export data = final outfile="E:\data\Dialysis\int_data\hrs_dial_claims.dta" replace; run;
+
+
+
+libname proj_int 'E:\data\Dialysis\int_data';
+
+data proj_int.hrs_dial_claims;
+set final;
+run;
+
+data index1 (keep= bid_hrs_21 id index_date index_year index_month);
+set proj_int.hrs_dial_claims(rename=(bid_hrs = bid_hrs_21 admit_date = index_date admit_year = index_year)) ;
+index_month = month(index_date);
+run;
+
+data proj_int.index;
+set index1;
+run;
+
+
+H="Creating index variables and dataset"
+libname proj_int 'E:\data\Dialysis\int_data';
+
+data proj_int.hrs_dial_claims;
+set final;
+run;
+
+data index1 (keep= bid_hrs_21 id index_date index_year index_month);
+set proj_int.hrs_dial_claims(rename=(bid_hrs = bid_hrs_21 admit_date = index_date admit_year = index_year)) ;
+index_month = month(index_date);
+run;
+
+data proj_int.index;
+set index1;
+run;
+
+H="Pulling DX codes from  Claims for 1yr outcomes"
+proc sort data=proj_int.index out=index1 nodupkey;
+by bid_hrs_21 id index_date;
+run;
+
+
+
+
+/**************************************************************************/
+/* ************** Claims Before 1st Dialysis  ******************************/
+/**************************************************************************/
+/*macro to get claims before dialysis
+saves datasets for each claim type / time window to the spo_mc_i directory*/
+%macro claims(days_start=,days_bef_index=,source=,suf=);
+
+/*claims fully within x time of dialysis date*/
+proc sql;
+create table &source._meet_1 as select a.*,b.index_date,b.id 
+from medi.&source._2000_2012 a inner join
+index1 b
+on trim(left(a.bid_hrs_21))=trim(left(b.bid_hrs_21))
+and &days_start<b.index_date-a.admit_date<=&days_bef_index ;
+quit;
+
+/*claims that start earlier than x time but span into x time before dialysis*/
+proc sql;
+create table &source._meet_2 as select a.*,b.index_date,b.id 
+from medi.&source._2000_2012 a inner join
+index1 b
+on trim(left(a.bid_hrs_21))=trim(left(b.bid_hrs_21))
+and b.index_date-a.admit_date>&days_bef_index and b.index_date-a.disch_date<=&days_bef_index;
+quit;
+
+data proj_int.&source._meet_&suf.(compress=yes);
+set &source._meet_1 &source._meet_2;
+run;
+%mend;
+
+/*6m before dialysis*/
+*%claims(days_start=0,days_bef_index=183,source=hh,suf=6m); /*home health*/
+*%claims(days_start=0,days_bef_index=183,source=hs,suf=6m); /*hospice*/
+*%claims(days_start=0,days_bef_index=183,source=mp,suf=6m); /*medpar*/
+*%claims(days_start=0,days_bef_index=183,source=dm,suf=6m); /*dme*/
+*%claims(days_start=0,days_bef_index=183,source=op,suf=6m); /*outpatient*/
+*%claims(days_start=0,days_bef_index=183,source=pb,suf=6m); /*carrier*/
+/*12m before dialysis*/
+%claims(days_start=0,days_bef_index=365,source=hh,suf=12m); /*home health*/
+%claims(days_start=0,days_bef_index=365,source=hs,suf=12m); /*hospice*/
+%claims(days_start=0,days_bef_index=365,source=mp,suf=12m); /*medpar*/
+%claims(days_start=0,days_bef_index=365,source=dm,suf=12m); /*dme*/
+%claims(days_start=0,days_bef_index=365,source=op,suf=12m); /*outpatient*/
+%claims(days_start=0,days_bef_index=365,source=pb,suf=12m); /*carrier*/
+/*18m before dialysis*/
+*%claims(days_start=0,days_bef_index=548,source=hh,suf=18m); /*home health*/
+*%claims(days_start=0,days_bef_index=548,source=hs,suf=18m); /*hospice*/
+*%claims(days_start=0,days_bef_index=548,source=mp,suf=18m); /*medpar*/
+*%claims(days_start=0,days_bef_index=548,source=dm,suf=18m); /*dme*/
+*%claims(days_start=0,days_bef_index=548,source=op,suf=18m); /*outpatient*/
+*%claims(days_start=0,days_bef_index=548,source=pb,suf=18m); /*carrier*/
+/*run for 24m before dialysis*/
+%claims(days_start=0,days_bef_index=365*2,source=hh,suf=24m); /*home health*/
+%claims(days_start=0,days_bef_index=365*2,source=hs,suf=24m); /*hospice*/
+%claims(days_start=0,days_bef_index=365*2,source=mp,suf=24m); /*medpar*/
+%claims(days_start=0,days_bef_index=365*2,source=dm,suf=24m); /*dme*/
+%claims(days_start=0,days_bef_index=365*2,source=op,suf=24m); /*outpatient*/
+%claims(days_start=0,days_bef_index=365*2,source=pb,suf=24m); /*carrier*/
+
+/**************************************************************************/
+/* ************** S Claims After R's dialysis   ******************************/
+/**************************************************************************/
+/*macro to get claims after dialysis
+saves datasets for each claim type / time window to the spo_mc_i directory*/
+%macro claims(days_start=,days_aft_index=,source=,suf=);
+
+/*claims fully within x time of dialysis date*/
+proc sql;
+create table &source._meet_1 as select a.*,b.index_date,b.id 
+from medi.&source._2000_2012 a inner join
+index1 b
+on trim(left(a.bid_hrs_21))=trim(left(b.bid_hrs_21))
+and &days_start<=a.admit_date - b.index_date<=&days_aft_index ;
+quit;
+
+/*claims that start earlier than R's DOD but span after R's dialysis*/
+proc sql;
+create table &source._meet_2 as select a.*,b.index_date,b.id 
+from medi.&source._2000_2012 a inner join
+index1 b
+on trim(left(a.bid_hrs_21))=trim(left(b.bid_hrs_21))
+and a.admit_date<b.index_date
+and &days_start<=a.disch_date - b.index_date;
+quit;
+
+data proj_int.&source._meet_&suf.(compress=yes);
+set &source._meet_1 &source._meet_2;
+format disch_date date9.;
+format admit_date date9.;
+run;
+%mend;
+
+/*6m after dialysis*/
+*%claims(days_start=0,days_aft_index=183,source=hh,suf=p6m); /*home health*/
+*%claims(days_start=0,days_aft_index=183,source=hs,suf=p6m); /*hospice*/
+*%claims(days_start=0,days_aft_index=183,source=mp,suf=p6m); /*medpar*/
+*%claims(days_start=0,days_aft_index=183,source=dm,suf=p6m); /*dme*/
+*%claims(days_start=0,days_aft_index=183,source=op,suf=p6m); /*outpatient*/
+*%claims(days_start=0,days_aft_index=183,source=pb,suf=p6m); /*carrier*/
+/*12m before dialysis*/
+%claims(days_start=0,days_aft_index=365,source=hh,suf=p12m); /*home health*/
+%claims(days_start=0,days_aft_index=365,source=hs,suf=p12m); /*hospice*/
+%claims(days_start=0,days_aft_index=365,source=mp,suf=p12m); /*medpar*/
+%claims(days_start=0,days_aft_index=365,source=dm,suf=p12m); /*dme*/
+%claims(days_start=0,days_aft_index=365,source=op,suf=p12m); /*outpatient*/
+%claims(days_start=0,days_aft_index=365,source=pb,suf=p12m); /*carrier*/
+/*18m before dialysis*/
+*%claims(days_start=0,days_aft_index=548,source=hh,suf=p18m); /*home health*/
+*%claims(days_start=0,days_aft_index=548,source=hs,suf=p18m); /*hospice*/
+*%claims(days_start=0,days_aft_index=548,source=mp,suf=p18m); /*medpar*/
+*%claims(days_start=0,days_aft_index=548,source=dm,suf=p18m); /*dme*/
+*%claims(days_start=0,days_aft_index=548,source=op,suf=p18m); /*outpatient*/
+*%claims(days_start=0,days_aft_index=548,source=pb,suf=p18m); /*carrier*/
+/*run for 24m before dialysis*/
+%claims(days_start=0,days_aft_index=365*2,source=hh,suf=p24m); /*home health*/
+%claims(days_start=0,days_aft_index=365*2,source=hs,suf=p24m); /*hospice*/
+%claims(days_start=0,days_aft_index=365*2,source=mp,suf=p24m); /*medpar*/
+%claims(days_start=0,days_aft_index=365*2,source=dm,suf=p24m); /*dme*/
+%claims(days_start=0,days_aft_index=365*2,source=op,suf=p24m); /*outpatient*/
+%claims(days_start=0,days_aft_index=365*2,source=pb,suf=p24m); /*carrier*/
+
+/**************************************************************************/
+/* ********************* S Diagnosis Lists   ******************************/
+/**************************************************************************/
+
+%macro dx_time_range(range1=, range2=, suf=);
+/*pulls just dx codes from carrier claims*/
+data pb_last_&range2._dx(keep=bid_hrs_21 id diag index_date);
+set proj_int.pb_meet_&suf.(keep=bid_hrs_21 id PDGNS_CD DGNSCD01-DGNSCD12 index_date);
+array dx PDGNS_CD DGNSCD01-DGNSCD12;
+do over dx;
+diag=dx ;
+output;
+end;
+run;
+proc sort data=pb_last_&range2._dx out=pb_last_&range2._dx2 nodupkey;
+by bid_hrs_21 id index_date diag;
+run;
+
+/*outpatient claims*/
+data op_last_&range2._dx(keep=bid_hrs_21 id diag index_date);
+set proj_int.op_meet_&suf.(keep=bid_hrs_21 id PDGNS_CD DGNSCD01-DGNSCD25  index_date);
+array dx PDGNS_CD DGNSCD01-DGNSCD25 ;
+do over dx;
+diag=dx ;
+output;
+end;
+run;
+proc sort data=op_last_&range2._dx out=op_last_&range2._dx2 nodupkey;
+by bid_hrs_21 id index_date diag;
+run;
+
+/*medpar claims*/
+data mp_last_&range2._dx(keep=bid_hrs_21 id diag index_date);
+set proj_int.mp_meet_&suf.(keep=bid_hrs_21 id AD_DGNS DGNS_CD01-DGNS_CD25 index_date );
+array dx D_DGNS DGNS_CD01-DGNS_CD25 ;
+do over dx;
+diag=dx ;
+output;
+end;
+run;
+proc sort data=mp_last_&range2._dx out=mp_last_&range2._dx2 nodupkey;
+by bid_hrs_21 id index_date diag;
+run;
+
+/*dme claims*/
+data dm_last_&range2._dx(keep=bid_hrs_21 id diag index_date);
+set proj_int.dm_meet_&suf.(keep=bid_hrs_21 id PDGNS_CD DGNSCD01-DGNSCD12 index_date);
+array dx PDGNS_CD DGNSCD01-DGNSCD12 ;
+do over dx;
+diag=dx ;
+output;
+end;
+run;
+proc sort data=dm_last_&range2._dx out=dm_last_&range2._dx2 nodupkey;
+by bid_hrs_21 id index_date diag;
+run;
+
+/*home health agency*/
+data hh_last_&range2._dx(keep=bid_hrs_21 id diag index_date);
+set proj_int.hh_meet_&suf.(keep=bid_hrs_21 id PDGNS_CD DGNSCD01-DGNSCD25 index_date);
+array dx PDGNS_CD DGNSCD01-DGNSCD25 ;
+do over dx;
+diag=dx ;
+output;
+end;
+run;
+proc sort data=hh_last_&range2._dx out=hh_last_&range2._dx2 nodupkey;
+by bid_hrs_21 id index_date diag;
+run;
+
+/*hospice*/
+data hs_last_&range2._dx(keep=bid_hrs_21 id diag index_date);
+set proj_int.hs_meet_&suf.(keep=bid_hrs_21 id PDGNS_CD DGNSCD01-DGNSCD25 index_date);
+array dx PDGNS_CD DGNSCD01-DGNSCD25 ;
+do over dx;
+diag=dx ;
+output;
+end;
+run;
+proc sort data=hs_last_&range2._dx out=hs_last_&range2._dx2 nodupkey;
+by bid_hrs_21 id index_date diag;
+run;
+
+/*set diag variable length = 7 chars since that's the max length from the mc claims
+Need to do this because length varies across the different mc claim types*/
+data hs_last_&range2._dx3;
+length diag $7;
+set hs_last_&range2._dx2;
+run;
+data hh_last_&range2._dx3;
+length diag $7;
+set hh_last_&range2._dx2;
+run;
+data mp_last_&range2._dx3;
+length diag $7;
+set mp_last_&range2._dx2;
+run;
+data dm_last_&range2._dx3;
+length diag $7;
+set dm_last_&range2._dx2;
+run;
+data op_last_&range2._dx3;
+length diag $7;
+set op_last_&range2._dx2;
+run;
+data pb_last_&range2._dx3;
+length diag $7;
+set pb_last_&range2._dx2;
+run;
+
+data dx_all_last_&range2.;
+set hs_last_&range2._dx3
+hh_last_&range2._dx3
+mp_last_&range2._dx3
+dm_last_&range2._dx3
+op_last_&range2._dx3
+pb_last_&range2._dx3;
+run;
+
+proc sort data=dx_all_last_&range2.(where=(diag~="")) out=proj_int.dx_&range1._&range2 nodupkey;
+by bid_hrs_21 id index_date diag;
+run;
+
+%mend;
+
+/*run macro to create data files proj_int.dx_0d_n6m proj_int.dx_0d_n12m and proj_int.dx_0d_n24m */
+*%dx_time_range(range1=0d, range2=n6m, suf=6m);
+%dx_time_range(range1=0d, range2=n12m, suf=12m);
+*%dx_time_range(range1=0d, range2=n24m, suf=24m);
+
+/*run for dx lists after R's dialysis*/
+*%dx_time_range(range1=0d, range2=p6m, suf=p6m);
+%dx_time_range(range1=0d, range2=p12m, suf=p12m);
+*%dx_time_range(range1=0d, range2=p24m, suf=p24m);
+
+
+
+/*get spouse medicare costs by claim type and total, adjusted for inflation
+to 2012$, monthly, 24m before and after R's dialysis
+
+begins with claims lists from "Get S MC claims lists..." section
+
+final dataset is spo_mc_i.hrs_elix_cc_pay*/
+
+
+/****************************************************************/
+/*medpar claims, time periods before R's dialysis*******************/
+/****************************************************************/
+/*macro for medpar claims, splits into costs for snf and ip claims
+for time periods before r's dialysis*/
+%macro mp(source=,equ=,name=);
+data proj_int.&source._meet_&name.;
+set proj_int.mp_meet_&name.;
+if (trim(left(SSLSSNF)))&equ.="N";
+run;
+%mend;
+
+%mp(source=ip,equ=~,name=24m);
+%mp(source=ip,equ=~,name=p24m);
+%mp(source=snf,equ=,name=24m);
+%mp(source=snf,equ=,name=p24m);
+
+H="Creating Comorbidities - Elix, Skip in favor of Charls"
+/*creates indicators for each of the Elixhauser comorbidities
+based on the dx codes lists 6, 12, and 24m before and after R's dialysis
+
+resulting dataset is proj_int.hrs_elix*/
+
+/*rename macro - called within the elixhauser macro
+to add time suffix to variables
+
+lib=library
+dsn=dataset name
+pre=suffix to be added to all of the variable names
+*/
+
+%macro rename(lib,dsn,pre);
+options pageno=1 nodate;
+proc contents data=&lib..&dsn;
+title "Before Renaming All Variables";
+run;
+
+proc sql noprint;
+select nvar into :num_vars
+from dictionary.tables
+where libname="&LIB" and
+memname="&DSN";
+select distinct(name) into :var1-
+:var%TRIM(%LEFT(&num_vars))
+from dictionary.columns
+where libname="&LIB" and
+memname="&DSN";
+quit;
+run;
+
+proc datasets library=&LIB;
+modify &DSN;
+rename
+%do i=1 %to &num_vars;
+&&var&i=&&var&i.._&pre 
+%end;
+;
+quit;
+run;
+options pageno=1 nodate;
+proc contents data=&lib..&dsn;
+title "After Renaming All Variables";
+run;
+%mend rename;
+
+
+
+/*Elixhauser index macro
+Note includes additional 2 comorbidities: Dementia and Coronary Artery Disease*/
+
+%macro elixhauser(range1=, range2=);
+
+data dx_33_comor_&range2;
+set proj_int.dx_&range1._&range2(rename=(diag=dx_0));
+dx=trim(left(dx_0));
+
+if dx~="" then do;
+
+comorbi_1=0;
+comorbi_2=0;
+comorbi_3=0;
+comorbi_4=0;
+comorbi_5=0;
+comorbi_6=0;
+comorbi_7=0;
+comorbi_8=0;
+comorbi_9=0;
+comorbi_10=0;
+comorbi_11=0;
+comorbi_12=0;
+comorbi_13=0;
+comorbi_14=0;
+comorbi_15=0;
+comorbi_16=0;
+comorbi_17=0;
+comorbi_18=0;
+comorbi_19=0;
+comorbi_20=0;
+comorbi_21=0;
+comorbi_22=0;
+comorbi_23=0;
+comorbi_24=0;
+comorbi_25=0;
+comorbi_26=0;
+comorbi_27=0;
+comorbi_28=0;
+comorbi_29=0;
+comorbi_30=0;
+*end of intialize of 30 binary variables;
+*add dementia and CAD;
+dementia=0;
+cad=0;
+
+* Add charlson and DW renal diesease/CKD indicator;
+charls=0;
+dw_ckd=0;
+
+
+*do over dx;
+	*Congestive Heart Failure;
+	if (substr(dx,1,5)='39891' or
+		substr(dx,1,5)='40211' or
+		substr(dx,1,5)='40291' or
+		substr(dx,1,5)='40411' or
+		substr(dx,1,5)='40413' or
+		substr(dx,1,5)='40491' or
+		substr(dx,1,5)='40493' or
+		substr(dx,1,3)='428') 
+		and comorbi_1=0 
+		then comorbi_1=1;*add one binary variables here.;
+	*Cardiac Arrhythmias;
+	if (substr(dx,1,5)='42610' or
+		substr(dx,1,5)='42611' or
+		substr(dx,1,5)='42613' or
+		substr(dx,1,4)='4262' or
+		substr(dx,1,4)='4263' or
+		substr(dx,1,4)='4264' or
+		substr(dx,1,5)='42650' or
+		substr(dx,1,5)='42651' or
+		substr(dx,1,5)='42652' or
+		substr(dx,1,5)='42653' or
+		substr(dx,1,4)='4266' or
+		substr(dx,1,4)='4267' or
+		substr(dx,1,4)='4268' or
+		substr(dx,1,4)='4270' or
+		substr(dx,1,4)='4272' or
+		substr(dx,1,5)='42731' or
+		substr(dx,1,5)='42760' or
+		substr(dx,1,4)='4279' or
+		substr(dx,1,4)='7850' or
+		substr(dx,1,4)='V450' or
+		substr(dx,1,4)='V533')
+			and comorbi_2=0 
+		then comorbi_2=1;
+	* Valvular Disease ;
+	if (substr(dx,1,5)='09320' or
+		substr(dx,1,5)='09321' or
+		substr(dx,1,5)='09322' or
+		substr(dx,1,5)='09323' or
+		substr(dx,1,5)='09324' or
+		substr(dx,1,3)='394' or
+		substr(dx,1,3)='395' or
+		substr(dx,1,3)='396' or
+		substr(dx,1,4)='3970' or
+		substr(dx,1,4)='3971' or
+		substr(dx,1,4)='4240' or
+		substr(dx,1,4)='4241' or
+		substr(dx,1,4)='4242' or
+		substr(dx,1,4)='4243' or
+		substr(dx,1,4)='4244' or
+		substr(dx,1,4)='4245' or
+		substr(dx,1,4)='4246' or
+		substr(dx,1,4)='4247' or
+		substr(dx,1,4)='4248' or
+		substr(dx,1,5)='42490' or
+		substr(dx,1,5)='42491' or
+		substr(dx,1,4)='7463' or
+		substr(dx,1,4)='7464' or
+		substr(dx,1,4)='7465' or
+		substr(dx,1,4)='7466' or
+		substr(dx,1,4)='V422' or
+		substr(dx,1,5)='V433')
+			and comorbi_3=0 
+		then comorbi_3=1;
+	*Pulmonary Circulation Disorders;
+	if (substr(dx,1,3)='416' or
+		substr(dx,1,4)='4179')
+			and comorbi_4=0 
+		then comorbi_4=1;
+	*Peripheral Vascular Disorders;
+	if (substr(dx,1,3)='440' or
+		substr(dx,1,4)='4412' or
+		substr(dx,1,4)='4414' or
+		substr(dx,1,4)='4417' or
+		substr(dx,1,4)='4419' or
+		substr(dx,1,4)='4431' or
+		substr(dx,1,4)='4432' or
+		substr(dx,1,4)='4438' or
+		substr(dx,1,4)='4439' or
+		substr(dx,1,4)='4471' or
+		substr(dx,1,4)='5571' or
+		substr(dx,1,4)='5579' or
+		substr(dx,1,4)='V434')
+			and comorbi_5=0 
+		then comorbi_5=1;
+	*Hypertension;
+	if ((substr(dx,1,4)='4011' or
+		substr(dx,1,4)='4019')) or
+	   ((substr(dx,1,5)='40210' or
+		substr(dx,1,5)='40290' or
+		substr(dx,1,5)='40410' or
+		substr(dx,1,5)='40490' or
+		substr(dx,1,5)='40511' or
+		substr(dx,1,5)='40519' or
+		substr(dx,1,5)='40591' or
+		substr(dx,1,5)='40599')) 
+			and comorbi_6=0 
+		then comorbi_6=1;
+	*Paralysis;	
+	if (substr(dx,1,4)='3420' or
+		substr(dx,1,5)='34210' or
+		substr(dx,1,5)='34211' or
+		substr(dx,1,5)='34212' or
+		substr(dx,1,4)='3429' or
+		substr(dx,1,3)='343' or
+		substr(dx,1,3)='344')
+			and comorbi_7=0 
+		then comorbi_7=1;
+	*Other Neurological Disorders;
+	if (substr(dx,1,4)='3319' or
+		substr(dx,1,4)='3320' or
+		substr(dx,1,4)='3334' or
+		substr(dx,1,4)='3335' or
+		substr(dx,1,3)='334' or
+		substr(dx,1,3)='335' or
+		substr(dx,1,3)='340' or
+		substr(dx,1,4)='3411' or
+		substr(dx,1,4)='3418' or
+		substr(dx,1,4)='3419' or
+		substr(dx,1,5)='34500' or
+		substr(dx,1,5)='34501' or
+		substr(dx,1,5)='34510' or
+		substr(dx,1,5)='34511' or
+		substr(dx,1,4)='3454' or
+		substr(dx,1,5)='34550' or
+		substr(dx,1,5)='34551' or
+		substr(dx,1,4)='3458' or
+		substr(dx,1,5)='34590' or
+		substr(dx,1,5)='34591' or
+		substr(dx,1,4)='3481' or
+		substr(dx,1,4)='3483' or
+		substr(dx,1,4)='7803' or
+		substr(dx,1,4)='7843') 
+			and comorbi_8=0 
+		then comorbi_8=1;	
+	*Chronic Pulmonary Disease;
+	if (substr(dx,1,3)='490' or
+		substr(dx,1,3)='491' or
+		substr(dx,1,3)='492' or
+		substr(dx,1,4)='4930' or
+		substr(dx,1,4)='4931' or
+		substr(dx,1,4)='4932' or
+		substr(dx,1,4)='4938' or
+		substr(dx,1,5)='49390' or
+		substr(dx,1,5)='49391' or
+		substr(dx,1,3)='494' or
+		substr(dx,1,3)='495' or
+		substr(dx,1,3)='496' or
+		substr(dx,1,3)='497' or
+		substr(dx,1,3)='498' or
+		substr(dx,1,3)='499' or
+		substr(dx,1,3)='500' or
+		substr(dx,1,3)='501' or
+		substr(dx,1,3)='502' or
+		substr(dx,1,3)='503' or
+		substr(dx,1,3)='504' or
+		substr(dx,1,3)='505' or
+		substr(dx,1,4)='5064') 
+			and comorbi_9=0 
+		then comorbi_9=1;	
+	*Diabetes, uncomplicated;
+	if (substr(dx,1,4)='2500' or
+		substr(dx,1,4)='2501' or
+		substr(dx,1,4)='2502' or
+		substr(dx,1,4)='2503') 
+			and comorbi_10=0 
+		then comorbi_10=1;
+	*Diabetes, complicated;
+	if (substr(dx,1,4)='2504' or
+		substr(dx,1,4)='2505' or
+		substr(dx,1,4)='2506' or
+		substr(dx,1,4)='2507' or
+		substr(dx,1,4)='2509') 
+			and comorbi_11=0 
+		then comorbi_11=1;
+	*Hypothyroidism;
+	if (substr(dx,1,3)='243' or
+		substr(dx,1,4)='2440' or
+		substr(dx,1,4)='2441' or
+		substr(dx,1,4)='2442' or
+		substr(dx,1,4)='2448' or
+		substr(dx,1,4)='2449') 	
+			and comorbi_12=0 
+		then comorbi_12=1;
+	*Renal Failure;
+	if (substr(dx,1,5)='40311' or
+		substr(dx,1,5)='40391' or
+		substr(dx,1,5)='40412' or
+		substr(dx,1,5)='40492' or
+		substr(dx,1,3)='585' or
+		substr(dx,1,3)='586' or
+		substr(dx,1,4)='V420' or
+		substr(dx,1,4)='V451' or
+		substr(dx,1,4)='V560' or
+		substr(dx,1,4)='V568') 
+			and comorbi_13=0 
+		then comorbi_13=1;
+	*Liver Disease;
+	if (substr(dx,1,5)='07032' or
+		substr(dx,1,5)='07033' or
+		substr(dx,1,5)='07054' or
+		substr(dx,1,4)='4560' or
+		substr(dx,1,4)='4561' or
+		substr(dx,1,5)='45620' or
+		substr(dx,1,5)='45621' or
+		substr(dx,1,4)='5710' or
+		substr(dx,1,4)='5712' or
+		substr(dx,1,4)='5713' or
+		substr(dx,1,4)='5714' or
+		substr(dx,1,4)='5715' or
+		substr(dx,1,4)='5716' or
+		substr(dx,1,4)='5718' or
+		substr(dx,1,4)='5719' or
+		substr(dx,1,4)='5723' or
+		substr(dx,1,4)='5728' or
+		substr(dx,1,4)='V427') 
+			and comorbi_14=0 
+		then comorbi_14=1;
+	*Peptic Ulcer Disease excluding bleeding;
+	if (substr(dx,1,5)='53170' or
+		substr(dx,1,5)='53190' or
+		substr(dx,1,5)='53270' or
+		substr(dx,1,5)='53290' or
+		substr(dx,1,5)='53370' or
+		substr(dx,1,5)='53390' or
+		substr(dx,1,5)='53470' or
+		substr(dx,1,5)='53490' or
+		substr(dx,1,5)='V1271') 
+			and comorbi_15=0 
+		then comorbi_15=1;
+	*AIDS;
+	if (substr(dx,1,3)='042' or
+		substr(dx,1,3)='043' or
+		substr(dx,1,3)='044') 
+			and comorbi_16=0 
+		then comorbi_16=1;
+	*Lymphoma;
+	if (substr(dx,1,3)='200' or
+		substr(dx,1,4)='201' or
+		substr(dx,1,4)='2020' or
+		substr(dx,1,4)='2021' or
+		substr(dx,1,4)='2022' or
+		substr(dx,1,4)='2023' or
+		substr(dx,1,4)='2025' or
+		substr(dx,1,4)='2026' or
+		substr(dx,1,4)='2027' or
+		substr(dx,1,4)='2028' or
+		substr(dx,1,4)='2029' or
+		substr(dx,1,4)='2030' or
+		substr(dx,1,4)='2038' or
+		substr(dx,1,4)='2386' or
+		substr(dx,1,4)='2733' or
+		substr(dx,1,4)='V1071' or
+		substr(dx,1,4)='V1072' or
+		substr(dx,1,4)='V1079')
+			and comorbi_17=0 
+		then comorbi_17=1;
+	*Metastatic Cancer;
+	if (substr(dx,1,3)='196' or
+		substr(dx,1,3)='197' or
+		substr(dx,1,3)='198' or
+		substr(dx,1,4)='199') 
+			and comorbi_18=0 
+		then comorbi_18=1;	
+	*Solid Tumor without Metastisis;
+	if (substr(dx,1,2)='14' or
+		substr(dx,1,2)='15' or
+		substr(dx,1,2)='16' or
+		substr(dx,1,3)='170' or
+		substr(dx,1,3)='171' or
+		substr(dx,1,3)='172' or
+		substr(dx,1,3)='174' or
+		substr(dx,1,3)='175' or
+		substr(dx,1,3)='179' or
+		substr(dx,1,2)='18' or
+		substr(dx,1,3)='190' or
+		substr(dx,1,3)='191' or
+		substr(dx,1,3)='192' or
+		substr(dx,1,3)='193' or
+		substr(dx,1,3)='194' or
+		substr(dx,1,3)='195' or
+		substr(dx,1,3)='V10')
+			and comorbi_19=0 
+		then comorbi_19=1;
+	*Rheumatoid Arthritis/Collagen Vascular Diseases;
+	if (substr(dx,1,4)='7010' or
+		substr(dx,1,3)='710' or
+		substr(dx,1,3)='714' or
+		substr(dx,1,3)='720' or
+		substr(dx,1,3)='725') 
+			and comorbi_20=0 
+		then comorbi_20=1;
+	*Coagulopathy;
+	if (substr(dx,1,3)='286' or
+		substr(dx,1,4)='2871' or
+		substr(dx,1,4)='2873' or
+		substr(dx,1,4)='2874' or
+		substr(dx,1,4)='2875') 
+			and comorbi_21=0 
+		then comorbi_21=1;
+	*Obesity;
+	if (substr(dx,1,4)='2780')  
+			and comorbi_22=0 
+		then comorbi_22=1;
+	*Weight Loss;
+	if (substr(dx,1,3)='260' or
+		substr(dx,1,3)='261' or
+		substr(dx,1,3)='262' or
+		substr(dx,1,3)='263') 
+			and comorbi_23=0 
+		then comorbi_23=1;	
+	*Fluid and Electrolyte Disorders;
+	if (substr(dx,1,3)='276') 
+			and comorbi_24=0 
+		then comorbi_24=1;
+	*Blood Loss Anemia;
+	if (substr(dx,1,4)='2800') 
+			and comorbi_25=0 
+		then comorbi_25=1;
+	*Deficiency Anemias;
+	if (substr(dx,1,4)='2801' or
+		substr(dx,1,4)='2808' or
+		substr(dx,1,4)='2809' or
+		substr(dx,1,4)='2859') 
+			and comorbi_26=0 
+		then comorbi_26=1;
+	*Alcohol Abuse;
+	if (substr(dx,1,4)='2911' or
+		substr(dx,1,4)='2912' or
+		substr(dx,1,4)='2915' or
+		substr(dx,1,4)='2918' or
+		substr(dx,1,4)='2919' or
+		substr(dx,1,4)='3039' or
+		substr(dx,1,4)='3050' or
+		substr(dx,1,4)='V113') 
+			and comorbi_27=0 
+		then comorbi_27=1;
+	*Drug Abuse;
+	if (substr(dx,1,4)='2920' or
+		substr(dx,1,5)='29282' or
+		substr(dx,1,5)='29283' or
+		substr(dx,1,5)='29284' or
+		substr(dx,1,5)='29289' or
+		substr(dx,1,4)='2929' or
+		substr(dx,1,3)='304' or
+		substr(dx,1,4)='3052' or
+		substr(dx,1,4)='3053' or
+		substr(dx,1,4)='3054' or
+		substr(dx,1,4)='3055' or
+		substr(dx,1,4)='3056' or
+		substr(dx,1,4)='3057' or
+		substr(dx,1,4)='3058' or
+		substr(dx,1,4)='3059')
+			and comorbi_28=0 
+		then comorbi_28=1;	
+	*Psychoses;
+	if (substr(dx,1,3)='295' or
+		substr(dx,1,3)='296' or
+		substr(dx,1,3)='297' or
+		substr(dx,1,3)='298' or
+		substr(dx,1,4)='2991') 
+			and comorbi_29=0 
+		then comorbi_29=1;
+	*Depression;
+	if (substr(dx,1,4)='3004' or
+		substr(dx,1,5)='30112' or
+		substr(dx,1,4)='3090' or
+		substr(dx,1,4)='3091' or
+		substr(dx,1,3)='311')
+			and comorbi_30=0 
+		then comorbi_30=1;
+
+
+	*Dementia;
+	if (substr(dx,1,4) in ('3310','3311','3312','2900','2901',
+             '2902','2903','2912','2948','2949') or
+		substr(dx,1,5) in ('29410','29411','29040','29041','29042','29043')) 
+		and dementia=0 
+          then dementia=1;
+
+	*CAD coronary artery disease;
+	if (substr(dx,1,4) in ('4140','4142','4143','4148','4149') or 
+		substr(dx,1,3) in ('410','411','412','413') or
+		substr(dx,1,5) in ('V4581','V4582'))
+		and cad=0 
+          then cad=1;
+
+/* CAD list
+410.00-410.92
+411.0-411.89
+412
+413.0-413.9
+414.00-414.07
+414.2
+414.3
+414.8
+414.9
+V45.81
+V45.82 */
+
+/*Charlson */ 
+IF	    (substr(dx,1,5)='40301' or
+		substr(dx,1,5)='40311' or
+		substr(dx,1,5)='40391' or
+		substr(dx,1,5)='40402' or
+		substr(dx,1,5)='40403' or
+		substr(dx,1,5)='40412' or
+		substr(dx,1,5)='40413' or
+        substr(dx,1,5)='40492' or
+		substr(dx,1,5)='40493' or
+		substr(dx,1,3)='582' or
+		substr(dx,1,4)='5830' or
+        substr(dx,1,4)='5831' or
+        substr(dx,1,4)='5832' or
+        substr(dx,1,4)='5834' or
+        substr(dx,1,4)='5836' or
+        substr(dx,1,4)='5837' or
+        substr(dx,1,3)='585' or
+        substr(dx,1,3)='586' or
+        substr(dx,1,4)='5880' or
+        substr(dx,1,4)='V420' or
+        substr(dx,1,4)='V451' or
+        substr(dx,1,3)='V56') and charls=0
+then charls=1;
+
+/* CCW */
+IF (substr(dx,1,4)='1600' or
+substr(dx,1,4)='1601' or 
+substr(dx,1,4)='1602' or
+substr(dx,1,4)='1603' or
+substr(dx,1,4)='1604' or
+substr(dx,1,4)='1605' or
+substr(dx,1,4)='1606' or
+substr(dx,1,3)='954' or
+substr(dx,1,4)='1890' or
+substr(dx,1,4)='1899' or
+substr(dx,1,4)='2230' or
+substr(dx,1,5)='23691' or
+substr(dx,1,5)='24940' or
+substr(dx,1,5)='24941' or
+substr(dx,1,5)='25040' or
+substr(dx,1,5)='25041' or
+substr(dx,1,5)='25042' or
+substr(dx,1,5)='25043' or
+substr(dx,1,4)='2714' or
+substr(dx,1,4)='2741' or
+substr(dx,1,5)='27410' or 
+substr(dx,1,5)='28311' or
+substr(dx,1,5)='40301' or 
+substr(dx,1,5)='40311' or 
+substr(dx,1,5)='40391' or
+substr(dx,1,5)='40402' or
+substr(dx,1,5)='40403' or
+substr(dx,1,5)='40412' or
+substr(dx,1,5)='40413' or
+substr(dx,1,5)='40492' or
+substr(dx,1,5)='40493' or
+substr(dx,1,4)='4401' or
+substr(dx,1,4)='4421' or
+substr(dx,1,4)='5724' or
+substr(dx,1,4)='5800' or
+substr(dx,1,4)='5804' or
+substr(dx,1,5)='58081' or
+substr(dx,1,5)='58089' or
+substr(dx,1,4)='5809' or
+substr(dx,1,4)='5810' or
+substr(dx,1,4)='5811' or
+substr(dx,1,4)='5812' or
+substr(dx,1,4)='5813' or
+substr(dx,1,5)='58181' or
+substr(dx,1,5)='58189' or
+substr(dx,1,4)='5819' or
+substr(dx,1,4)='5820' or 
+substr(dx,1,4)='5821' or
+substr(dx,1,4)='5822' or
+substr(dx,1,4)='5824' or
+substr(dx,1,5)='58281' or
+substr(dx,1,5)='58289' or
+substr(dx,1,4)='5829' or
+substr(dx,1,4)='5830' or
+substr(dx,1,4)='5831' or
+substr(dx,1,4)='5832' or
+substr(dx,1,4)='5834' or
+substr(dx,1,4)='5836' or
+substr(dx,1,4)='5837' or
+substr(dx,1,5)='58381' or
+substr(dx,1,5)='58389' or
+substr(dx,1,4)='5839' or
+substr(dx,1,4)='5845' or
+substr(dx,1,4)='5846' or
+substr(dx,1,4)='5847' or
+substr(dx,1,4)='5848' or
+substr(dx,1,4)='5849' or
+substr(dx,1,3)='585' or
+substr(dx,1,4)='5851' or
+substr(dx,1,4)='5852' or
+substr(dx,1,4)='5853' or
+substr(dx,1,4)='5854' or
+substr(dx,1,4)='5855' or
+substr(dx,1,4)='5856' or
+substr(dx,1,4)='5859' or
+substr(dx,1,3)='586' or
+substr(dx,1,3)='587' or
+substr(dx,1,4)='5880' or 
+substr(dx,1,4)='5881' or
+substr(dx,1,5)='58881' or
+substr(dx,1,5)='58889' or
+substr(dx,1,4)='5889' or
+substr(dx,1,3)='591' or
+substr(dx,1,5)='75312' or
+substr(dx,1,5)='75313' or
+substr(dx,1,5)='75314' or
+substr(dx,1,5)='75315' or
+substr(dx,1,5)='75316' or
+substr(dx,1,5)='75317' or
+substr(dx,1,5)='75319' or
+substr(dx,1,5)='75320' or
+substr(dx,1,5)='75321' or
+substr(dx,1,5)='75322' or
+substr(dx,1,5)='75323' or
+substr(dx,1,5)='75329' or
+substr(dx,1,4)='7944') and dw_ckd=0
+then dw_ckd= 1;
+
+end;
+run;
+
+
+/*check sums of each comorbidity for each id*/
+proc sql;
+create table com_test1_&range2 as
+select distinct BID_hrs_21, id, index_date,
+sum(comorbi_1) as com_1,
+sum(comorbi_2) as com_2,
+sum(comorbi_3) as com_3,
+sum(comorbi_4) as com_4,
+sum(comorbi_5) as com_5,
+sum(comorbi_6) as com_6,
+sum(comorbi_7) as com_7,
+sum(comorbi_8) as com_8,
+sum(comorbi_9) as com_9,
+sum(comorbi_10) as com_10,
+sum(comorbi_11) as com_11,
+sum(comorbi_12) as com_12,
+sum(comorbi_13) as com_13,
+sum(comorbi_14) as com_14,
+sum(comorbi_15) as com_15,
+sum(comorbi_16) as com_16,
+sum(comorbi_17) as com_17,
+sum(comorbi_18) as com_18,
+sum(comorbi_19) as com_19,
+sum(comorbi_20) as com_20,
+sum(comorbi_21) as com_21,
+sum(comorbi_22) as com_22,
+sum(comorbi_23) as com_23,
+sum(comorbi_24) as com_24,
+sum(comorbi_25) as com_25,
+sum(comorbi_26) as com_26,
+sum(comorbi_27) as com_27,
+sum(comorbi_28) as com_28,
+sum(comorbi_29) as com_29,
+sum(comorbi_30) as com_30,
+sum(dementia) as com_31,
+sum(cad) as com_32,
+sum(charls) as com_33,
+sum(dw_ckd) as com_34
+from dx_33_comor_&range2
+group by BID_hrs_21, id, index_date;
+quit;
+
+/*define comorbidities as binary indicators*/
+data comorbidity_&range2.(keep=BID_hrs_21 id index_date
+	comorb_1-comorb_34 comorb_all);
+set com_test1_&range2;
+array list_com com_1-com_30 com_31 com_32 com_33 com_34;
+array list_com_bin comorb_1-comorb_30 comorb_31 comorb_32 comorb_33 comorb_34;
+
+/*note this defines comorbidity 31 = dementia & 32 = cad*/
+do over list_com;
+  list_com_bin=0;
+
+  if list_com>0 then do;
+    list_com_bin=1;
+   end;
+
+end;
+
+/*define aggregate comorbidity as sum of 30 individual indicator vars.
+note: CAD not included in this aggregate score*/
+comorb_all=comorb_1+comorb_2+comorb_3+comorb_4+comorb_5+comorb_6+
+comorb_7+comorb_8+comorb_9+comorb_10+comorb_11+comorb_12+comorb_13+
+comorb_14+comorb_15+comorb_16+comorb_17+comorb_18+comorb_19+comorb_20+
+comorb_21+comorb_22+comorb_23+comorb_24+comorb_25+comorb_26+comorb_27+
+comorb_28+comorb_29+comorb_30+comorb_31;
+run;
+
+
+proc sort data=comorbidity_&range2. nodupkey;
+by BID_hrs_21 id index_date;
+run;
+
+/*merges with list of s's with xwalk id, dod & ffs mc 6m before R's dialysis*/
+proc sql;
+create table ids_w_xwalk_&range2._1(drop=BID_hrs_212 id2) as
+select a.bid_hrs_21,a.id,a.index_date,b.* 
+from proj_int.index a 
+left join
+comorbidity_&range2.(rename=(BID_hrs_21=BID_hrs_212) rename=(id=id2))  b
+on trim(left(a.bid_hrs_21))=trim(left(b.BID_hrs_212)) and
+	a.id=b.id2 and a.index_date=b.index_date;
+quit;
+
+/*if comorbidity=null, set to zero for this group with the ffs mc 6m*/
+data elix_&range1._&range2;
+set ids_w_xwalk_&range2._1;
+array list comorb_1-comorb_34 comorb_all;
+do over list;
+	if list=. then list=0;
+	end;
+
+label comorb_1 ="Congestive Heart Failure";
+label comorb_2 ="Cardiac Arrhythmias";
+label comorb_3 ="Valvular Disease";
+label comorb_4 ="Pulmonary Circulation Disorders";
+label comorb_5 ="Peripheral Vascular Disorders";
+label comorb_6 ="Hypertension";
+label comorb_7 ="Paralysis";
+label comorb_8 ="Other Neurological Disorders";
+label comorb_9 ="Chronic Pulmonary Disease";
+label comorb_10 ="Diabetes, uncomplicated";
+label comorb_11 ="Diabetes, complicated";
+label comorb_12 ="Hypothyroidism";
+label comorb_13 ="Renal Failure";
+label comorb_14 ="Liver Disease";
+label comorb_15 ="Peptic Ulcer Disease excluding bleeding";
+label comorb_16 ="AIDS";
+label comorb_17 ="Lymphoma";
+label comorb_18 ="Metastatic Cancer";
+label comorb_19 ="Solid Tumor without Metastisis";
+label comorb_20 ="Rheumatoid Arthritis/Collagen Vascular Diseases";
+label comorb_21 ="Coagulopathy";
+label comorb_22 ="Obesity";
+label comorb_23 ="Weight Loss";
+label comorb_24 ="Fluid and Electrolyte Disorders";
+label comorb_25 ="Blood Loss Anemia";
+label comorb_26 ="Deficiency Anemias";
+label comorb_27 ="Alcohol Abuse";
+label comorb_28 ="Drug Abuse";
+label comorb_29 ="Psychoses";
+label comorb_30 ="Depression";
+label comorb_31 ="Dementia";
+label comorb_32 ="Coronary Artery Disease";
+label comorb_33 ="Charlson Renal Disease";
+label comorb_34 ="DW Chronic Kidney Disease";
+
+run;
+
+data test;
+set elix_&range1._&range2;
+run;
+
+/*calls rename macro*/
+%rename(WORK,TEST,&range1._&range2);
+
+/*rename r&s BID variables*/
+data elix_&range1._&range2._2
+	(rename =(id_&range1._&range2=id)
+	rename =(bid_hrs_21_&range1._&range2=bid_hrs_21)
+	rename = (index_date_&range1._&range2=index_date));
+set test;
+keep bid_hrs_21_&range1._&range2 id_&range1._&range2 index_date_&range1._&range2 comorb:;
+run;
+
+proc sort data=elix_&range1._&range2._2 nodup;
+by bid_hrs_21 id index_date;
+run;
+
+%mend;
+
+/*run macro to get elixhauser comorbidities 6, 12, 24m pre and post dialysis
+resulting datasets are spo_int.elix_0d_x#m_2
+x = n=before, p=after dialysis
+# = 6, 12, or 24 for time window (months) 
+have id and bid_hrs_21 to merge back to dataset*/
+*%elixhauser(range1=0d, range2=n6m);
+%elixhauser(range1=0d, range2=n12m);
+*%elixhauser(range1=0d, range2=n24m);
+
+*%elixhauser(range1=0d, range2=p6m);
+%elixhauser(range1=0d, range2=p12m);
+*%elixhauser(range1=0d, range2=p24m);
+
+
+/*combine the 6 sets of variables into a single dataset
+then merge this into main hrs spouse dataset*/
+data proj_int.elix_all;
+merge /*elix_0d_n6m_2*/ elix_0d_n12m_2 /* elix_0d_n24m_2 */
+/*elix_0d_p6m_2*/ elix_0d_p12m_2; /* elix_0d_p24m_2; */
+by bid_hrs_21 id index_date;
+run;
+
+
+
+H="Creating Comorbidities - Charlson"
+/*creates indicators for each of the Elixhauser comorbidities
+based on the dx codes lists 6, 12, and 24m before and after R's dialysis
+
+resulting dataset is proj_int.hrs_elix*/
+
+/*rename macro - called within the elixhauser macro
+to add time suffix to variables
+
+lib=library
+dsn=dataset name
+pre=suffix to be added to all of the variable names
+*/
+
+%macro rename(lib,dsn,pre);
+options pageno=1 nodate;
+proc contents data=&lib..&dsn;
+title "Before Renaming All Variables";
+run;
+
+proc sql noprint;
+select nvar into :num_vars
+from dictionary.tables
+where libname="&LIB" and
+memname="&DSN";
+select distinct(name) into :var1-
+:var%TRIM(%LEFT(&num_vars))
+from dictionary.columns
+where libname="&LIB" and
+memname="&DSN";
+quit;
+run;
+
+proc datasets library=&LIB;
+modify &DSN;
+rename
+%do i=1 %to &num_vars;
+&&var&i=&&var&i.._&pre 
+%end;
+;
+quit;
+run;
+options pageno=1 nodate;
+proc contents data=&lib..&dsn;
+title "After Renaming All Variables";
+run;
+%mend rename;
+
+
+
+/*Elixhauser index macro
+Note includes additional 2 comorbidities: Dementia and Coronary Artery Disease*/
+
+%macro elixhauser(range1=, range2=);
+
+data dx_33_comor_&range2;
+set proj_int.dx_&range1._&range2(rename=(diag=dx_0));
+dx=trim(left(dx_0));
+
+if dx~="" then do;
+
+comorbi_1=0;
+comorbi_2=0;
+comorbi_3=0;
+comorbi_4=0;
+comorbi_5=0;
+comorbi_6=0;
+comorbi_7=0;
+comorbi_8=0;
+comorbi_9=0;
+comorbi_10=0;
+comorbi_11=0;
+comorbi_12=0;
+comorbi_13=0;
+comorbi_14=0;
+comorbi_15=0;
+comorbi_16=0;
+comorbi_17=0;
+comorbi_18=0;
+comorbi_19=0;
+comorbi_20=0;
+comorbi_21=0;
+comorbi_22=0;
+comorbi_23=0;
+comorbi_24=0;
+comorbi_25=0;
+comorbi_26=0;
+comorbi_27=0;
+comorbi_28=0;
+comorbi_29=0;
+comorbi_30=0;
+*end of intialize of 30 binary variables;
+*add dementia and CAD;
+dementia=0;
+cad=0;
+
+* Add charlson and DW renal diesease/CKD indicator;
+charls=0;
+dw_ckd=0;
+
+
+*do over dx;
+
+	*Congestive Heart Failure;
+   if(substr(dx,1,5)='39891' or
+               substr(dx,1,5)='40201' or
+               substr(dx,1,5)='40211' or
+               substr(dx,1,5)='40291' or
+               substr(dx,1,5)='40401' or
+               substr(dx,1,5)='40403' or
+               substr(dx,1,5)='40411' or
+               substr(dx,1,5)='40413' or
+               substr(dx,1,5)='40491' or
+               substr(dx,1,5)='40493' or
+               substr(dx,1,4)='4254' or
+               substr(dx,1,4)='4255' or
+               substr(dx,1,4)='4256' or
+               substr(dx,1,4)='4257' or
+               substr(dx,1,4)='4258' or
+               substr(dx,1,4)='4259' or
+               substr(dx,1,3)='428')
+		and comorbi_1=0 
+		then comorbi_1=1;*add one binary variables here.;
+ *Myocardial Infarction;
+   if(substr(dx,1,3)='410' or
+               substr(dx,1,3)='412')
+			and comorbi_2=0 
+		then comorbi_2=1;
+*Periphral Vascular Disease;
+    if(substr(dx,1,4)='0930' or
+               substr(dx,1,4)='4373' or
+               substr(dx,1,3)='440' or
+               substr(dx,1,3)='441' or
+               substr(dx,1,4)='4431' or
+               substr(dx,1,4)='4432' or
+               substr(dx,1,4)='4438' or
+               substr(dx,1,4)='4439' or
+               substr(dx,1,4)='4471' or
+               substr(dx,1,4)='5571' or
+               substr(dx,1,4)='5579' or
+               substr(dx,1,4)='V434')
+			and comorbi_3=0 
+		then comorbi_3=1;
+ *Cerebrovascular Disease ;
+        if(substr(dx,1,5)='36234' or
+               substr(dx,1,3)='430' or
+               substr(dx,1,3)='431' or
+               substr(dx,1,3)='432' or
+               substr(dx,1,3)='433' or
+               substr(dx,1,3)='434' or
+               substr(dx,1,3)='435' or
+               substr(dx,1,3)='436' or
+               substr(dx,1,3)='437' or
+               substr(dx,1,3)='438')
+			and comorbi_4=0 
+		then comorbi_4=1;
+*Dementia ;
+       if(substr(dx,1,3)='290' or
+               substr(dx,1,4)='2941' or
+               substr(dx,1,4)='3312')
+			and comorbi_5=0 
+		then comorbi_5=1;
+	*Chronic Pulmonary Disease ;
+        if(substr(dx,1,5)='4168' or
+               substr(dx,1,4)='4169' or
+               substr(dx,1,3)='490' or
+               substr(dx,1,3)='491' or
+               substr(dx,1,3)='492' or
+               substr(dx,1,3)='493' or
+               substr(dx,1,3)='494' or
+               substr(dx,1,3)='495' or
+               substr(dx,1,3)='496' or
+               substr(dx,1,3)='500' or
+               substr(dx,1,3)='501' or
+               substr(dx,1,3)='502' or
+               substr(dx,1,3)='503' or
+               substr(dx,1,3)='504' or
+               substr(dx,1,3)='505' or
+               substr(dx,1,4)='5064' or
+               substr(dx,1,4)='5081' or
+               substr(dx,1,4)='5088')
+			and comorbi_6=0 
+		then comorbi_6=1;
+*Connective Tissue Disease-Rheumatic Disease;
+         if(substr(dx,1,4)='4465' or
+               substr(dx,1,4)='7100' or
+               substr(dx,1,4)='7101' or
+               substr(dx,1,4)='7102' or
+               substr(dx,1,4)='7103' or
+               substr(dx,1,4)='7104' or
+               substr(dx,1,4)='7140' or
+               substr(dx,1,4)='7141' or
+               substr(dx,1,4)='7142' or
+               substr(dx,1,4)='7148' or
+               substr(dx,1,3)='725')
+			and comorbi_7=0 
+		then comorbi_7=1;
+*Peptic Ulcer Disease;
+         if(substr(dx,1,3)='531' or
+               substr(dx,1,3)='532' or
+               substr(dx,1,3)='533' or
+               substr(dx,1,3)='534')
+			and comorbi_8=0 
+		then comorbi_8=1;	
+*Mild Liver Disease ;
+         if(substr(dx,1,5)='07022' or
+               substr(dx,1,5)='07023' or
+               substr(dx,1,5)='07032' or
+               substr(dx,1,5)='07033' or
+               substr(dx,1,5)='07044' or
+               substr(dx,1,5)='07054' or
+               substr(dx,1,4)='0706' or
+               substr(dx,1,4)='0709' or
+               substr(dx,1,3)='570' or
+               substr(dx,1,3)='571' or
+               substr(dx,1,4)='5733' or
+               substr(dx,1,4)='5734' or
+               substr(dx,1,4)='5738' or
+               substr(dx,1,4)='5739' or
+               substr(dx,1,4)='V427')
+			and comorbi_9=0 
+		then comorbi_9=1;	
+*Diabetes without complications ;
+         if(substr(dx,1,4)='2500' or
+               substr(dx,1,4)='2501' or
+               substr(dx,1,4)='2502' or
+               substr(dx,1,4)='2503' or
+               substr(dx,1,4)='2508' or
+               substr(dx,1,4)='2509')
+			and comorbi_10=0 
+		then comorbi_10=1;
+*Diabetes, complicated;
+	if (substr(dx,1,4)='2504' or
+		substr(dx,1,4)='2505' or
+		substr(dx,1,4)='2506' or
+		substr(dx,1,4)='2507')
+			and comorbi_11=0 
+		then comorbi_11=1;
+*Paraplegia and Hemiplegia ;
+	if (substr(dx,1,4)='3341' or
+		substr(dx,1,3)='342' or
+		substr(dx,1,3)='343' or
+		substr(dx,1,4)='3440' or
+		substr(dx,1,4)='3441' or
+		substr(dx,1,4)='3442' or
+		substr(dx,1,4)='3443' or
+                substr(dx,1,4)='3444' or
+		substr(dx,1,4)='3445' or
+		substr(dx,1,4)='3446' or
+		substr(dx,1,4)='3449')
+			and comorbi_12=0 
+		then comorbi_12=1;
+* Renal Disease ;
+	if (substr(dx,1,5)='40301' or
+		substr(dx,1,5)='40311' or
+		substr(dx,1,5)='40391' or
+		substr(dx,1,5)='40402' or
+		substr(dx,1,5)='40403' or
+		substr(dx,1,5)='40412' or
+		substr(dx,1,5)='40413' or
+                substr(dx,1,5)='40492' or
+		substr(dx,1,5)='40493' or
+		substr(dx,1,3)='582' or
+		substr(dx,1,4)='5830' or
+                substr(dx,1,4)='5831' or
+                substr(dx,1,4)='5832' or
+                substr(dx,1,4)='5834' or
+                substr(dx,1,4)='5836' or
+                substr(dx,1,4)='5837' or
+                substr(dx,1,3)='585' or
+                substr(dx,1,3)='586' or
+                substr(dx,1,4)='5880' or
+                substr(dx,1,4)='V420' or
+                substr(dx,1,4)='V451' or
+                substr(dx,1,3)='V56' )
+			and comorbi_13=0 
+		then comorbi_13=1;
+*Cancer ;
+	if (substr(dx,1,2)='14' or
+		substr(dx,1,2)='15' or
+		substr(dx,1,2)='16' or
+		substr(dx,1,3)='170' or
+		substr(dx,1,3)='171' or
+		substr(dx,1,3)='172' or
+		substr(dx,1,3)='174' or
+		substr(dx,1,3)='175' or
+		substr(dx,1,3)='176' or
+		substr(dx,1,3)='179' or
+		substr(dx,1,2)='18' or
+		substr(dx,1,3)='190' or
+		substr(dx,1,3)='191' or
+		substr(dx,1,3)='192' or
+		substr(dx,1,3)='193' or
+		substr(dx,1,3)='194' or
+		substr(dx,1,3)='195' or
+                substr(dx,1,3)='200' or
+                substr(dx,1,3)='201' or
+                substr(dx,1,3)='202' or
+                substr(dx,1,3)='203' or
+                substr(dx,1,3)='204' or
+                substr(dx,1,3)='205' or
+                substr(dx,1,3)='206' or
+                substr(dx,1,3)='207' or
+                substr(dx,1,3)='208' or
+                substr(dx,1,3)='2386' )
+			and comorbi_14=0 
+		then comorbi_14=1;
+* Moderate or Severe Liver Disease ;
+	if (substr(dx,1,4)='4560' or
+		substr(dx,1,4)='4561' or
+		substr(dx,1,4)='4562' or
+		substr(dx,1,4)='5722' or
+		substr(dx,1,4)='5723' or
+		substr(dx,1,4)='5724' or
+      		substr(dx,1,4)='5728' )
+			and comorbi_15=0 
+		then comorbi_15=1;
+  * Metastatic Carcinoma ;
+	if (substr(dx,1,3)='196' or
+		substr(dx,1,3)='197' or
+		substr(dx,1,3)='198' or
+		substr(dx,1,3)='199' )
+			and comorbi_16=0 
+		then comorbi_16=1;
+  * AIDS/HIV ;
+	if (substr(dx,1,3)='042' or
+		substr(dx,1,3)='043' or
+		substr(dx,1,3)='044' )
+			and comorbi_17=0 
+		then comorbi_17=1;
+
+	*Metastatic Cancer;
+	if (substr(dx,1,3)='196' or
+		substr(dx,1,3)='197' or
+		substr(dx,1,3)='198' or
+		substr(dx,1,4)='199') 
+			and comorbi_18=0 
+		then comorbi_18=1;	
+	*Solid Tumor without Metastisis;
+	if (substr(dx,1,2)='14' or
+		substr(dx,1,2)='15' or
+		substr(dx,1,2)='16' or
+		substr(dx,1,3)='170' or
+		substr(dx,1,3)='171' or
+		substr(dx,1,3)='172' or
+		substr(dx,1,3)='174' or
+		substr(dx,1,3)='175' or
+		substr(dx,1,3)='179' or
+		substr(dx,1,2)='18' or
+		substr(dx,1,3)='190' or
+		substr(dx,1,3)='191' or
+		substr(dx,1,3)='192' or
+		substr(dx,1,3)='193' or
+		substr(dx,1,3)='194' or
+		substr(dx,1,3)='195' or
+		substr(dx,1,3)='V10')
+			and comorbi_19=0 
+		then comorbi_19=1;
+	*Rheumatoid Arthritis/Collagen Vascular Diseases;
+	if (substr(dx,1,4)='7010' or
+		substr(dx,1,3)='710' or
+		substr(dx,1,3)='714' or
+		substr(dx,1,3)='720' or
+		substr(dx,1,3)='725') 
+			and comorbi_20=0 
+		then comorbi_20=1;
+	*Coagulopathy;
+	if (substr(dx,1,3)='286' or
+		substr(dx,1,4)='2871' or
+		substr(dx,1,4)='2873' or
+		substr(dx,1,4)='2874' or
+		substr(dx,1,4)='2875') 
+			and comorbi_21=0 
+		then comorbi_21=1;
+	*Obesity;
+	if (substr(dx,1,4)='2780')  
+			and comorbi_22=0 
+		then comorbi_22=1;
+	*Weight Loss;
+	if (substr(dx,1,3)='260' or
+		substr(dx,1,3)='261' or
+		substr(dx,1,3)='262' or
+		substr(dx,1,3)='263') 
+			and comorbi_23=0 
+		then comorbi_23=1;	
+	*Fluid and Electrolyte Disorders;
+	if (substr(dx,1,3)='276') 
+			and comorbi_24=0 
+		then comorbi_24=1;
+	*Blood Loss Anemia;
+	if (substr(dx,1,4)='2800') 
+			and comorbi_25=0 
+		then comorbi_25=1;
+	*Deficiency Anemias;
+	if (substr(dx,1,4)='2801' or
+		substr(dx,1,4)='2808' or
+		substr(dx,1,4)='2809' or
+		substr(dx,1,4)='2859') 
+			and comorbi_26=0 
+		then comorbi_26=1;
+	*Alcohol Abuse;
+	if (substr(dx,1,4)='2911' or
+		substr(dx,1,4)='2912' or
+		substr(dx,1,4)='2915' or
+		substr(dx,1,4)='2918' or
+		substr(dx,1,4)='2919' or
+		substr(dx,1,4)='3039' or
+		substr(dx,1,4)='3050' or
+		substr(dx,1,4)='V113') 
+			and comorbi_27=0 
+		then comorbi_27=1;
+	*Drug Abuse;
+	if (substr(dx,1,4)='2920' or
+		substr(dx,1,5)='29282' or
+		substr(dx,1,5)='29283' or
+		substr(dx,1,5)='29284' or
+		substr(dx,1,5)='29289' or
+		substr(dx,1,4)='2929' or
+		substr(dx,1,3)='304' or
+		substr(dx,1,4)='3052' or
+		substr(dx,1,4)='3053' or
+		substr(dx,1,4)='3054' or
+		substr(dx,1,4)='3055' or
+		substr(dx,1,4)='3056' or
+		substr(dx,1,4)='3057' or
+		substr(dx,1,4)='3058' or
+		substr(dx,1,4)='3059')
+			and comorbi_28=0 
+		then comorbi_28=1;	
+	*Psychoses;
+	if (substr(dx,1,3)='295' or
+		substr(dx,1,3)='296' or
+		substr(dx,1,3)='297' or
+		substr(dx,1,3)='298' or
+		substr(dx,1,4)='2991') 
+			and comorbi_29=0 
+		then comorbi_29=1;
+	*Depression;
+	if (substr(dx,1,4)='3004' or
+		substr(dx,1,5)='30112' or
+		substr(dx,1,4)='3090' or
+		substr(dx,1,4)='3091' or
+		substr(dx,1,3)='311')
+			and comorbi_30=0 
+		then comorbi_30=1;
+
+
+	*Dementia;
+	if (substr(dx,1,4) in ('3310','3311','3312','2900','2901',
+             '2902','2903','2912','2948','2949') or
+		substr(dx,1,5) in ('29410','29411','29040','29041','29042','29043')) 
+		and dementia=0 
+          then dementia=1;
+
+	*CAD coronary artery disease;
+	if (substr(dx,1,4) in ('4140','4142','4143','4148','4149') or 
+		substr(dx,1,3) in ('410','411','412','413') or
+		substr(dx,1,5) in ('V4581','V4582'))
+		and cad=0 
+          then cad=1;
+
+/* CAD list
+410.00-410.92
+411.0-411.89
+412
+413.0-413.9
+414.00-414.07
+414.2
+414.3
+414.8
+414.9
+V45.81
+V45.82 */
+
+/*Charlson */ 
+IF	    (substr(dx,1,5)='40301' or
+		substr(dx,1,5)='40311' or
+		substr(dx,1,5)='40391' or
+		substr(dx,1,5)='40402' or
+		substr(dx,1,5)='40403' or
+		substr(dx,1,5)='40412' or
+		substr(dx,1,5)='40413' or
+        substr(dx,1,5)='40492' or
+		substr(dx,1,5)='40493' or
+		substr(dx,1,3)='582' or
+		substr(dx,1,4)='5830' or
+        substr(dx,1,4)='5831' or
+        substr(dx,1,4)='5832' or
+        substr(dx,1,4)='5834' or
+        substr(dx,1,4)='5836' or
+        substr(dx,1,4)='5837' or
+        substr(dx,1,3)='585' or
+        substr(dx,1,3)='586' or
+        substr(dx,1,4)='5880' or
+        substr(dx,1,4)='V420' or
+        substr(dx,1,4)='V451' or
+        substr(dx,1,3)='V56') and charls=0
+then charls=1;
+
+/* CCW */
+IF (substr(dx,1,4)='1600' or
+substr(dx,1,4)='1601' or 
+substr(dx,1,4)='1602' or
+substr(dx,1,4)='1603' or
+substr(dx,1,4)='1604' or
+substr(dx,1,4)='1605' or
+substr(dx,1,4)='1606' or
+substr(dx,1,3)='954' or
+substr(dx,1,4)='1890' or
+substr(dx,1,4)='1899' or
+substr(dx,1,4)='2230' or
+substr(dx,1,5)='23691' or
+substr(dx,1,5)='24940' or
+substr(dx,1,5)='24941' or
+substr(dx,1,5)='25040' or
+substr(dx,1,5)='25041' or
+substr(dx,1,5)='25042' or
+substr(dx,1,5)='25043' or
+substr(dx,1,4)='2714' or
+substr(dx,1,4)='2741' or
+substr(dx,1,5)='27410' or 
+substr(dx,1,5)='28311' or
+substr(dx,1,5)='40301' or 
+substr(dx,1,5)='40311' or 
+substr(dx,1,5)='40391' or
+substr(dx,1,5)='40402' or
+substr(dx,1,5)='40403' or
+substr(dx,1,5)='40412' or
+substr(dx,1,5)='40413' or
+substr(dx,1,5)='40492' or
+substr(dx,1,5)='40493' or
+substr(dx,1,4)='4401' or
+substr(dx,1,4)='4421' or
+substr(dx,1,4)='5724' or
+substr(dx,1,4)='5800' or
+substr(dx,1,4)='5804' or
+substr(dx,1,5)='58081' or
+substr(dx,1,5)='58089' or
+substr(dx,1,4)='5809' or
+substr(dx,1,4)='5810' or
+substr(dx,1,4)='5811' or
+substr(dx,1,4)='5812' or
+substr(dx,1,4)='5813' or
+substr(dx,1,5)='58181' or
+substr(dx,1,5)='58189' or
+substr(dx,1,4)='5819' or
+substr(dx,1,4)='5820' or 
+substr(dx,1,4)='5821' or
+substr(dx,1,4)='5822' or
+substr(dx,1,4)='5824' or
+substr(dx,1,5)='58281' or
+substr(dx,1,5)='58289' or
+substr(dx,1,4)='5829' or
+substr(dx,1,4)='5830' or
+substr(dx,1,4)='5831' or
+substr(dx,1,4)='5832' or
+substr(dx,1,4)='5834' or
+substr(dx,1,4)='5836' or
+substr(dx,1,4)='5837' or
+substr(dx,1,5)='58381' or
+substr(dx,1,5)='58389' or
+substr(dx,1,4)='5839' or
+substr(dx,1,4)='5845' or
+substr(dx,1,4)='5846' or
+substr(dx,1,4)='5847' or
+substr(dx,1,4)='5848' or
+substr(dx,1,4)='5849' or
+substr(dx,1,3)='585' or
+substr(dx,1,4)='5851' or
+substr(dx,1,4)='5852' or
+substr(dx,1,4)='5853' or
+substr(dx,1,4)='5854' or
+substr(dx,1,4)='5855' or
+substr(dx,1,4)='5856' or
+substr(dx,1,4)='5859' or
+substr(dx,1,3)='586' or
+substr(dx,1,3)='587' or
+substr(dx,1,4)='5880' or 
+substr(dx,1,4)='5881' or
+substr(dx,1,5)='58881' or
+substr(dx,1,5)='58889' or
+substr(dx,1,4)='5889' or
+substr(dx,1,3)='591' or
+substr(dx,1,5)='75312' or
+substr(dx,1,5)='75313' or
+substr(dx,1,5)='75314' or
+substr(dx,1,5)='75315' or
+substr(dx,1,5)='75316' or
+substr(dx,1,5)='75317' or
+substr(dx,1,5)='75319' or
+substr(dx,1,5)='75320' or
+substr(dx,1,5)='75321' or
+substr(dx,1,5)='75322' or
+substr(dx,1,5)='75323' or
+substr(dx,1,5)='75329' or
+substr(dx,1,4)='7944') and dw_ckd=0
+then dw_ckd= 1;
+
+end;
+run;
+
+
+/*check sums of each comorbidity for each id*/
+proc sql;
+create table com_test1_&range2 as
+select distinct BID_hrs_21, id, index_date,
+sum(comorbi_1) as com_1,
+sum(comorbi_2) as com_2,
+sum(comorbi_3) as com_3,
+sum(comorbi_4) as com_4,
+sum(comorbi_5) as com_5,
+sum(comorbi_6) as com_6,
+sum(comorbi_7) as com_7,
+sum(comorbi_8) as com_8,
+sum(comorbi_9) as com_9,
+sum(comorbi_10) as com_10,
+sum(comorbi_11) as com_11,
+sum(comorbi_12) as com_12,
+sum(comorbi_13) as com_13,
+sum(comorbi_14) as com_14,
+sum(comorbi_15) as com_15,
+sum(comorbi_16) as com_16,
+sum(comorbi_17) as com_17,
+sum(comorbi_18) as com_18,
+sum(comorbi_19) as com_19,
+sum(comorbi_20) as com_20,
+sum(comorbi_21) as com_21,
+sum(comorbi_22) as com_22,
+sum(comorbi_23) as com_23,
+sum(comorbi_24) as com_24,
+sum(comorbi_25) as com_25,
+sum(comorbi_26) as com_26,
+sum(comorbi_27) as com_27,
+sum(comorbi_28) as com_28,
+sum(comorbi_29) as com_29,
+sum(comorbi_30) as com_30,
+sum(dementia) as com_31,
+sum(cad) as com_32,
+sum(charls) as com_33,
+sum(dw_ckd) as com_34
+from dx_33_comor_&range2
+group by BID_hrs_21, id, index_date;
+quit;
+
+/*define comorbidities as binary indicators*/
+data comorbidity_&range2.(keep=BID_hrs_21 id index_date
+	comorb_1-comorb_34 comorb_all);
+set com_test1_&range2;
+array list_com com_1-com_30 com_31 com_32 com_33 com_34;
+array list_com_bin comorb_1-comorb_30 comorb_31 comorb_32 comorb_33 comorb_34;
+
+/*note this defines comorbidity 31 = dementia & 32 = cad*/
+do over list_com;
+  list_com_bin=0;
+
+  if list_com>0 then do;
+    list_com_bin=1;
+   end;
+
+end;
+
+/*define aggregate comorbidity as sum of 30 individual indicator vars.
+note: CAD not included in this aggregate score*/
+comorb_all=comorb_1+comorb_2+comorb_3+comorb_4+comorb_5+comorb_6+
+comorb_7+comorb_8+comorb_9+comorb_10+comorb_11+comorb_12+comorb_13+
+comorb_14+comorb_15+comorb_16+comorb_17+comorb_18+comorb_19+comorb_20+
+comorb_21+comorb_22+comorb_23+comorb_24+comorb_25+comorb_26+comorb_27+
+comorb_28+comorb_29+comorb_30+comorb_31;
+run;
+
+
+proc sort data=comorbidity_&range2. nodupkey;
+by BID_hrs_21 id index_date;
+run;
+
+/*merges with list of s's with xwalk id, dod & ffs mc 6m before R's dialysis*/
+proc sql;
+create table ids_w_xwalk_&range2._1(drop=BID_hrs_212 id2) as
+select a.bid_hrs_21,a.id,a.index_date,b.* 
+from proj_int.index a 
+left join
+comorbidity_&range2.(rename=(BID_hrs_21=BID_hrs_212) rename=(id=id2))  b
+on trim(left(a.bid_hrs_21))=trim(left(b.BID_hrs_212)) and
+	a.id=b.id2 and a.index_date=b.index_date;
+quit;
+
+/*if comorbidity=null, set to zero for this group with the ffs mc 6m*/
+data elix_&range1._&range2;
+set ids_w_xwalk_&range2._1;
+array list comorb_1-comorb_34 comorb_all;
+do over list;
+	if list=. then list=0;
+	end;
+
+label comorb_1 ="Congestive Heart Failure, Charlson";
+label comorb_2 ="Myocardial infarction, Charlson";
+label comorb_3 ="Peripheral Vascular Disease, Charlson";
+label comorb_4 ="Cerebrovascular disease, Charlson";
+label comorb_5 ="Dementia, Charlson";
+label comorb_6 ="Chronic Pulmonary Disease, Charlson";
+label comorb_7 ="Rheumatic disease, Charlson";
+label comorb_8 ="Peptic ulcer disease, Charlson";
+label comorb_9 ="Mild liver disease, Charlson";
+label comorb_10 ="Diabetes, uncomplicated, Charlson";
+label comorb_11 ="Diabetes, complicated, Charlson";
+label comorb_12 ="Hemiplegia or paraplegia, Charlson";
+label comorb_13 ="Renal disease, Charlson";
+label comorb_14 ="Any malignancy except neoplasm of skin, Charlson";
+label comorb_15 ="Mod or severe liver disease, Charlson";
+label comorb_16 ="Metastatic solid tumor, Charlson";
+label comorb_17 ="AIDS/HIV, Charlson";
+label comorb_18 ="Metastatic Cancer";
+label comorb_19 ="Solid Tumor without Metastisis";
+label comorb_20 ="Rheumatoid Arthritis/Collagen Vascular Diseases";
+label comorb_21 ="Coagulopathy";
+label comorb_22 ="Obesity";
+label comorb_23 ="Weight Loss";
+label comorb_24 ="Fluid and Electrolyte Disorders";
+label comorb_25 ="Blood Loss Anemia";
+label comorb_26 ="Deficiency Anemias";
+label comorb_27 ="Alcohol Abuse";
+label comorb_28 ="Drug Abuse";
+label comorb_29 ="Psychoses";
+label comorb_30 ="Depression";
+label comorb_31 ="Dementia";
+label comorb_32 ="Coronary Artery Disease";
+label comorb_33 ="Charlson Renal Disease";
+label comorb_34 ="DW Chronic Kidney Disease";
+
+run;
+
+data test;
+set elix_&range1._&range2;
+run;
+
+/*calls rename macro*/
+%rename(WORK,TEST,&range1._&range2);
+
+/*rename r&s BID variables*/
+data elix_&range1._&range2._2
+	(rename =(id_&range1._&range2=id)
+	rename =(bid_hrs_21_&range1._&range2=bid_hrs_21)
+	rename = (index_date_&range1._&range2=index_date));
+set test;
+keep bid_hrs_21_&range1._&range2 id_&range1._&range2 index_date_&range1._&range2 comorb:;
+run;
+
+proc sort data=elix_&range1._&range2._2 nodup;
+by bid_hrs_21 id index_date;
+run;
+
+%mend;
+
+/*run macro to get elixhauser comorbidities 6, 12, 24m pre and post dialysis
+resulting datasets are spo_int.elix_0d_x#m_2
+x = n=before, p=after dialysis
+# = 6, 12, or 24 for time window (months) 
+have id and bid_hrs_21 to merge back to dataset*/
+*%elixhauser(range1=0d, range2=n6m);
+%elixhauser(range1=0d, range2=n12m);
+*%elixhauser(range1=0d, range2=n24m);
+
+*%elixhauser(range1=0d, range2=p6m);
+%elixhauser(range1=0d, range2=p12m);
+*%elixhauser(range1=0d, range2=p24m);
+
+
+/*combine the 6 sets of variables into a single dataset
+then merge this into main hrs spouse dataset*/
+data proj_int.elix_all;
+merge /*elix_0d_n6m_2*/ elix_0d_n12m_2 /* elix_0d_n24m_2 */
+/*elix_0d_p6m_2*/ elix_0d_p12m_2; /* elix_0d_p24m_2; */
+by bid_hrs_21 id index_date;
+run;
+
+
+
+H="Creating Spending variables"
+/*get spouse medicare costs by claim type and total, adjusted for inflation
+to 2012$, monthly, 24m before and after R's dialysis
+
+begins with claims lists from "Get S MC claims lists..." section
+
+final dataset is proj_int.hrs_elix_cc_pay*/
+
+
+
+%macro mp_index_dt(source=);
+*get claims that overlap with date of dialysis;
+
+data &source._meet_admit;
+set proj_int.&source._meet_24m;
+if index_date=admit_date and admit_date~=disch_date;
+admit_on_index_date=1;
+run;
+
+
+data &source._meet_both;
+set proj_int.&source._meet_24m;
+if index_date=disch_date and admit_date=disch_date;
+admit_on_index_date=1;
+disch_on_index_date=1;
+run;
+
+
+
+
+data &source._cost;
+set &source._meet_admit &source._meet_both;
+array list pmt_amt passthru;
+do over list;
+if list=. then list=0;
+end;
+
+if year(admit_date)>=2012 then rate=1;
+if year(admit_date)=2011 then rate=1.03902;
+if year(admit_date)=2010 then rate=1.07086;
+if year(admit_date)=2009 then rate=1.10835;
+if year(admit_date)=2008 then rate=1.1439;
+if year(admit_date)=2007 then rate=1.1923;
+if year(admit_date)=2006 then rate=1.25586;
+if year(admit_date)=2005 then rate=1.30783;
+if year(admit_date)=2004 then rate=1.37027;
+if year(admit_date)=2003 then rate=1.43908;
+if year(admit_date)=2002 then rate=1.50337;
+if year(admit_date)=2001 then rate=1.57963;
+if year(admit_date)=2000 then rate=1.65519;
+if year(admit_date)<=1999 then rate=1.72641;
+
+
+&source._paid_by_mc=rate*(pmt_amt+passthru);
+&source._paid_by_mc_index_dt=(1/(disch_date-admit_date+1))*&source._paid_by_mc;
+run;
+
+proc sql;
+create table &source._pay as select distinct bid_hrs_21,id,index_date,
+sum(&source._paid_by_mc_index_dt) as &source._paid_by_mc_index_dt,
+sum(admit_on_index_date) as &source._admit_dod, sum(disch_on_index_date) as &source._disch_dod
+from &source._cost group by bid_hrs_21,id,index_date;
+quit;
+
+%mend;
+%mp_index_dt(source=ip);
+%mp_index_dt(source=snf);
+
+
+%macro claims_index_dt(source=);
+*get claims that start with date of dialysis;
+
+data &source._meet_admit;
+set proj_int.&source._meet_24m;
+if index_date=admit_date; 
+run;
+
+
+
+data &source._cost;
+set &source._meet_admit;
+array list pmt_amt passthru;
+do over list;
+if list=. then list=0;
+end;
+
+if year(admit_date)>=2012 then rate=1;
+if year(admit_date)=2011 then rate=1.03902;
+if year(admit_date)=2010 then rate=1.07086;
+if year(admit_date)=2009 then rate=1.10835;
+if year(admit_date)=2008 then rate=1.1439;
+if year(admit_date)=2007 then rate=1.1923;
+if year(admit_date)=2006 then rate=1.25586;
+if year(admit_date)=2005 then rate=1.30783;
+if year(admit_date)=2004 then rate=1.37027;
+if year(admit_date)=2003 then rate=1.43908;
+if year(admit_date)=2002 then rate=1.50337;
+if year(admit_date)=2001 then rate=1.57963;
+if year(admit_date)=2000 then rate=1.65519;
+if year(admit_date)<=1999 then rate=1.72641;
+
+
+&source._paid_by_mc_index_dt=rate*(pmt_amt);
+run;
+
+proc sql;
+create table &source._pay as select distinct bid_hrs_21,id,index_date,
+sum(&source._paid_by_mc_index_dt) as &source._paid_by_mc_index_dt
+from &source._cost group by bid_hrs_21,id,index_date;
+quit;
+
+%mend;
+
+%claims_index_dt(source=op);
+%claims_index_dt(source=pb);
+%claims_index_dt(source=hh);
+%claims_index_dt(source=hs);
+%claims_index_dt(source=dm);
+
+data mc_costs_doda;
+merge ip_pay snf_pay op_pay pb_pay hh_pay hs_pay dm_pay ;
+bid_hrs_21=bid_hrs_21;
+by bid_hrs_21 id index_date;
+run;
+
+
+data mc_costs_dod;
+set mc_costs_doda;
+tot_paid_by_mc_index_dt=ip_paid_by_mc_index_dt+snf_paid_by_mc_index_dt+op_paid_by_mc_index_dt +
+pb_paid_by_mc_index_dt+hs_paid_by_mc_index_dt+dm_paid_by_mc_index_dt;
+run;
+
+
+%macro mp_claims(days_start=,days_bef_index=,source=,name=);
+
+*first get claims lists for the specific claims type, snf or ip;
+data &source._meet;
+set proj_int.&source._meet_24m;
+win_start_dt=index_date-&days_bef_index;
+win_stop_dt=index_date-&days_start;
+format admit_date disch_date win_start_dt win_stop_dt date9.;
+run;
+
+/*identify claims where entire claim is within the x months prior to dialysis*/
+data &source._meet_1;
+set &source._meet;
+if win_start_dt<=admit_date<win_stop_dt and
+	win_start_dt<=disch_date<win_stop_dt;
+run;
+
+/*identify claims where start before window but end during window*/
+data &source._meet_2;
+set &source._meet;
+if win_start_dt>admit_date and
+	win_start_dt<=disch_date<win_stop_dt;
+run;
+
+/*identify fraction of claims to be attributed to period before dialysis
+by just using the fraction of time that was included in the time window*/
+data &source._meet_3;
+set &source._meet_2;
+pct_xm=(disch_date-win_start_dt)/(disch_date-admit_date+1);
+array list pmt_amt passthru;
+do over list;
+if list=. then list=0;
+/*scale the partial claims by the time within the x month period*/
+list=list*pct_xm;
+end;
+
+run;
+
+/*claims where start within window but end after R's dialysis*/
+data &source._meet_4;
+set &source._meet;
+if win_start_dt<=admit_date<win_stop_dt and
+	disch_date>=win_stop_dt;
+run;
+
+/*again fraction to attribute to window*/
+data &source._meet_5;
+set &source._meet_4;
+pct_xm=(win_stop_dt-admit_date+1)/(disch_date-admit_date+1);
+array list pmt_amt passthru;
+do over list;
+if list=. then list=0;
+/*scale the partial claims by the time within the x month period*/
+list=list*pct_xm;
+end;
+run;
+
+/*claims where start before and end after window*/
+data &source._meet_6;
+set &source._meet;
+if win_start_dt>admit_date and
+	disch_date>=win_stop_dt;
+run;
+
+/*again fraction to attribute to window*/
+data &source._meet_7;
+set &source._meet_6;
+pct_xm=(win_stop_dt-win_start_dt)/(disch_date-admit_date+1);
+array list pmt_amt passthru;
+do over list;
+if list=. then list=0;
+/*scale the partial claims by the time within the x month period*/
+list=list*pct_xm;
+end;
+run;
+
+/*merge claims into single dataset, adjust for inflation
+Uses CPI for Medical Services from BLS website, accessed 5/4/2015*/
+data &source._cost;
+set &source._meet_1 &source._meet_3 &source._meet_5 &source._meet_7;
+array list pmt_amt passthru;
+do over list;
+if list=. then list=0;
+end;
+
+if year(admit_date)>=2012 then rate=1;
+if year(admit_date)=2011 then rate=1.03902;
+if year(admit_date)=2010 then rate=1.07086;
+if year(admit_date)=2009 then rate=1.10835;
+if year(admit_date)=2008 then rate=1.1439;
+if year(admit_date)=2007 then rate=1.1923;
+if year(admit_date)=2006 then rate=1.25586;
+if year(admit_date)=2005 then rate=1.30783;
+if year(admit_date)=2004 then rate=1.37027;
+if year(admit_date)=2003 then rate=1.43908;
+if year(admit_date)=2002 then rate=1.50337;
+if year(admit_date)=2001 then rate=1.57963;
+if year(admit_date)=2000 then rate=1.65519;
+if year(admit_date)<=1999 then rate=1.72641;
+
+
+&source._paid_by_mc=rate*(pmt_amt+passthru);
+run;
+
+*calculates total of mc charges for the claim type by hrs bid;
+proc sql;
+create table &source._pay as select distinct bid_hrs_21,id,index_date,
+sum(&source._paid_by_mc) as &source._paid_by_mc 
+from &source._cost group by bid_hrs_21,id,index_date;
+quit;
+
+/*merge into a full bid list of those s's with ffs mc 6m or more*/
+proc sql;
+create table &source._&name. as select 
+a.bid_hrs_21,a.id,a.index_date,coalesce(b.&source._paid_by_mc,0) as &source._paid_by_mc_&name.
+from proj_int.index a
+left join
+ &source._pay b
+ on trim(left(a.bid_hrs_21))=trim(left(b.bid_hrs_21)) and a.id=b.id and a.index_date=b.index_date;
+ quit;
+
+proc sort data=&source._&name.; by bid_hrs_21 id index_date; run;
+
+%mend;
+
+
+
+%macro claims(days_start=,days_bef_index=,source=,name=);
+
+*first get claims lists for the specific claims type, not snf or ip;
+data &source._meet;
+set proj_int.&source._meet_24m;
+win_start_dt=index_date-&days_bef_index;
+win_stop_dt=index_date-&days_start;
+format admit_date disch_date win_start_dt win_stop_dt date9.;
+run;
+
+/*identify claims where start of claim is within the x months prior to dialysis*/
+data proj_int.&source._meet&name.;
+set &source._meet;
+if win_start_dt<=admit_date<win_stop_dt;
+run;
+
+
+/*adjust for inflation
+Uses CPI for Medical Services from BLS website, accessed 5/4/2015*/
+data &source._cost;
+set proj_int.&source._meet&name.;
+array list pmt_amt passthru;
+do over list;
+if list=. then list=0;
+end;
+
+if year(admit_date)>=2012 then rate=1;
+if year(admit_date)=2011 then rate=1.03902;
+if year(admit_date)=2010 then rate=1.07086;
+if year(admit_date)=2009 then rate=1.10835;
+if year(admit_date)=2008 then rate=1.1439;
+if year(admit_date)=2007 then rate=1.1923;
+if year(admit_date)=2006 then rate=1.25586;
+if year(admit_date)=2005 then rate=1.30783;
+if year(admit_date)=2004 then rate=1.37027;
+if year(admit_date)=2003 then rate=1.43908;
+if year(admit_date)=2002 then rate=1.50337;
+if year(admit_date)=2001 then rate=1.57963;
+if year(admit_date)=2000 then rate=1.65519;
+if year(admit_date)<=1999 then rate=1.72641;
+
+
+&source._paid_by_mc=rate*(pmt_amt);
+run;
+
+*calculates total of mc charges for the claim type by hrs bid;
+proc sql;
+create table &source._pay as select distinct bid_hrs_21,id,index_date,
+sum(&source._paid_by_mc) as &source._paid_by_mc 
+from &source._cost group by bid_hrs_21,id,index_date;
+quit;
+
+/*merge into a full bid list of those s's with ffs at dialysis*/
+proc sql;
+create table &source._&name. as select 
+a.bid_hrs_21,a.id,a.index_date,coalesce(b.&source._paid_by_mc,0) as &source._paid_by_mc_&name.
+from proj_int.index a
+left join
+ &source._pay b
+ on trim(left(a.bid_hrs_21))=trim(left(b.bid_hrs_21)) and a.id=b.id and a.index_date=b.index_date;
+ quit;
+
+proc sort data=&source._&name.; by bid_hrs_21 id index_date; run;
+
+%mend;
+
+
+
+
+/****************************************************************/
+/*all claims, time periods after R's dialysis********************/
+/****************************************************************/
+%macro mp_claims_p(days_start=,days_aft_index=,source=,name=);
+
+*first get claims lists for the specific claims type, snf or ip;
+data &source._meet;
+set proj_int.&source._meet_p24m;
+win_end_dt=index_date+&days_aft_index;
+win_start_dt=index_date+&days_start;
+format admit_date disch_date win_end_dt win_start_dt date9.;
+run;
+
+/*identify claims where entire claim is within the x months after dialysis*/
+data &source._meet_1;
+set &source._meet;
+if win_start_dt<admit_date<=win_end_dt and
+	win_start_dt<disch_date<=win_end_dt;
+run;
+
+/*identify claims where start before window but end during window*/
+data &source._meet_2;
+set &source._meet;
+if win_start_dt>=admit_date and
+	win_start_dt<disch_date<=win_end_dt;
+run;
+
+/*identify fraction of claims to be attributed to period after dialysis
+by just using the fraction of time that was included in the time window*/
+data &source._meet_3;
+set &source._meet_2;
+pct_xm=(disch_date-win_start_dt)/(disch_date-admit_date+1);
+array list pmt_amt passthru;
+do over list;
+if list=. then list=0;
+/*scale the partial claims by the time within the x month period*/
+list=list*pct_xm;
+end;
+run;
+
+/*claims where start within window but end after window*/
+data &source._meet_4;
+set &source._meet;
+if win_start_dt<admit_date<=win_end_dt and
+	disch_date>win_end_dt ;
+run;
+
+/*again fraction to attribute to window*/
+data &source._meet_5;
+set &source._meet_4;
+pct_xm=(win_end_dt-admit_date+1)/(disch_date-admit_date+1);
+array list pmt_amt passthru;
+do over list;
+if list=. then list=0;
+/*scale the partial claims by the time within the x month period*/
+list=list*pct_xm;
+end;
+run;
+
+/*claims where start before window but end after window*/
+data &source._meet_6;
+set &source._meet;
+if win_start_dt>=admit_date and
+	disch_date>win_end_dt ;
+run;
+
+/*again fraction to attribute to window*/
+data &source._meet_7;
+set &source._meet_6;
+pct_xm=(win_end_dt -win_start_dt)/(disch_date-admit_date+1);
+array list pmt_amt passthru;
+do over list;
+if list=. then list=0;
+/*scale the partial claims by the time within the x month period*/
+list=list*pct_xm;
+end;
+run;
+/*merge claims into single dataset, adjust for inflation*/
+data &source._cost;
+set &source._meet_1 &source._meet_3 &source._meet_5 &source._meet_7;
+array list pmt_amt passthru;
+do over list;
+if list=. then list=0;
+end;
+
+if year(admit_date)>=2012 then rate=1;
+if year(admit_date)=2011 then rate=1.03902;
+if year(admit_date)=2010 then rate=1.07086;
+if year(admit_date)=2009 then rate=1.10835;
+if year(admit_date)=2008 then rate=1.1439;
+if year(admit_date)=2007 then rate=1.1923;
+if year(admit_date)=2006 then rate=1.25586;
+if year(admit_date)=2005 then rate=1.30783;
+if year(admit_date)=2004 then rate=1.37027;
+if year(admit_date)=2003 then rate=1.43908;
+if year(admit_date)=2002 then rate=1.50337;
+if year(admit_date)=2001 then rate=1.57963;
+if year(admit_date)=2000 then rate=1.65519;
+if year(admit_date)<=1999 then rate=1.72641;
+
+&source._paid_by_mc=rate*(pmt_amt+passthru);
+run;
+
+*calculates total of mc charges for the claim type by hrs bid;
+proc sql;
+create table &source._pay as select distinct bid_hrs_21,id,index_date,
+sum(&source._paid_by_mc) as &source._paid_by_mc 
+from &source._cost group by bid_hrs_21,id,index_date;
+quit;
+
+/*merge into a full bid list of those s's with ffs mc at dialysis*/
+proc sql;
+create table &source._&name. as select 
+a.bid_hrs_21,a.id,a.index_date,coalesce(b.&source._paid_by_mc,0) as &source._paid_by_mc_&name.
+from proj_int.index a
+left join
+ &source._pay b
+ on trim(left(a.bid_hrs_21))=trim(left(b.bid_hrs_21)) and a.id=b.id and a.index_date=b.index_date;
+ quit;
+
+proc sort data=&source._&name.; by bid_hrs_21 id index_date; run;
+
+%mend;
+
+
+
+
+/****************************************************************/
+/*all claims, time periods after R's dialysis********************/
+/****************************************************************/
+%macro claims_p(days_start=,days_aft_index=,source=,name=);
+
+*first get claims lists for the specific claims type, snf or ip;
+data &source._meet;
+set proj_int.&source._meet_p24m;
+win_end_dt=index_date+&days_aft_index;
+win_start_dt=index_date+&days_start;
+format admit_date disch_date win_end_dt win_start_dt date9.;
+run;
+
+/*identify claims where entire claim is within the x months after dialysis*/
+data proj_int.&source._meet&name.;
+set &source._meet;
+if win_start_dt<admit_date<=win_end_dt;
+run;
+
+
+/*adjust for inflation*/
+data &source._cost;
+set proj_int.&source._meet&name.;
+array list pmt_amt;
+do over list;
+if list=. then list=0;
+end;
+
+if year(admit_date)>=2012 then rate=1;
+if year(admit_date)=2011 then rate=1.03902;
+if year(admit_date)=2010 then rate=1.07086;
+if year(admit_date)=2009 then rate=1.10835;
+if year(admit_date)=2008 then rate=1.1439;
+if year(admit_date)=2007 then rate=1.1923;
+if year(admit_date)=2006 then rate=1.25586;
+if year(admit_date)=2005 then rate=1.30783;
+if year(admit_date)=2004 then rate=1.37027;
+if year(admit_date)=2003 then rate=1.43908;
+if year(admit_date)=2002 then rate=1.50337;
+if year(admit_date)=2001 then rate=1.57963;
+if year(admit_date)=2000 then rate=1.65519;
+if year(admit_date)<=1999 then rate=1.72641;
+
+&source._paid_by_mc=rate*(pmt_amt);
+run;
+
+*calculates total of mc charges for the claim type by hrs bid;
+proc sql;
+create table &source._pay as select distinct bid_hrs_21,id,index_date,
+sum(&source._paid_by_mc) as &source._paid_by_mc 
+from &source._cost group by bid_hrs_21,id,index_date;
+quit;
+
+/*merge into a full bid list of those s's with ffs mc at dialysis*/
+proc sql;
+create table &source._&name. as select 
+a.bid_hrs_21,a.id,a.index_date,coalesce(b.&source._paid_by_mc,0) as &source._paid_by_mc_&name.
+from proj_int.index a
+left join
+ &source._pay b
+ on trim(left(a.bid_hrs_21))=trim(left(b.bid_hrs_21)) and a.id=b.id and a.index_date=b.index_date;
+ quit;
+
+proc sort data=&source._&name.; by bid_hrs_21 id index_date; run;
+
+%mend;
+
+%macro days_nesting();
+
+%do i=1 %to 24 ;
+
+
+%mp_claims(days_start=floor((&i.-1)*30.417),days_bef_index=floor(&i.*30.417), source=snf,  name=m&i.);
+%mp_claims(days_start=floor((&i.-1)*30.417),days_bef_index=floor(&i.*30.417), source=ip,  name=m&i.);
+%claims(days_start=floor((&i.-1)*30.417),days_bef_index=floor(&i.*30.417), source=pb,  name=m&i.);
+%claims(days_start=floor((&i.-1)*30.417),days_bef_index=floor(&i.*30.417), source=op,  name=m&i.);
+%claims(days_start=floor((&i.-1)*30.417),days_bef_index=floor(&i.*30.417), source=hh,  name=m&i.);
+%claims(days_start=floor((&i.-1)*30.417),days_bef_index=floor(&i.*30.417), source=hs,  name=m&i.);
+%claims(days_start=floor((&i.-1)*30.417),days_bef_index=floor(&i.*30.417), source=dm,  name=m&i.);
+%mp_claims_p(days_start=floor((&i.-1)*30.417),days_aft_index=floor(&i.*30.417), source=snf,  name=m&i.p);
+%mp_claims_p(days_start=floor((&i.-1)*30.417),days_aft_index=floor(&i.*30.417), source=ip,  name=m&i.p);
+%claims_p(days_start=floor((&i.-1)*30.417),days_aft_index=floor(&i.*30.417), source=op,  name=m&i.p);
+%claims_p(days_start=floor((&i.-1)*30.417),days_aft_index=floor(&i.*30.417), source=pb,  name=m&i.p);
+%claims_p(days_start=floor((&i.-1)*30.417),days_aft_index=floor(&i.*30.417), source=hh,  name=m&i.p);
+%claims_p(days_start=floor((&i.-1)*30.417),days_aft_index=floor(&i.*30.417), source=hs,  name=m&i.p);
+%claims_p(days_start=floor((&i.-1)*30.417),days_aft_index=floor(&i.*30.417), source=dm,  name=m&i.p);
+
+
+%end;
+%mend;
+
+%days_nesting();
+
+
+
+
+%macro merge(l=,source=,time=,p=);
+data &source._&time._m1;
+set &source._m1&p.;
+run;
+
+%do i=2 %to 24 ;
+%let l = %eval(&i.-1) ;
+
+data &source._&time._m&i.;
+merge &source._&time._m&l. &source._m&i.&p.;
+run;
+%end;
+
+data &source._&time.;
+set &source._&time._m24;
+run;
+%mend;
+
+%merge(source=ip,time=bef,p=);
+%merge(source=ip,time=aft,p=p);
+%merge(source=snf,time=bef,p=);
+%merge(source=snf,time=aft,p=p);
+%merge(source=op,time=bef,p=);
+%merge(source=op,time=aft,p=p);
+%merge(source=pb,time=bef,p=);
+%merge(source=pb,time=aft,p=p);
+%merge(source=hh,time=bef,p=);
+%merge(source=hh,time=aft,p=p);
+%merge(source=hs,time=bef,p=);
+%merge(source=hs,time=aft,p=p);
+%merge(source=dm,time=bef,p=);
+%merge(source=dm,time=aft,p=p);
+
+/*now merge into single dataset of MC costs and get totals for each time window*/
+data mc_costs_all;
+merge ip_bef snf_bef op_bef pb_bef hh_bef hs_bef dm_bef 
+ip_aft snf_aft op_aft pb_aft hh_aft hs_aft dm_aft;
+by bid_hrs_21 id index_date;
+run;
+
+%macro total();
+
+data mc_costs_all2;
+set mc_costs_all;
+%do i=1 %to 24;
+tot_paid_by_mc_m&i.=ip_paid_by_mc_m&i. + snf_paid_by_mc_m&i. + op_paid_by_mc_m&i. + 
+pb_paid_by_mc_m&i. + hh_paid_by_mc_m&i. + hs_paid_by_mc_m&i. + dm_paid_by_mc_m&i.;
+tot_paid_by_mc_m&i.p=ip_paid_by_mc_m&i.p + snf_paid_by_mc_m&i.p + op_paid_by_mc_m&i.p + 
+pb_paid_by_mc_m&i.p + hh_paid_by_mc_m&i.p + hs_paid_by_mc_m&i.p + dm_paid_by_mc_m&i.p;
+%end;
+run;
+%mend;
+
+%total();
+
+data mc_costs_all3;
+merge mc_costs_all2 mc_costs_dod;
+by  bid_hrs_21 id index_date;
+run;
+
+/*save permanent dataset*/
+data proj_int.mc_costs_monthly;
+set mc_costs_all3;
+run;
+
+
+
+H="Creating 1yr outcomes"
+
+
+
+
+/*additional outcome variables
+
+Spouse - monthly pre and post R's death:
+Hospital # visits
+Hospital nights
+# ED visits
+# OP visits*/
+
+
+/*get spouse medicare costs by claim type and total, adjusted for inflation
+to 2012$, monthly, 24m before and after R's death
+
+begins with claims lists from "Get S MC claims lists..." section
+
+final dataset is proj_int.hrs_elix_cc_pay*/
+
+proc sort data=proj_int.index out=index1 nodupkey;
+by bid_hrs_21 index_date;
+run;
+
+
+
+/*****************************************************************************/
+/*get admissions and ip ed visits from ip claims monthly pre R's death*/
+/*****************************************************************************/
+
+
+
+
+%macro pre_admissions(days_start=,days_bef_index=,suffix=,su=);
+
+/*pull list of ip claims from all medpar claims x days pre-death*/
+data ip_meet_&suffix._1a;
+set proj_int.mp_meet_24m(where=(trim(left(SSLSSNF))~="N"));
+win_start_dt=index_date-&days_bef_index;
+win_stop_dt=index_date-&days_start;
+format admit_date disch_date win_start_dt win_stop_dt date9.;
+run;
+
+data ip_meet_&suffix._1;
+set ip_meet_&suffix._1a;
+if win_start_dt<=admit_date<=win_stop_dt or 
+win_start_dt<=disch_date<=win_stop_dt;
+run;
+
+data ip_&suffix._2;
+set ip_meet_&suffix._1;
+if icarecnt=. then icarecnt=0; /*medpar intensive care day count*/
+if CRNRYDAY=. then CRNRYDAY=0; /*medpar coronary day count*/
+icu_days=icarecnt+CRNRYDAY;
+
+
+/*truncate stays where the admit is before x days pre- R's death
+or discharge is after R's death so can get accurate LOS*/
+admit_date2=admit_date;
+disch_date2=disch_date;
+if admit_date<win_start_dt then do;
+	admit_date2=win_start_dt;
+	admit_trunc=1;
+	end;
+if win_stop_dt <disch_date then do;
+	disch_date2=win_stop_dt;
+	disch_trunc=1;	
+	end;
+adj_los=disch_date2-admit_date2;
+if disch_date-admit_date=0 then adj_los=1;
+run;
+
+/*determine if mental health dx is present*/
+data ip_&suffix._2a;
+set ip_&suffix._2;
+/*first, check if mental health is the admitting diagnosis*/
+adm_mental_ill=0;
+
+/*dx list from the AHRQ CCS Multi dx Tool, 2015, for Mental Illness Level 1 category*/
+	if (substr(ad_dgns,1,3)='290' or
+		substr(ad_dgns,1,3)='291' or
+		substr(ad_dgns,1,3)='292' or
+		substr(ad_dgns,1,3)='293' or
+		substr(ad_dgns,1,3)='294' or
+		substr(ad_dgns,1,3)='295' or
+		substr(ad_dgns,1,3)='296' or
+		substr(ad_dgns,1,3)='297' or
+		substr(ad_dgns,1,3)='298' or
+		substr(ad_dgns,1,3)='299' or
+		substr(ad_dgns,1,3)='300' or
+		substr(ad_dgns,1,3)='301' or
+		substr(ad_dgns,1,3)='302' or
+		substr(ad_dgns,1,3)='303' or
+		substr(ad_dgns,1,3)='304' or
+		substr(ad_dgns,1,3)='305' or
+		substr(ad_dgns,1,3)='306' or
+		substr(ad_dgns,1,3)='307' or
+		substr(ad_dgns,1,3)='308' or
+		substr(ad_dgns,1,3)='309' or
+		substr(ad_dgns,1,3)='310' or
+		substr(ad_dgns,1,3)='311' or
+		substr(ad_dgns,1,3)='312' or
+		substr(ad_dgns,1,3)='313' or
+		substr(ad_dgns,1,3)='314' or
+		substr(ad_dgns,1,3)='315' or
+		substr(ad_dgns,1,3)='316' or
+		substr(ad_dgns,1,3)='317' or
+		substr(ad_dgns,1,3)='318' or
+		substr(ad_dgns,1,3)='319' or
+		substr(ad_dgns,1,4)='3310' or
+		substr(ad_dgns,1,4)='3311' or
+		substr(ad_dgns,1,4)='3312' or
+		substr(ad_dgns,1,5)='33182' or
+		substr(ad_dgns,1,5)='33392' or
+		substr(ad_dgns,1,4)='3575' or
+		substr(ad_dgns,1,4)='4255' or
+		substr(ad_dgns,1,4)='5353' or
+		substr(ad_dgns,1,4)='5710' or
+		substr(ad_dgns,1,4)='5711' or
+		substr(ad_dgns,1,4)='5712' or
+		substr(ad_dgns,1,4)='5713' or
+		substr(ad_dgns,1,4)='6483' or
+		substr(ad_dgns,1,4)='6484' or
+		substr(ad_dgns,1,4)='6555' or
+		substr(ad_dgns,1,5)='76071' or
+		substr(ad_dgns,1,5)='76072' or
+		substr(ad_dgns,1,5)='76073' or
+		substr(ad_dgns,1,5)='76075' or
+		substr(ad_dgns,1,4)='7795' or
+		substr(ad_dgns,1,4)='7903' or
+		substr(ad_dgns,1,3)='797' or 
+		substr(ad_dgns,1,4)='9650' or
+		substr(ad_dgns,1,4)='9800' or
+		substr(ad_dgns,1,3)='E95' or
+		substr(ad_dgns,1,3)='V11' or
+		substr(ad_dgns,1,4)='V154' or
+		substr(ad_dgns,1,5)='V1582' or
+		substr(ad_dgns,1,3)='V40' or
+		substr(ad_dgns,1,5)='V6284' or
+		substr(ad_dgns,1,5)='V6285' or
+		substr(ad_dgns,1,5)='V6542' or
+		substr(ad_dgns,1,4)='V663' or
+		substr(ad_dgns,1,4)='V673' or
+		substr(ad_dgns,1,4)='V701' or
+		substr(ad_dgns,1,4)='V702' or
+		substr(ad_dgns,1,4)='V710' or
+		substr(ad_dgns,1,3)='V79') 
+		and adm_mental_ill=0 
+		then adm_mental_ill=1;*set to 1 if not flagged already;
+
+	   /*now check if mental illness is any of the diagnoses present for the claim*/
+any_dx_mental_ill=0;
+array dx DGNS_CD01-DGNS_CD25 ;
+do over dx;
+	if (substr(dx,1,3)='290' or
+		substr(dx,1,3)='291' or
+		substr(dx,1,3)='292' or
+		substr(dx,1,3)='293' or
+		substr(dx,1,3)='294' or
+		substr(dx,1,3)='295' or
+		substr(dx,1,3)='296' or
+		substr(dx,1,3)='297' or
+		substr(dx,1,3)='298' or
+		substr(dx,1,3)='299' or
+		substr(dx,1,3)='300' or
+		substr(dx,1,3)='301' or
+		substr(dx,1,3)='302' or
+		substr(dx,1,3)='303' or
+		substr(dx,1,3)='304' or
+		substr(dx,1,3)='305' or
+		substr(dx,1,3)='306' or
+		substr(dx,1,3)='307' or
+		substr(dx,1,3)='308' or
+		substr(dx,1,3)='309' or
+		substr(dx,1,3)='310' or
+		substr(dx,1,3)='311' or
+		substr(dx,1,3)='312' or
+		substr(dx,1,3)='313' or
+		substr(dx,1,3)='314' or
+		substr(dx,1,3)='315' or
+		substr(dx,1,3)='316' or
+		substr(dx,1,3)='317' or
+		substr(dx,1,3)='318' or
+		substr(dx,1,3)='319' or
+		substr(dx,1,4)='3310' or
+		substr(dx,1,4)='3311' or
+		substr(dx,1,4)='3312' or
+		substr(dx,1,5)='33182' or
+		substr(dx,1,5)='33392' or
+		substr(dx,1,4)='3575' or
+		substr(dx,1,4)='4255' or
+		substr(dx,1,4)='5353' or
+		substr(dx,1,4)='5710' or
+		substr(dx,1,4)='5711' or
+		substr(dx,1,4)='5712' or
+		substr(dx,1,4)='5713' or
+		substr(dx,1,4)='6483' or
+		substr(dx,1,4)='6484' or
+		substr(dx,1,4)='6555' or
+		substr(dx,1,5)='76071' or
+		substr(dx,1,5)='76072' or
+		substr(dx,1,5)='76073' or
+		substr(dx,1,5)='76075' or
+		substr(dx,1,4)='7795' or
+		substr(dx,1,4)='7903' or
+		substr(dx,1,3)='797' or 
+		substr(dx,1,4)='9650' or
+		substr(dx,1,4)='9800' or
+		substr(dx,1,3)='E95' or
+		substr(dx,1,3)='V11' or
+		substr(dx,1,4)='V154' or
+		substr(dx,1,5)='V1582' or
+		substr(dx,1,3)='V40' or
+		substr(dx,1,5)='V6284' or
+		substr(dx,1,5)='V6285' or
+		substr(dx,1,5)='V6542' or
+		substr(dx,1,4)='V663' or
+		substr(dx,1,4)='V673' or
+		substr(dx,1,4)='V701' or
+		substr(dx,1,4)='V702' or
+		substr(dx,1,4)='V710' or
+		substr(dx,1,3)='V79') 
+		and any_dx_mental_ill=0 
+		then any_dx_mental_ill=1;*set to 1 if not flagged already;
+	end;
+
+run;
+
+
+
+proc sort data=ip_&suffix._2a;
+by BID_hrs_21 id index_date;
+run;
+
+proc sql;
+create table ip_&suffix._3a as select distinct bid_hrs_21,id,index_date,
+/*total Hospital LOS*/
+sum(adj_los) as n_hospd_&suffix. label="total hospital days &suffix."
+from ip_&suffix._2a group by bid_hrs_21,id,index_date;
+quit;
+
+data ip_&suffix._2b;
+set ip_&suffix._2a;
+if win_start_dt<=admit_date<win_stop_dt;
+em_urgent_admit=0; /*Urgent , emergent admissions from admission type*/
+if type_adm in (1,2) then em_urgent_admit=1;
+em_admit=0;
+if type_adm=1 then em_admit=1;
+urgent_admit=0;
+if type_adm=2 then urgent_admit=1;
+elect_admit=0;
+if type_adm=3 then elect_admit=1;
+ind_ed_charge=0; /*ED charges as another indicator of ED use*/
+if ER_AMT>0 & ER_AMT~=. then ind_ed_charge=1;
+if ER_AMT=0 | ER_AMT=. then ind_ed_charge=0;
+run;
+
+proc sql;
+create table ip_&suffix._3b as select distinct bid_hrs_21,id,index_date,
+/*total ICU days*/
+sum(icu_days) as icu_days_&suffix. label="total icu days &suffix.",
+/*count of IP admissions, all types*/
+count(*) as n_ip_admit_&suffix. label="total n of hospital admit &suffix.",
+/*count of admissions with any ED charges*/
+count(case when ind_ed_charge=1 then ind_ed_charge else . end) as n_ED_ip_&suffix. 
+	label="total n of ED visits with subsequent admit &suffix.",
+/*count of admissions for mental illness, per admitting dx*/
+count(case when adm_mental_ill=1 then adm_mental_ill else . end) as n_mental_ill_adm_dx_ip_&suffix. 
+	label="total n of admissions admit dx=mental illness &suffix.",
+/*count of admissions for mental illness, per any dx code*/
+count(case when any_dx_mental_ill=1 then any_dx_mental_ill else . end) as n_mental_ill_any_dx_ip_&suffix. 
+	label="total n of admissions with any dx of mental illness &suffix."
+ from ip_&suffix._2b group by bid_hrs_21,id,index_date;
+quit;
+
+proc sql;
+create table ip_&suffix._3 as select *
+from ip_&suffix._3a a 
+left join ip_&suffix._3b b
+on a.bid_hrs_21=b.bid_hrs_21 and a.index_date=b.index_date;
+quit;
+
+data ip_&suffix.;
+set ip_&suffix._3;
+if icu_days_&suffix.>n_hospd_&suffix. then icu_days_&suffix.=n_hospd_&suffix.;
+run;
+
+
+
+
+proc sort data=ip_&suffix.; by bid_hrs_21 id index_date; run;
+
+%mend;
+
+/*****************************************************************************/
+/*get admissions and ip ed visits from ip claims monthly post R's death*/
+/*****************************************************************************/
+%macro post_admissions(days_start=,days_aft_index=,suffix=);
+
+/*pull list of ip claims from all medpar claims x days post-death*/
+data ip_meet_&suffix._1a;
+set proj_int.mp_meet_p24m(where=(trim(left(SSLSSNF))~="N"));
+win_stop_dt=index_date+&days_aft_index;
+win_start_dt=index_date+&days_start;
+format admit_date disch_date win_stop_dt win_start_dt date9.;
+run;
+
+data ip_meet_&suffix._1;
+set ip_meet_&suffix._1a;
+if win_start_dt<=admit_date<=win_stop_dt or 
+win_start_dt<=disch_date<=win_stop_dt;
+run;
+
+data ip_&suffix._2;
+set ip_meet_&suffix._1;
+if icarecnt=. then icarecnt=0; /*medpar intensive care day count*/
+if CRNRYDAY=. then CRNRYDAY=0; /*medpar coronary day count*/
+icu_days=icarecnt+CRNRYDAY;
+
+
+/*truncate stays where the admit is before R's death
+or discharge is after the x days after R's death so can get accurate LOS*/
+admit_date2=admit_date;
+disch_date2=disch_date;
+if admit_date<win_start_dt then do;
+	admit_date2=win_start_dt;
+	admit_trunc=1;
+	end;
+if win_stop_dt<disch_date then do;
+	disch_date2=win_stop_dt;
+	disch_trunc=1;	
+	end;
+adj_los=disch_date2-admit_date2;
+if disch_date-admit_date=0 then adj_los=1;
+run;
+
+/*determine if mental health dx is present in the IP claim*/
+data ip_&suffix._2a;
+set ip_&suffix._2;
+/*determine if mental health dx is admitting dx for hospitalization*/
+adm_mental_ill=0;
+
+/*dx list from the AHRQ CCS Multi dx Tool, 2015, for Mental Illness Level 1 category*/
+	if (substr(ad_dgns,1,3)='290' or
+		substr(ad_dgns,1,3)='291' or
+		substr(ad_dgns,1,3)='292' or
+		substr(ad_dgns,1,3)='293' or
+		substr(ad_dgns,1,3)='294' or
+		substr(ad_dgns,1,3)='295' or
+		substr(ad_dgns,1,3)='296' or
+		substr(ad_dgns,1,3)='297' or
+		substr(ad_dgns,1,3)='298' or
+		substr(ad_dgns,1,3)='299' or
+		substr(ad_dgns,1,3)='300' or
+		substr(ad_dgns,1,3)='301' or
+		substr(ad_dgns,1,3)='302' or
+		substr(ad_dgns,1,3)='303' or
+		substr(ad_dgns,1,3)='304' or
+		substr(ad_dgns,1,3)='305' or
+		substr(ad_dgns,1,3)='306' or
+		substr(ad_dgns,1,3)='307' or
+		substr(ad_dgns,1,3)='308' or
+		substr(ad_dgns,1,3)='309' or
+		substr(ad_dgns,1,3)='310' or
+		substr(ad_dgns,1,3)='311' or
+		substr(ad_dgns,1,3)='312' or
+		substr(ad_dgns,1,3)='313' or
+		substr(ad_dgns,1,3)='314' or
+		substr(ad_dgns,1,3)='315' or
+		substr(ad_dgns,1,3)='316' or
+		substr(ad_dgns,1,3)='317' or
+		substr(ad_dgns,1,3)='318' or
+		substr(ad_dgns,1,3)='319' or
+		substr(ad_dgns,1,4)='3310' or
+		substr(ad_dgns,1,4)='3311' or
+		substr(ad_dgns,1,4)='3312' or
+		substr(ad_dgns,1,5)='33182' or
+		substr(ad_dgns,1,5)='33392' or
+		substr(ad_dgns,1,4)='3575' or
+		substr(ad_dgns,1,4)='4255' or
+		substr(ad_dgns,1,4)='5353' or
+		substr(ad_dgns,1,4)='5710' or
+		substr(ad_dgns,1,4)='5711' or
+		substr(ad_dgns,1,4)='5712' or
+		substr(ad_dgns,1,4)='5713' or
+		substr(ad_dgns,1,4)='6483' or
+		substr(ad_dgns,1,4)='6484' or
+		substr(ad_dgns,1,4)='6555' or
+		substr(ad_dgns,1,5)='76071' or
+		substr(ad_dgns,1,5)='76072' or
+		substr(ad_dgns,1,5)='76073' or
+		substr(ad_dgns,1,5)='76075' or
+		substr(ad_dgns,1,4)='7795' or
+		substr(ad_dgns,1,4)='7903' or
+		substr(ad_dgns,1,3)='797' or 
+		substr(ad_dgns,1,4)='9650' or
+		substr(ad_dgns,1,4)='9800' or
+		substr(ad_dgns,1,3)='E95' or
+		substr(ad_dgns,1,3)='V11' or
+		substr(ad_dgns,1,4)='V154' or
+		substr(ad_dgns,1,5)='V1582' or
+		substr(ad_dgns,1,3)='V40' or
+		substr(ad_dgns,1,5)='V6284' or
+		substr(ad_dgns,1,5)='V6285' or
+		substr(ad_dgns,1,5)='V6542' or
+		substr(ad_dgns,1,4)='V663' or
+		substr(ad_dgns,1,4)='V673' or
+		substr(ad_dgns,1,4)='V701' or
+		substr(ad_dgns,1,4)='V702' or
+		substr(ad_dgns,1,4)='V710' or
+		substr(ad_dgns,1,3)='V79') 
+		and adm_mental_ill=0 
+		then adm_mental_ill=1;*set to 1 if not flagged already;
+
+	   /*now check if mental illness is any of the diagnoses present for the claim*/
+any_dx_mental_ill=0;
+array dx DGNS_CD01-DGNS_CD25 ;
+do over dx;
+	if (substr(dx,1,3)='290' or
+		substr(dx,1,3)='291' or
+		substr(dx,1,3)='292' or
+		substr(dx,1,3)='293' or
+		substr(dx,1,3)='294' or
+		substr(dx,1,3)='295' or
+		substr(dx,1,3)='296' or
+		substr(dx,1,3)='297' or
+		substr(dx,1,3)='298' or
+		substr(dx,1,3)='299' or
+		substr(dx,1,3)='300' or
+		substr(dx,1,3)='301' or
+		substr(dx,1,3)='302' or
+		substr(dx,1,3)='303' or
+		substr(dx,1,3)='304' or
+		substr(dx,1,3)='305' or
+		substr(dx,1,3)='306' or
+		substr(dx,1,3)='307' or
+		substr(dx,1,3)='308' or
+		substr(dx,1,3)='309' or
+		substr(dx,1,3)='310' or
+		substr(dx,1,3)='311' or
+		substr(dx,1,3)='312' or
+		substr(dx,1,3)='313' or
+		substr(dx,1,3)='314' or
+		substr(dx,1,3)='315' or
+		substr(dx,1,3)='316' or
+		substr(dx,1,3)='317' or
+		substr(dx,1,3)='318' or
+		substr(dx,1,3)='319' or
+		substr(dx,1,4)='3310' or
+		substr(dx,1,4)='3311' or
+		substr(dx,1,4)='3312' or
+		substr(dx,1,5)='33182' or
+		substr(dx,1,5)='33392' or
+		substr(dx,1,4)='3575' or
+		substr(dx,1,4)='4255' or
+		substr(dx,1,4)='5353' or
+		substr(dx,1,4)='5710' or
+		substr(dx,1,4)='5711' or
+		substr(dx,1,4)='5712' or
+		substr(dx,1,4)='5713' or
+		substr(dx,1,4)='6483' or
+		substr(dx,1,4)='6484' or
+		substr(dx,1,4)='6555' or
+		substr(dx,1,5)='76071' or
+		substr(dx,1,5)='76072' or
+		substr(dx,1,5)='76073' or
+		substr(dx,1,5)='76075' or
+		substr(dx,1,4)='7795' or
+		substr(dx,1,4)='7903' or
+		substr(dx,1,3)='797' or 
+		substr(dx,1,4)='9650' or
+		substr(dx,1,4)='9800' or
+		substr(dx,1,3)='E95' or
+		substr(dx,1,3)='V11' or
+		substr(dx,1,4)='V154' or
+		substr(dx,1,5)='V1582' or
+		substr(dx,1,3)='V40' or
+		substr(dx,1,5)='V6284' or
+		substr(dx,1,5)='V6285' or
+		substr(dx,1,5)='V6542' or
+		substr(dx,1,4)='V663' or
+		substr(dx,1,4)='V673' or
+		substr(dx,1,4)='V701' or
+		substr(dx,1,4)='V702' or
+		substr(dx,1,4)='V710' or
+		substr(dx,1,3)='V79') 
+		and any_dx_mental_ill=0 
+		then any_dx_mental_ill=1;*set to 1 if not flagged already;
+	end;
+
+run;
+
+
+proc sort data=ip_&suffix._2a;
+by BID_hrs_21 id index_date;
+run;
+
+proc sql;
+create table ip_&suffix._3a as select distinct bid_hrs_21,id,index_date,
+/*total Hospital LOS*/
+sum(adj_los) as n_hospd_&suffix. label="total hospital days &suffix."
+from ip_&suffix._2a group by bid_hrs_21,id,index_date;
+quit;
+
+data ip_&suffix._2b;
+set ip_&suffix._2a;
+if win_start_dt<admit_date<=win_stop_dt;
+em_urgent_admit=0; /*Urgent , emergent admissions from admission type*/
+if type_adm in (1,2) then em_urgent_admit=1;
+em_admit=0;
+if type_adm=1 then em_admit=1;
+urgent_admit=0;
+if type_adm=2 then urgent_admit=1;
+elect_admit=0;
+if type_adm=3 then elect_admit=1;
+ind_ed_charge=0; /*ED charges as another indicator of ED use*/
+if ER_AMT>0 & ER_AMT~=. then ind_ed_charge=1;
+if ER_AMT=0 | ER_AMT=. then ind_ed_charge=0;
+run;
+
+proc sql;
+create table ip_&suffix._3b as select distinct bid_hrs_21,id,index_date,
+/*count of IP admissions, all types*/
+count(*) as n_ip_admit_&suffix. label="total n of hospital admit &suffix.",
+/*count of admissions with any ED charges*/
+count(case when ind_ed_charge=1 then ind_ed_charge else . end) as n_ED_ip_&suffix. 
+	label="total n of ED visits with subsequent admit &suffix.",
+/*total ICU days*/
+sum(icu_days) as icu_days_&suffix. label="total icu days &suffix.",
+/*count of admissions for mental illness, per admitting dx*/
+count(case when adm_mental_ill=1 then adm_mental_ill else . end) as n_mental_ill_adm_dx_ip_&suffix. 
+	label="total n of admissions admit dx=mental illness &suffix.",
+/*count of admissions for mental illness, per any dx code*/
+count(case when any_dx_mental_ill=1 then any_dx_mental_ill else . end) as n_mental_ill_any_dx_ip_&suffix. 
+	label="total n of admissions with any dx of mental illness &suffix."
+ from ip_&suffix._2b group by bid_hrs_21,id,index_date;
+quit;
+
+proc sql;
+create table ip_&suffix._3 as select *
+from ip_&suffix._3a a 
+left join ip_&suffix._3b b
+on a.bid_hrs_21=b.bid_hrs_21 and a.index_date=b.index_date;
+quit;
+
+data ip_&suffix.;
+set ip_&suffix._3;
+if icu_days_&suffix.>n_hospd_&suffix. then icu_days_&suffix.=n_hospd_&suffix.;
+run;
+
+
+
+proc sort data=ip_&suffix.; by bid_hrs_21 id index_date; run;
+
+%mend;
+
+
+
+/*****************************************************************************/
+/*get outpatient visits and ed use from op claims monthly pre and post R's death*/
+/*****************************************************************************/
+%macro op(days=,suffix=);
+
+data op_meet_&suffix.;
+set proj_int.op_meet&suffix.(keep=bid_hrs_21 id admit_date disch_date 
+	index_date RVCNTR01-RVCNTR45);
+run;
+
+proc sort data=op_meet_&suffix.; by bid_hrs_21 id admit_date; run;
+
+data ed_op_&suffix._1;
+set op_meet_&suffix.;
+ed_op=0;
+array list RVCNTR01-RVCNTR45;
+do over list;
+	if list >= 450 and list < 460 and ed_op=0 then  
+	ed_op = 1;
+	end;
+run;
+
+
+
+proc sql;
+create table op_&suffix. as select distinct bid_hrs_21,id,index_date,
+count(case when ed_op=1 then ed_op else . end)
+	as n_ed_op_visits_&suffix. label="n of OP ED visits &suffix.",
+count(*) as n_op_visits_&suffix. label="n OP visits &suffix."
+	from ed_op_&suffix._1 group by bid_hrs_21,id,index_date;
+quit;
+
+
+proc sort data=op_&suffix.; by bid_hrs_21 id index_date; run;
+
+%mend;
+
+%macro claims_nesting();
+
+%do i=1 %to 24 ;
+%pre_admissions(days_start=floor((&i.-1)*30.417),days_bef_index=floor(&i.*30.417), suffix=m&i.,su=m&i.);
+%post_admissions(days_start=floor((&i.-1)*30.417),days_aft_index=floor(&i.*30.417),suffix=m&i.p);
+%op(suffix=m&i.);
+%op(suffix=m&i.p);
+%end;
+%mend;
+%claims_nesting();
+
+data ip_meet_24m;
+set proj_int.ip_meet_24m;
+run;
+
+%pre_admissions(days_start=-1,days_bef_index=0,suffix=dod,su=_24m);
+proc sql;
+create table op_meet_dod1 as select * from
+index1 a 
+left join medi.op_2000_2012 b
+on a.bid_hrs_21=b.bid_hrs_21 and a.index_date=b.admit_date;
+quit;
+
+data op_meet_dod;
+set op_meet_dod1(keep=bid_hrs_21 id admit_date disch_date 
+	index_date RVCNTR01-RVCNTR45);
+run;
+data op_meet_doda;
+set op_meet_dod(where=(admit_date=index_date));
+run;
+proc sort data=op_meet_doda; by bid_hrs_21 id admit_date; run;
+
+data ed_op_dod_1;
+set op_meet_doda;
+ed_op=0;
+array list RVCNTR01-RVCNTR45;
+do over list;
+	if list >= 450 and list < 460 and ed_op=0 then  
+	ed_op = 1;
+	end;
+run;
+
+
+proc sql;
+create table op_0 as select distinct bid_hrs_21,id,index_date,
+count(case when ed_op=1 then ed_op else . end)
+	as n_ed_op_visits_dod label="n of OP ED visits dod",
+count(*) as n_op_visits_dod label="n OP visits dod"
+	from ed_op_dod_1 group by bid_hrs_21,id,index_date;
+quit;
+
+
+proc sort data=op_0; by bid_hrs_21 id index_date; run;
+
+data ip_0;
+set ip_dod;
+run;
+
+proc sort data=ip_0; by bid_hrs_21 id index_date; run;
+%macro claims_all(source=,);
+data &source._all_1;
+merge &source._0 &source._m1 &source._m1p;
+by bid_hrs_21 id index_date;
+run;
+
+
+%do i=2 %to 24 ;
+%let l=%eval(&i-1);
+data &source._all_&i.;
+merge &source._all_&l. &source._m&i. &source._m&i.p;
+by bid_hrs_21 id index_date;
+run;
+%end;
+
+data &source._all;
+set &source._all_24;
+run;
+
+%mend;
+
+%claims_all(source=ip);
+%claims_all(source=op);
+
+/*now bring in to list of obs with ffs medicare at R's death*/
+proc sql;
+create table add_ip(drop=id2) as select 
+a.bid_hrs_21,a.id,b.*
+from proj_int.index a
+left join
+ip_all(rename=(id=id2)) b
+ on trim(left(a.bid_hrs_21))=trim(left(b.bid_hrs_21)) and a.id=b.id2 and a.index_date=b.index_date;
+ quit;
+
+proc sql;
+create table proj_int.op_ip_monthly(drop=id2) as select *
+from add_ip a
+left join
+op_all(rename=(id=id2)) b
+ on trim(left(a.bid_hrs_21))=trim(left(b.bid_hrs_21)) and a.id=b.id2 and a.index_date=b.index_date;
+ quit;
+
+
+
+H="Merge to create intermediate data"
+
+
+proc sql; 
+create table tomerge as select * from
+proj_int.index a left join
+proj_int.elix_all b
+on a.bid_hrs_21=b.bid_hrs_21 and a.index_date=b.index_date
+left join
+proj_int.mc_costs_monthly c
+on a.bid_hrs_21=c.bid_hrs_21 and a.index_date=c.index_date
+left join
+proj_int.op_ip_monthly d
+on a.bid_hrs_21=d.bid_hrs_21 and a.index_date=d.index_date
+;
+quit;
+
+data hrs_dial_claims;
+set proj_int.hrs_dial_claims;
+run;
+proc sql;
+create table dial_matched_int_dataset as select * from
+proj_int.hrs_dial_claims a 
+left join
+tomerge b 
+on a.id=b.id and a.admit_date=b.index_date;
+quit;
+
+proc sort data=dial_matched_int_dataset out=proj_int.dial_int_dataset nodupkey;
+by id index_date;
+run;
+proc export data=proj_int.dial_int_dataset outfile="E:\data\Dialysis\int_data\dial_int_dataset.dta" replace;
+run;
+
+H="Get Nephrology Visits & Dialysis VAC"
+/*Check Carrier file for nephrology codes */
+
+data pb_claims (keep = bid_hrs_21 admit_pb disch_pb admit_year hcpcs_cd HCFPCL01--HCFPCL13);
+set merged.pb_2000_2012 (rename = (admit_date = admit_pb disch_date = disch_pb));
+array dx hcpscd01--hcpscd13;
+do over dx;
+HCPCS_CD=dx;
+output;
+end;
+run;
+
+data pb_claims;
+set pb_claims; *(rename=(hcpcs_cd = cptcodes1));
+cptcodes1 = input(compress(hcpcs_cd,'ABCDEFGHIJKLMNOPQRSTUVWXYZ/',),8.);
+run;
+
+data pb_claims_1;
+set pb_claims;
+IF cptcodes1 in:('99201', '99202', '99203', '99204', '99205', '99211', '99212', '99213', '99214', '99215', '99241', '99242', '99243', '99244', '99245', '99271',
+'99272', '99273', '99274', '99275', '99354', '99355', '99381', '99382', '99383', '99384', '99385', '99386', '99387', '99391', '99392', '99393', '99394', '99395',
+'99396', '99397', '99401', '99402', '99403', '99404', '99411', '99412', '99420', '99429');
+format admit_pb disch_pb date10.;
+run;
+
+
+data pb_claims_npr (keep = bid_hrs_21 admit_pb disch_pb admit_year HCFPCL cptcodes1);
+set pb_claims_1;
+array dx HCFPCL01--HCFPCL13;
+do over dx;
+HCFPCL=dx;
+output;
+end;
+run; 
+
+data pb_claims_npr; /* All nephrology visits from the carrier file */
+set pb_claims_npr;
+where HCFPCL = '39';
+run;
+
+proc sql; /* merge with incident dialysis dataset to check for claims prior to incident date */
+create table npr_check as select a.*, b.admit_date, b.disch_date
+from pb_claims_npr a
+inner join dialysis1 b
+on a.bid_hrs_21 = b.bid_hrs_21 and 0 < b.admit_date - a.admit_pb <= 365;
+quit;
+
+proc sort data=npr_check out=npr_check_des nodupkey; by descending admit_pb bid_hrs_21; run; 
+
+proc sort data=npr_check_des out=npr_des_1 nodupkey equals; by bid_hrs_21; run; /* Last nephrology visit prior to start of dialysis */
+
+proc export data=npr_des_1 outfile="E:\data\Dialysis\int_data\nephr_last_visit.dta" replace; run;
+
+
+data npr_des_1;
+set npr_des_1 (rename=(admit_pb = npr_admit_last disch_pb = npr_disch_last));
+run;
+
+
+
+proc sort data=npr_check out=npr_check_asc; by bid_hrs_21 admit_pb; run;
+
+data npr_check_asc; /*First nephrology visit prior to dialysis*/
+set npr_check_asc (rename = ( admit_pb = npr_admit_1st disch_pb = npr_disch_1st));
+by bid_hrs_21 npr_admit_1st;
+IF first.bid_hrs_21;
+run; 
+
+
+proc sql;
+create table npr_visit as select a.npr_admit_last, a.npr_disch_last, b.*
+from npr_des_1 a
+inner join 
+npr_check_asc b
+on a.bid_hrs_21 = b.bid_hrs_21;
+quit;
+
+
+proc export data=npr_visit outfile="E:\data\Dialysis\int_data\npr_visit.dta" replace; run;
+
+
+/* Dialysis Vascular Access */
+
+*Cptcodes 36800 36810 36818 36819 36820 36821 36825 36830 36835 36815 36832 3927 3942 3943 3993 4470;
+
+/* Pull Claims from Outpatient */
+
+data mpwide (keep= bid_hrs_21 admit_date disch_date hcpscd01--hcpscd45);
+set merged.op_2000_2012;
+run;
+
+
+data opclaims (keep= bid_hrs_21 admit_date1 disch_date1 HCPCS_CD);
+set mpwide (rename=(admit_date = admit_date1 disch_date = disch_date1));
+array dx hcpscd01--hcpscd45;
+do over dx;
+HCPCS_CD=dx;
+output;
+end;
+run;
+
+data opclaims;
+set opclaims;
+cptcodes1 = input(compress(hcpcs_cd,'ABCDEFGHIJKLMNOPQRSTUVWXYZ/',),8.);
+run;
+
+data opclaims_1;
+set opclaims;
+IF cptcodes1 in:('36800', '36810', '36818', '36819', '36820', '36821', '36825', '36830', '36835', '36815', '36832', '3927', '3942', '3943', '3993', '4470');
+format admit_date1 disch_date1 date10.;
+run;
+
+data pb_claims (keep = bid_hrs_21 admit_date1 disch_date1 hcpcs_cd);
+set merged.pb_2000_2012 (rename = (admit_date = admit_date1 disch_date = disch_date1));
+array dx hcpscd01--hcpscd13;
+do over dx;
+HCPCS_CD=dx;
+output;
+end;
+run;
+
+data pb_claims;
+set pb_claims;
+cptcodes1 = input(compress(hcpcs_cd,'ABCDEFGHIJKLMNOPQRSTUVWXYZ/',),8.);
+run;
+
+data pb_claims_1;
+set pb_claims;
+IF cptcodes1 in:('36800', '36810', '36818', '36819', '36820', '36821', '36825', '36830', '36835', '36815', '36832', '3927', '3942', '3943', '3993', '4470');
+format admit_date1 disch_date1 date10.;
+run;
+
+
+data ip_claims (keep = BID_HRS_21 admit_dateip disch_dateip admit_year HCPCS_CD stus_cd);
+set merged.ip_2000_2012 (rename=(from_dt = admit_dateip thru_dt = disch_dateip));
+array dx AD_DGNS DGNS_CD01-DGNS_CD25 PRCDRCD01--PRCDRCD25;
+do over dx;
+HCPCS_CD=dx;
+output;
+end;
+run;
+
+data ip_claims;
+set ip_claims;
+cptcodes1 = input(compress(hcpcs_cd,'ABCDEFGHIJKLMNOPQRSTUVWXYZ/',),8.);
+admit_date1 = input(admit_dateip, yymmdd8.);
+disch_date1 = input(disch_dateip, yymmdd8.);
+format admit_date1 disch_date1 date10.;
+run;
+
+data ip_claims_1;
+set ip_claims;
+IF cptcodes1 in:('36800', '36810', '36818', '36819', '36820', '36821', '36825', '36830', '36835', '36815', '36832', '3927', '3942', '3943', '3993', '4470');
+run;
+
+
+data pbop_claims;
+set opclaims_1 pb_claims_1 ip_claims_1;
+run;
+
+proc sql;
+create table pbop_dva as select a.*, b.admit_date, b.disch_date
+from pbop_claims a
+inner join
+dialysis1 b
+on a.bid_hrs_21 = b.bid_hrs_21 and 0 < b.admit_date - a.admit_date1 <=365;
+quit;
+
+
+proc sort data=pbop_dva nodupkey; by bid_hrs_21 admit_date1; run;
+
+data pbop_dva;
+set pbop_dva;
+by bid_hrs_21;
+IF first.bid_hrs_21;
+vac_flag = 1;
+run;
+
+proc export data=pbop_dva outfile="E:\data\Dialysis\int_data\vac_visit.dta" replace; run;
+
+/* Accute Kidney Injury */
+
+
+data ip_file_1;
+set ip_file;
+IF substr(HCPCS_CD,1,4)='V451' or
+		substr(HCPCS_CD,1,4)='V560' or
+		substr(HCPCS_CD,1,4)='V561' or
+	    substr(HCPCS_CD,1,4)='V562' or
+		substr(HCPCS_CD,1,5)='V5631' or
+        substr(HCPCS_CD,1,5)='V5632' or
+		substr(HCPCS_CD,1,4)='V568';
+format admit_aki disch_aki date10.;
+run;
+
+proc sql;
+create table arf_aki as select a.*, b.*
+from ip_file_1 a
+inner join Dialysis1 b
+on a.bid_hrs_21 = b.bid_hrs_21 and 0 < b.admit_date - a.admit_aki <=365;
+quit;
+
+proc sort data=arf_aki nodupkey; by bid_hrs_21 admit_aki; run;
+
+data ip_file_1;
+set arf_aki;
+by bid_hrs_21;
+aki_flag = 1;
+IF first.bid_hrs_21;
+run;
+
+proc export data=ip_file_1 outfile="E:\data\Dialysis\int_data\aki_visit.dta" replace; run;
+
+
+
+
+
+H="Check for Hospice Enrollment prior to death"
+data index1;
+set death.death_date_2012 (rename=(death_all = index_date));
+run;
+
+proc sort data = index1; by bid_hrs_21 index_date; run;
+
+
+proc contents data = tmp2.hs_2000_2012 short; run;
+
+proc sql;
+create table hospice_check as select a.*, b.index_date, b.id
+from tmp2.hs_2000_2012 a inner join
+index1 b
+on trim(left(a.bid_hrs_21))=trim(left(b.bid_hrs_21))
+and index_date-admit_date<=180;
+quit;
+
+
+proc export data=hospice_check outfile="E:\data\Dialysis\hospice.dta"; run;
+
+
+H="Check for those who died in hospital 1yr post dialysis"
+libname merged "E:\data\cms_DUA_24548_2012";
+libname death "E:\data\hrs_cleaned";
+libname medi 'E:\data\cms_DUA_24548_2012';
+libname proj_int 'E:\data\Dialysis\int_data';
+
+proc sort data=proj_int.index out=index1 nodupkey;
+by bid_hrs_21 id index_date;
+run;
+
+/* Inpatient Claims */
+
+data ip_claims (keep = BID_HRS_21 admit_dateip disch_dateip admit_year HCPCS_CD stus_cd);
+set merged.ip_2000_2012 (rename=(from_dt = admit_dateip thru_dt = disch_dateip));
+array dx PRCDRCD01--PRCDRCD25;
+do over dx;
+HCPCS_CD=dx;
+output;
+end;
+run;
+
+data ip_claims;
+set ip_claims;
+cptcodes = input(compress(hcpcs_cd,'ABCDEFGHIJKLMNOPQRSTUVWXYZ/',),8.);
+admit_ip = input(admit_dateip, yymmdd8.);
+disch_ip = input(disch_dateip, yymmdd8.);
+format admit_ip disch_ip date10.;
+run;
+
+proc sql;
+create table matched as select a.*, b.admit_ip, b.disch_ip, b.stus_cd
+from index1 a
+inner join ip_claims b
+on a.bid_hrs_21 = b.bid_hrs_21 and a.index_date < b.admit_ip;
+quit;
+
+data matched;
+set matched;
+diff = admit_ip - index_date;
+run;
+
+data matched;
+set matched;
+where diff<=365 and stus_cd="20";
+d_flag = 1;
+run;
+
+proc sort data=matched nodupkey; by bid_hrs_21; run;
+
+proc export data=matched outfile="E:\data\Dialysis\int_data\died_hospital.dta" replace; run;
+
+H="Merge with Core 2000-2012 (Stata)"
+
+use "E:\data\hrs_cleaned\core_00_to_12.dta", clear
+
+sort id core_year
+by id: carryforward height_in, gen(height)
+
+
+merge m:1 id using "E:\data\Dialysis\int_data\hrs_dial_claims.dta"
+
+keep if _merge==3
+drop _m
+save "E:\data\Dialysis\final_data\hrs_dialysis.dta", replace
+
+merge m:1 id using "E:\data\Dialysis\int_data\dial_int_dataset.dta"
+keep if _merge==3
+drop _m
+save "E:\data\Dialysis\final_data\hrs_dialysis.dta", replace
+
+
+merge m:1 bid_hrs using "E:\data\Dialysis\hrs_dial_claims.dta", keepus(part_ab_1y hmo_d_6m hmo_d_1y ip_only ip_start esrd_ind periflag hemoflag stus_cd)
+*merge m:1 bid_hrs using "E:\data\Dialysis\int_data\hrs_dial_claims.dta", keepus(part_ab_1y hmo_d_6m hmo_d_1y cptcodes)
+
+keep if _m==3
+cap drop _m
+
+merge 1:1 id core_year using "E:\data\hrs_public_2012\dementia\pdem_withvarnames_ebl.dta"
+drop if _merge==2
+drop _m
+save "E:\data\Dialysis\final_data\hrs_dialysis.dta", replace
+
+gen year = core_year
+
+
+merge 1:1 hhid pn year using "E:\data\hrs_oop_2010\received_data\2012\helper_hours_2012.dta" 
+drop if _m==2
+replace n_hp = 0 if n_hp==.
+save "E:\data\Dialysis\final_data\hrs_dialysis.dta", replace
+/* Get Demographics from tracker file */
+
+*use "E:\data\Dialysis\hrs_dialysis.dta", clear
+cap drop _m
+merge m:1 hhid pn using "E:\data\hrs_cleaned\restricted_tracker_v2012.dta", keepus(hisp_eth white black gender degree)  // keepus(white black other_na_api_race)
+keep if _merge==3
+drop _m
+
+
+replace female = 1 if gender==2 & female==.
+replace female = 0 if gender==1 & female==.
+
+
+// Probability of dementia 
+
+gen likelydem = 0
+replace likelydem = 1 if pdem >=0.5 & pdem!=.
+
+gen likelycind = 0
+replace likelycind = 1 if pdem2 >= 0.5 & pdem2!=.
+
+gen likelynormal = 0
+replace likelynormal = 1 if pdem3>=0.5 & pdem3!=.
+
+// tics score
+
+gen tics_cutoff = 0
+replace tics_cutoff = 1 if tics_tot <= 8
+
+save "E:\data\Dialysis\final_data\hrs_dialysis.dta", replace
+
+/* Create indicator for n1 interview */
+
+
+replace admit_year = year(index_date)
+format c_ivw_date %td
+format index_date %td
+
+
+gen pre = c_ivw_date <= index_date
+gsort id -pre -core_year
+by id: gen ind_n1_ivw=_n==1
+gen no_core = 1 if ind_n1_ivw==1 & pre==0
+gen id_flag= 1 if ind_n1_ivw==1
+replace ind_n1_ivw=0 if pre==0
+label var ind_n1_ivw "Indicator for n1 interview"
+label var no_core "Does not have any n1 interview"
+label var id_flag "Total # of people with Dialysis"
+
+gen post = c_ivw_date > index_date
+gsort id -post + core_year
+by id: gen ind_p1_ivw=_n==1
+
+replace ind_p1_ivw = 0 if post==0
+label var ind_p1_ivw "Indicator for p1 interview"
+
+/*merge with death date dataset*/
+cap drop _m
+merge m:1 id using "E:\data\hrs_cleaned\death_date_2012.dta", keepus(death_year death_month death_day dod_dn12 dod_ndi10 dod_exit12 death_all dod_bene12 death_any)
+drop if _m==2
+
+gen died = 0
+replace died = 1 if _m==3
+label var died "Died at some point during HRS"
+save "E:\data\Dialysis\final_data\hrs_dialysis.dta", replace
+/* 1-2yr mortality */
+
+gen mortality = death_all - index_date
+gen died_1yr = 0
+replace died_1yr = 1 if mortality <= 365
+label var died_1yr "Died within one year of incident dialysis (%)"
+gen died_2yr = 0
+replace died_2yr = 1 if mortality <= 730
+label var died_2yr "Died within two years of incident dialysis (%)"
+label var mortality "Average # of Days from 1st Dialysis to Death"
+
+gen died_30d = 0
+replace died_30d = 1 if mortality <=30
+
+gen died_6m = 0
+replace died_6m = 1 if mortality <=180
+
+
+
+cap drop _m
+merge m:1 id using "E:\data\hrs_cleaned\exit_02_to_12_dt.dta", keepus(e_ivw_date exit_year)
+drop if _m==2
+
+gen index_2_exit = .
+replace index_2_exit = 1 if e_ivw_date - index_date <=365
+
+
+gen index_t2_exit = e_ivw_date - index_date
+
+gen ind_exit = .
+replace ind_exit = 1 if index_2_exit!=1 & (e_ivw_date - index_date)<=730
+
+gen death_2_exit = e_ivw_date - death_all
+
+gen died_1yr_w_exit = 0
+replace died_1yr_w_exit = 1 if died_1yr==1 & exit_year!=.
+label var died_1yr_w_exit "Died within 1 year of Dialysis w/Exit"
+
+gen died_1yr_no_exit = 0
+replace died_1yr_no_exit = 1 if died_1yr==1 & exit_year==.
+label var died_1yr_no_exit "Died within 1 year of Dialysis no Exit"
+
+gen died_2yr_w_exit = 0
+replace died_2yr_w_exit = 1 if died_2yr==1 & exit_year!=.
+label var died_2yr_w_exit "Died within 2 years of Dialysis w/Exit"
+
+gen died_2yr_no_exit = 0
+replace died_2yr_no_exit = 1 if died_2yr==1 & exit_year==.
+label var died_2yr_no_exit "Died within 2 years of Dialysis no Exit"
+
+gen race = 0
+replace race = 1 if white==1
+replace race = 2 if black==1
+replace race = 3 if hisp_eth==1
+
+
+/* Time between dialysis n1 & p1 */
+
+gen n1_to_dial = index_date - c_ivw_date
+*gen time = td%(index_date) - td%(c_ivw_date)
+label var n1_to_dial "Average # of days between n1 interview & 1st dialysis"
+gen dial_to_p1 = c_ivw_date - index_date
+label var dial_to_p1 "Average # days between 1st dialysis & p1 interview"
+
+
+gen timegap = 0
+gen diff = index_date - c_ivw_date
+replace timegap = 1 if diff <=1095 & ind_n1_ivw==1
+
+
+
+levelsof id if timegap==1, local(keepid)
+gen n1_ingap = 0
+
+foreach x in `keepid' {
+
+replace n1_ingap = 1 if id=="`x'"
+}
+
+
+gen timegap_p1 = 0
+*replace timegap_p1 = 1 if died_1yr==0 & (c_ivw_date - index_date>365) & (c_ivw_date - index_date<=730) & ind_p1_ivw==1
+replace timegap_p1 = 1 if (c_ivw_date - index_date<=365) & ind_p1_ivw==1
+gen timegap_p2 = 0
+replace timegap_p2 = 1 if (c_ivw_date - index_date>365) & (c_ivw_date - index_date<=730) & ind_p1_ivw==1
+
+
+levelsof id if timegap_p1==1, local(keepp1)
+gen p1_gap = 0
+foreach x in `keepp1' {
+
+replace p1_gap = 1 if id=="`x'"
+}
+
+gen p2_gap = 0
+levelsof id if timegap_p2==1, local(keepp2)
+foreach x in `keepp2' {
+replace p2_gap = 1 if id=="`x'"
+}
+
+*replace timegap = 4 if diff>2 & diff<=4
+*replace timegap = 5 if diff>4
+
+
+*label var timegap "years between index & n1, 5 = 5+ yrs"
+
+/*Getting P1 followup */
+
+
+preserve
+
+keep if ind_p1_ivw==1
+rename ind_p1_ivw ind_p1_followup
+save "E:\data\Dialysis\p1data.dta", replace
+restore
+
+cap drop _merge
+merge m:1 bid_hrs using "E:\data\Dialysis\p1data.dta", keepus(ind_p1_followup n1_ingap p1_gap p2_gap)
+*replace ind_p1_followup = . if ind_n1_ivw!=1
+label var ind_p1_followup "Has both N1 and P1 Interview"
+
+
+
+
+/*Caregiver hours */
+
+gen ind_any_help = 0
+replace ind_any_help = 1 if n_hp > 0 & n_hp!=.
+label var ind_any_help "Receives any form of help"
+
+gen ind_paid_help = 0
+replace ind_paid_help = 1 if n_f > 0 & n_f!=.
+label var ind_paid_help "Receives paid help"
+
+replace hlphrs=0 if hlphrs==. //hlphrs = sum of caregiver hours 
+
+label var hlphrs "Average Monthly Helper hours at N1 (#)"
+
+replace part_ab_6m=0 if part_ab_6m==.
+replace part_ab_1y=0 if part_ab_1y==.
+replace hmo_d_6m=1 if hmo_d_6m==.
+replace hmo_d_1y=1 if hmo_d_1y==.
+
+/*
+gen no_ffs_1m = 0
+replace no_ffs_1m = 1 if part_ab_6m==0 | hmo_d_6m==1
+label var no_ffs_1m "No fee for service 1 month prior to Incident Dialysis (%)"
+label var underage "64 or younger one month prior to 1st OP dialysis"
+
+gen excluded = 0
+replace excluded = 1 if underage==1 | no_ffs_1m==1 | timegap==1 | no_core==1
+label var excluded "No FFS or underage 1 month prior or >4yrs or no core prior to dialysis"
+label var periflag "Peritoneal Dialysis (%)"
+label var hemoflag "Hemodialysis (%)"
+
+gen ffs_1m = 0
+replace ffs_1m = 1 if part_ab_6m==1 & hmo_d_6m==0
+label var ffs_1m "FFS 1 month prior to Incident Dialysis (%)"
+
+gen con_ffs_1yr = 0
+replace con_ffs_1yr = 1 if underage==1 & part_ab_1y==1 & hmo_d_1y==0
+label var con_ffs_1yr "Con. FFS 1yr after Incident Dialysis (<65 only, %)"
+
+*/
+gen died_after_n1 = 0
+replace died_after_n1 = 1 if ind_n1_ivw==1 & ind_p1_followup==.
+
+
+
+gen ind_ip_admit_1yr = 0
+forvalues i = 1/12 {
+replace ind_ip_admit_1yr = 1 if n_ip_admit_m`i'p > 0 & n_ip_admit_m`i'p!=.
+}
+
+
+gen ind_ip_admit_2yr = 0
+forvalues i = 1/24 {
+replace ind_ip_admit_2yr = 1 if n_ip_admit_m`i'p > 0 & n_ip_admit_m`i'p!=.
+}
+
+gen ind_ed_visit_1yr = 0
+forvalues i = 1/12 {
+replace ind_ed_visit_1yr = 1 if n_ed_op_visits_m`i'p > 0 & n_ed_op_visits_m`i'p!=.
+}
+
+
+gen ind_ed_visit_2yr = 0
+forvalues i = 1/24 {
+replace ind_ed_visit_2yr = 1 if n_ed_op_visits_m`i'p > 0 & n_ed_op_visits_m`i'p!=.
+}
+
+gen nhres_n1 = 0
+replace nhres_n1 = 1 if nhres==1 & ind_n1_ivw==1
+
+
+gen age_n1 = age if ind_n1_ivw==1
+label var age_n1 "Average age at N1 interview (#)"
+
+
+label var ind_ip_admit_1yr "Inpatient admit within 1yr after Incident Dialysis (%)"
+label var ind_ip_admit_2yr "Inpatient admit within 2yr after Incident Dialysis (%)"
+label var ind_ed_visit_1yr "ED visit within 1yr after Incident Dialysis (%)"
+label var ind_ed_visit_2yr "ED visit within 2yr after Incident Dialysis (%)"
+*label var comorb_31_0d_n12m "Comorb - Dementia within 1yr prior to Incident Dialysis (%)"
+*label var comorb_31_0d_p12m "Comorb - Dementia 1yr after Incident Dialysis (%)"
+*label var comorb_6_0d_n12m "Comorb - Hypertension within 1yr prior to Incident Dialysis (%)"
+*label var comorb_10_0d_n12m "Comorb - Diabetes, uncomplicated within 1yr prior to Incident Dialysis (%)"
+*label var comorb_11_0d_n12m "Comorb - Diabetes, complicated within 1yr prior to Incident Dialysis (%)"
+*label var comorb_13_0d_n12m "Comorb - Renal Failure within 1yr prior to Incident Dialysis (%)"
+*label var nhres_n1 "Nursing Home Resident at time of N1 (%)"
+*label var nhres_p1 "Nursing Home Resident at time of p1"
+
+gen disch_dead = 0
+replace disch_dead = 1 if stus_cd=="20"
+label var disch_dead "Discharged as dead on incident IP Dialysis (%)"
+
+
+gen height_sq = height*height
+gen wgt_bmi = wgt_curr * 703
+
+gen bmi_d = .
+replace bmi_d = wgt_bmi / height_sq
+
+
+
+/* comorb count */
+
+
+
+
+/* Was hospitalized 6/12 months prior to Dialysis */
+
+
+gen hosp_30d_bef = 0
+replace hosp_30d_bef = 1 if n_ip_admit_m1>0 & n_ip_admit_m1!=.
+
+
+gen hosp_6m_bef = 0
+forvalues i = 1/6 {
+replace hosp_6m_bef = 1 if (n_ip_admit_m`i'>0 & n_ip_admit_m`i'!=.)
+}
+
+
+gen hosp_12m_bef = 0
+forvalues i = 1/12 {
+replace hosp_12m_bef = 1 if (n_ip_admit_m`i'>0 & n_ip_admit_m`i'!=.)
+}
+
+/* Was hospitalized after dialysis */
+
+gen hosp_30d_post = 0
+replace hosp_30d_post = 1 if n_ip_admit_m1p>0 & n_ip_admit_m1p!=.
+
+gen hosp_6m_post = 0
+forvalues i = 1/6 {
+replace hosp_6m_post = 1 if (n_ip_admit_m`i'p>0 & n_ip_admit_m`i'p!=.)
+}
+
+gen hosp_1yr_post = 0
+forvalues i = 1/12 {
+replace hosp_1yr_post = 1 if (n_ip_admit_m`i'p>0 & n_ip_admit_m`i'p!=.)
+}
+
+gen hosp_2yr_post = 0
+forvalues i = 1/24 {
+replace hosp_2yr_post = 1 if (n_ip_admit_m`i'p>0 & n_ip_admit_m`i'p!=.)
+}
+
+egen comorb_count = rowtotal(comorb_1_0d_n12m comorb_2_0d_n12m comorb_3_0d_n12m comorb_4_0d_n12m comorb_5_0d_n12m comorb_6_0d_n12m comorb_7_0d_n12m comorb_8_0d_n12m ///
+comorb_9_0d_n12m comorb_10_0d_n12m comorb_11_0d_n12m comorb_12_0d_n12m comorb_13_0d_n12m comorb_14_0d_n12m comorb_15_0d_n12m comorb_16_0d_n12m comorb_17_0d_n12m)
+
+
+recode medicaid (. = 0)
+recode champus (. = 0)
+/* Number of hospital admits 1/6/12 months prior to Dialysis */
+
+
+
+egen n_admit_6m_bef = rowtotal(n_ip_admit_m1 n_ip_admit_m2 n_ip_admit_m3 n_ip_admit_m4 n_ip_admit_m5 n_ip_admit_m6)
+
+egen n_admit_12m_bef = rowtotal(n_ip_admit_m1 n_ip_admit_m2 n_ip_admit_m3 n_ip_admit_m4 n_ip_admit_m5 n_ip_admit_m6 n_ip_admit_m7 n_ip_admit_m8 n_ip_admit_m9 n_ip_admit_m10 n_ip_admit_m11 n_ip_admit_m12)
+
+
+/* Average # hospital days prior/after to 1st dialysis */
+
+egen n_hospdays_6m_bef = rowtotal(n_hospd_m1 n_hospd_m2 n_hospd_m3 n_hospd_m4 n_hospd_m5 n_hospd_m6)
+egen n_hospdays_12m_bef = rowtotal(n_hospd_m1 n_hospd_m2 n_hospd_m3 n_hospd_m4 n_hospd_m5 n_hospd_m6 n_hospd_m7 n_hospd_m8 n_hospd_m9 n_hospd_m10 n_hospd_m11 n_hospd_m12) 
+
+egen n_hospdays_6m_post = rowtotal(n_hospd_m1p n_hospd_m2p n_hospd_m3p n_hospd_m4p n_hospd_m5p n_hospd_m6p)
+egen n_hospdays_12m_post = rowtotal(n_hospd_m1p n_hospd_m2p n_hospd_m3p n_hospd_m4p n_hospd_m5p n_hospd_m6p n_hospd_m7p n_hospd_m8p n_hospd_m9p n_hospd_m10p n_hospd_m11p n_hospd_m12p) 
+
+
+/*ED visit before/after dialysis */
+
+
+gen ed_30d_pre = 0
+replace ed_30d_pre = 1 if n_ed_ip_m1>0 & n_ed_ip_m1!=.
+replace ed_30d_pre = 1 if n_ed_op_visits_m1>0 & n_ed_op_visits_m1!=.
+
+gen ed_6m_pre = 0
+forvalues i = 1/6 {
+replace ed_6m_pre = 1 if (n_ed_ip_m`i'>0 & n_ed_ip_m`i'!=.)
+replace ed_6m_pre = 1 if n_ed_op_visits_m`i'>0 & n_ed_op_visits_m`i'!=.
+}
+
+gen ed_1yr_pre = 0
+forvalues i = 1/12 {
+replace ed_1yr_pre = 1 if (n_ed_ip_m`i'>0 & n_ed_ip_m`i'!=.)
+replace ed_1yr_pre = 1 if n_ed_op_visits_m`i'>0 & n_ed_op_visits_m`i'!=.
+}
+
+gen ed_30d_post = 0
+replace ed_30d_post = 1 if n_ed_ip_m1p>0 & n_ed_ip_m1p!=.
+replace ed_30d_post = 1 if n_ed_op_visits_m1p>0 & n_ed_op_visits_m1p!=.
+
+gen ed_6m_post = 0
+forvalues i = 1/6 {
+replace ed_6m_post = 1 if (n_ed_ip_m`i'p>0 & n_ed_ip_m`i'p!=.)
+replace ed_6m_post = 1 if n_ed_op_visits_m`i'p>0 & n_ed_op_visits_m`i'p!=.
+}
+
+gen ed_1yr_post = 0
+forvalues i = 1/12 {
+replace ed_1yr_post = 1 if (n_ed_ip_m`i'p>0 & n_ed_ip_m`i'p!=.)
+replace ed_1yr_post = 1 if n_ed_op_visits_m`i'p>0 & n_ed_op_visits_m`i'p!=.
+}
+
+gen ed_2yr_post = 0
+forvalues i = 1/24 {
+replace ed_2yr_post = 1 if (n_ed_ip_m`i'p>0 & n_ed_ip_m`i'p!=.)
+}
+
+
+/* ICU Visits */
+
+gen icu_30d_pre = 0
+replace icu_30d_pre = 1 if icu_days_m1>0 & icu_days_m1!=.
+
+gen icu_6m_pre = 0
+forvalues i = 1/6 {
+replace icu_6m_pre = 1 if (icu_days_m`i'>0 & icu_days_m`i'!=.)
+}
+
+gen icu_1yr_pre = 0
+forvalues i = 1/12 {
+replace icu_1yr_pre = 1 if (icu_days_m`i'>0 & icu_days_m`i'!=.)
+}
+
+
+gen icu_30d_post = 0
+replace icu_30d_post = 1 if icu_days_m1p>0 & icu_days_m1p!=.
+
+gen icu_6m_post = 0
+forvalues i = 1/6 {
+replace icu_6m_post = 1 if (icu_days_m`i'p>0 & icu_days_m`i'p!=.)
+}
+
+gen icu_1yr_post = 0
+forvalues i = 1/12 {
+replace icu_1yr_post = 1 if (icu_days_m`i'p>0 & icu_days_m`i'p!=.)
+}
+
+gen icu_2yr_post = 0
+forvalues i = 1/24 {
+replace icu_2yr_post = 1 if (icu_days_m`i'p>0 & icu_days_m`i'p!=.)
+}
+
+
+
+/* CMS chornoic conditions */
+
+gen dm_flag = 0
+replace dm_flag = 1 if comorb_10_0d_n12m==1 | comorb_11_0d_n12m==1
+
+egen cms_chronic = anycount(comorb_31_0d_n12m comorb_6_0d_n12m dm_flag comorb_13_0d_n12m comorb_32_0d_n12m comorb_18_0d_n12m comorb_1_0d_n12m), values(1)
+
+cap drop _m
+
+merge m:1 id using "E:\data\Dialysis\hospice.dta", keepus(claim_id_hrs_21)
+
+gen hosp_enroll = 0
+replace hosp_enroll = 1 if _m==3
+drop _m
+
+
+/*
+tab _m if ind_n1_ivw==1
+tab _m if ind_n1_ivw==1 & true_op==1
+tab _m if ind_n1_ivw==1 & ip_start==1
+tab _m if ind_n1_ivw==1 & ip_start==1 & disch_dead==1
+tab _m if ind_n1_ivw==1 & ip_start==1 & ip_only==0
+tab _m if ind_n1_ivw==1 & ip_start==1 & ip_only==1 & disch_dead==0
+*/
+
+
+gen avg_hospd_1yr = 0
+forvalues i = 1/12 {
+replace avg_hospd_1yr = avg_hospd_1yr + n_hospd_m`i'p
+}
+
+replace avg_hospd_1yr = avg_hospd_1yr/12
+label var avg_hospd_1yr "Average hospital days 1 year post Dialysis (#)"
+
+
+gen avg_hospd_2yr = 0
+forvalues i = 13/24 {
+replace avg_hospd_2yr = avg_hospd_2yr + n_hospd_m`i'p
+}
+
+replace avg_hospd_2yr = avg_hospd_2yr/12
+label var avg_hospd_2yr "Average hospital days 2 year post dialysis (#)"
+
+/* Add flag for people with dialysis in the last quarter of 2012 */
+
+replace hseduc = 0 if degree==0
+replace hseduc = 1 if degree>=1
+
+
+gen last_qrtr = 0
+replace last_qrtr = 1 if index_year==2012 & index_month>=10
+label var last_qrtr "1st Dialysis in last quarter 2012 (%)"
+
+
+
+/*Creating p1 variables */
+
+preserve 
+keep if ind_p1_ivw==1
+
+local p1vars proxy_core medicaid medigap srh_pf adl_diff_dr adl_diff_wk adl_diff_bh adl_diff_e adl_diff_t adl_diff_tx adl_independent_core ///
+adl_wk_core adl_bh_core adl_e_core adl_tx_core adl_t_core adl_dr_core ///
+likelydem likelycind likelynormal comorb_31_0d_p12m nhres ///
+ind_any_help ind_paid_help dial_to_p1 hlphrs age champus
+
+foreach x of local p1vars {
+rename `x' `x'_p1
+
+}
+
+
+save "E:\data\Dialysis\p1data.dta", replace 
+local p2vars srh_pf_p1 proxy_core_p1 medicaid_p1 medigap_p1 adl_diff_dr_p1 adl_diff_wk_p1 adl_diff_bh_p1 adl_diff_e_p1 adl_diff_t_p1 adl_diff_tx_p1 adl_independent_core_p1 ///
+adl_wk_core_p1 adl_bh_core_p1 adl_e_core_p1 adl_tx_core_p1 adl_t_core_p1 adl_dr_core_p1 ///
+likelydem_p1 likelycind_p1 likelynormal_p1 comorb_31_0d_p12m_p1 nhres_p1 ///
+ind_any_help_p1 ind_paid_help_p1 dial_to_p1_p1 hlphrs_p1 age_p1 champus_p1
+restore
+cap drop _merge
+merge m:1 bid_hrs using "E:\data\Dialysis\p1data.dta", keepus(`p2vars')
+
+label var adl_diff_dr "Difficulty dressing at N1 (%)"
+label var adl_diff_wk "Difficulty walking at N1 (%)"
+label var adl_diff_bh "Difficulty bathing at N1 (%)"
+label var adl_diff_e "Difficulty eating at N1 (%)"
+label var adl_diff_t "Difficulty toileting at N1 (%)"
+label var adl_diff_tx "Difficulty transfers to bed at N1 (%)"
+label var adl_independent_core "Independent for ADLs at N1 (%)"
+label var adl_wk_core "Help Walking at N1 (%)"
+label var adl_bh_core "Help Bathing at N1 (%)"
+label var adl_e_core "Help Eating at N1 (%)"
+label var adl_tx_core "Help with Transfers to Bed at N1 (%)"
+label var adl_t_core "Help with Toileting at N1 (%)" 
+label var adl_dr_core "Help with Dressing at N1 (%)"
+label var nhres_n1 "Nursing Home resident at time of N1 (%)"
+label var ind_any_help "Receives some form of help at N1 (%)"
+label var ind_paid_help "Receives paid help at N1 (%)"
+label var hlphrs "Average Monthly Helper hours at N1 (#)"
+label var srh_pf "Self Reported Health: Poor/Fair N1 (%)"
+label var proxy_core "Proxy Respondent at N1 (%)"
+label var medicaid "Medicaid at N1 (%)"
+label var medigap "Medigap at N1 (%)"
+label var age "Average age at N1 (#)"
+label var champus "Has Veterans insurance at N1"
+
+
+
+
+label var adl_diff_dr_p1 "Difficulty dressing at P1 (%)"
+label var adl_diff_wk_p1 "Difficulty walking at P1 (%)"
+label var adl_diff_bh_p1 "Difficulty bathing at P1 (%)"
+label var adl_diff_e_p1 "Difficulty eating at P1 (%)"
+label var adl_diff_t_p1 "Difficulty toileting at P1 (%)"
+label var adl_diff_tx_p1 "Difficulty transfers to bed at P1(%)"
+label var adl_independent_core_p1 "Independent for ADLs at P1 (%)"
+label var adl_wk_core_p1 "Help Walking at P1 (%)"
+label var adl_bh_core_p1 "Help Bathing at P1 (%)"
+label var adl_e_core_p1 "Help Eating at P1 (%)"
+label var adl_tx_core_p1 "Help with Transfers to Bed at P1 (%)"
+label var adl_t_core_p1 "Help with Toileting at P1 (%)" 
+label var adl_dr_core_p1 "Help with Dressing at P1 (%)"
+label var nhres_p1 "Nursing Home resident at time of P1 (%)"
+label var ind_any_help_p1 "Receives some form of help at P1 (%)"
+label var ind_paid_help_p1 "Receives paid help at P1 (%)"
+label var hlphrs_p1 "Average Monthly Helper hours at P1 (#)"
+label var srh_pf_p1 "Self Reported Health: Poor/Fair P1 (%)"
+label var proxy_core_p1 "Proxy Respondent at P1 (%)"
+label var medicaid_p1 "Medicaid at P1 (%)"
+label var medigap_p1 "Medigap at P1 (%)"
+label var age_p1 "Average age at P1 (#)"
+label var champus_p1 "Has Veterans insurance at P1"
+
+replace esrd_ind = "1" if esrd_ind=="Y"
+destring esrd_ind, replace
+label var esrd_ind "ESRD indicator from DN file (%)"
+
+label var likelydem "Likely Dementia at N1 (%)"
+label var likelycind "Likely CIND at N1 (%)"
+label var likelynormal "Likely Normal at N1 (%)"
+label var likelydem_p1 "Likely Dementia at P1 (%)"
+label var likelycind_p1 "Likely CIND at P1 (%)"
+label var likelynormal_p1 "Likely Normal at P1 (%)"
+*replace esrd_ind = "0" if esrd
+
+*replace dx_flag = 0 if dx_flag==.
+gen esrd_comorb = 0
+replace esrd_comorb = 1 if comorb_13_0d_p12m==1 | comorb_13_0d_n12m==1
+
+label var ip_only "No OP dialysis claim, only IP"
+*label var dx_flag "Flag for Renal Failure Diagnosis Code"
+*label var cptflag "Has Dialysis Procedure coode in Carrier/OP"
+
+label var female "Female (%)"
+label var white "Non-Hispanic White/Caucasian (%)"
+label var black "Non-Hispanic black or African American (%)"
+label var hisp_eth "Hispanic Ethnicity (%)"
+label var hseduc "Eduction, High School (%)"
+
+gen non_white = 1
+replace non_white = 0 if white==1
+****** key groups *********
+
+/* id_flag==1 // unique id for total pop
+cptflag==1 // only carrier/op procedure code
+dx_flag==1 // diagnosis codes from mb & op
+esrd_ind==1 // esrd_flag from denominator
+ip_overlap==1 | ip_only==1// IP incident dialysis
+*/
+
+replace n1_to_dial = . if n1_to_dial <=0
+replace dial_to_p1 = . if dial_to_p1 <=0
+
+replace periflag = 1 if cptcodes==5498
+replace hemoflag=1 if cptcodes==3995
+
+replace periflag=0 if periflag==.
+replace hemoflag=0 if hemoflag==.
+
+gen true_op = 0
+replace true_op = 1 if ip_start==0
+
+gen ip_overlap = 0
+replace ip_overlap = 1 if ip_start==1 & ip_only==0
+
+egen adl_core_c = anycount(adl_dr_core adl_wk_core adl_bh_core adl_e_core adl_tx_core adl_t_core), values(1)
+gen adl_indep_core = 0
+replace adl_indep_core = 1 if adl_core_c==0
+gen adl_mod_core = 0
+replace adl_mod_core = 1 if adl_core_c>0 & adl_core_c<4
+gen adl_sev_core = 0
+replace adl_sev_core = 1 if adl_core_c>=4 & adl_core_c<=6
+
+gen srh_gve = 0
+replace srh_gve = 1 if srh_g==1 | srh_ve==1
+
+gen adl_dep_core = 0
+replace adl_dep_core = 1 if adl_indep_core==0 
+
+
+gen tics_8p = 0 if tics_tot!=.
+replace tics_8p = 1 if tics_tot>8 & tics_tot!=.
+
+gen tics_8 = 0 if tics_tot!=.
+replace tics_8 = 1 if tics_tot<=8
+
+cap drop _m
+merge m:1 bid_hrs_21 using "E:\data\Dialysis\int_data\npr_visit.dta"
+
+/* Tables 4/13/17
+
+local ivars female race hseduc esrd_ind comorb_31_0d_n12m comorb_6_0d_n12m comorb_10_0d_n12m comorb_11_0d_n12m ///
+comorb_13_0d_n12m comorb_32_0d_n12m comorb_18_0d_n12m comorb_1_0d_n12m proxy_core medicaid ///
+srh adl_core_c adl_dr_core adl_wk_core adl_bh_core adl_e_core adl_tx_core adl_t_core likely_dem likely_cind likely_normal ///
+pdem tics_tot nhres
+
+local cvars n1_to_dial dial_to_p1
+
+foreach x of local ivars {
+
+tab `x' if ind_n1_ivw==1, m 
+}
+
+
+
+/*Table 1B: N1 Sample Characteristics */
+
+local ivars1 female white black hisp_eth hseduc died_1yr died_2yr periflag hemoflag esrd_ind disch_dead ///
+comorb_31_0d_n12m comorb_31_0d_p12m comorb_6_0d_n12m comorb_10_0d_n12m comorb_11_0d_n12m comorb_13_0d_n12m ///
+last_qrtr ind_ip_admit_1yr ind_ip_admit_2yr ind_ed_visit_1yr ind_ed_visit_2yr ffs_1m con_ffs_1yr
+
+local ivars2 proxy_core medicaid medigap srh_pf /// 
+adl_diff_dr adl_diff_wk adl_diff_bh adl_diff_e adl_diff_t adl_diff_tx adl_independent_core ///
+adl_wk_core adl_bh_core adl_e_core adl_tx_core adl_t_core adl_dr_core ///
+likelydem likelycind likelynormal nhres_n1 champus ///
+ind_any_help ind_paid_help  ///
+
+local cvars1 age_n1 hlphrs n1_to_dial dial_to_p1_p1 mortality age_p1 hlphrs_p1
+
+local ivars3 srh_pf_p1 proxy_core_p1 medicaid_p1 medigap_p1 adl_diff_dr_p1 adl_diff_wk_p1 adl_diff_bh_p1 adl_diff_e_p1 adl_diff_t_p1 adl_diff_tx_p1 adl_independent_core_p1 ///
+adl_wk_core_p1 adl_bh_core_p1 adl_e_core_p1 adl_tx_core_p1 adl_t_core_p1 adl_dr_core_p1 ///
+likelydem_p1 likelycind_p1 likelynormal_p1 ind_any_help_p1 ind_paid_help_p1 nhres_p1 champus_p1 ///
+
+local rd: word count `ivars1' `ivars2' `cvars1' `ivars3' 1 1 1
+di `rd'
+
+local rn : word count `ivars1' 
+di `rn'
+
+local rn : word count `ivars2' 
+di `rn'
+
+local rn : word count `cvars1' 
+di `rn'
+
+
+local rn : word count `ivars3' 
+di `rn'
+
+
+
+
+mat tab2=J(`rd',4,.)
+
+/* True 1st OP Dialysis, 65+ */
+
+local r = 1
+
+foreach x of local ivars1 {
+			qui sum `x' if id_flag==1 & true_op==1 & underage==0
+			mat tab2[`r',1]=r(mean)*100
+			local r=`r'+1
+
+}
+
+*local r = 25
+
+foreach x of local ivars2 {
+			qui sum `x' if ind_n1_ivw==1 & true_op==1 & underage==0
+			mat tab2[`r',1]=r(mean)*100
+			local r=`r'+1
+
+}
+
+*local r = 48
+
+foreach x of local cvars1 {
+		qui sum `x' if ind_n1_ivw==1 & true_op==1 & underage==0
+		mat tab2[`r',1]=r(mean)
+		local r=`r'+1
+		}
+
+*local r = 55
+
+foreach x of local ivars3 {
+			qui sum `x' if ind_n1_ivw==1 & true_op==1 & underage==0
+			mat tab2[`r',1]=r(mean)*100
+			local r=`r'+1
+
+}
+
+qui sum id_flag if true_op==1 & underage==0
+mat tab2[`r',1]=r(N)
+
+qui sum ind_n1_ivw if ind_n1_ivw==1 & true_op==1 & underage==0
+mat tab2[`r'+1,1]=r(N)
+
+qui sum ind_n1_ivw if ind_n1_ivw==1 & ind_p1_followup==1 & true_op==1 & underage==0
+mat tab2[`r'+2,1]=r(N)
+
+
+*mat rownames tab2=`ivars1' `ivars2' `cvars1' `ivars3' "Overall Sample Size" "Sample Size at N1" "Sample Size at P1"
+
+
+/* True 1st OP Dialysis, 65+ , N */
+
+local r = 1
+
+foreach x of local ivars1 {
+			qui sum `x' if id_flag==1 & true_op==1 & underage==0
+			mat tab2[`r',2]=r(N)
+			local r=`r'+1
+
+}
+
+*local r = 25
+
+foreach x of local ivars2 {
+			qui sum `x' if ind_n1_ivw==1 & true_op==1 & underage==0
+			mat tab2[`r',2]=r(N)
+			local r=`r'+1
+
+}
+
+*local r = 48
+
+foreach x of local cvars1 {
+		qui sum `x' if ind_n1_ivw==1 & true_op==1 & underage==0
+		mat tab2[`r',2]=r(N)
+		local r=`r'+1
+		}
+
+*local r = 55
+
+foreach x of local ivars3 {
+			qui sum `x' if ind_n1_ivw==1 & true_op==1 & underage==0
+			mat tab2[`r',2]=r(N)
+			local r=`r'+1
+
+}
+
+qui sum id_flag if true_op==1 & underage==0
+mat tab2[`r',2]=r(N)
+
+qui sum ind_n1_ivw if ind_n1_ivw==1 & true_op==1 & underage==0
+mat tab2[`r'+1,2]=r(N)
+
+qui sum ind_n1_ivw if ind_n1_ivw==1 & ind_p1_followup==1 & true_op==1 & underage==0
+mat tab2[`r'+2,2]=r(N)
+
+
+
+
+/* True 1st OP Dialysis, <65 */				
+
+
+local r = 1
+
+foreach x of local ivars1 {
+			qui sum `x' if id_flag==1 & true_op==1 & underage==1
+			mat tab2[`r',3]=r(mean)*100
+			local r=`r'+1
+
+}
+
+*local r = 25
+
+foreach x of local ivars2 {
+			qui sum `x' if ind_n1_ivw==1 & true_op==1 & underage==1
+			mat tab2[`r',3]=r(mean)*100
+			local r=`r'+1
+
+}
+
+*local r = 48
+
+foreach x of local cvars1 {
+		qui sum `x' if ind_n1_ivw==1 & true_op==1 & underage==1
+		mat tab2[`r',3]=r(mean)
+		local r=`r'+1
+		}
+
+*local r = 55
+
+foreach x of local ivars3 {
+			qui sum `x' if ind_n1_ivw==1 & true_op==1 & underage==1
+			mat tab2[`r',3]=r(mean)*100
+			local r=`r'+1
+
+}
+
+qui sum id_flag if true_op==1 & underage==1
+mat tab2[`r',3]=r(N)
+
+qui sum ind_n1_ivw if ind_n1_ivw==1 & true_op==1 & underage==1
+mat tab2[`r'+1,3]=r(N)
+
+qui sum ind_n1_ivw if ind_n1_ivw==1 & ind_p1_followup==1 & true_op==1 & underage==1
+mat tab2[`r'+2,3]=r(N)
+
+
+/* True 1st OP Dialysis, <65, N */		
+
+
+local r = 1
+
+foreach x of local ivars1 {
+			qui sum `x' if id_flag==1 & true_op==1 & underage==1
+			mat tab2[`r',4]=r(N)
+			local r=`r'+1
+
+}
+
+*local r = 25
+
+foreach x of local ivars2 {
+			qui sum `x' if ind_n1_ivw==1 & true_op==1 & underage==1
+			mat tab2[`r',4]=r(N)
+			local r=`r'+1
+
+}
+
+*local r = 48
+
+foreach x of local cvars1 {
+		qui sum `x' if ind_n1_ivw==1 & true_op==1 & underage==1
+		mat tab2[`r',4]=r(N)
+		local r=`r'+1
+		}
+
+*local r = 55
+
+foreach x of local ivars3 {
+			qui sum `x' if ind_n1_ivw==1 & true_op==1 & underage==1
+			mat tab2[`r',4]=r(N)
+			local r=`r'+1
+
+}
+
+qui sum id_flag if true_op==1 & underage==1
+mat tab2[`r',4]=r(N)
+
+qui sum ind_n1_ivw if ind_n1_ivw==1 & true_op==1 & underage==1
+mat tab2[`r'+1,4]=r(N)
+
+qui sum ind_n1_ivw if ind_n1_ivw==1 & ind_p1_followup==1 & true_op==1 & underage==1
+mat tab2[`r'+2,4]=r(N)
+
+
+
+	
+mat rownames tab2=`ivars1' `ivars2' `cvars1' `ivars3' "Overall Sample Size (#)" "Sample Size at N1 (#)" "Sample Size at P1 (#)"
+mat list tab2
+
+frmttable using "E:\projects\Dialysis\archive_logs\trueop_characteristics.doc", replace statmat(tab2) ///
+varlabels title("Incident Dialysis - OP: Sample Characteristics at N1 & P1 Core Interviews") ctitles("" ">65" "N" "<65" "N") sdec(1) ///
+note()
+                                                                                                                                                                                                                                                                                                                                                                                                                 
+
+				
+				
+/* Table 1.1 */
+				
+
+
+mat tab3=J(`rd',4,.)
+
+/* ip_overlap==1 , 65+ */
+
+local r = 1
+
+foreach x of local ivars1 {
+			qui sum `x' if id_flag==1 & ip_overlap==1 & underage==0
+			mat tab2[`r',1]=r(mean)*100
+			local r=`r'+1
+
+}
+
+*local r = 25
+
+foreach x of local ivars2 {
+			qui sum `x' if ind_n1_ivw==1 & ip_overlap==1 & underage==0
+			mat tab2[`r',1]=r(mean)*100
+			local r=`r'+1
+
+}
+
+*local r = 48
+
+foreach x of local cvars1 {
+		qui sum `x' if ind_n1_ivw==1 & ip_overlap==1 & underage==0
+		mat tab2[`r',1]=r(mean)
+		local r=`r'+1
+		}
+
+*local r = 55
+
+foreach x of local ivars3 {
+			qui sum `x' if ind_n1_ivw==1 & ip_overlap==1 & underage==0
+			mat tab2[`r',1]=r(mean)*100
+			local r=`r'+1
+
+}
+
+qui sum id_flag if ip_overlap==1 & underage==0
+mat tab2[`r',1]=r(N)
+
+qui sum ind_n1_ivw if ind_n1_ivw==1 & ip_overlap==1 & underage==0
+mat tab2[`r'+1,1]=r(N)
+
+qui sum ind_n1_ivw if ind_n1_ivw==1 & ind_p1_followup==1 & ip_overlap==1 & underage==0
+mat tab2[`r'+2,1]=r(N)
+
+/* ip_overlap==1, 65+ , N */
+
+local r = 1
+
+foreach x of local ivars1 {
+			qui sum `x' if id_flag==1 & ip_overlap==1 & underage==0
+			mat tab2[`r',2]=r(N)
+			local r=`r'+1
+
+}
+
+*local r = 25
+
+foreach x of local ivars2 {
+			qui sum `x' if ind_n1_ivw==1 & ip_overlap==1 & underage==0
+			mat tab2[`r',2]=r(N)
+			local r=`r'+1
+
+}
+
+*local r = 48
+
+foreach x of local cvars1 {
+		qui sum `x' if ind_n1_ivw==1 & ip_overlap==1 & underage==0
+		mat tab2[`r',2]=r(N)
+		local r=`r'+1
+		}
+
+*local r = 55
+
+foreach x of local ivars3 {
+			qui sum `x' if ind_n1_ivw==1 & ip_overlap==1 & underage==0
+			mat tab2[`r',2]=r(N)
+			local r=`r'+1
+
+}
+
+qui sum id_flag if ip_overlap==1 & underage==0
+mat tab2[`r',2]=r(N)
+
+qui sum ind_n1_ivw if ind_n1_ivw==1 & ip_overlap==1 & underage==0
+mat tab2[`r'+1,2]=r(N)
+
+qui sum ind_n1_ivw if ind_n1_ivw==1 & ind_p1_followup==1 & ip_overlap==1 & underage==0
+mat tab2[`r'+2,2]=r(N)
+
+
+
+
+
+/* ip_overlap==1, <65 */				
+
+local r = 1
+
+foreach x of local ivars1 {
+			qui sum `x' if id_flag==1 & ip_overlap==1 & underage==1
+			mat tab2[`r',3]=r(mean)*100
+			local r=`r'+1
+
+}
+
+*local r = 25
+
+foreach x of local ivars2 {
+			qui sum `x' if ind_n1_ivw==1 & ip_overlap==1 & underage==1
+			mat tab2[`r',3]=r(mean)*100
+			local r=`r'+1
+
+}
+
+*local r = 48
+
+foreach x of local cvars1 {
+		qui sum `x' if ind_n1_ivw==1 & ip_overlap==1 & underage==1
+		mat tab2[`r',3]=r(mean)
+		local r=`r'+1
+		}
+
+*local r = 55
+
+foreach x of local ivars3 {
+			qui sum `x' if ind_n1_ivw==1 & ip_overlap==1 & underage==1
+			mat tab2[`r',3]=r(mean)*100
+			local r=`r'+1
+
+}
+
+qui sum id_flag if ip_overlap==1 & underage==1
+mat tab2[`r',3]=r(N)
+
+qui sum ind_n1_ivw if ind_n1_ivw==1 & ip_overlap==1 & underage==1
+mat tab2[`r'+1,3]=r(N)
+
+qui sum ind_n1_ivw if ind_n1_ivw==1 & ind_p1_followup==1 & ip_overlap==1 & underage==1
+mat tab2[`r'+2,3]=r(N)
+
+/* ip_overlap==1, <65, N */		
+
+		
+
+local r = 1
+
+foreach x of local ivars1 {
+			qui sum `x' if id_flag==1 & ip_overlap==1 & underage==1
+			mat tab2[`r',4]=r(N)
+			local r=`r'+1
+
+}
+
+*local r = 25
+
+foreach x of local ivars2 {
+			qui sum `x' if ind_n1_ivw==1 & ip_overlap==1 & underage==1
+			mat tab2[`r',4]=r(N)
+			local r=`r'+1
+
+}
+
+*local r = 48
+
+foreach x of local cvars1 {
+		qui sum `x' if ind_n1_ivw==1 & ip_overlap==1 & underage==1
+		mat tab2[`r',4]=r(N)
+		local r=`r'+1
+		}
+
+*local r = 55
+
+foreach x of local ivars3 {
+			qui sum `x' if ind_n1_ivw==1 & ip_overlap==1 & underage==1
+			mat tab2[`r',4]=r(N)
+			local r=`r'+1
+
+}
+
+qui sum id_flag if ip_overlap==1 & underage==1
+mat tab2[`r',4]=r(N)
+
+qui sum ind_n1_ivw if ind_n1_ivw==1 & ip_overlap==1 & underage==1
+mat tab2[`r'+1,4]=r(N)
+
+qui sum ind_n1_ivw if ind_n1_ivw==1 & ind_p1_followup==1 & ip_overlap==1 & underage==1
+mat tab2[`r'+2,4]=r(N)
+
+
+	
+mat rownames tab2=`ivars1' `ivars2' `cvars1' `ivars3' "Overall Sample Size (#)" "Sample Size at N1 (#)" "Sample Size at P1 (#)"
+
+
+frmttable using "E:\projects\Dialysis\archive_logs\overlap_characteristics.doc", replace statmat(tab2) ///
+varlabels title("Incident Dialysis - IP, Subsequent OP: Sample Characteristics at N1 & P1 Core Interviews") ctitles("" ">65" "N" "<65" "N") sdec(1) ///
+note()
+          
+				
+
+/* Table 1.1 */
+				
+
+
+mat tab3=J(`rd',4,.)
+
+/* ip_only==1 & ip_start==1 , 65+ */
+
+local r = 1
+
+foreach x of local ivars1 {
+			qui sum `x' if id_flag==1 & ip_only==1 & ip_start==1 & underage==0
+			mat tab2[`r',1]=r(mean)*100
+			local r=`r'+1
+
+}
+
+*local r = 25
+
+foreach x of local ivars2 {
+			qui sum `x' if ind_n1_ivw==1 & ip_only==1 & ip_start==1 & underage==0
+			mat tab2[`r',1]=r(mean)*100
+			local r=`r'+1
+
+}
+
+*local r = 48
+
+foreach x of local cvars1 {
+		qui sum `x' if ind_n1_ivw==1 & ip_only==1 & ip_start==1 & underage==0
+		mat tab2[`r',1]=r(mean)
+		local r=`r'+1
+		}
+
+*local r = 55
+
+foreach x of local ivars3 {
+			qui sum `x' if ind_n1_ivw==1 & ip_only==1 & ip_start==1 & underage==0
+			mat tab2[`r',1]=r(mean)*100
+			local r=`r'+1
+
+}
+
+qui sum id_flag if ip_only==1 & ip_start==1 & underage==0
+mat tab2[`r',1]=r(N)
+
+qui sum ind_n1_ivw if ind_n1_ivw==1 & ip_only==1 & ip_start==1 & underage==0
+mat tab2[`r'+1,1]=r(N)
+
+qui sum ind_n1_ivw if ind_n1_ivw==1 & ind_p1_followup==1 & ip_only==1 & ip_start==1 & underage==0
+mat tab2[`r'+2,1]=r(N)
+
+/* ip_only==1 & ip_start==1, 65+ , N */
+
+local r = 1
+
+foreach x of local ivars1 {
+			qui sum `x' if id_flag==1 & ip_only==1 & ip_start==1 & underage==0
+			mat tab2[`r',2]=r(N)
+			local r=`r'+1
+
+}
+
+*local r = 25
+
+foreach x of local ivars2 {
+			qui sum `x' if ind_n1_ivw==1 & ip_only==1 & ip_start==1 & underage==0
+			mat tab2[`r',2]=r(N)
+			local r=`r'+1
+
+}
+
+*local r = 48
+
+foreach x of local cvars1 {
+		qui sum `x' if ind_n1_ivw==1 & ip_only==1 & ip_start==1 & underage==0
+		mat tab2[`r',2]=r(N)
+		local r=`r'+1
+		}
+
+*local r = 55
+
+foreach x of local ivars3 {
+			qui sum `x' if ind_n1_ivw==1 & ip_only==1 & ip_start==1 & underage==0
+			mat tab2[`r',2]=r(N)
+			local r=`r'+1
+
+}
+
+qui sum id_flag if ip_only==1 & ip_start==1 & underage==0
+mat tab2[`r',2]=r(N)
+
+qui sum ind_n1_ivw if ind_n1_ivw==1 & ip_only==1 & ip_start==1 & underage==0
+mat tab2[`r'+1,2]=r(N)
+
+qui sum ind_n1_ivw if ind_n1_ivw==1 & ind_p1_followup==1 & ip_only==1 & ip_start==1 & underage==0
+mat tab2[`r'+2,2]=r(N)
+
+
+
+
+
+/* ip_only==1 & ip_start==1, <65 */				
+
+local r = 1
+
+foreach x of local ivars1 {
+			qui sum `x' if id_flag==1 & ip_only==1 & ip_start==1 & underage==1
+			mat tab2[`r',3]=r(mean)*100
+			local r=`r'+1
+
+}
+
+*local r = 25
+
+foreach x of local ivars2 {
+			qui sum `x' if ind_n1_ivw==1 & ip_only==1 & ip_start==1 & underage==1
+			mat tab2[`r',3]=r(mean)*100
+			local r=`r'+1
+
+}
+
+*local r = 48
+
+foreach x of local cvars1 {
+		qui sum `x' if ind_n1_ivw==1 & ip_only==1 & ip_start==1 & underage==1
+		mat tab2[`r',3]=r(mean)
+		local r=`r'+1
+		}
+
+*local r = 55
+
+foreach x of local ivars3 {
+			qui sum `x' if ind_n1_ivw==1 & ip_only==1 & ip_start==1 & underage==1
+			mat tab2[`r',3]=r(mean)*100
+			local r=`r'+1
+
+}
+
+qui sum id_flag if ip_only==1 & ip_start==1 & underage==1
+mat tab2[`r',3]=r(N)
+
+qui sum ind_n1_ivw if ind_n1_ivw==1 & ip_only==1 & ip_start==1 & underage==1
+mat tab2[`r'+1,3]=r(N)
+
+qui sum ind_n1_ivw if ind_n1_ivw==1 & ind_p1_followup==1 & ip_only==1 & ip_start==1 & underage==1
+mat tab2[`r'+2,3]=r(N)
+
+/* ip_only==1 & ip_start==1, <65, N */		
+
+		
+
+local r = 1
+
+foreach x of local ivars1 {
+			qui sum `x' if id_flag==1 & ip_only==1 & ip_start==1 & underage==1
+			mat tab2[`r',4]=r(N)
+			local r=`r'+1
+
+}
+
+*local r = 25
+
+foreach x of local ivars2 {
+			qui sum `x' if ind_n1_ivw==1 & ip_only==1 & ip_start==1 & underage==1
+			mat tab2[`r',4]=r(N)
+			local r=`r'+1
+
+}
+
+*local r = 48
+
+foreach x of local cvars1 {
+		qui sum `x' if ind_n1_ivw==1 & ip_only==1 & ip_start==1 & underage==1
+		mat tab2[`r',4]=r(N)
+		local r=`r'+1
+		}
+
+*local r = 55
+
+foreach x of local ivars3 {
+			qui sum `x' if ind_n1_ivw==1 & ip_only==1 & ip_start==1 & underage==1
+			mat tab2[`r',4]=r(N)
+			local r=`r'+1
+
+}
+
+qui sum id_flag if ip_only==1 & ip_start==1 & underage==1
+mat tab2[`r',4]=r(N)
+
+qui sum ind_n1_ivw if ind_n1_ivw==1 & ip_only==1 & ip_start==1 & underage==1
+mat tab2[`r'+1,4]=r(N)
+
+qui sum ind_n1_ivw if ind_n1_ivw==1 & ind_p1_followup==1 & ip_only==1 & ip_start==1 & underage==1
+mat tab2[`r'+2,4]=r(N)
+
+
+	
+mat rownames tab2=`ivars1' `ivars2' `cvars1' `ivars3' "Overall Sample Size (#)" "Sample Size at N1 (#)" "Sample Size at P1 (#)"
+
+
+frmttable using "E:\projects\Dialysis\archive_logs\noop_characteristics.doc", replace statmat(tab2) ///
+varlabels title("No Outpatient Dialysis: Sample Characteristics at N1 & P1 Core Interviews") ctitles("" ">65" "N" "<65" "N") sdec(1) ///
+note()
+       
+
+*/
+
+
+
+
+
+
+
+
+H="Crosstabs + sig tests"
+/* Dialysis tables 5/9/17 */
+
+ttest age_n1 if ind_n1_ivw==1, by(true_op)
+tab female true_op if ind_n1_ivw==1, col chi2
+tab white true_op if ind_n1_ivw==1, chi2 col
+tab non_white true_op if ind_n1_ivw==1, chi2 col
+tab periflag true_op if ind_n1_ivw==1, chi2 col
+tab hemoflag true_op if ind_n1_ivw==1, chi2 col
+tab esrd_ind true_op if ind_n1_ivw==1, chi2 col
+ttest comorb_count if ind_n1_ivw==1, by(true_op)
+tab comorb_5_0d_n12m true_op if ind_n1_ivw==1, col chi2
+tab comorb_3_0d_n12m true_op if ind_n1_ivw==1, col chi2
+tab comorb_10_0d_n12m true_op if ind_n1_ivw==1, col chi2
+tab comorb_11_0d_n12m true_op if ind_n1_ivw==1, col chi2
+tab comorb_13_0d_n12m true_op if ind_n1_ivw==1, col chi2
+tab comorb_32_0d_n12m true_op if ind_n1_ivw==1, col chi2
+tab comorb_14_0d_n12m true_op if ind_n1_ivw==1, col chi2
+tab comorb_1_0d_n12m true_op if ind_n1_ivw==1, col chi2
+tab proxy_core true_op if ind_n1_ivw==1, col chi2
+tab medicaid true_op if ind_n1_ivw==1, col chi2
+tab champus true_op if ind_n1_ivw==1, col chi2
+tab srh_pf true_op if ind_n1_ivw==1, col chi2
+tab srh_gve true_op if ind_n1_ivw==1, col chi2
+tab adl_indep_core true_op if ind_n1_ivw==1, col chi2
+tab likelydem true_op if ind_n1_ivw==1, chi2 col
+ttest prob_hurd if ind_n1_ivw==1, by(true_op)
+tab tics_8 true_op if ind_n1_ivw==1, col chi2
+tab tics_8p true_op if ind_n1_ivw==1, col chi2
+ttest n1_to_dial if ind_n1_ivw==1, by(true_op)
+ttest dial_to_p1 if ind_p1_ivw==1 & n1_ingap==1, by(true_op)
+tab hosp_30d_bef true_op if ind_n1_ivw==1, col chi2
+tab hosp_6m_bef true_op if ind_n1_ivw==1, col chi2
+tab hosp_12m_bef true_op if ind_n1_ivw==1, col chi2
+tab n_ip_admit_m1 true_op if ind_n1_ivw==1, col chi2
+ttest n_ip_admit_m1 if ind_n1_ivw==1, by(true_op)
+ttest n_admit_6m_bef if ind_n1_ivw==1, by(true_op)
+ttest n_admit_12m_bef if ind_n1_ivw==1, by(true_op)
+ttest n_hospd_m1 if ind_n1_ivw==1, by(true_op)
+ttest n_hospdays_6m_bef if ind_n1_ivw==1, by(true_op)
+ttest n_hospdays_12m_bef if ind_n1_ivw==1, by(true_op)
+ttest bmi_d if ind_n1_ivw==1, by(true_op)
+tab died_30d true_op if ind_n1_ivw==1, col chi2
+tab died_6m true_op if ind_n1_ivw==1, col chi2
+tab died_1yr true_op if ind_n1_ivw==1, col chi2
+ttest mortality if ind_n1_ivw==1, by(true_op)
+tab hosp_30d_post true_op if ind_n1_ivw==1, chi2 col
+tab hosp_6m_post true_op if ind_n1_ivw==1
+tab hosp_1yr_post true_op if ind_n1_ivw==1, col chi2
+ttest n_hospd_m1p if ind_n1_ivw==1, by(true_op)
+ttest n_hospdays_6m_post if ind_n1_ivw==1, by(true_op)
+ttest n_hospdays_12m_post if ind_n1_ivw==1, by(true_op)
+tab ed_30d_pre true_op if ind_n1_ivw==1, chi2 col
+tab ed_6m_pre true_op if ind_n1_ivw==1, chi2 col
+tab ed_1yr_pre true_op if ind_n1_ivw==1, chi2 col
+tab ed_30d_post true_op if ind_n1_ivw==1, chi2 col
+tab ed_6m_post true_op if ind_n1_ivw==1, chi2 col
+tab ed_1yr_post true_op if ind_n1_ivw==1, chi2 col
+tab icu_30d_pre true_op if ind_n1_ivw==1, chi2 col
+tab icu_6m_pre true_op if ind_n1_ivw==1, chi2 col
+tab icu_1yr_pre true_op if ind_n1_ivw==1, chi2 col
+tab icu_30d_post true_op if ind_n1_ivw==1, chi2 col
+tab icu_6m_post true_op if ind_n1_ivw==1, chi2 col
+tab icu_1yr_post true_op if ind_n1_ivw==1, chi2 col
+tab srh_pf true_op if ind_p1_ivw==1 & n1_ingap==1, chi2 col
+tab srh_gve true_op if ind_p1_ivw==1 & n1_ingap==1, chi2 col
+tab proxy_core true_op if ind_p1_ivw==1 & n1_ingap==1, chi2 col
+tab medicaid true_op if ind_p1_ivw==1 & n1_ingap==1, chi2 col
+tab champus true_op if ind_p1_ivw==1 & n1_ingap==1, chi2 col
+tab adl_indep_core true_op if ind_p1_ivw==1 & n1_ingap==1, chi2 col
+tab adl_dep_core true_op if ind_p1_ivw==1 & n1_ingap==1, chi2 col
+
+H="****Everything below not apart of main project****"
+
+
+H="Carrier Claims with (missed) IP stay"
+libname merged "E:\data\cms_DUA_24548_2012";
+
+
+/* Pull claims from carrier file */
+
+data pb_claims (keep = bid_hrs_21 admit_pb disch_pb admit_year hcpcs_cd);
+set merged.pb_2000_2012 (rename = (admit_date = admit_pb disch_date = disch_pb));
+array dx hcpscd01--hcpscd13;
+do over dx;
+HCPCS_CD=dx;
+output;
+end;
+run;
+
+data pb_claims;
+set pb_claims;
+cptcodes = input(compress(hcpcs_cd,'ABCDEFGHIJKLMNOPQRSTUVWXYZ/',),8.);
+run;
+
+
+data pb_claims;
+set pb_claims;
+hemoflag = 0;
+periflag = 0;
+gflag = indexc(hcpcs_cd, "G");
+IF (cptcodes = 90935) or (cptcodes = 90937) or (cptcodes = 90999) THEN hemoflag = 1;
+IF (cptcodes = 90945) or (cptcodes = 90947) then periflag = 1;
+IF (gflag = 1) and (cptcodes = 257) then periflag = 1;
+run;
+
+data pb_claims (drop = hemoflag periflag);
+set pb_claims;
+where hemoflag = 1 or periflag = 1;
+pb_flag = 1;
+format admit_pb disch_pb date10.;
+run;
+
+proc sort data=pb_claims nodupkey; by bid_hrs_21 admit_pb disch_pb; run;
+
+proc sort data=pb_claims nodupkey out=pb_claims1; by bid_hrs_21; run;
+
+data ip_claims (keep = BID_HRS_21 admit_dateip disch_dateip admit_year HCPCS_CD);
+set merged.ip_2000_2012 (rename=(from_dt = admit_dateip thru_dt = disch_dateip));
+array dx PRCDRCD01--PRCDRCD25;
+do over dx;
+HCPCS_CD=dx;
+output;
+end;
+run;
+
+data ip_claims;
+set ip_claims;
+cptcodes = input(compress(hcpcs_cd,'ABCDEFGHIJKLMNOPQRSTUVWXYZ/',),8.);
+admit_ip = input(admit_dateip, yymmdd8.);
+disch_ip = input(disch_dateip, yymmdd8.);
+format admit_ip disch_ip date10.;
+run;
+
+data ip_claims;
+set ip_claims;
+ip_flag = 0;
+IF cptcodes = 3995 or cptcodes = 5498 then ip_flag = 1;
+run;
+
+data ip_claims1;
+set ip_claims;
+where ip_flag = 1;
+run;
+
+data ip_claims1 (keep = bid_hrs_21 admit_ip disch_ip ip_flag1);
+set ip_claims1 (rename=(ip_flag = ip_flag1));
+run;
+
+proc sort data= ip_claims; by bid_hrs_21 admit_ip disch_ip; run;
+proc sort data= ip_claims1; by bid_hrs_21 admit_ip disch_ip; run;
+
+data ip_claims;
+merge ip_claims ip_claims1;
+by bid_hrs_21 admit_ip disch_ip;
+IF ip_flag1 = . then ip_flag1=0;
+run;
+
+
+proc sql;
+create table matched as select a.bid_hrs_21, a.admit_pb, a.pb_flag, b.*
+from pb_claims a
+left join ip_claims b
+on a.bid_hrs_21=b.bid_hrs_21 and b.admit_ip<=a.admit_pb<=b.disch_ip;
+quit;
+
+proc sort data=matched nodupkey out=matched1; by bid_hrs_21 admit_ip disch_ip ip_flag1; run;
+proc freq data=matched1; tables ip_flag1; run;
+
+data matched2;
+set matched1;
+where ip_flag1 = 0;
+run;
+
+
+proc freq data = matched2; tables cptcodes / missprint; run;
+
+proc sort data=matched2 nodupkey; by bid_hrs_21; run;
+
+data matched2 (keep = bid_hrs_21 ipc_flag);
+set matched2;
+ipc_flag = 1;
+run;
+
+
+
+H="quick match of dn & procs"
+
+use "C:\Evan\dn_2000_2012.dta", clear
+gen esrd=esrd_ind=="Y"
+keep esrd bid buyin12 hmoind12 orec crec year bid_h
+tempfile dn
+save `dn'
+use "C:\Evan\op_2000_2012.dta", clear
+keep bid_h admit_d hcpscd*
+tempfile op
+save `op'
+use "C:\Evan\pb_2000_2012.dta", clear
+keep bid_h admit_d hcpscd*
+tempfile pb
+save `pb'
+append using `op'
+rename hcpscd0* hcpscd*
+gen flag=0
+forvalues i=1/25 {
+replace flag=1 if inlist(substr(hcpscd`i',1,3),"909","G02")
+}
+tab flag
+keep if flag
+gen obs=_n
+reshape long hcpscd, i(bid obs) j(num)
+rename hcpscd proc
+tab proc
+tab flag
+drop flag
+gen flag=inlist(substr(proc,1,3),"909","G02")
+tab proc if flag
+codebook bid if flag
+keep if flag
+tab proc
+drop if substr(proc,1,1)=="G" & proc!="G0257"
+tab proc
+gen forreal=inlist(substr(proc,4,1),"3","4","9","5")
+tab forre
+tab proc if forre
+drop if inlist(substr(proc,5,1),"0","3")
+tab proc
+codebook bid
+sort bid admit_date
+tab proc
+tab proc if forre
+tab proc if !forr
+keep if forr
+codebook bid
+sort bid admit
+format admit %td
+codebook admit
+sort bid admit
+by bid: keep if _n==1
+merge 1:m bid using `dn'
+
+tab esrd
+drop if _m==2 & !esrd
+tab esrd
+tab _m esrd
+tab proc if esrd
+tab proc if !esrd
+codebook bid
+sort bid year
+by bid: egen everesrd=max(esrd)
+tab ever
+by bid: drop if year>year(admit) & _n>1
+gsort bid -year
+gen first=esrd & year<year(admit)
+tab first
+by bid: egen firstesrd=max(first)
+drop first
+by bid: drop if year<year(admit) & _n>1
+
+drop if missing(bid)
+
+merge 1:m bid_h using "E:\data\hrs_cleaned\death_date_2012.dta"
+keep if _m!=2
+gen died_12=death_all<=admit_da+365 
+tab died_12
+tab died_12 if esrd
+tab died_12 if !esrd
+tab esrd
+tab esrd if flag
+tab died_12 if flag
+tab died_12 if esrd&flag
+tab died_12 if !esrd&flag

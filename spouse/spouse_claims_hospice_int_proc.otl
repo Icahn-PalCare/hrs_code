@@ -5579,8 +5579,19 @@ gen s_died_`d'd=s_death_date-r_death_date_e<=`d'
 label var s_died_`d'd "S death <=`d'd after R"
 }
 ***************************************************************
+	
+local rvars r_age r_nhres_n1 r_srh_pf_n1 r_advdir_x r_dexp_x r_adl_impair_n1 ///
+ likely_dem r_cancer_hrs_n1 r_hrs_comorb_none_n1 r_hrs_comorb_mild_n1 ///
+ r_hrs_comorb_modsev_n1 r_champus_n1
+
+local svars s_age s_female s_nw_lowest_n1 /*s_nw_midlow_n1 s_nw_midhigh_n1 s_nw_highest_n1*/ s_white_e ///
+s_hseduc s_srh_pf_n1 s_hrs_comorb_none_n1 s_hrs_comorb_mild_n1 s_hrs_comorb_modsev_n1 ///
+s_adl_impair_n1 ///
 
 
+foreach x in `rvars' `svars' {
+	drop if missing(`x')
+}
 *************************************************************************************
 *************************************************************************************
 //create Table 1, overall sample characteristics
@@ -5751,7 +5762,8 @@ preserve
 replace s_tot_paid_by_mc_wi_p24m=. if !surv_12 | r_death_year==2011
 /*gen s_tot_paid_by_mc_wi_6m18m=s_tot_paid_by_mc_wi_18m-s_tot_paid_by_mc_wi_6m if ///
 s_cont_ffs_n_mos>=18*/
-mat tab=J(12,4,.)
+mat tab=J(12,8,.)
+mat stars=J(12,8,0)
 local r=1
 local c=1
 sum spend_quart
@@ -5762,6 +5774,10 @@ local num24=r(N)
 forvalues i=1/4 {
 	foreach x in 6m18m p12m p24m {
 	local r=`r'+1
+	qui ranksum s_tot_paid_by_mc_wi_`x' if spend_quart==`i', by(r_loc_hos)
+	mat tab[`r',`c'+1]=2*(normprob(-abs(r(z))))
+	mat stars[`r',`c'+1]=(2*(normprob(-abs(r(z))))<.01)+(2*(normprob(-abs(r(z))))<.05)
+	
 	foreach j in "0,1" 0 1 {	
 	qui sum s_tot_paid_by_mc_wi_`x' if spend_quart==`i' & inlist(r_loc_hos,`j') ///
 	/*[aw=w_r_loc]*/,d
@@ -5769,7 +5785,7 @@ forvalues i=1/4 {
 	local r=`r'+1
 }
 }
-	local c=`c'+1
+	local c=`c'+2
 	local r=1
 
 }
@@ -5780,8 +5796,9 @@ mat rownames tab="6-18m before R's death" "All" "No In-hospital death" "In-hospi
 
 frmttable using `logpath'/sample_characteristics_death_hosp_matched.rtf, statmat(tab) title("Median MC Spending by Quartile of S Expenditure prior to R's death") ///
 note("Among those with 18m FFS prior to R's death only (N=`num')" ///
-"WI & inflation adjusted to 2012$" "*-Excluding those with less than 12m FFS (N=`num24')") ///
-ctitles("" "Bottom" "2nd" "3rd" "Top") addtable //replace
+"WI & inflation adjusted to 2012$" "*-Excluding those with less than 12m FFS (N=`num24')" ///
+"P-values from Wilcoxon rank-sum test") ///
+ctitles("" "Bottom" "P" "2nd" "P" "3rd" "P" "Top" "P") addtable //replace
 label var likely_dem "Pr. dementia >.5"
 
 mat tab=J(12,8,.)
@@ -5850,21 +5867,38 @@ s_adl_impair_n1 ///
 r_s_helper_x 
 
 foreach x in s_tot_paid_by_mc_wi_p24m s_ed_ind_p24m s_admit_ind_p24m s_icu_ind_p24m ///
-s_died_730d {
+s_died_730d s_ind_nonelect_adm_p24m {
 	replace `x'=. if r_death_year==2011
 	gen `x'_cond=`x' if surv_12 & r_death_year<2011
 	local lab : var label `x'
 	label var `x'_cond "`lab', conditional on 12m Survival"
 }
-local coutcomes s_tot_paid_by_mc_wi_p12m s_tot_paid_by_mc_wi_p24m /*s_n_hospd_p12m ///
-s_n_hospd_p24m s_icu_days_p12m s_icu_days_p24m*/ s_tot_paid_by_mc_wi_p24m_cond 
+local coutcomes
+foreach x in p12m p24m p24m_cond {
+	gen med_`x'=s_tot_paid_by_mc_wi_`x'
+	local vl : var label s_tot_paid_by_mc_wi_`x'
+	label var med_`x' "`vl', median"
+	local coutcomes `coutcomes' s_tot_paid_by_mc_wi_`x' med_`x'
+}
+
+local coutcomes s_tot_paid_by_mc_wi_p12m med_p12m s_tot_paid_by_mc_wi_p24m ///
+med_p24m /*s_n_hospd_p12m ///
+s_n_hospd_p24m s_icu_days_p12m s_icu_days_p24m*/ s_tot_paid_by_mc_wi_p24m_cond ///
+med_p24m_cond
 local ioutcomes s_admit_ind_p12m s_admit_ind_p24m s_admit_ind_p24m_cond ///
+s_ind_nonelect_adm_p12m s_ind_nonelect_adm_p24m s_ind_nonelect_adm_p24m_cond ///
 s_ed_ind_p12m s_ed_ind_p24m s_ed_ind_p24m_cond ///
 s_icu_ind_p12m s_icu_ind_p24m s_icu_ind_p24m_cond s_died_365d s_died_730d s_died_730d_cond
 
-
 foreach weight in w_r_loc surv_12_w surv_24_w bottomquartile_w topquartile_w {
 	svyset [pw=`weight']
+	foreach x in 0 1 {
+	sum s_tot_paid_by_mc_wi_p24m_cond if r_loc_==`x' [aw=`weight']
+	local denomcond`x'=r(N)
+	sum s_tot_paid_by_mc_wi_p24m if r_loc_==`x' [aw=`weight']
+	local denom24`x'=r(N)
+}
+
 	if "`weight'"=="w_r_loc" local title "Full Sample"
 	if "`weight'"=="surv_12_w" {
 		preserve
@@ -5885,6 +5919,13 @@ foreach weight in w_r_loc surv_12_w surv_24_w bottomquartile_w topquartile_w {
 		restore
 		preserve
 		keep if spend_quart==4
+		foreach x in 0 1 {
+			sum s_tot_paid_by_mc_wi_p24m_cond if r_loc_==`x' [aw=`weight']
+			local denomcond`x'=r(N)
+			sum s_tot_paid_by_mc_wi_p24m if r_loc_==`x' [aw=`weight']
+			local denom24`x'=r(N)
+}
+
 		local title "Top quartile pre-death spending"
 }
 
@@ -5967,6 +6008,7 @@ s_hseduc s_srh_pf_n1 s_hrs_comorb_none_n1 s_hrs_comorb_mild_n1 s_hrs_comorb_mods
 s_adl_impair_n1 ///
 r_s_helper_x */
 
+
 local rvars `rcvars' `rivars' 
 local svars `scvars' `sivars' 
 local rn : word count `rvars' `svars' `region' `coutcomes' `ioutcomes' 1 1 1 1
@@ -5980,7 +6022,7 @@ foreach time in "[aw=`weight']" {
 		di "`x'"
 			if "`x'"!="r_age" & "`x'"!="s_age" & ///
 			!inlist(substr("`x'",1,6),"s_netw", "s_tot_","s_n_ho", ///
-			"s_icu_") {
+			"s_icu_","med_p1","med_p2") {
 				sum `x' if r_loc_==`loc' `time'
 				mat tab[`r',`c']=r(mean)*100
 				if `loc'==1 & "`x'"!="r_loc_hosp_x" svy: tab `x' r_loc_
@@ -5990,12 +6032,18 @@ foreach time in "[aw=`weight']" {
 			else {
 				if inlist("`x'","r_age","s_age","s_tot_paid_by_mc_wi_p12m") ///
 				 local r=`r'+1
+				if substr("`x'",1,3)!="med"	{
 				sum `x' if r_loc_==`loc' `time'
 				mat tab[`r',`c']=r(mean)
 				if `loc'==1 svy: mean `x', over(r_loc_)
 				if `loc'==1 test [`x']0=[`x']1
 				if `loc'==1 mat tab[`r',`c'+1]=r(p)
 				if `loc'==1 mat stars[`r',`c'+1]=(r(p)<.05)+(r(p)<.01) 
+}
+				else {
+				sum `x' if r_loc_==`loc' `time',d
+				mat tab[`r',`c']=r(p50)
+}
 }
 	local r = `r'+1
 }
@@ -8102,7 +8150,7 @@ twoway (connected m_`x' time if source=="spouse") (connected f_`x' time if sourc
 (connected m_`x' time if source=="comparison") (connected f_`x' time if source=="comparison") , ///
  xline(0) xtitle("Months from index date")title("Mean Medicare Costs By Time from Index Date, 3month intervals") ///
  xlab(-8 -4 -1 1 4 8, valuelabel) ///
- note("WI Adjusted to 2012 $") subtitle("by gender ") legend(label(1 "Male Spouses") ///
+ note("WI Adjusted to 2012$") subtitle("by gender ") legend(label(1 "Male Spouses") ///
 label(2 "Female Spouses") label(3 "Male Comparison") label(4 "Female Comparison")) ///
   
 graph save mc_costs_spouse_death_hosp_gender`x'.gph, replace
@@ -8115,7 +8163,7 @@ twoway (connected m_`x' time) (connected f_`x' time) (lfit m_`x' before) (lfit m
 (lfit f_`x' before) (lfit f_`x' after), ///
  xline(0) xtitle("Months from index date")title("Mean Medicare Costs By Time from Index Date, 3month intervals") ///
  xlab(-8 -4 -1 1 4 8, valuelabel) ///
- note("WI Adjusted to 2012 $") subtitle("by gender ") legend(label(1 "Males") ///
+ note("WI Adjusted to 2012$") subtitle("by gender ") legend(label(1 "Males") ///
 label(2 "Females"))   
 graph save mc_costs_spouse_death_hosp_gender`x'.gph, replace
 graph export mc_costs_spouse_death_hosp_gender_tot3months_prepostweighted.pdf, replace
@@ -8128,7 +8176,7 @@ twoway (connected m_`x' time if source=="spouse") (connected f_`x' time if sourc
 (connected m_`x' time if source=="comparison") (connected f_`x' time if source=="comparison") , ///
 xline(0) xtitle("Months from index date")  ///
  xlab(-8 -4 -1 1 4 8, valuelabel) ///
-note("WI Adjusted to 2012 $" "24m survivors only") subtitle("by gender ") ///
+note("WI Adjusted to 2012$" "24m survivors only") subtitle("by gender ") ///
 legend(label(1 "Male Spouses") ///
 label(2 "Female Spouses") label(3 "Male Comparison") label(4 "Female Comparison")) ///
   
@@ -8143,7 +8191,7 @@ foreach g in "" "m_" "f_" {
 twoway (connected `g'ffs_tot time if source=="spouse") (connected `g'ffs_tot time if source=="comparison"),  ///
 xline(0) xtitle("Months from index date")  ///
  xlab(-8 -4 -1 1 4 8, valuelabel)    ///
-note("WI Adjusted to 2012 $") subtitle("All `gend' Respondents")  legend(order( 1 "Bereaved Spouses" 2 "Matched Spouses")) ///
+note("WI Adjusted to 2012$")   legend(order( 1 "In-hospital death" 2 "Non-hospital death")) ///
  ytitle()
 graph save mc_costs_spouse_death_hosp_all, replace
 graph export "Non-CI graphs/mc_costs_spouse_death_hosp_`g'all3monthsweighted.pdf", replace
@@ -8151,7 +8199,7 @@ graph export "Non-CI graphs/mc_costs_spouse_death_hosp_`g'all3monthsweighted.pdf
 twoway (connected `g's_ffs_tot time if source=="spouse") (connected `g's_ffs_tot time if source=="comparison"), ///
  xline(0) xtitle("Months from index date") ytitle()  ///
  xlab(-8 -4 -1 1 4 8, valuelabel)     ///
-note("WI Adjusted to 2012 $" )  legend(order( 1 "Bereaved Spouses" 2 "Matched Spouses")) ///
+note("WI Adjusted to 2012$" )  legend(order( 1 "In-hospital death" 2 "Non-hospital death")) ///
  subtitle("24m `gend' Survivors only")
 graph save mc_costs_spouse_death_hosp_24m_survivors, replace
 graph export "Non-CI graphs/mc_costs_spouse_death_hosp_24m_`g'survivors3monthsweighted.pdf", replace
@@ -8167,7 +8215,7 @@ twoway (connected `g'ffs_tot time if source=="spouse") (connected `g'ffs_tot tim
 (rcap ulci`g'ffs_tot llci`g'ffs_tot time if source=="spouse") (rcap ulci`g'ffs_tot llci`g'ffs_tot time if source=="comparison"),  ///
 xline(0) xtitle("Months from index date")  ///
  xlab(-8 -4 -1 1 4 8, valuelabel)    ///
-note("WI Adjusted to 2012 $") subtitle("All `gend' Respondents")  legend(order( 1 "Bereaved Spouses" 2 "Matched Spouses")) ///
+note("WI Adjusted to 2012$")   legend(order( 1 "In-hospital death" 2 "Non-hospital death")) ///
  ytitle()
 graph save mc_costs_spouse_death_hosp_all_ci, replace
 graph export "CI graphs/mc_costs_spouse_death_hosp_`g'all3months_ciweighted.pdf", replace
@@ -8176,7 +8224,7 @@ twoway (connected `g's_ffs_tot time if source=="spouse") (connected `g's_ffs_tot
 (rcap ulci`g's_ffs_tot llci`g's_ffs_tot time if source=="spouse") (rcap ulci`g's_ffs_tot llci`g's_ffs_tot time if source=="comparison"),  ///
  xline(0) xtitle("Months from index date")  ///
  xlab(-8 -4 -1 1 4 8, valuelabel)  ytitle()    ///
-note("WI Adjusted to 2012 $")  legend(order( 1 "Bereaved Spouses" 2 "Matched Spouses")) ///
+note("WI Adjusted to 2012$")  legend(order( 1 "In-hospital death" 2 "Non-hospital death")) ///
  label(3 "") label(4 "") ) subtitle("24m `gend' Survivors only")
 graph save mc_costs_spouse_death_hosp_24m_survivors_ci, replace
 graph export "CI graphs/mc_costs_spouse_death_hosp_24m_`g'survivors3months_ciweighted.pdf", replace
@@ -8192,7 +8240,7 @@ foreach g in "" "m_" "f_" {
 twoway (connected `g'ffs_tot time if source=="spouse") (connected `g'ffs_tot time if source=="comparison"),  ///
 xline(0) xtitle("Months from index date")  ///
  xlab(-8 -4 -1 1 4 8, valuelabel)    ///
-note("WI Adjusted to 2012 $") subtitle("All `gend' Respondents")  legend(order( 1 "Bereaved Spouses" 2 "Matched Spouses")) ///
+note("WI Adjusted to 2012$")   legend(order( 1 "In-hospital death" 2 "Non-hospital death")) ///
 
 graph save mc_costs_spouse_death_hosp_all, replace
 graph export "graphs/mc_costs_spouse_death_hosp_`g'all3monthsweighted.pdf", replace
@@ -8200,7 +8248,7 @@ graph export "graphs/mc_costs_spouse_death_hosp_`g'all3monthsweighted.pdf", repl
 twoway (connected `g's_ffs_tot time if source=="spouse") (connected `g's_ffs_tot time if source=="comparison"), ///
  xline(0) xtitle("Months from index date")  ///
  xlab(-8 -4 -1 1 4 8, valuelabel)     ///
-note("WI Adjusted to 2012 $" )  legend(order( 1 "Bereaved Spouses" 2 "Matched Spouses")) ///
+note("WI Adjusted to 2012$" )  legend(order( 1 "In-hospital death" 2 "Non-hospital death")) ///
  subtitle("24m `gend' Survivors only")
 graph save mc_costs_spouse_death_hosp_24m_survivors, replace
 graph export "graphs/mc_costs_spouse_death_hosp_24m_`g'survivors3monthsweighted.pdf", replace
@@ -8210,20 +8258,23 @@ foreach g in "" "m_" "f_" {
 	local gend 
 	if "`g'"=="m_" local gend "Male"
 	if "`g'"=="f_" local gend "Female"
-twoway (connected `g'ffs_tot time if source=="spouse") (connected `g'ffs_tot time if source=="comparison") ///
-(rcap ulci`g'ffs_tot llci`g'ffs_tot time if source=="spouse") (rcap ulci`g'ffs_tot llci`g'ffs_tot time if source=="comparison"),  ///
+twoway (line `g'ffs_tot time if source=="spouse", lcolor(dknavy)lwidth(medthick) /*msymbol(square)*/) ///
+(line `g'ffs_tot time if source=="comparison", ///
+lcolor(cranberry) lpattern(longdash) lwidth(medthick)) ///
+(rcap ulci`g'ffs_tot llci`g'ffs_tot time if source=="spouse", lcolor(dknavy)) (rcap ulci`g'ffs_tot ///
+llci`g'ffs_tot time if source=="comparison", lcolor(cranberry) ),  ///
 xline(0) xtitle("Months from index date")  ///
  xlab(-8 -4 -1 1 4 8, valuelabel)    ///
-note("WI Adjusted to 2012 $") subtitle("All `gend' Respondents")  legend(order( 1 "Bereaved Spouses" 2 "Matched Spouses")) ///
+  legend(order( 1 "In-hospital death" 2 "Non-hospital death")) 
 
 graph save mc_costs_spouse_death_hosp_all_ci, replace
-graph export "graphs/mc_costs_spouse_death_hosp_`g'all3months_ciweighted.pdf", replace
+graph export "graphs/mc_costs_spouse_death_hosp_`g'all3months_ciweighted_soliddash.pdf", replace
 
 twoway (connected `g's_ffs_tot time if source=="spouse") (connected `g's_ffs_tot time if source=="comparison") ///
 (rcap ulci`g's_ffs_tot llci`g's_ffs_tot time if source=="spouse") (rcap ulci`g's_ffs_tot llci`g's_ffs_tot time if source=="comparison"),  ///
  xline(0) xtitle("Months from index date")  ///
  xlab(-8 -4 -1 1 4 8, valuelabel)     ///
-note("WI Adjusted to 2012 $")  legend(order( 1 "Bereaved Spouses" 2 "Matched Spouses")) ///
+/*note("WI Adjusted to 2012$")*/  legend(order( 1 "In-hospital death" 2 "Non-hospital death")) ///
  subtitle("24m `gend' Survivors only")
 graph save mc_costs_spouse_death_hosp_24m_survivors_ci, replace
 graph export "graphs/mc_costs_spouse_death_hosp_24m_`g'survivors3months_ciweighted.pdf", replace
@@ -9341,4 +9392,85 @@ mean median 8 mean median
 frmttable using "`logpath'\quarterly_spending.rtf", replace statmat(tab) ctitles("" "N contributing" "Non-hospital death"  ///
 "In-hospital death" "" "P-value" ""\"" "" "" "T-test" "Rank sum" "GLM") sdec(0,2,2,2) annotate(stars) asymbol(*,**) ///
 title(Quarterly MC Expenditures) note("S included if has FFS for the first month (closest to index date) in period" ///
+"Bivariate GLM with log link and gamma family") 
+
+
+H="quarterly table matched sample"
+
+
+capture log close
+
+clear all
+set more off
+
+//Amy's PC
+local  logpath E:\data\spouse_claims\logs
+local datapath E:\data\spouse_claims\data\int_data
+
+log using "`logpath'\Spouse_intensive_table1.txt", text replace
+
+cd `datapath'
+
+//use sample with no missingness - saved when first round of psmatching done
+use spouse_claims_intensmatched.dta
+svyset [pw=w_r_loc]
+
+mat tab=J(50,6,.)
+mat stars=J(50,6,0)
+local r=3
+local c=1
+
+forvalues i=22(-3)1 {
+forvalues j=0/1 {
+	sum s_tot_paid_by_mc_wi_m_`i'_to_`=`i'+2' if r_loc_==`j' [aw=w_r_loc_],d
+	local n`j'=r(N)
+	mat tab[`r',`=`j'+2']=r(mean)
+	mat tab[`r'+1,`j'+2]=r(p50)
+}
+	mat tab[`r',1]=`n0'+`n1'
+	*ttest s_tot_paid_by_mc_wi_m_`i'_to_`=`i'+2',by(r_loc_)
+	reg s_tot_paid_by_mc_wi_m_`i'_to_`=`i'+2' r_loc_ [pw=w_r_loc]
+	test r_loc_
+	mat tab[`r',4]=r(p)
+	mat stars[`r',4]=(r(p)<.01)+(r(p)<.05)
+/*	ranksum s_tot_paid_by_mc_wi_m_`i'_to_`=`i'+2', by(r_loc_)
+	mat tab[`r',5]=2*(normprob(-abs(r(z))))
+	mat stars[`r',5]=(2*(normprob(-abs(r(z))))<.01)+(2*(normprob(-abs(r(z))))<.05)	
+*/	glm s_tot_paid_by_mc_wi_m_`i'_to_`=`i'+2' r_loc_ [pw=w_r_loc_], link(log) fam(gamma)
+	mat tab[`r',6]=e(p)
+	mat stars[`r',6]=(e(p)<.01)+(e(p)<.05)	
+	local r=`r'+3
+}
+local r=`r'+1
+forvalues i=1(3)24 {
+forvalues j=0/1 {
+	sum s_tot_paid_by_mc_wi_m_`i'_to_`=`i'+2'p if r_loc_==`j' [aw=w_r_loc_],d
+	local n`j'=r(N)
+	mat tab[`r',`=`j'+2']=r(mean)
+	mat tab[`r'+1,`j'+2]=r(p50)
+}
+	mat tab[`r',1]=`n0'+`n1'
+*	ttest s_tot_paid_by_mc_wi_m_`i'_to_`=`i'+2'p,by(r_loc_)
+	reg s_tot_paid_by_mc_wi_m_`i'_to_`=`i'+2'p r_loc_ [pw=w_r_loc]
+	test r_loc_
+	mat tab[`r',4]=r(p)
+	mat stars[`r',4]=(r(p)<.01)+(r(p)<.05)
+/*	ranksum s_tot_paid_by_mc_wi_m_`i'_to_`=`i'+2'p, by(r_loc_)
+	mat tab[`r',5]=2*(normprob(-abs(r(z))))
+	mat stars[`r',5]=(2*(normprob(-abs(r(z))))<.01)+(2*(normprob(-abs(r(z))))<.05)	
+	*/glm s_tot_paid_by_mc_wi_m_`i'_to_`=`i'+2'p r_loc_ [pw=w_r_loc_], link(log) fam(gamma)
+	mat tab[`r',6]=e(p)
+	mat stars[`r',6]=(e(p)<.01)+(e(p)<.05)
+	local r=`r'+3
+}
+
+mat rownames tab= "Quarters pre R death" 8 mean median 7 mean median 6 mean median 5 mean median ///
+4 mean median 3 mean median 2 mean median 1 mean median "Quarters post R death" 1 mean median ///
+2 mean median 3 mean median 4 mean median 5 mean median 6 mean median 7 ///
+mean median 8 mean median
+
+frmttable using "`logpath'\quarterly_spending_matched.rtf", replace statmat(tab) ctitles("" "N contributing" "Non-hospital death"  ///
+"In-hospital death" "" "P-value" ""\"" "" "" "T-test" "Rank sum" "GLM") sdec(0,2,2,2) annotate(stars) asymbol(*,**) ///
+title(Quarterly MC Expenditures) note("All means, medians, and significance tests based on propensity matched sample" ///
+"S included if has FFS for the first month (closest to index date) in period" ///
 "Bivariate GLM with log link and gamma family") 

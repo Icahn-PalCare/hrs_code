@@ -5471,7 +5471,7 @@ replace died_6m = 1 if mortality <=180
 
 
 cap drop _m
-merge m:1 id using "E:\data\hrs_cleaned\exit_02_to_12_dt.dta", keepus(e_ivw_date exit_year)
+merge m:1 id using "E:\data\hrs_cleaned\exit_02_to_12_dt.dta", keepus(e_ivw_date exit_year adl_t adl_tx adl_wk adl_bh adl_dr adl_e)
 drop if _m==2
 
 gen index_2_exit = .
@@ -5505,6 +5505,12 @@ gen race = 0
 replace race = 1 if white==1
 replace race = 2 if black==1
 replace race = 3 if hisp_eth==1
+
+/* Age at Dialysis */
+replace birthmo = 3 if birthmo==. & ind_n1_ivw==1
+gen birth_date = mdy(birthmo,birthday,birthyr)
+gen age_index=(index_date-birth_date)/365.25
+recast int age_index, force
 
 
 /* Time between dialysis n1 & p1 */
@@ -5825,7 +5831,7 @@ replace icu_2yr_post = 1 if (icu_days_m`i'p>0 & icu_days_m`i'p!=.)
 gen dm_flag = 0
 replace dm_flag = 1 if comorb_10_0d_n12m==1 | comorb_11_0d_n12m==1
 
-egen cms_chronic = anycount(comorb_31_0d_n12m comorb_6_0d_n12m dm_flag comorb_13_0d_n12m comorb_32_0d_n12m comorb_18_0d_n12m comorb_1_0d_n12m), values(1)
+egen cms_chronic = anycount(comorb_5_0d_n12m comorb_6_0d_n12m dm_flag comorb_13_0d_n12m comorb_32_0d_n12m comorb_18_0d_n12m comorb_1_0d_n12m), values(1)
 
 cap drop _m
 
@@ -6027,7 +6033,150 @@ replace tics_8 = 1 if tics_tot<=8
 cap drop _m
 merge m:1 bid_hrs_21 using "E:\data\Dialysis\int_data\npr_visit.dta"
 
-/* Tables 4/13/17
+drop if timegap==0 & ind_n1_ivw==1
+
+/* ADL vs Time Graph */
+
+/* N1 */
+gen ivw_gap = 0
+local q = -1
+local r = 0
+local s = 30
+
+while `s' <=1080 {
+replace ivw_gap=`q' if n1_to_dial>`r' & n1_to_dial<=`s' & ind_n1_ivw==1
+local --q
+local r = `r' + 30
+local s = `s' + 30
+}
+
+/* P1 */
+local q = 1
+local r = 0
+local s = 30
+
+while `s' <=1300 {
+replace ivw_gap=`q' if (dial_to_p1>`r' & dial_to_p1<=`s') & n1_ingap==1 & ind_p1_ivw==1
+local ++q
+local r = `r' + 30
+local s = `s' + 30
+}
+
+/*Exit*/
+expand = 2 if ind_n1_ivw==1 & exit_year!=., gen(ind_exit_ivw)
+egen adl_exit_c = anycount(adl_dr adl_wk adl_bh adl_e adl_tx adl_t) if ind_exit_ivw==1, values(1)
+gen adl_dep_exit = 0
+replace adl_dep_exit = 1 if adl_exit_c>0 & ind_exit_ivw==1
+
+gen report_date = death_all - 42 if ind_exit_ivw==1
+format %td report_date
+
+gen dial_to_report = report_date - index_date 
+
+
+local q = 1
+local r = 0
+local s = 30
+
+replace ivw_gap = 1 if dial_to_report<=0 & ind_exit_ivw==1
+while `s' <= 3900 {
+
+replace ivw_gap=`q' if ind_exit_ivw==1 & (dial_to_report>`r' & dial_to_report<=`s')
+local ++q
+local r = `r' + 30
+local s = `s' + 30
+}
+
+/* Calculate ratio - N1 */
+preserve
+contract ivw_gap if ivw_gap<0
+save "E:\data\Dialysis\int_data\ivwgap_freq.dta", replace
+restore
+cap drop _m
+merge m:1 ivw_gap using "E:\data\Dialysis\int_data\ivwgap_freq.dta", keepus(_freq)
+cap drop _m
+
+gen percentage_n1 = _freq/283
+preserve
+keep if ind_n1_ivw==1 & adl_dep_core==1
+egen adl_count = count(adl_dep_core), by(ivw_gap)
+keep ivw_gap adl_count
+duplicates drop
+save "E:\data\Dialysis\int_data\adln1_freq.dta", replace
+restore
+cap drop _m
+merge m:1 ivw_gap using "E:\data\Dialysis\int_data\adln1_freq.dta", keepus(adl_count)
+cap drop _m
+
+gen percentage_adl = adl_count/283
+gen ratio = percentage_adl/percentage_n1
+
+/*Calculate Ratio - P1 */
+
+preserve
+contract ivw_gap if ind_p1_ivw==1 & n1_ingap==1, freq(p1_freq)
+save "E:\data\Dialysis\int_data\p1gap_freq.dta", replace
+restore
+cap drop _m
+merge m:1 ivw_gap using "E:\data\Dialysis\int_data\p1gap_freq.dta", keepus(p1_freq)
+cap drop _m
+
+gen percentage_p1 = p1_freq/112
+preserve
+keep if ind_p1_ivw==1 & adl_dep_core==1 & n1_ingap==1
+egen adl_count_p1 = count(adl_dep_core), by(ivw_gap)
+keep ivw_gap adl_count_p1
+duplicates drop
+save "E:\data\Dialysis\int_data\adlp1_freq.dta", replace
+restore
+cap drop _m
+merge m:1 ivw_gap using "E:\data\Dialysis\int_data\adlp1_freq.dta", keepus(adl_count_p1)
+cap drop _m
+
+replace percentage_adl = adl_count_p1/112 if ind_p1_ivw==1 & n1_ingap==1
+replace ratio = percentage_adl/percentage_p1 if ind_p1_ivw==1 & n1_ingap==1
+
+
+
+/* Calculate Ratio - Exit */
+preserve
+contract ivw_gap if ind_exit_ivw==1, freq(exit_freq)
+gen ind_exit_ivw = 1
+save "E:\data\Dialysis\int_data\exit_freq.dta", replace
+restore
+cap drop _m
+merge m:1 ivw_gap ind_exit_ivw using "E:\data\Dialysis\int_data\exit_freq.dta", keepus(exit_freq)
+cap drop _m
+
+gen percentage_exit = exit_freq/236
+preserve
+keep if ind_exit_ivw==1 & adl_dep_exit==1
+egen adl_count_exit = count(adl_dep_exit), by(ivw_gap)
+keep ivw_gap adl_count_exit
+duplicates drop
+gen ind_exit_ivw = 1
+save "E:\data\Dialysis\int_data\adlexit_freq.dta", replace
+restore 
+cap drop _m
+merge m:1 ivw_gap ind_exit_ivw using "E:\data\Dialysis\int_data\adlexit_freq.dta", keepus(adl_count_exit)
+cap drop _m
+
+replace percentage_adl = adl_count_exit/236 if ind_exit_ivw==1
+replace ratio = percentage_adl/percentage_exit if ind_exit_ivw==1
+
+save "E:\data\Dialysis\final_data\hrs_dialysis.dta", replace
+
+/* Scatter plot */
+*scatter ratio ivw_gap if ivw_gap<50, xline(0)
+graph twoway (scatter ratio ivw_gap if ind_n1_ivw==1) (scatter ratio ivw_gap if ind_p1_ivw==1 & n1_ingap==1) (scatter ratio ivw_gap if ind_exit_ivw==1) if ivw_gap<=36, ///
+legend(label(1 N1) label(2 P1) label(3 Exit)) xline(0) ytitle("Relative ADL Dependence") xtitle("Months from Index Date") xlabel(-36(6)36)
+
+
+keep if ivw_gap<0
+keep ivw_gap p1_freq adl_count_p1 percentage_p1 percentage_adl 
+
+
+/* Tables 4/13/17 */
 
 local ivars female race hseduc esrd_ind comorb_31_0d_n12m comorb_6_0d_n12m comorb_10_0d_n12m comorb_11_0d_n12m ///
 comorb_13_0d_n12m comorb_32_0d_n12m comorb_18_0d_n12m comorb_1_0d_n12m proxy_core medicaid ///
@@ -6702,7 +6851,7 @@ varlabels title("No Outpatient Dialysis: Sample Characteristics at N1 & P1 Core 
 note()
        
 
-*/
+
 
 
 
@@ -6784,6 +6933,469 @@ tab adl_indep_core true_op if ind_p1_ivw==1 & n1_ingap==1, chi2 col
 tab adl_dep_core true_op if ind_p1_ivw==1 & n1_ingap==1, chi2 col
 
 H="****Everything below not apart of main project****"
+
+
+H="Survival Analysis"
+/*pull bmi from rand file */
+use hhid pn r9bmi r8bmi r7bmi r6bmi r5bmi r4bmi r3bmi r2bmi r1bmi r11bmi r10bmi using "E:\data\hrs_public_2012\rand2012\main\randhrsn.dta", clear
+
+*tostring hhidpn, generate(id)
+save "E:\data\Dialysis\Int_data\rand_height.dta", replace
+
+/*create survival dataset */
+
+use "E:\data\Dialysis\final_data\hrs_dialysis.dta", clear
+
+keep if ind_n1_ivw==1 & ind_exit_ivw==0
+save "E:\data\Dialysis\int_data\survival_283.dta", replace
+
+gen age_65_74 = 0
+replace age_65_74 = 1 if age_index<=74
+
+gen age_75_84 = 0
+replace age_75_84 = 1 if age_index>74 & age_index<=84
+
+gen age_85 = 0
+replace age_85 = 1 if age_index>=85
+
+gen death_weeks = mortality*0.14286
+recast int death_weeks, force
+recode death_weeks (0=1) 
+
+
+
+/*
+gen death_months = mortality * 0.0328767
+recast int death_months, force
+recode death_months (0=1) 
+
+
+gen death_years = mortality * 0.00273973
+recast int death_years, force
+recode death_years (0=1)
+*/
+gen agecat = .
+replace agecat = 1 if age_65_74==1
+replace agecat = 2 if age_75_84==1
+replace agecat = 3 if age_85==1 
+
+la define agelbl 1"65-74"2"75-84"3"85+"
+la values agecat agelbl
+
+*gen prob_cind = 0
+*replace prob_cind = 1 if likelycind==1 | likelydem==1
+
+gen prob_unknown = 0
+replace prob_unknown = 1 if pdem==. | pdem2==. | pdem3==.
+replace prob_unknown = 1 if pdem<0.5 & pdem2<0.5 & pdem3<0.5
+
+gen likelycat = 0
+replace likelycat = 1 if likelydem==1
+replace likelycat = 2 if likelycind==1
+replace likelycat = 3 if likelynormal==1
+
+
+/* merge with rand height dataset */
+
+merge 1:1 hhid pn using "E:\data\Dialysis\Int_data\rand_height.dta"
+keep if _m==3
+
+drop bmi*
+
+gen bmi = .
+
+local j = 1998
+forvalues i = 4/11 {
+replace bmi=r`i'bmi if core_year==`j'
+
+local j = `j' + 2
+}
+
+
+/* BMI calcs */
+
+xtile bmi_quart = bmi, nq(4) // quart #1 is the lowest, #5 = missing
+*recode bmi_quart (. = 5) 
+
+stset death_weeks, failure(died==1)
+*stset death_weeks, failure(died==1) exit(death_weeks==52)
+
+gen bmi_25 = 0
+replace bmi_25 = 1 if bmi_quart==1
+
+gen bmi_50 = 0
+replace bmi_50 = 1 if bmi_quart==2
+
+gen bmi_75 = 0
+replace bmi_75 = 1 if bmi_quart==3
+
+gen bmi_100 = 0
+replace bmi_100 = 1 if bmi_quart==4
+/*
+gen bmi_unknown = 0
+replace bmi_unknow = 1 if bmi_quart==5
+*/
+gen bmi_under_25 = 0
+replace bmi_under_25 = 1 if bmi <=25
+
+drop if bmi==.
+drop if srh_pf==.
+
+
+/*Rename Comorbs */
+
+
+rename comorb_1_0d_n12m comorb_chf
+rename comorb_2_0d_n12m comorb_myocard
+rename comorb_3_0d_n12m comorb_perivascular
+rename comorb_4_0d_n12m comorb_cerebrovascular 
+rename comorb_5_0d_n12m comorb_dementia
+rename comorb_6_0d_n12m comorb_pulmonary
+rename comorb_7_0d_n12m comorb_rheumatic
+rename comorb_8_0d_n12m comorb_peptic
+rename comorb_9_0d_n12m comorb_liver
+rename comorb_10_0d_n12m comorb_uncdiabetes
+rename comorb_11_0d_n12m comorb_comdiabetes
+rename comorb_12_0d_n12m comorb_plegia
+rename comorb_13_0d_n12m comorb_renal
+rename comorb_14_0d_n12m comorb_malignancy
+rename comorb_15_0d_n12m comorb_msliver
+rename comorb_16_0d_n12m comorb_tumor
+rename comorb_17_0d_n12m comorb_aids
+rename comorb_32_0d_n12m comorb_cad
+rename dm_flag comorb_diabetes
+gen comorb_cancer = 0
+replace comorb_cancer = 1 if comorb_malignancy==1 | comorb_tumor==1
+
+
+gen comorb_micad = 0
+replace comorb_micad = 1 if comorb_myocard==1 | comorb_cad==1
+
+gen comorb_other = 0
+replace comorb_other = 1 if comorb_dementia==1 | comorb_rheumatic==1 | comorb_peptic==1 | comorb_plegia==1 | comorb_aids==1
+
+gen comorb_liv = 0
+replace comorb_liv = 1 if comorb_liver==1 | comorb_msliver==1 
+
+
+
+label var periflag "Peritoneal Dialysis"
+label var comorb_diabetes "Charlson, Any Diabetes"
+label var comorb_cancer "Charlson, Cancer"
+label var adl_dep_core "ADL Dependency at N1"
+label var ip_start "Inpatient Start"
+label var prob_unknown "Cog. Status Unknown"
+label var bmi_25 "BMI, 25th percentile"
+label var bmi_50 "BMI, 50th percentile"
+label var bmi_75 "BMI, 75th percentile"
+
+
+local c_vars comorb_chf comorb_myocard comorb_perivascular comorb_cerebrovascular comorb_dementia comorb_pulmonary comorb_rheumatic comorb_peptic comorb_liver comorb_uncdiabetes comorb_comdiabetes comorb_plegia comorb_malignancy comorb_msliver comorb_tumor comorb_aids comorb_cad
+local rd: word count `c_vars'
+di `rd'
+egen c_con = anycount(`c_vars'), values(1)
+
+gen con_cat = .
+replace con_cat = 1 if c_con<=4
+replace con_cat = 2 if c_con>4
+*replace con_cat = 3 if c_con>=7
+
+gen below_median_age = 0
+replace below_median_age = 1 if age<76
+
+gen above_median_age = 0
+replace above_median_age = 1 if age>=76
+
+
+la define conlbl 1"0-3 Comorbidities"2"4-6 Comorbidities"3"7+ Comorbidities"
+*la define conlbl 1"0-4 Comorbidities"2"5+ Comorbidities"
+la values con_cat conlbl
+
+/*
+gen comorb_0_3 = 0
+replace comorb_0_3 = 1 if con_cat==1
+
+gen comorb_4_6 = 0
+replace comorb_4_6 = 1 if con_cat==2
+
+gen comorb_7+ = 0
+replace comorb_7+ = 1 if con_cat==3
+*/
+
+gen comorb_0_4 = 0
+replace comorb_0_4 = 1 if con_cat==1
+
+gen comorb_5 = 0
+replace comorb_5 = 1 if con_cat==2
+
+gen age_comorb = .
+replace age_comorb = 1 if age_65_74==1 & comorb_0_4==1
+replace age_comorb = 2 if age_65_74==1 & comorb_5==1
+replace age_comorb = 3 if age_75_84==1 & comorb_0_4==1
+replace age_comorb = 4 if age_75_84==1 & comorb_5==1
+replace age_comorb = 5 if age_85==1 & comorb_0_4==1
+replace age_comorb = 6 if age_85==1 & comorb_5==1
+
+la define ageclbl 1"65-74&0-4"2"65-74&5+"3"75-84&0-4"4"75-84&5+" ///
+5"85+&0-4"6"85+&5+"
+la values age_comorb ageclbl
+
+
+sts graph, by(age_comorb) xtitle(Analysis Time = weeks)
+
+gen median_comorb = .
+replace median_comorb = 1 if below_median_age==1 & comorb_0_4==1
+replace median_comorb = 2 if below_median_age==1 & comorb_5==1
+replace median_comorb = 3 if above_median_age==1 & comorb_0_4==1
+replace median_comorb = 4 if above_median_age==1 & comorb_5==1
+
+la define medlbl 1"<76&0-4"2"<76&5+"3">=76&0-4"4">=76&5+"
+la values median_comorb medlbl
+
+sts graph, by(median_comorb) xtitle(Analysis Time = weeks)
+
+sts graph, by(adl_dep_core) xtitle(Analysis Time = weeks)
+
+
+gen co_adl = .
+replace co_adl = 1 if comorb_0_3==1 & adl_dep_core==0
+replace co_adl = 2 if comorb_0_3==1 & adl_dep_core==1
+replace co_adl = 3 if comorb_4_6==1 & adl_dep_core==0
+replace co_adl = 4 if comorb_4_6==1 & adl_dep_core==1
+replace co_adl = 5 if comorb_7==1 & adl_dep_core==0
+replace co_adl = 6 if comorb_7==1 & adl_dep_core==1
+
+/*
+
+cap drop co_adl 
+gen co_adl = .
+replace co_adl = 1 if comorb_0_4==1 & adl_dep_core==0
+replace co_adl = 2 if comorb_0_4==1 & adl_dep_core==1 
+replace co_adl = 3 if comorb_5==1 & adl_dep_core==0 
+replace co_adl = 4 if comorb_5==1 & adl_dep_core==1 
+*/
+
+
+la define comorbadlbl 1"0-3&ADL NON DEP"2"0-3&ADL DEP"3"4-6&ADL NON DEP"4"4-6&ADL DEP"5"7+&ADL NON DEP"6"7+&ADL DEP"
+la values co_adl comorbadlbl
+
+/*
+cap la drop comorbadlbl
+la define comorbadlbl 1"0-4&ADL NON DEP"2"0-4&ADL DEP"3"5+&ADL NON DEP"4"5+&ADL DEP" 
+la values co_adl comorbadlbl 
+*/
+
+sts graph, by(co_adl) xtitle(Analysis Time = weeks)
+
+
+
+stset death_weeks, failure(died==1)
+stset death_weeks, failure(died==1) exit(death_weeks==52)
+
+foreach x of varlist comorb_0_4 comorb_5 {
+
+sts graph, strata(adl_dep_core) adjustfor(`x') xtitle(Analysis Time = Weeks) 
+*graph export "E:/Files to move out/Omari/20170613/`x'.pdf", as(pdf) replace
+graph export "E:/Files to move out/Omari/20170613/`x'_1yr.pdf", as(pdf) replace
+}
+
+
+
+
+ 
+
+ 
+sts graph , strata(con_cat) adjustfor(agecat) xtitle(Analysis Time = Weeks) 
+
+la define iplbl 0"Outpatient"1"Inpatient"
+la values ip_start iplbl
+
+
+sts graph , by(ip_start) xtitle(Analysis Time = Weeks) 
+
+
+
+
+/*
+mat ctab=J(`rd',2,.) 
+local s = 1
+
+foreach x of local c_vars {
+
+tab `x', matcell(A)
+mat ctab[`s',1] = A[2,1]
+mat ctab[`s',2] = (A[2,1]/277)*100
+
+local s = `s'+1
+}
+
+mat ctab[19, 1] = r(N)
+mat rownames ctab= `c_vars' "Sample Size"
+
+frmttable using "E:\projects\Dialysis\archive_logs\comorb_count.doc", replace statmat(ctab) ///
+varlabels title("Charlson Comorbidities + CAD") ctitles("Comorbidity" "# of People" "%") sdec(2) ///
+note("In the Cox Model, Cancer is a combination of Any Malignancy and Metastatic Solid Tumor")
+
+
+
+local c_vars comorb_chf comorb_myocard comorb_perivascular comorb_cerebrovascular comorb_dementia comorb_pulmonary comorb_rheumatic comorb_peptic comorb_liver comorb_uncdiabetes comorb_comdiabetes comorb_plegia comorb_renal comorb_malignancy comorb_msliver comorb_tumor comorb_aids comorb_cad
+egen co_dist = anycount(`c_vars'), values(1)
+*/
+
+/*Logrank/Univariate tests */
+stset death_weeks, id(bid_hrs) failure(died==1)
+
+*sts graph, by(agecat) xtitle("Analysis Time = Weeks")
+
+local ivars age_75_84 age_85 female hseduc non_white periflag comorb_5_0d_n12m comorb_3_0d_n12m dm_flag comorb_13_0d_n12m ///
+comorb_32_0d_n12m comorb_16_0d_n12m comorb_1_0d_n12m srh_pf adl_dep_core nhres ip_start likelydem likelycind prob_unknown ///
+bmi_under_25
+
+local ivars age_75_84 age_85 female hseduc non_white periflag comorb_dementia comorb_perivascular comorb_diabetes comorb_renal ///
+comorb_cad comorb_cancer comorb_chf srh_pf adl_dep_core nhres ip_start likelydem likelycind prob_unknown ///
+bmi_25 bmi_50 bmi_75
+
+local ivars1 age_75_84 age_85 female hseduc non_white periflag comorb_dementia comorb_perivascular comorb_diabetes ///
+comorb_cad comorb_cancer comorb_chf srh_pf adl_dep_core nhres ip_start likelydem likelycind prob_unknown ///
+bmi_25 bmi_50 bmi_75
+
+stcox `ivars', tvc(comorb_diabetes) texp(_t)
+
+/*
+estimates store reg4
+outreg2 [reg4] using regtab1, excel eform
+foreach x of local ivars {
+stcox `ivars', tvc(`x') texp(ln(_t))
+estimates store reg4
+outreg2 [reg4] using regtab1, excel eform
+}
+
+
+
+foreach x of local ivars {
+
+sts graph, by(`x')
+
+graph export "E:/projects/Dialysis/archive_code/Diagnostics/KM Curves/`x'.pdf", as(pdf) replace
+
+stphplot, by (`x')
+graph export "E:/projects/Dialysis/archive_code/Diagnostics/Neg Log KM Curves/`x'.pdf", as(pdf) replace
+}
+
+*/
+
+
+ 
+ 
+
+
+local idem age_75_84 age_85 female hseduc non_white
+stcox `idem' comorb_4_6 comorb_7
+stcox `idem' comorb_chf comorb_micad comorb_perivascular comorb_cerebrovascular comorb_renal comorb_pulmonary comorb_liv comorb_diabetes comorb_cancer comorb_other
+stcox `idem' adl_dep_core
+stcox `idem' likelydem likelycind prob_unknown 
+
+/*
+stcox `ivars', tvc(periflag) texp(_t)
+stcox `ivars', tvc(periflag) texp(ln(_t))
+*/
+
+stpm2 `ivars', scale(hazard) df(3) tvc(comorb_renal) dftvc(2) eform
+cap drop hr_tvc
+predict hr_tvc, hrnumerator(comorb_renal 1) hrdenominator(comorb_renal 0)
+predict hr_tvc, 
+
+
+foreach x of local ivars {
+
+stcox (`ivars'), tvc(`x') texp(ln(_t))
+}
+
+
+
+
+
+/*
+stcox i.age_65_74 if bmi!=.
+outreg, stats(e_b p) varlabels
+
+foreach x of local ivars1 {
+
+stcox i.`x' if bmi!=.
+outreg, merge stats(e_b p) varlabels
+outreg, merge stats (e_b p) store(out) varlabels
+}
+
+outreg using table3, basefont(fs10) replay(out) 
+
+
+
+stcox i.age_65_74 if bmi!=.
+
+estout using table2, cells(b p) eform
+
+
+*/
+
+local ivars age_75_84 age_85 female hseduc non_white periflag comorb_dementia comorb_perivascular comorb_diabetes comorb_renal ///
+comorb_cad comorb_cancer comorb_chf srh_pf adl_dep_core nhres ip_start likelydem likelycind prob_unknown ///
+bmi_25 bmi_50 bmi_75
+
+
+local rn: word count `ivars'
+di `rn'
+
+mat tab1=J(`rn',5,.)
+local r = 1
+
+foreach x of local ivars {
+
+stcox `x' if bmi!=., strata(ip_start)
+qui return list
+matrix A = r(table)
+matrix tab1[`r', 1] = A[1,1]
+matrix tab1[`r', 2] = A[4,1]
+matrix tab1[`r', 3] = A[5,1]
+matrix tab1[`r', 4] = A[6,1]
+
+local r = `r' + 1
+}
+mat rownames tab1= `ivars'
+mat list tab1
+
+frmttable using "E:\projects\Dialysis\archive_logs\unadjusted_associations.doc", replace statmat(tab1) ///
+varlabels title("Bivariate Relationships in Cox Model") ctitles("Variables" "Hazard Ratio" "P-Value" "95% CI, Lower" "95% CI, Upper") sdec(3) ///
+note()
+
+
+
+
+
+
+pwcorr `ivars1'
+stcox i.(`ivars'), strata(ip_start)
+
+
+/*
+foreach x of local ivars {
+
+sts test `x'
+stphplot, by(`x') adjust(ip_start)
+
+graph export "E:/projects/Dialysis/archive_logs/20170522/stratified/`x'.pdf", as(pdf) replace
+}
+
+/*
+sts gen surv = s, by(agecat)
+keep surv bid_hrs_21
+rename surv f_surv
+rename surv r_serv
+merge 1:1 bid_hrs_21 using "E:\projects\Dialysis\full_surv.dta"
+save "E:\projects\Dialysis\full_surv.dta", replace
+*/
+
+
+sts graph , by(agecat) xtitle(Analysis Time = Weeks) 
 
 
 H="Carrier Claims with (missed) IP stay"

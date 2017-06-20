@@ -1,0 +1,610 @@
+= V4 Outline MultiLine NoSorting TabWidth=30
+
+H="Smoking project"
+/*start with the intermediate dataset with claims data and outcomes from 2004 from the serious illness dataset
+
+get keith's comorbidities and staging
+--1 medpar dx or 2 other dx 1yr prior to ivw
+
+add survey smoking info
+
+run table
+*/
+
+
+/*nhats cleaned path*/
+libname hrs_cln 'E:\data\hrs_cleaned';
+
+/*medicare xwalk and claims path*/
+libname medi 'E:\data\cms_DUA_24548_2012';
+
+/*project data paths*/
+libname proj_int 'E:\data\smoking\int_data';
+libname proj_fin 'E:\data\smoking\final_data';
+
+
+
+H="Get index date"
+/* bring in hrs 2004 dataset from serious illness file*/
+option nofmterr;
+data proj_int.core;
+set proj_int.n0_n1_p1_p2_criteria_2004;
+index_date=c_ivw_date_n0;
+index_year=c_ivw_year_n0;
+bid_hrs_21=bid_hrs;
+run;
+
+data proj_int.index (keep= id hhid s_id bid_hrs_21 index_date index_year);
+set proj_int.core;
+run;
+
+
+
+H="get claims and diagnoses 1 year prior to index"
+/*get claims 1yr prior to index date, then pull diagnoses*/
+
+
+
+%macro claims (source=,name=,su=);
+
+proc sql;
+create table &name._&source._meet_&su.a as select *
+from medi.&source._2000_2012 a inner join
+proj_int.index b
+on trim(left(a.bid_hrs_21))=trim(left(b.bid_hrs_21))
+and ((admit_date>=(index_date-&su.) and index_date>=admit_date) 
+or (disch_date>=(index_date-&su.) and disch_date<=index_date));
+quit;
+
+data &name._&source._meet_&su.;
+set &name._&source._meet_&su.a;
+source="&source";
+run;
+%mend;
+
+%claims(source=mp,name=interviews,su=365);
+%claims(source=op,name=interviews,su=365);
+%claims(source=pb,name=interviews,su=365);
+%claims(source=hh,name=interviews,su=365);
+%claims(source=hs,name=interviews,su=365);
+%claims(source=dm,name=interviews,su=365);
+
+
+
+/**************************************************************************/
+/* ********************* S Diagnosis Lists   ******************************/
+/**************************************************************************/
+
+%macro dx_time_range (range1=,name=,su=);
+/*pulls just dx codes from carrier claims*/
+data pb_last_&su._dx(keep=bid_hrs_21 id diag source index_date admit_date);
+set &name._pb_meet_&su.(keep=bid_hrs_21 id PDGNS_CD DGNSCD01-DGNSCD12 source index_date admit_date);
+array dx PDGNS_CD DGNSCD01-DGNSCD12;
+do over dx;
+diag=dx ;
+output;
+end;
+run;
+proc sort data=pb_last_&su._dx out=pb_last_&su._dx2 nodupkey;
+by bid_hrs_21 id diag admit_date;
+run;
+
+/*outpatient claims*/
+data &name._op_meet_&su.2;
+set &name._op_meet_&su.;
+er=0;
+array list RVCNTR01-RVCNTR45;
+do over list;
+	if list >= 450 and list < 460 and er=0 then er = 1;
+	end;
+run;
+
+data op_last_&su._dx(keep=bid_hrs_21 id diag source index_date fdiag er admit_date);
+set &name._op_meet_&su.2(keep=bid_hrs_21 id PDGNS_CD DGNSCD01-DGNSCD25 source index_date er admit_date);
+fdiag=dgnscd01;
+array dx PDGNS_CD DGNSCD01-DGNSCD25 ;
+do over dx;
+diag=dx ;
+output;
+end;
+run;
+proc sort data=op_last_&su._dx out=op_last_&su._dx2 nodupkey;
+by bid_hrs_21 id diag admit_date;
+run;
+
+/*medpar claims*/
+data mp_last_&su._dx(keep=bid_hrs_21 id diag source index_date admit_date);
+set &name._mp_meet_&su.(keep=bid_hrs_21 id AD_DGNS DGNS_CD01-DGNS_CD25 source index_date admit_date sslssnf);
+if sslssnf~="N" then source="ip" ;
+array dx D_DGNS DGNS_CD01-DGNS_CD25 ;
+do over dx;
+diag=dx ;
+output;
+end;
+run;
+proc sort data=mp_last_&su._dx out=mp_last_&su._dx2 nodupkey;
+by bid_hrs_21 id diag;
+run;
+
+/*dme claims*/
+data dm_last_&su._dx(keep=bid_hrs_21 id diag source index_date admit_date);
+set &name._dm_meet_&su.(keep=bid_hrs_21 id PDGNS_CD DGNSCD01-DGNSCD12 index_date source admit_date);
+array dx PDGNS_CD DGNSCD01-DGNSCD12 ;
+do over dx;
+diag=dx ;
+output;
+end;
+run;
+proc sort data=dm_last_&su._dx out=dm_last_&su._dx2 nodupkey;
+by bid_hrs_21 id diag admit_date;
+run;
+
+/*home health agency*/
+data hh_last_&su._dx(keep=bid_hrs_21 id diag source index_date admit_date);
+set &name._hh_meet_&su.(keep=bid_hrs_21 id PDGNS_CD DGNSCD01-DGNSCD25 index_date source admit_date);
+array dx PDGNS_CD DGNSCD01-DGNSCD25 ;
+do over dx;
+diag=dx ;
+output;
+end;
+run;
+proc sort data=hh_last_&su._dx out=hh_last_&su._dx2 nodupkey;
+by bid_hrs_21 id diag admit_date;
+run;
+
+/*hospice*/
+data hs_last_&su._dx(keep=bid_hrs_21 id diag source index_date admit_date);
+set &name._hs_meet_&su.(keep=bid_hrs_21 id PDGNS_CD DGNSCD01-DGNSCD25 index_date source admit_date);
+array dx PDGNS_CD DGNSCD01-DGNSCD25 ;
+do over dx;
+diag=dx ;
+output;
+end;
+run;
+proc sort data=hs_last_&su._dx out=hs_last_&su._dx2 nodupkey;
+by bid_hrs_21 id diag admit_date;
+run;
+
+/*set diag variable length = 7 chars since that's the max length from the mc claims
+Need to do this because length varies across the different mc claim types*/
+data hs_last_&su._dx3;
+length diag $7;
+set hs_last_&su._dx2;
+run;
+data hh_last_&su._dx3;
+length diag $7;
+set hh_last_&su._dx2;
+run;
+data mp_last_&su._dx3;
+length diag $7;
+set mp_last_&su._dx2;
+run;
+data dm_last_&su._dx3;
+length diag $7;
+set dm_last_&su._dx2;
+run;
+data op_last_&su._dx3;
+length diag $7;
+set op_last_&su._dx2;
+run;
+data pb_last_&su._dx3;
+length diag $7;
+set pb_last_&su._dx2;
+run;
+
+data dx_all_last_&su.a;
+set hs_last_&su._dx3
+hh_last_&su._dx3
+dm_last_&su._dx3
+op_last_&su._dx3
+pb_last_&su._dx3;
+value=1;
+run;
+
+data mp_last_wv;
+set mp_last_&su._dx3;
+value=2;
+run;
+
+data dx_all_last_&su.;
+set dx_all_last_&su.a
+mp_last_wv;
+run;
+
+
+data  proj_int.claims_dx;
+set dx_all_last_&su.;
+if diag~="";
+run;
+
+%mend;
+
+/*run macro to create data files spo_mc_i.dx_0d_n6m spo_mc_i.dx_0d_n12m and spo_mc_i.dx_0d_n24m */
+%dx_time_range (range1=0,name=interviews,su=365);
+
+
+/*creates indicators for each of Keith's comorbidities*/
+
+
+H="get comorbidities"
+
+/*creates indicators for each of Keith's comorbidities*/
+
+data comorb_1;
+set proj_int.claims_dx;
+
+/*copd*/
+copd=0;
+if (substr(diag,1,3) in('490','491','492','493','494','495','496','500','501','502', 
+						'503','504','505') or substr(diag,1,4)='5064') then copd=value;
+
+/*
+
+
+Inpatient or ER exacerbation	Inpatient or ER visits associated with a primary diagnosis of COPD identified by ICD-9-CM codes of 491, 492, and 496.
+Outpatient exacerbation	Outpatient visits associated with the one of the following ICD-9 codes in the first position: 136.3, 466-466.19, 480-486, 487.0, 490, 491.21, 491.22, 494.1, 506.0-506.3, 507, 511.0-511.1, 512, 517.1, 518.0, 518.81, 518.82, and 518.84.
+*/
+inp_exacerbation=substr(diag,1,3) in('491','492','496') and source='ip';
+er_exacerbation=substr(diag,1,3) in('491','492','496') and er=1;
+op_exacerbation=substr(fdiag,1,5) in('49121','49122','51881','51882','51884') 
+or substr(fdiag,1,4) in('1363','4660','4661','4870','4941','5060-5063','5110-5111','5171','5180')
+or substr(fdiag,1,3) in('480','481','482','483','484','485','486','490','507','512');
+
+
+
+/*ckd*/
+ckd=0;
+if (substr(diag,1,5) in('01600','01601','01602','01603','01604','01605','01606',
+						'23691','24940','24941','25040','25041','25042','25043','27410',
+						'28311','40301','40311','40391','40402','40403','40412','40413',
+						'40492','40493','58081','58089','58181','58189','58281','58289',
+						'58381','58389','58881','58889','75312','75313','75314','75315',
+						'75316','75317','75319','75320','75321','75322','75323','75329')
+
+or substr(diag,1,4) in('0954','1890','1899','2230','2714','4401','4421','5724','5800','5804',
+						'5810','5811','5812','5813','5819','5820','5821','5809','5822','5824',
+						'5829','5830','5831','5832','5834','5836','5837','5845','5846','5847',
+						'5848','5849','5851','5852','5853','5854','5855','5856','5859','5839',
+						'5880','5881','5889','7944')
+
+or substr(diag,1,3) in('586','587','591')) then ckd=value;
+
+ckd_lev=0;
+if (substr(diag,1,4) in('5851','5852','5859')) then ckd_lev=1 ;
+if (substr(diag,1,4) in('5853','5854')) then ckd_lev=2 ;
+if (substr(diag,1,4) in('5855','1586')) then ckd_lev=3 ;
+
+
+
+/*cad*/
+
+cad=0;
+if (substr(diag,1,3) in('410') and substr(diag,5,1) in('0','1')
+or substr(diag,1,3) in('361','362')
+or substr(diag,1,4) in('0066','3600','3601','3602','3605','3606','3607')
+or diag='360') then cad=value;
+
+/*chf*/
+chf=0;
+if (substr(diag,1,3)='428') then chf=value;
+
+/*hypertension*/
+hypertension=0;
+if (substr(diag,1,5) in('36211','40200','40201','40210','40211','40290','40291','40300',
+					'40301','40310','40311','40390','40391','40400','40401','40402','40403','40410',
+					'40411','40412','40413','40490','40491','40492','40493','40501','40509','40511',
+					'40519','40591','40599')
+
+or substr(diag,1,4) in('4010','4011','4019','4372')) then hypertension=value;
+
+comorbi_6=0;
+	*Hypertension;
+	if ((substr(diag,1,4)='4011' or
+		substr(diag,1,4)='4019')) or
+	   ((substr(diag,1,5)='40210' or
+		substr(diag,1,5)='40290' or
+		substr(diag,1,5)='40410' or
+		substr(diag,1,5)='40490' or
+		substr(diag,1,5)='40511' or
+		substr(diag,1,5)='40519' or
+		substr(diag,1,5)='40591' or
+		substr(diag,1,5)='40599')) 
+
+		then comorbi_6=1;
+/*diabetes*/
+diabetes=0;
+if (substr(diag,1,5) in('24900','24901','24910','24911','24920','24921','24930','24931','24940',
+					'24941','24950','24951','24960','24961','24970','24971','24980','24981','24990',
+					'24991','25000','25001','25002','25003','25010','25011','25012','25013','25020',
+					'25021','25022','25023','25030','25031','25032','25033','25040','25041','25042',
+					'25043','25050','25051','25052','25053','25060','25061','25062','25063','25070',
+					'25071','25072','25073','25080','25081','25082','25083','25090','25091','25092',
+					'25093','36201','36202','36203','36204','36205','36206','36641')
+or substr(diag,1,4)='3572') then diabetes=value;
+
+run;
+
+
+proc sql; 
+create table comorb_2 as select *
+from proj_int.index a 
+left join
+comorb_1 b
+on a.bid_hrs_21=b.bid_hrs_21 and a.index_date=b.index_date;
+quit;
+proc sql;
+create table comorb_3 as select distinct bid_hrs_21,index_date,
+sum(copd) as copd_count,
+sum(chf) as chf_count,
+sum(diabetes) as diab_count,
+sum(hypertension) as hyp_count,
+sum(ckd) as ckd_count,
+max(ckd_lev) as ckd_lev,
+max(inp_exacerbation) as ip_exac,
+max(op_exacerbation) as op_exac,
+max(er_exacerbation) as er_exac,
+max(comorbi_6) as comorb_6,
+sum(comorbi_6) as c6_count
+from comorb_2
+group by bid_hrs_21, index_date;
+quit;
+
+data proj_int.comorb /*(keep= bid_hrs_21 index_date copd_ind chf_ind diab_ind hyp_ind ckd_ind ckd_lev ip_exac op_exac er_exac)*/;
+set comorb_3;
+copd_ind=copd_count>=2;
+chf_ind=chf_count>=2;
+diab_ind=diab_count>=2;
+hyp_ind=hyp_count>=2;
+ckd_ind=ckd_count>=2;
+run;
+
+H="get copd staging"
+/*copd staging*/
+
+/*pull drug codes from dme, and inpatient and er exacerbation, and other outpatient exacerbation*/
+
+/*first need to get the dme file to include drug codes 
+because this is just one year, combine '03-'05 claims, all variables, run from there*/
+
+libname mediraw 'E:\data\cms_DUA_24548_2012\received_20150327';
+
+data dmfull (keep=bid_hrs_21 admit_date ndc_cd01-ndc_cd13);
+set mediraw.dm_2003 mediraw.dm_2004 mediraw.dm_2005;
+admit_date=mdy(substr(trim(left(FROM_DT)),5,2),substr(trim(left(FROM_DT)),7,2),substr(trim(left(FROM_DT)),1,4));;
+run;
+
+proc sql; 
+create table dme as select * from
+proj_int.index a
+inner join 
+medi.dm_2000_2012 b
+on a.bid_hrs_21=b.bid_hrs_21 and b.admit_date<=index_date<=b.admit_date+365;
+quit;
+
+data dm2;
+set dme;
+array list ndc_cd01-ndc_cd13;
+do over list;
+if list~="" then do;
+ndc=list;
+end;
+end;
+run;
+
+proc freq; tables ndc; run;
+
+H="combine into one dataset"
+/*combine into one dataset*/
+
+proc sql;
+create table proj_int.smoking_int_dataset as select * from
+proj_int.index a
+left join proj_int.comorb b
+on a.bid_hrs_21=b.bid_hrs_21 
+left join proj_int.core c
+on a.bid_hrs_21=c.bid_hrs;
+quit;
+
+proc export data=proj_int.smoking_int_dataset outfile="E:\data\smoking\int_data\smoking_int_dataset.dta" replace; run;
+
+H="variable creation and table 1"
+clear all
+set more off
+capture log close
+local logpath "E:\data\smoking\logs"
+
+cd "E:\data\smoking\int_data\"
+
+use smoking_int_dataset
+drop *_n1 *p1 bid_hrs_21_n0
+rename *_n0 *
+
+merge 1:1 id using "E:\data\hrs_cleaned\death_date_2012.dta", keep(match master) ///
+keepusing(death_all) nogen
+rename death_date dod_old
+rename death_all death_date
+
+merge 1:1 hhid pn using "E:\data\hrs_public_2012\core\core2004.dta", keep(match master) 
+svyset [pw=wgtr]
+/*smoking categories
+jc118 jc119 jc120
+-never smoked
+-previously smoked, not currently
+-currently smoke<20
+20-40 (1 or 2 packs)
+>40 (3+ packs)
+amt not given*/
+
+gen smokes_cat=smoke_ever+1
+replace smokes_cat=3 if jc118<20
+replace smokes_cat=4 if (jc118>=20 & jc118<=40) | inlist(jc119,1)
+replace smokes_cat=5 if (jc118>40 & jc118<900) | (jc119>=2 & jc119<=20)
+label define smokes_cat 1 "Never smoked" 2 "Formerly smoked" 3 "Currently smokes <20 cigarettes/day" ///
+4 "Currently smokes 20-40 cigarettes/day (1 pack)" 5 "Smokes >40 cigarettes/day (2+ packs)"
+label values smokes_cat smokes_cat
+drop if smokes_cat==2 & smoke_curr==1
+tab smokes_cat, gen(smoke)
+forvalues i=1/5 {
+local lab : label smokes_cat `i'
+label var smoke`i' "`lab'"
+}
+
+
+gen ip_er_exac=(ip_exac==1 | er_exac==1) & copd_ind==1
+replace op_exac=0 if copd_ind==0
+label var ckd_ind "Chronic Kidney Disease"
+label var ckd_lev "CKD Level"
+label var ip_er_exac "COPD with inpatient or ED exacerbation"
+label var op_exac "COPD with outpatient exacerbation"
+label var diab_ind "Diabetes"
+label var hyp_ind "Hypertension"
+label var copd_ind "COPD"
+label var chf_ind "Chronic Heart Failure"
+
+rename age_at_core age
+gen age_cat=age<75
+replace age_cat=2 if age>=75 & age<85
+replace age_cat=3 if age>=85
+tab age_cat, gen(age)
+
+label define age_cat 1 "Age <75" 2 "Age 75-84" 3 "Age>=85"
+label values age_cat age_cat
+forvalues i=1/3 {
+local lab: label age_cat `i'
+label var age`i' "`lab'"
+}
+gen n=1
+
+gen ed_hs=educ>=2 if !missing(educ)
+label var ed_hs "High School + education"
+drop other_race
+rename other_na other_race
+foreach x in dr wk bh e tx t {
+	local adl `adl' adl_`x'_core
+}
+local cvars age networth_adj2012
+
+foreach x in 1 2 5 8 {
+gen died_`x'=death_date-c_ivw_date<=365.25*`x'
+label var died_`x' "Mortality: Death within `x' years"
+}
+label var age "Age at core interview, mean(sd)"
+label var networth_adj2012 "Net worth, mean(sd)"
+local ivars age1 age2 age3 female black white hisp other_race ///
+ed_less_hs ed_hs_plus ed_coll ///
+smoke1 smoke2 smoke3 smoke4 smoke5 ///
+married medicaid champus medigap srh_pf srh_g srh_ve  ///
+iadl_independent_core adl_independent_core `adl' comorb_31_0_1yr ///
+copd_ind ip_er_exac op_exac ckd_ind diab_ind hyp_ind chf_ind ///
+died_1 died_2 died_5 died_8
+
+local outcomes 
+sum `ivars'
+
+local rn : word count `cvars' `ivars' 1 1
+
+mat tab=J(`rn',3,.)
+local r=1
+local c=1
+
+
+foreach x of local cvars {
+	sum n if missing(`x') 
+	mat tab[`r',1]=r(N)
+	sum `x' [aw=wgtr]
+	mat tab[`r',2]=r(mean)
+	mat tab[`r',3]=r(sd)
+	local r=`r'+1
+}
+foreach x of local ivars {
+	sum n if missing(`x') 
+	mat tab[`r',1]=r(N)
+	sum `x' 
+	mat tab[`r',2]=r(mean)*r(N)
+	sum `x' [aw=wgtr]
+	mat tab[`r',3]=r(mean)*100
+	local r=`r'+1
+}
+
+sum n [aw=wgtr]
+mat tab[`r',2]=r(N)
+mat tab[`r'+1,2]=r(sum)
+
+mat rownames tab=`cvars' `ivars' N "Population estimate"
+
+local dec
+foreach x of local ivars {
+	local dec "`dec'\0,0,2"
+}
+di "`dec'"
+frmttable using "`logpath'\hrs_2004_smoking_chars.rtf", replace  statmat(tab) ///
+ctitles("" "Number missing" "Number yes" "% yes") ///
+sdec(0,2,2\0,2,2\0,0,2`dec') title("Sample characteristics") varlabels ///
+note("HRS respondents from 2004 wave , 65+ with 12m FFS Medicare prior to interview" ///
+"Demographic, function, self-rated health and smoking characteristics from survey data" ///
+"Illnesses/comorbidities from claims data 12m prior to interview" ///
+"Mortality from NDI, Medicare, and survey data")
+
+gen smoke6=inrange(smokes_cat,4,5)
+label var smoke6 "Smokes 20+ cigarettes/day (or 1+ pack)"
+mat tab=J(`rn',12,.)
+mat stars=J(`rn',12,0)
+local r=1
+local c=1
+foreach i in 1 2 3 6 {
+	local rn : word count `cvars' `ivars' 1 1
+
+
+
+foreach x of local cvars {
+	sum `x' if smoke`i' ==1 [aw=wgtr]
+	mat tab[`r',`c']=r(mean)
+	mat tab[`r',`c'+1]=r(sd)
+	if `i'<6 {
+	svy: mean `x' if smoke`i'==1 | smoke6==1, over(smoke`i')
+	test [`x']0=[`x']1
+	mat tab[`r',`c'+2]=r(p)
+	mat stars[`r',`c'+2]=(r(p)<.05)+(r(p)<.01)
+}
+	local r=`r'+1
+}
+foreach x of local ivars {
+	sum `x' if smoke`i'==1
+	mat tab[`r',`c']=r(N)*r(mean)
+	sum `x' if smoke`i' ==1 [aw=wgtr]
+
+	mat tab[`r',`c'+1]=r(mean)*100
+	if `i'<6 & "`x'"!="smoke`i'" {
+	svy: tab `x' smoke`i' if smoke`i'==1 | smoke6==1 
+	mat tab[`r',`c'+2]=e(p_Pear)
+	mat stars[`r',`c'+2]=(e(p_Pear)<.05)+(e(p_Pear)<.01)
+}
+	local r=`r'+1
+}
+
+sum n if smoke`i' ==1 [aw=wgtr]
+mat tab[`r',`c']=r(N)
+mat tab[`r'+1,`c']=r(sum)
+
+local r=1
+local c=`c'+3
+}
+
+mat rownames tab=`cvars' `ivars' N "Population estimate"
+
+local dec
+foreach x of local ivars {
+	local dec "`dec'\0,0,2"
+}
+di "`dec'"
+frmttable using "E:\data\smoking\logs\hrs_2004_smoking_chars.rtf", addtable statmat(tab) ///
+ ctitles("" "Never smoked" "Former smoker" "<20 Cigarettes/day" ///
+"20+ Cigarettes/day") substat(2) annotate(stars) asymbol(*,**) ///
+sdec(2) title("Sample characteristics, by smoker status") varlabels ///
+note("HRS respondents from 2004 wave , 65+ with 12m FFS Medicare prior to interview" ///
+"Demographic, function, self-rated health and smoking characteristics from survey data" ///
+"Illnesses/comorbidities from claims data 12m prior to interview (1 occurrence in Medpar, or 2 occurrences otherwise)" ///
+"Mortality from NDI, Medicare, and survey data" ///
+"*-P<.05,**-P<.01, different from heaviest smokers" "-- Indicates censored for cell size")
+
+

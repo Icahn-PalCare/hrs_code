@@ -189,6 +189,7 @@ local comorb cancer_hrs lung_hrs heart_hrs chf_hrs stroke_hrs memory_hrs ///
 htn_hrs dm_hrs psych_hrs comorb_cat1 comorb_cat2 comorb_cat3 adl_iadl_sp_helper ///
 cesd_tot medicaid medigap champus networth_adj adl_impair ///
 
+
 keep r_id c_ivw_* core_year lcd `matchvars' `comorb' age_at_core ressp ///
 comor_c_hrs cesd_tot* r_death* comorb_index ncd
 
@@ -248,8 +249,12 @@ di r(N)
 }
 }
 
-
-
+//remarried-look for known spouse different, next year
+sort r_id core_year
+by r_id: gen r_remarried=!missing(s_id[_n+1]) & s_id!=s_id[_n+1] if !missing(core_year[_n+1])
+sort s_id core_year
+by s_id: gen s_remarried=!missing(r_id[_n+1]) & r_id!=r_id[_n+1] if !missing(core_year[_n+1])
+sort r_id core_year
 
 gen sagecat=floor((s_age_at_core-65)/5)+1
 replace sagecat=6 if sagecat>6
@@ -323,7 +328,7 @@ merge 1:1 s_id s_core_year_n1 using "E:\data\spouse_claims\data\int_data\spouse_
 keep(match master) gen(spm) keepusing(*ffs* s_part_ab* s_hmo*)
 //1515 remain after excluding those w/o ffs at r death date
 drop if ind_==1 & spm==1
-
+drop *ffs* s_part_ab* s_hmo*
 /*cem sagecat (#0) r_adl_independent s_comorb_cat2 s_comorb_cat3 ///
 s_hseduc s_female s_black s_hisp ///
 r_comorb_cat2 r_comorb_cat3 core_year(#0) ,treatment(ind_)
@@ -356,10 +361,10 @@ gen rdd=r_death_date if ind_ & cem_matched==1
 by cem_strata matchid, sort: egen index_date=max(rdd)
 gen index_month=month(index_date)
 gen index_year=year(index_date)
-replace index_date=. if s_death_date<index_date
-replace index_date=. if s_c_ivw_date<index_date
+/*replace index_date=. if s_death_date<index_date
+replace index_date=. if s_c_ivw_date>index_date*/
 log close
-saveold  "E:\data\spouse_claims\spouse_claims_comparison\int_data\spouse_cem1.dta", replace
+saveold  "E:\data\spouse_claims\spouse_claims_comparison\int_data\spouse_cem1.dta", replace version(12)
 
 
 H="get index date"
@@ -2842,9 +2847,9 @@ run;
 %pre_admissions(days_start=-1,days_bef_index=0,suffix=dod,su=_24m);
 proc sql;
 create table op_meet_dod1 as select * from
-index1a a 
+index1 a 
 left join medi.op_2000_2012 b
-on a.bid_hrs_21=b.bid_hrs_21 and a.index_date=b.index_date and a.index_date=b.admit_date;
+on a.bid_hrs_21=b.bid_hrs_21 and a.index_date=b.admit_date;
 quit;
 
 data op_meet_dod;
@@ -3719,7 +3724,10 @@ foreach t in 6m 12m 18m 24m p6m p12m p18m p24m{
 sort s_id
 quietly by s_id : gen dup2 = cond(_N==1,0,_n)
 tab dup2 //2 instances with spouse with more than one partner
-
+gen total_months=cont_ffs_n
+replace total_months=24 if total_months>24
+replace total_months=total_months+cont_ffs_p if cont_ffs_p<=24
+replace total_months=total_months+24 if cont_ffs_p>=24
 ************************************************************
 //save this dataset
 save E:\data\spouse_claims\spouse_claims_comparison\final_data\spouse_claims_comparison_clean.dta, replace
@@ -3829,6 +3837,16 @@ save spouse_claims_comparison_sample.dta, replace
 
 
 H="table 1 with outcomes"
+use "E:\data\hrs_cleaned\core_00_to_14.dta", clear
+sort id core_year
+by id: gen s_remarried=resspouse[_n+1]==1 if !missing(resspouse[_n+1])
+keep id core_year s_remarried
+rename id s_id
+label var s_remarried "S married at p1 wave"
+tempfile marriage
+destring s_id, replace
+save `marriage'
+
 clear all
 set more off
 capture log close
@@ -3840,7 +3858,8 @@ local logpath "E:\data\spouse_claims\spouse_claims_comparison\logs\"
 
 cd `logpath'
 use `datapath'\spouse_cem1, clear
-
+drop s_remarried
+merge 1:1 s_id core_year using `marriage', nogen keep(match master)
 local match r_age_at_core r_comorb_cat2 r_comorb_cat3 r_adl_independent_core ///
 r_srh_g r_srh_v s_age_at_core ///
 nw2 nw3 nw4 s_comorb_cat2 s_comorb_cat3 ///
@@ -3942,7 +3961,10 @@ local logpath "E:\data\spouse_claims\spouse_claims_comparison\logs\"
 cd `logpath'
 use `datapath'\spouse_claims_comparison_sample, clear
 
-
+drop *remarried
+merge 1:1 s_id core_year using `marriage', nogen keep(match master)
+label var r_adl_iadl_ "S was R's main helper at n1"
+label var s_adl_iadl_ "R was S's main helper at n1"
 local match r_age_at_core r_comorb_cat2 r_comorb_cat3 r_adl_independent_core ///
 r_srh_g r_srh_v s_age_at_core ///
 nw2 nw3 nw4 s_comorb_cat2 s_comorb_cat3 ///
@@ -3954,7 +3976,7 @@ label var s_died_1yr "Spouse death <=365 days after index"
 label var s_died_2yr "Spouse death <=730 days after index"
 local rivars1 r_white r_black r_hisp r_hseduc s_medicaid s_medigap s_champus ///
 r_comorb_cat1 r_comorb_cat2 r_comorb_cat3 r_adl_independent_core ///
-r_srh_pf // r_nhres 
+r_srh_pf  // r_nhres 
 local rivars2 r_adl_iadl_sp_helper
 local rivars3
 local rcvars1 r_age_at_core
@@ -3964,8 +3986,9 @@ local scvars1 s_age_at_core
 local scvars2 s_networth_adj /*s_cesd_tot*/
 local scvars3 
 local sivars1 s_female s_white s_black s_hisp  s_hseduc 
-local sivars2 nw1 s_medicaid s_medigap s_champus s_comorb_cat1 s_comorb_cat2 s_comorb_cat3 ///
-s_adl_independent_core s_srh_pf ///
+local sivars2 nw1 s_medicaid s_medigap s_champus s_adl_iadl_sp_helper ///
+s_comorb_cat1 s_comorb_cat2 s_comorb_cat3 ///
+s_adl_independent_core s_srh_pf s_remarried ///
 //s_nhres
 local sivars3 s_northeast s_midwest s_west s_south eol_spend_quart1 ///
 eol_spend_quart2 eol_spend_quart3 eol_spend_quart4
@@ -4377,7 +4400,8 @@ local projdatapath E:\data\spouse_claims\spouse_claims_comparison\final_data
 
 cd `projdatapath'
 
-use spouse_claims_comparison_sample.dta
+use spouse_claims_comparison_sample.dta if !missing(index_date)
+
 cd `logpath'\graphs
 svyset [pw=cem_w]
 //note-you can use these next lines to drop the top 3% of pre-Index Date_spenders
@@ -4392,6 +4416,12 @@ gen pt=npt+ppt
 gsort -npt
 drop if _n<50
 */
+
+gen surv_bereaved=ind_n1 & cont_ffs_p_mos>=24
+by cem_strata, sort: egen any_bereaved_surv=max(surv_be)
+gen con_surv=!ind_n1 & cont_ffs_p_mos>=24
+by cem_strata, sort: egen any_controls_surv=max(con_surv)
+gen surv_matched=any_controls_surv==1 & any_bereaved_surv==1 & cont_ffs_p_mos>=24
 
 forvalues n=1(3)24 {
 	sum tot_paid_by_mc_wi_m_`n'_to_`=`n'+2' if inscope_n_mos>=`n' [aw=cem_w]
@@ -4444,24 +4474,24 @@ forvalues n=1(3)24 {
 	sum tot_paid_by_mc_wi_m_`n'_to_`=`n'+2'p if ind_==`ind' & inscope_p_mos>=`n' & s_female==1 [aw=cem_w]
 	replace f_ffs_tot`=`n'+25'=r(mean) if ind_==`ind' & inscope_p_mos>=`n' & s_female==1 
 	replace sdf_ffs_tot`=`n'+25'=r(sd) if ind_==`ind' & inscope_p_mos>=`n' & s_female==1 
-	sum tot_paid_by_mc_wi_m_`n'_to_`=`n'+2' if ind_==`ind' & inscope_p_mos>=24 [aw=cem_w]
-	replace s_ffs_tot`n'=r(mean) if ind_==`ind' & inscope_p_mos>=24
-	replace sds_ffs_tot`n'=r(sd) if ind_==`ind' & inscope_p_mos>=24
-	sum tot_paid_by_mc_wi_m_`n'_to_`=`n'+2'p if ind_==`ind' & inscope_p_mos>=24 [aw=cem_w]
-	replace s_ffs_tot`=`n'+25'=r(mean) if ind_==`ind' & inscope_p_mos>=24 
-	replace sds_ffs_tot`=`n'+25'=r(sd) if ind_==`ind' & inscope_p_mos>=24 
-	sum tot_paid_by_mc_wi_m_`n'_to_`=`n'+2' if ind_==`ind' & inscope_p_mos>=24 & s_female==0 [aw=cem_w]
-	replace m_s_ffs_tot`n'=r(mean) if ind_==`ind' & inscope_p_mos>=24 & s_female==0 
-	replace sdm_s_ffs_tot`n'=r(sd) if ind_==`ind' & inscope_p_mos>=24 & s_female==0 
-	sum tot_paid_by_mc_wi_m_`n'_to_`=`n'+2'p if ind_==`ind' & inscope_p_mos>=24 & s_female==0 [aw=cem_w]
-	replace m_s_ffs_tot`=`n'+25'=r(mean) if ind_==`ind' & inscope_p_mos>=24 & s_female==0 
-	replace sdm_s_ffs_tot`=`n'+25'=r(sd) if ind_==`ind' & inscope_p_mos>=24 & s_female==0 
-	sum tot_paid_by_mc_wi_m_`n'_to_`=`n'+2' if ind_==`ind' & inscope_p_mos>=24 & s_female==1 [aw=cem_w]
-	replace f_s_ffs_tot`n'=r(mean) if ind_==`ind' & inscope_p_mos>=24 & s_female==1 
-	replace sdf_s_ffs_tot`n'=r(sd) if ind_==`ind' & inscope_p_mos>=24 & s_female==1 
-	sum tot_paid_by_mc_wi_m_`n'_to_`=`n'+2'p if ind_==`ind' & inscope_p_mos>=24 & s_female==1 [aw=cem_w]
-	replace f_s_ffs_tot`=`n'+25'=r(mean) if ind_==`ind' & inscope_p_mos>=24 & s_female==1 
-	replace sdf_s_ffs_tot`=`n'+25'=r(sd) if ind_==`ind' & inscope_p_mos>=24 & s_female==1 
+	sum tot_paid_by_mc_wi_m_`n'_to_`=`n'+2' if ind_==`ind' & inscope_p_mos>=24 & surv_matched==1 [aw=cem_w]
+	replace s_ffs_tot`n'=r(mean) if ind_==`ind' & inscope_p_mos>=24 & surv_matched==1
+	replace sds_ffs_tot`n'=r(sd) if ind_==`ind' & inscope_p_mos>=24 & surv_matched==1
+	sum tot_paid_by_mc_wi_m_`n'_to_`=`n'+2'p if ind_==`ind' & inscope_p_mos>=24 & surv_matched==1 [aw=cem_w]
+	replace s_ffs_tot`=`n'+25'=r(mean) if ind_==`ind' & inscope_p_mos>=24 & surv_matched==1 
+	replace sds_ffs_tot`=`n'+25'=r(sd) if ind_==`ind' & inscope_p_mos>=24 & surv_matched==1 
+	sum tot_paid_by_mc_wi_m_`n'_to_`=`n'+2' if ind_==`ind' & inscope_p_mos>=24 & surv_matched==1 & s_female==0 [aw=cem_w]
+	replace m_s_ffs_tot`n'=r(mean) if ind_==`ind' & inscope_p_mos>=24 & surv_matched==1 & s_female==0 
+	replace sdm_s_ffs_tot`n'=r(sd) if ind_==`ind' & inscope_p_mos>=24 & surv_matched==1 & s_female==0 
+	sum tot_paid_by_mc_wi_m_`n'_to_`=`n'+2'p if ind_==`ind' & inscope_p_mos>=24 & surv_matched==1 & s_female==0 [aw=cem_w]
+	replace m_s_ffs_tot`=`n'+25'=r(mean) if ind_==`ind' & inscope_p_mos>=24 & surv_matched==1 & s_female==0 
+	replace sdm_s_ffs_tot`=`n'+25'=r(sd) if ind_==`ind' & inscope_p_mos>=24 & surv_matched==1 & s_female==0 
+	sum tot_paid_by_mc_wi_m_`n'_to_`=`n'+2' if ind_==`ind' & inscope_p_mos>=24 & surv_matched==1 & s_female==1 [aw=cem_w]
+	replace f_s_ffs_tot`n'=r(mean) if ind_==`ind' & inscope_p_mos>=24 & surv_matched==1 & s_female==1 
+	replace sdf_s_ffs_tot`n'=r(sd) if ind_==`ind' & inscope_p_mos>=24 & surv_matched==1 & s_female==1 
+	sum tot_paid_by_mc_wi_m_`n'_to_`=`n'+2'p if ind_==`ind' & inscope_p_mos>=24 & surv_matched==1 & s_female==1 [aw=cem_w]
+	replace f_s_ffs_tot`=`n'+25'=r(mean) if ind_==`ind' & inscope_p_mos>=24 & surv_matched==1 & s_female==1 
+	replace sdf_s_ffs_tot`=`n'+25'=r(sd) if ind_==`ind' & inscope_p_mos>=24 & surv_matched==1 & s_female==1 
 }
 }
 
@@ -4840,6 +4870,76 @@ outreg using `logpath'comparison_regressions_f_12mp, replay `table'
 H="reshape long for meglm"
 
 
+clear all
+set more off
+capture log close
+
+local datapath "E:\data\spouse_claims\spouse_claims_comparison\final_data\"
+local logpath "E:\data\spouse_claims\spouse_claims_comparison\logs\"
+
+cd `logpath'
+use `datapath'\spouse_claims_comparison_sample_bday if !missing(index_date), clear
+label var s_northe "Northeast"
+label var s_midw "Midwest"
+label var s_west "West"
+label var s_south "South"
+label var nw1 "Networth lowest quartile"
+foreach s in r s {
+	label var `s'_comorb_cat2 "`s' comorbidities mild"
+	label  var `s'_comorb_cat3 "`s' comorbidities mod/severe"
+}
+label var ind_n1_ivw "Indicator Bereaved Spouse"
+label var r_age_at_core "R age at n1 ivw"
+label var s_age_at_core "S age at n1 ivw"
+
+local match ragecat r_comorb_cat2 r_comorb_cat3 r_adl_independent_core ///
+r_srh_pf sagecat ///
+s_comorb_cat2 s_comorb_cat3 ///
+s_female s_hseduc s_black s_hisp s_adl_independent_core s_srh_pf ///
+r_nhres r_adl_iadl_sp_helper s_nhres
+
+local region s_northeast 
+local match r_age_at_core r_adl_independent r_comorb_cat2 r_comorb_cat3 ///
+s_age_at_core s_female s_black s_hseduc s_comorb_cat2 s_comorb_cat3
+
+log using `logpath'comparison_regressions_meglm.txt, text replace
+
+
+forvalues i=1(3)24 {
+	rename tot_paid_by_mc_wi_m_`i'_to_`=`i'+2' tot`=floor((`i'-1)/3)+1'
+	rename tot_paid_by_mc_wi_m_`i'_to_`=`i'+2'p tot`=floor((`i'+24-1)/3)+1'
+}
+
+drop tot_*
+keep s_id `match' `region' ind_n1_ivw tot* index_d core_year cem_w
+reshape long tot, i(s_id index_date) j(period)
+/*replace period=-period
+replace period=period-8 if period>8*/
+replace period=-period+9 if period<=8
+
+meglm tot ind_n1_ivw##period `match' i.core_year  [pw=cem_w] if s_female==1 , vce(cluster s_id)
+
+label var ind_n1_ivw "Bereavement indicator"
+label define ind_n1_ivw 0 "Control" 1 "Bereaved"
+label values ind_n1_ivw ind_n1_ivw
+replace tot=1 if tot<=0
+foreach x in 0 1 {
+
+meglm tot ind_n1_ivw##period `match' i.core_year if s_female==`x' [pw=cem_w] || s_id:, ///
+link(log) fam(gamma)
+margins ind_n1_ivw#period
+marginsplot, plot(ind_n1_ivw)
+graph save meglm_f_`x', replace
+graph export meglm_f_`x'.pdf, replace
+}
+meglm tot ind_n1_ivw##period##s_female `match' i.core_year [pw=cem_w] || s_id:, ///
+link(log) fam(gamma)
+margins period#s_female, dydx(ind_n1_ivw
+marginsplot
+graph save meglm_fx, replace
+graph export meglm_fx.pdf, replace
+
+
 H="crosstabs"
 
 
@@ -4862,6 +4962,8 @@ save `cd'
 cd `logpath'
 use `datapath'\spouse_claims_comparison_sample, clear
 merge m:1 r_hhid r_pn using `cd', keep(match master) gen(restrm)
+gen long hhidpn=s_id
+merge 1:1 hhidpn core_year using "E:\data\hrs_public_2012\rand2012\family\family_r_clean_98_10.dta", keep(match master) gen(randm)
 
 label define cause_of_death 1 "Infections Disease (not HIV/AIDS/viral hepatitis)" ///
 2 "HIV/AIDS" ///
@@ -4896,15 +4998,101 @@ sum hlphrs_s
 tab1 *sp_helper
 tab r_cause
 tab r_cause s_female
+tab living_kids_ind
+tab resd_kid_ind
+tab kid_nearby_ind
+tab child_care_ind
+
 foreach x in r s {
 if "`x'"=="r" di "Respondent"
 else di "Surviving Spouse"
 tab `x'_adl_iadl_sp_helper 
-tab `x'_adl_iadl_sp_helper s_female
-tab r_cause `x'_adl_iadl_sp_helper
+tab `x'_adl_iadl_sp_helper s_female, row col nokey
+tab r_cause `x'_adl_iadl_sp_helper, row col nokey
 sum hlphrs_s if `x'_adl_iadl_sp==1
+
 }
 restore
 }
 log close
+
+
+
+H="xtgee"
+
+
+clear all
+set more off
+capture log close
+
+local datapath "E:\data\spouse_claims\spouse_claims_comparison\final_data\"
+local logpath "E:\data\spouse_claims\spouse_claims_comparison\logs\"
+
+cd `logpath'
+use `datapath'\spouse_claims_comparison_sample_bday if !missing(index_date), clear
+label var s_northe "Northeast"
+label var s_midw "Midwest"
+label var s_west "West"
+label var s_south "South"
+label var nw1 "Networth lowest quartile"
+foreach s in r s {
+	label var `s'_comorb_cat2 "`s' comorbidities mild"
+	label  var `s'_comorb_cat3 "`s' comorbidities mod/severe"
+}
+label var ind_n1_ivw "Indicator Bereaved Spouse"
+label var r_age_at_core "R age at n1 ivw"
+label var s_age_at_core "S age at n1 ivw"
+
+local match ragecat r_comorb_cat2 r_comorb_cat3 r_adl_independent_core ///
+r_srh_pf sagecat ///
+s_comorb_cat2 s_comorb_cat3 ///
+s_female s_hseduc s_black s_hisp s_adl_independent_core s_srh_pf ///
+r_nhres r_adl_iadl_sp_helper s_nhres
+
+local region s_northeast 
+local match r_age_at_core r_adl_independent r_comorb_cat2 r_comorb_cat3 ///
+s_age_at_core s_female s_black s_hseduc s_comorb_cat2 s_comorb_cat3
+
+*log using `logpath'comparison_regressions_meglm.txt, text replace
+
+
+forvalues i=1(3)24 {
+	rename tot_paid_by_mc_wi_m_`i'_to_`=`i'+2' tot`=floor((`i'-1)/3)+1'
+	rename tot_paid_by_mc_wi_m_`i'_to_`=`i'+2'p tot`=floor((`i'+24-1)/3)+1'
+}
+
+drop tot_*
+keep s_id `match' `region' ind_n1_ivw tot* index_d core_year cem_*
+reshape long tot, i(s_id index_date) j(period)
+/*replace period=-period
+replace period=period-8 if period>8*/
+replace period=-period+9 if period<=8
+
+log using `logpath'\xtgee.txt, text replace
+
+xtset s_id
+
+label var ind_n1_ivw "Bereavement indicator"
+label define ind_n1_ivw 0 "Control" 1 "Bereaved"
+label values ind_n1_ivw ind_n1_ivw
+foreach x in 0 1 {
+
+xtgee tot ind_n1_ivw##period `match' i.core_year if s_female==`x', ///
+link(log) fam(gamma)
+margins ind_n1_ivw##period
+marginsplot, plot(ind_n1_ivw)
+graph save xtgee_f_`x', replace
+graph export xtgee_f_`x'.pdf, replace
+margins period, dydx(ind_n1_ivw)
+marginsplot
+graph save xtgee_f_`x'_fx, replace
+graph export xtgee_f_`x'_fx.pdf, replace
+}
+
+xtgee tot ind_n1_ivw##s_female##period `match' i.core_year, ///
+link(log) fam(gamma)
+margins period#s_female, dydx(ind_n1_ivw)
+marginsplot, yline(0)
+graph save xtgee_fx, replace
+graph export xtgee_fx.pdf, replace
 

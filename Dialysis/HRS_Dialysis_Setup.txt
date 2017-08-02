@@ -20,980 +20,7 @@ libname dartm 'E:\data\Dartmouth_misc';
 libname dart_wi 'E:\data\Dartmouth_misc\Wage Index';
 
 
-H="Extract Claims Based on Dialysis Code - outdated"
-libname merged "E:\data\cms_DUA_24548_2012";
-libname death "E:\data\hrs_cleaned";
-libname medi 'E:\data\cms_DUA_24548_2012';
-
-/* Inpatient Claims */
-
-data ip_claims (keep = BID_HRS_21 admit_dateip disch_dateip admit_year HCPCS_CD stus_cd);
-set merged.ip_2000_2012 (rename=(from_dt = admit_dateip thru_dt = disch_dateip));
-array dx PRCDRCD01--PRCDRCD25;
-do over dx;
-HCPCS_CD=dx;
-output;
-end;
-run;
-
-data ip_claims;
-set ip_claims;
-cptcodes = input(compress(hcpcs_cd,'ABCDEFGHIJKLMNOPQRSTUVWXYZ/',),8.);
-admit_ip = input(admit_dateip, yymmdd8.);
-disch_ip = input(disch_dateip, yymmdd8.);
-format admit_ip disch_ip date10.;
-run;
-
-data ip_claims;
-set ip_claims;
-where cptcodes = 3995 or cptcodes = 5498;
-ip_flag = 1;
-run;
-
-/*
-
-data ip_claims;
-set ip_claims;
-where cptcodes = 3995 or cptcodes = 5498 or cptcodes = 3895;
-ip_flag = 1;
-run;
-
-*/
-
-/* Pull Claims from Outpatient */
-
-data mpwide (keep= bid_hrs_21 from_dt thru_dt admit_date disch_date admit_year hcpscd01--hcpscd45 DGNSCD01-DGNSCD25);
-set merged.op_2000_2012;
-run;
-
-
-data opclaims (keep= bid_hrs_21 from_dt thru_dt admit_op disch_op admit_year HCPCS_CD);
-set mpwide (rename=(admit_date = admit_op disch_date = disch_op));
-array dx hcpscd01--hcpscd45;
-do over dx;
-HCPCS_CD=dx;
-output;
-end;
-run;
-
-data opclaims;
-set opclaims;
-cptcodes = input(compress(hcpcs_cd,'ABCDEFGHIJKLMNOPQRSTUVWXYZ/',),8.);
-run;
-
-data opclaims;
-set opclaims;
-hemoflag = 0;
-periflag = 0;
-gflag = indexc(hcpcs_cd, "G");
-IF (cptcodes = 90935) or (cptcodes = 90937) or (cptcodes = 90999) THEN hemoflag = 1;
-IF (cptcodes = 90945) or (cptcodes = 90947) then periflag = 1;
-IF (gflag = 1) and (cptcodes = 257) then periflag = 1;
-run;
-
-data opclaims (drop = hemoflag periflag);
-set opclaims;
-where hemoflag = 1 or periflag = 1;
-op_flag = 1;
-format admit_op disch_op date10.;
-run;
-
-/* Pull claims from carrier file */
-
-data pb_claims (keep = bid_hrs_21 admit_pb disch_pb admit_year hcpcs_cd);
-set merged.pb_2000_2012 (rename = (admit_date = admit_pb disch_date = disch_pb));
-array dx hcpscd01--hcpscd13;
-do over dx;
-HCPCS_CD=dx;
-output;
-end;
-run;
-
-data pb_claims;
-set pb_claims;
-cptcodes = input(compress(hcpcs_cd,'ABCDEFGHIJKLMNOPQRSTUVWXYZ/',),8.);
-run;
-
-
-data pb_claims;
-set pb_claims;
-hemoflag = 0;
-periflag = 0;
-gflag = indexc(hcpcs_cd, "G");
-IF (cptcodes = 90935) or (cptcodes = 90937) or (cptcodes = 90999) THEN hemoflag = 1;
-IF (cptcodes = 90945) or (cptcodes = 90947) then periflag = 1;
-IF (gflag = 1) and (cptcodes = 257) then periflag = 1;
-run;
-
-data pb_claims;
-set pb_claims;
-where hemoflag = 1 or periflag = 1;
-pb_flag = 1;
-format admit_pb disch_pb date10.;
-run;
-
-/*Determine if Carrier claims overlap with inpatient stay */
-
-proc sort data=pb_claims nodupkey out=pb_ipcheck; by bid_hrs_21 admit_pb disch_pb; run;
-proc sort data=ip_claims nodupkey out = ip_check; by bid_hrs_21 admit_ip disch_ip; run;
-/*
-data ip_claims1 (keep = bid_hrs_21 admit_ip disch_ip ip_flag1);
-set ip_claims1 (rename=(ip_flag = ip_flag1));
-run;
-
-proc sort data= ip_claims; by bid_hrs_21 admit_ip disch_ip; run;
-proc sort data= ip_claims1; by bid_hrs_21 admit_ip disch_ip; run;
-
-data ip_claims;
-merge ip_claims ip_claims1;
-by bid_hrs_21 admit_ip disch_ip;
-IF ip_flag1 = . then ip_flag1=0;
-run;
-*/
-proc sql;
-create table matched as select a.bid_hrs_21, a.admit_pb, a.pb_flag, a.disch_pb, b.*
-from pb_ipcheck a
-left join ip_check b
-on a.bid_hrs_21=b.bid_hrs_21 and b.admit_ip<=a.admit_pb<=b.disch_ip;
-quit;
-
-data pb_ipcheck (keep = bid_hrs_21 admit_pb disch_pb no_ip);
-set matched;
-no_ip = 0;
-if ip_flag=. then no_ip = 1;
-run;
-
-proc sort data=pb_ipcheck; by bid_hrs_21 admit_pb disch_pb; run;
-proc sort data=pb_claims; by bid_hrs_21 admit_pb disch_pb; run;
-
-/* Merge back with carrier claims */
-
-data pbclaims1 (keep = bid_hrs_21 admit_pb disch_pb no_ip);
-merge pb_claims pb_ipcheck;
-by bid_hrs_21 admit_pb disch_pb;
-run;
-
-
-proc sort data=pbclaims1 nodupkey; by bid_hrs_21 admit_pb disch_pb; run;
-
-data pb_claims;
-merge pb_claims pbclaims1;
-by bid_hrs_21 admit_pb disch_pb;
-run;
-
-proc freq data=pb_claims; tables no_ip / missprint; run;
-
-/*Append all 3 datasets */
-
-data dialysis (drop = periflag hemoflag gflag);
-set ip_claims opclaims pb_claims;
-run;
-
-data dialysis;
-set dialysis;
-admit_date = .;
-disch_date = .;
-IF ip_flag = 1 then do;
-admit_date = admit_ip;
-disch_date = disch_ip;
-end;
-IF op_flag = 1 then do;
-admit_date = admit_op;
-disch_date = disch_op;
-end;
-IF pb_flag = 1 then do;
-admit_date = admit_pb;
-disch_date = disch_pb;
-end;
-format admit_date disch_date date10.;
-run;
-
-proc sort data=dialysis; by bid_hrs_21 admit_date; run;
-
-data dialysis; /* Flag first incident of any dialysis, prioritizing IP dates over overlapping claims */
-set dialysis;
-by bid_hrs_21 admit_date;
-first_occur = first.bid_hrs_21;
-run;
-
-data dialysis1; /* Index date for all dialysis claims */
-set dialysis;
-where first_occur = 1;
-run;
-
-proc freq data=dialysis1; tables ip_flag op_flag pb_flag ; run; 
-
-/********* flagging whether each person can be found in op, pb, or ip *************/
-
-/* op flag */ /* Need to tweak for after disch date */
-data dialysis1_b (keep = bid_hrs_21 op_claim admit_date disch_date);
-set dialysis1;
-op_claim = 1;
-run;
-
-proc sort data= dialysis1_b; by bid_hrs_21; run;
-proc sort data = opclaims out=opclaims1(keep=bid_hrs_21 admit_op disch_op); by bid_hrs_21; run;
-
-data dialysis1_c;
-merge opclaims1 dialysis1_b;
-by bid_hrs_21;
-run;
-
-data dialysis1_op;
-set dialysis1_c;
-if admit_op = . then op_claim = 0;
-run;
-
-data dialysis1_op;
-set dialysis1_op;
-if admit_op <= admit_date <= disch_op then delete;
-run;
-
-data dialysis1_op (keep = bid_hrs_21 op_claim);
-set dialysis1_op;
-where op_claim = 0;
-run;
-
-proc freq data=dialysis1_op; tables op_claim; run;
-
-data dialysis1;
-merge dialysis1 dialysis1_op;
-by bid_hrs_21;
-IF op_claim = . then op_claim = 1;
-run;
-
-proc freq data=dialysis1; tables op_claim; run;
-
-/* ip flag */
-
-data dialysis1_b (keep = bid_hrs_21 ip_claim admit_date disch_date);
-set dialysis1;
-ip_claim = 1;
-run;
-
-proc sort data= dialysis1_b; by bid_hrs_21; run;
-proc sort data = ip_claims out=ip_claims1(keep=bid_hrs_21 admit_ip disch_ip); by bid_hrs_21; run;
-
-data dialysis1_c;
-merge ip_claims1 dialysis1_b;
-by bid_hrs_21;
-run;
-
-data dialysis1_ip;
-set dialysis1_c;
-if admit_ip = . then ip_claim = 0;
-run;
-
-data dialysis1_ip;
-set dialysis1_ip;
-if admit_ip <= admit_date <=disch_ip then delete;
-run;
-
-data dialysis1_ip (keep=bid_hrs_21 ip_claim);
-set dialysis1_ip;
-where ip_claim = 0;
-run;
-
-data dialysis1;
-merge dialysis1 dialysis1_ip;
-by bid_hrs_21;
-IF ip_claim = . then ip_claim = 1;
-run;
-
-
-/* pb flag */
-
-data dialysis1_b (keep = bid_hrs_21 pb_claim admit_date disch_date);
-set dialysis1;
-pb_claim = 1;
-run;
-
-proc sort data= dialysis1_b; by bid_hrs_21; run;
-proc sort data = pbclaims1(keep=bid_hrs_21 admit_pb disch_pb); by bid_hrs_21; run;
-
-
-data dialysis1_c;
-merge pbclaims1 dialysis1_b;
-by bid_hrs_21;
-run;
-
-data dialysis1_pb;
-set dialysis1_c;
-if admit_pb = . then pb_claim = 0;
-run;
-
-data dialysis1_pb;
-set dialysis1_pb;
-if admit_pb <= admit_date <=disch_pb then delete;
-run;
-
-data dialysis1_pb (keep=bid_hrs_21 pb_claim);
-set dialysis1_pb;
-where pb_claim = 0;
-run;
-
-data dialysis1;
-merge dialysis1 dialysis1_pb;
-by bid_hrs_21;
-IF pb_claim = . then pb_claim = 1;
-run;                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             
-
-data dialysis1; /* Flagging those with IP start date */
-set dialysis1;
-ip_start = 0;
-IF ip_flag = 1 then ip_start = 1;
-run;
-
-
-/****** Check whether carrier/ip overlap claims have the same admit date ********/
-
-data matched_v2;
-set matched;
-where admit_ip ~= .;
-run;
-
-data matched_v2;
-set matched_v2;
-ippb_same = 0;
-IF admit_ip = admit_pb then ippb_same = 1;
-run;
-
-
-proc sort data = matched_v2; by bid_hrs_21 admit_pb; run;
-
-data matched_v2;
-set matched_v2;
-by bid_hrs_21 admit_pb;
-first = first.bid_hrs_21;
-run;
-
-data matched_v3;
-set matched_v2;
-where first = 1;
-run;
-
-proc freq data = matched_v3; tables ippb_same; run;
-
-* Merge with Dialysis1 index date;
-
-proc sql;
-
-create table datecheck as select 
-a.bid_hrs_21, a.admit_date, a.ip_flag, a.pb_flag, a.op_flag, b.ippb_same from dialysis1 a
-inner join 
-matched_v3 b
-on a.bid_hrs_21 = b.bid_hrs_21 and a.admit_date = b.admit_ip;
-quit;
-
-proc freq data= datecheck; tables ippb_same; run;
-
-
-data datecheck1 (keep = bid_hrs_21 ippb_same);
-set datecheck;
-run;
-
-data dialysis1;
-merge dialysis1 datecheck1;
-by bid_hrs_21;
-run;
-
-
-/* Check inpatient claims for subsequent OP/Carrier claims */
-
-data dialysis2 (drop = admit_op disch_op no_ip); 
-set dialysis1;
-where ip_start = 1;
-run;
-
-data op_pb;
-set dialysis;
-where ip_flag = .;
-run;
-
-proc sql;
-create table ipop_check as select
-a.*,b.* from dialysis2 a inner join
-op_pb b
-on a.bid_hrs_21 = b.bid_hrs_21;
-quit;
-
-
-data ipop_check;
-set ipop_check;
-ip_only = 1;
-IF admit_op => admit_ip then ip_only = 0; 
-run;
-
-data ipop_check;
-set ipop_check;
-IF admit_pb => admit_ip and no_ip=1 then ip_only = 0;
-run;
-
-/* IP start, subsequent OP */
-
-data ipop_check (keep = bid_hrs_21 ip_only);
-set ipop_check;
-where ip_only = 0;
-run;
-
-proc sort data=ipop_check nodupkey out=ipop_start; by bid_hrs_21; run; /* 142? */
-
-proc freq data=ipop_check; tables ip_only; run;
-
-
-data ipop_start (keep = bid_hrs_21 ip_only);
-set ipop_start;
-run;
-
-data dialysis1;
-merge dialysis1 ipop_start;
-by bid_hrs_21;
-IF ip_only = . then ip_only = 1;
-run;
-
-proc freq data=dialysis1; where ip_start=1; tables ip_only; run;
-/*
-data ip_index;
-merge dialysis2 ipop_start;
-by bid_hrs_21;
-run;
-
-data ip_index;
-set ip_index;
-if ip_start = . then ip_start = 0;
-run;
-
-proc freq data=ip_index; tables ip_start; run;
-
-
-data op_index;
-set dialysis1;
-where op_flag = 1;
-run;
-
-
-proc freq data=dialysis1; tables pb_flag ip_flag op_flag; run;
-
-*/
-
-
-/* Check discharge status for IP only dialysis group */
-
-data ip_only1 (keep=bid_hrs_21);
-set dialysis1;
-where ip_only = 1 and ip_start=1 and stus_cd = "20";
-run;
-
-
-data ip_status (keep = bid_hrs_21 stus_cd);
-set ip_claims;
-where stus_cd = "20";
-run;
-
-proc sort data=ip_status nodupkey; by bid_hrs_21; run;
-
-proc sql;
-create table ip_only2 as select a.*,b.*
-from ip_only1 a
-inner join ip_status b
-on a.bid_hrs_21=b.bid_hrs_21;
-quit;
-
-
-proc sort data=ip_only2 nodupkey; by bid_hrs_21; run;
-proc freq data=ip_only2; tables stus_cd / missprint; run;
-
-data ip_only2; 
-set ip_only2;
-where stus_cd;
-run;
-
-
-
-data first_dial (drop = admit_ip disch_ip admit_op disch_op admit_pb disch_pb);
-set dialysis1;
-run;
-
-
-proc sort data = first_dial; by bid_hrs_21 admit_year; run;
-
-data first_dial_v2;
-set first_dial;
-admit_year = admit_year + 1;
-run;
-
-/* ----------------------------merge with dn file to check for ffs */
-
-
-data dn_file (keep = bid_hrs_21 admit_year buyin12 hmoind12 hmo_mo buyin_mo age orec esrd_ind bene_dob);
-set merged.dn_2000_2012 (rename=(year = admit_year));
-run;
-
-proc freq data=dn_file; tables esrd_ind; run;
-
-/*
-
-*/
-
-proc sort data=dn_file; by bid_hrs_21 admit_year; run;
-
-data hrs_dial_final;
-merge first_dial dn_file;
-by bid_hrs_21 admit_year;
-run;
-
-data hrs_dial_final;
-set hrs_dial_final;
-where admit_date ~= .;
-format admit_date date10.;
-run;
-
-
-
-
-/* Trim buyin and hmo variables to only reflect time before dialysis */
-data hrs_dial_y2;
-set hrs_dial_final;
-surg_month=month(admit_date);
-if length(trim(left(buyin12)))=12 and surg_month>0 then do;
-buyin_sy=substr(trim(left(buyin12)),1,surg_month); * creating buyin/hmo variable for the months before index date in same year;
-hmo_sy=substr(trim(left(HMOIND12)),1,surg_month);
-end;
-else do;
-buyin_sy=trim(left(buyin12));
-hmo_sy=trim(left(HMOIND12));
-end;
-run;
-proc means n;
-var  surg_month;
-run;
-
-
-proc sql;
-create table dn_surg_y_bef as select
-a.bid_hrs_21,a.admit_year as surg_year,b.year as surg_year_bef,b.year,b.buyin12,b.HMOIND12
-from hrs_dial_final a inner join
-merged.dn_2000_2012 b
-on trim(left(a.bid_hrs_21))=trim(left(b.bid_hrs_21))
-and 0<a.admit_year-b.year<=1 order by bid_hrs_21,admit_year;
-quit;
-
-
-proc sql;
-create table all_insurance as select a.*,b.buyin12 as buyin_bef,b.HMOIND12 as hmo_bef from
-hrs_dial_y2 a
-left join
-dn_surg_y_bef b
-on trim(left(a.bid_hrs_21))=trim(left(b.bid_hrs_21));
-quit;
-
-
-data all_insurance2;
-set all_insurance;
-buyin_2y=trim(left(buyin_bef))||trim(left(buyin_sy));
-hmo_2y=trim(left(hmo_bef))||trim(left(hmo_sy));
-
-/*create 12 month variables*/
-buyin_2y_r=reverse(trim(buyin_2y));
-hmo_2y_r=reverse(trim(hmo_2y));
-
-if length(buyin_2y_r)>11 then buyin_1y_r=substr(trim(left(buyin_2y)),1,12);
-if length(hmo_2y_r)>11 then hmo_1y_r=substr(trim(left(hmo_2y)),1,12);
-
-if length(buyin_2y_r)<12 then buyin_1y_r="";
-if length(hmo_2y_r)<12 then hmo_1y_r="";
-
-buyin_1y=reverse(trim(buyin_1y_r));
-hmo_1y=reverse(trim(hmo_1y_r));
-
-/*create indicator variable for mc coverage 0=no, 1=yes*/
-if length(buyin_1y)=12 then do;
-if indexc(buyin_1y,"0","1","2","A","B") then part_ab_1y=0;
-if indexc(buyin_1y,"0","1","2","A","B")=0 then part_ab_1y=1;
-end;
-/*create indicator variable for hmo coverage 0=no, 1=yes*/
-if length(hmo_1y)=12 then do;
-if index(hmo_1y,"00000000000") then hmo_d_1y=0;
-if index(hmo_1y,"00000000000")=0 then hmo_d_1y=1;
-end;
-
-/*create 1 month variable*/
-if length(buyin_2y_r)>0 then buyin_6m_r=substr(trim(left(buyin_2y)),1,1);
-if length(hmo_2y_r)>0 then hmo_6m_r=substr(trim(left(hmo_2y)),1,1);
-
-if length(buyin_2y_r)<1 then buyin_6m_r="";
-if length(hmo_2y_r)<1 then hmo_6m_r="";
-
-buyin_6m=reverse(trim(buyin_6m_r));
-hmo_6m=reverse(trim(hmo_6m_r));
-
-/*create indicator variable for mc coverage 6 mo. 0=no, 1=yes*/
-if length(buyin_6m)=1 then do;
-if indexc(buyin_6m,"0","1","2","A","B") then part_ab_6m=0;
-if indexc(buyin_6m,"0","1","2","A","B")=0 then part_ab_6m=1;
-end;
-if length(hmo_6m)=1 then do;
-if index(hmo_6m,"0") then hmo_d_6m=0;
-if index(hmo_6m,"0")=0 then hmo_d_6m=1;
-end;
-
-run;
-
-
-data final;
-set all_insurance2;
-*where part_ab_6m= 1; 
-run;
-
-
-data final;
-set final;
-DOB= input(bene_dob, yymmdd8.) ;
-   format DOB date10.;
-run;
-
-data final;
-set final;
-sixback = intnx('month',admit_date,-1); /*one month window to check age/ffs */
-sixback6 = intnx('month',admit_date,-6); /*six month check for IP Dialysis */
-run;
-
-data final;
-set final;
-age_6m = yrdif(DOB, sixback, 'AGE'); *Age 1 month prior to first dialysis;
-age_6_back = int(age_6m);
-run;
-
-data final;
-set final;
-underage = 0;
-If age_6_back < 65 then underage = 1;
-run;
-
-/*-------------------------to determine if underage had continous ffs create replica dataset and increment year*/
-
-proc sort data=first_dial_v2; by bid_hrs_21 admit_year; run;
-proc sort data=dn_file; by bid_hrs_21 admit_year; run;
-
-
-data hrs_dial_final;
-merge first_dial_v2 dn_file;
-by bid_hrs_21 admit_year;
-run;
-
-
-data hrs_dial_final;
-set hrs_dial_final;
-where admit_date ~= .;
-format admit_date date10.;
-run;
-
-
-data death_file; /*Get death date to check for people who die within first year of ffs */
-set death.death_date_2012;
-run;
-
-
-data death_file (keep = id bid_hrs_21 death_year death_month);
-set death_file;
-run;
-
-proc sql;
-create table hrs_death as select a.*,b.*
-from hrs_dial_final a left join
-death_file b
-on a.bid_hrs_21 = b.bid_hrs_21;
-quit;
-
-data hrs_dial_final;
-set hrs_death;
-trudate = admit_year - 1;
-run;
-
-
-/* Trim buyin and hmo variables to only reflect time before dialysis */
-data hrs_dial_y2;
-set hrs_dial_final;
-surg_month=month(admit_date);
-if length(trim(left(buyin12)))=12 and surg_month>0 then do;
-buyin_sy=substr(trim(left(buyin12)),1,surg_month);
-hmo_sy=substr(trim(left(HMOIND12)),1,surg_month);
-end;
-else do;
-buyin_sy=trim(left(buyin12));
-hmo_sy=trim(left(HMOIND12));
-end;
-run;
-proc means n;
-var  surg_month;
-run;
-
-
-proc sql;
-create table dn_surg_y_bef as select
-a.bid_hrs_21,a.admit_year as surg_year,b.year as surg_year_bef,b.year,b.buyin12,b.HMOIND12
-from hrs_dial_final a inner join
-merged.dn_2000_2012 b
-on trim(left(a.bid_hrs_21))=trim(left(b.bid_hrs_21))
-and 0<a.admit_year-b.year<=1 order by bid_hrs_21,admit_year;
-quit;
-
-
-proc sql;
-create table all_insurance as select a.*,b.buyin12 as buyin_bef,b.HMOIND12 as hmo_bef from
-hrs_dial_y2 a
-left join
-dn_surg_y_bef b
-on trim(left(a.bid_hrs_21))=trim(left(b.bid_hrs_21));
-quit;
-
-
-data all_insurance2;
-set all_insurance;
-death_diff = surg_month - death_month;
-time2death = 12 - surg_month + death_month;
-buyin_2y=trim(left(buyin_bef))||trim(left(buyin_sy));
-hmo_2y=trim(left(hmo_bef))||trim(left(hmo_sy));
-
-/*create 12 month variables*/
-buyin_2y_r=reverse(trim(buyin_2y));
-hmo_2y_r=reverse(trim(hmo_2y));
-
-if length(buyin_2y_r)>11 then buyin_1y_r=substr(trim(left(buyin_2y_r)),1,12);
-if length(hmo_2y_r)>11 then hmo_1y_r=substr(trim(left(hmo_2y_r)),1,12);
-
-if length(buyin_2y_r)<12 then buyin_1y_r="";
-if length(hmo_2y_r)<12 then hmo_1y_r="";
-
-buyin_1y=reverse(trim(buyin_1y_r));
-hmo_1y=reverse(trim(hmo_1y_r));
-
-/*create indicator variable for mc coverage 0=no, 1=yes*/
-if length(buyin_1y)=12 then do;
-if indexc(buyin_1y,"0","1","2","A","B") then part_ab_1y=0;
-if indexc(buyin_1y,"0","1","2","A","B")=0 then part_ab_1y=1;
-end;
-
-if death_diff>=0 then buyin_1y = substr(trim(left(buyin_1y)),1,time2death);
-if death_diff>=0 and indexc(buyin_1y,"0","1","2","A","B")=0 then part_ab_1y=1;
-
-/*create indicator variable for hmo coverage 0=no, 1=yes*/
-if length(hmo_1y)=12 then do;
-if index(hmo_1y,"00000000000") then hmo_d_1y=0;
-if index(hmo_1y,"00000000000")=0 then hmo_d_1y=1;
-end;
-
-/*create 6 month variable*/
-if length(buyin_2y_r)>5 then buyin_6m_r=substr(trim(left(buyin_2y)),1,6);
-if length(hmo_2y_r)>5 then hmo_6m_r=substr(trim(left(hmo_2y)),1,6);
-
-if length(buyin_2y_r)<6 then buyin_6m_r="";
-if length(hmo_2y_r)<6 then hmo_6m_r="";
-
-buyin_6m=reverse(trim(buyin_6m_r));
-hmo_6m=reverse(trim(hmo_6m_r));
-
-/*create indicator variable for mc coverage 6 mo. 0=no, 1=yes*/
-if length(buyin_6m)=6 then do;
-if indexc(buyin_6m,"0","1","2","A","B") then part_ab_6m=0;
-if indexc(buyin_6m,"0","1","2","A","B")=0 then part_ab_6m=1;
-end;
-if length(hmo_6m)=6 then do;
-if index(hmo_6m,"00000") then hmo_d_6m=0;
-if index(hmo_6m,"00000")=0 then hmo_d_6m=1;
-end;
-
-run;
-
-data finalv2; /* has ffs 1yr post dialysis */
-set all_insurance2;
-where part_ab_1y=1 and hmo_d_1y=0;
-run;
-
-data finalv2 (keep = bid_hrs_21 part_ab_1y hmo_d_1y);
-set finalv2;
-run;
-
-data final;
-merge final finalv2;
-by bid_hrs_21;
-run;
-
-proc sort data=final; by bid_hrs_21 admit_year; run;
-
-proc sort data=final; by bid_hrs_21 admit_year; run;
-
-/*merge with esrd_flag */
-
-data esrd_flag (keep = bid_hrs_21 admit_year esrd_ind);
-set dn_file;
-where esrd_ind = "Y";
-run;
-
-proc sort data=esrd_flag nodupkey; by bid_hrs_21 admit_year; run; 
-
-data final_esrd;
-merge final esrd_flag;
-by bid_hrs_21 admit_year;
-run;
-
-data final;
-set final_esrd;
-IF admit_date ~= .;
-run;
-
-
-/****************************************************************/
-/*Add HRS xwalk ID to the claims datasets
-Creates 2 datasets, one with the 6 month cc and elix 
-and one with 12 month cc and elix */
-/****************************************************************/
-
-/*HRS - CMS crosswalk initial processing*/
-data crosswalk_1;
-set merged.cmsxref2012;
-keep bid_hrs_21 hhid pn hhidpn hhidnew pnnew;
-/*create id variable as concat of hhid and pn*/
-length hhidpn $9 hhidnew $6 pnnew $3;
-hhidnew=trim(hhid);
-pnnew=trim(pn);
-hhidpn=hhidnew||pnnew;
-run;
-
-data crosswalk_1a;
-set crosswalk_1(keep=bid_hrs_21 hhidpn);
-run;
-
-data crosswalk_2;
-set crosswalk_1a;
-bid_hrs=bid_hrs_21;
-id=hhidpn;
-drop hhidpn;
-drop bid_hrs_21;
-run;
-
-proc sort data= crosswalk_2;
-by bid_hrs;
-run;
-
-proc sort data = final; by bid_hrs_21; run; 
-
-data final;
-set final (rename=(bid_hrs_21 = bid_hrs));
-run;
-
-
-proc freq data = final; tables age; run;
-
-data final_dial;
-merge final crosswalk_2;
-by bid_hrs;
-run;
-
-data final; /* need to merge with tracker file to get dob */
-set final_dial;
-if admit_date ~= .;
-run;
-
-
-data tracker (keep = id_num birthmo birthday birthyr);
-set death.restr_tracker_v2012;
-id_num = id + 0;
-run;
-
-
-data final1;
-set final;
-id_num = id + 0;
-run;
-
-proc sort data=tracker; by id_num; run;
-proc sort data=final1; by id_num; run;
-
-data final2;
-merge final1 tracker;
-by id_num;
-run;
-
-data final2;
-set final2;
-if admit_date ~=.;
-run;
-
-
-data final2;
-set final2;
-if age = . then bene_dob=mdy(birthmo,birthday,birthyr);
-run;
-
-data final2;
-set final2;
-if age = . then dob=bene_dob;
-run;
-
-data final2;
-set final2;
-sixback = intnx('month',admit_date,-1); /*one month window to check age/ffs */
-sixback6 = intnx('month',admit_date,-6); /*six month check for IP Dialysis */
-run;
-
-data final2;
-set final2;
-age_6m = yrdif(DOB, sixback, 'AGE'); *Age 1 month prior to first dialysis;
-age_6_back = int(age_6m);
-If age = . then age = yrdif(DOB, admit_date, 'AGE'); *Age 1 month prior to first dialysis;
-run;
-
-data final (keep = bid_hrs admit_date disch_date admit_year age orec underage sixback sixback6 part_ab_1y part_ab_6m hmo_d_6m hmo_d_1y id esrd_ind ip_start ip_only cptflag cptcodes ip_claim pb_claim op_claim ip_flag pb_flag op_flag stus_cd ippb_same);
-set final2;
-underage = 0;
-If age_6_back < 65 then underage = 1;
-run;
-
-data final;
-set final;
-periflag = 0;
-hemoflag = 0;
-*ip_overlap = 0;
-IF (cptcodes = 90935) or (cptcodes = 90937) or (cptcodes = 90999) or (cptcodes=3995) THEN hemoflag = 1;
-IF (cptcodes = 90945) or (cptcodes = 90947) or (cptcodes = 5498) then periflag = 1;
-IF (cptcodes = 257) then periflag = 1;
-*IF ip_start = 1 and ip_only = 0 then ip_overlap = 1;
-run;
-
-/*
-data final;
-set final;
-true_op = 0;
-IF ip_overlap = 0 and ip_only = 0 then true_op = 1;
-run;
-
-
-
-proc freq data=final; tables ip_overlap / missprint; run;
-*/
-
-proc export data = final outfile="E:\data\Dialysis\int_data\hrs_dial_claims.dta" replace; run;
-
-
-
-libname proj_int 'E:\data\Dialysis\int_data';
-
-data proj_int.hrs_dial_claims;
-set final;
-run;
-
-data index1 (keep= bid_hrs_21 id index_date index_year index_month);
-set proj_int.hrs_dial_claims(rename=(bid_hrs = bid_hrs_21 admit_date = index_date admit_year = index_year)) ;
-index_month = month(index_date);
-run;
-
-data proj_int.index;
-set index1;
-run;
-
-
-H="Extract Claims Based on Dialysis Code - 4/12/17"
+H="Extract Claims Based on Dialysis Code"
 libname merged "E:\data\cms_DUA_24548_2012";
 libname death "E:\data\hrs_cleaned";
 libname medi 'E:\data\cms_DUA_24548_2012';
@@ -6929,7 +5956,7 @@ tab champus true_op if ind_p1_ivw==1 & n1_ingap==1, chi2 col
 tab adl_indep_core true_op if ind_p1_ivw==1 & n1_ingap==1, chi2 col
 tab adl_dep_core true_op if ind_p1_ivw==1 & n1_ingap==1, chi2 col
 
-H="Survival Analysis"
+H="Table 1 Fisher"
 /*pull bmi from rand file */
 use hhid pn r9bmi r8bmi r7bmi r6bmi r5bmi r4bmi r3bmi r2bmi r1bmi r11bmi r10bmi using "E:\data\hrs_public_2012\rand2012\main\randhrsn.dta", clear
 
@@ -6956,18 +5983,6 @@ gen death_weeks = mortality*0.14286
 recast int death_weeks, force
 recode death_weeks (0=1) 
 
-
-
-/*
-gen death_months = mortality * 0.0328767
-recast int death_months, force
-recode death_months (0=1) 
-
-
-gen death_years = mortality * 0.00273973
-recast int death_years, force
-recode death_years (0=1)
-*/
 
 gen agecat = .
 replace agecat = 1 if age_65_74==1
@@ -7030,8 +6045,8 @@ replace bmi_unknow = 1 if bmi_quart==5
 gen bmi_under_25 = 0
 replace bmi_under_25 = 1 if bmi <=25
 
-drop if bmi==.
-drop if srh_pf==.
+*drop if bmi==.
+*drop if srh_pf==.
 
 
 /*Rename Comorbs */
@@ -7155,312 +6170,147 @@ replace median_comorb = 4 if above_median_age==1 & comorb_5==1
 la define medlbl 1"<76&0-4"2"<76&5+"3">=76&0-4"4">=76&5+"
 la values median_comorb medlbl
 
-sts graph, by(median_comorb) xtitle(Analysis Time = weeks)
 
-sts graph, by(adl_dep_core) xtitle(Analysis Time = weeks)
+label var agecat "Age Categories"
 
+gen sex = female
 
-gen co_adl = .
-replace co_adl = 1 if comorb_0_3==1 & adl_dep_core==0
-replace co_adl = 2 if comorb_0_3==1 & adl_dep_core==1
-replace co_adl = 3 if comorb_4_6==1 & adl_dep_core==0
-replace co_adl = 4 if comorb_4_6==1 & adl_dep_core==1
-replace co_adl = 5 if comorb_7==1 & adl_dep_core==0
-replace co_adl = 6 if comorb_7==1 & adl_dep_core==1
+gen male = 0
+replace male=1 if female==0
 
-/*
+gen race_t = non_white
+label var race_t "Race"
 
-cap drop co_adl 
-gen co_adl = .
-replace co_adl = 1 if comorb_0_4==1 & adl_dep_core==0
-replace co_adl = 2 if comorb_0_4==1 & adl_dep_core==1 
-replace co_adl = 3 if comorb_5==1 & adl_dep_core==0 
-replace co_adl = 4 if comorb_5==1 & adl_dep_core==1 
-*/
+gen hs_yes = 0
+replace hs_yes = 1 if hseduc==1
 
+gen hs_no = 0
+replace hs_no = 1 if hseduc==0
 
-la define comorbadlbl 1"0-3&ADL NON DEP"2"0-3&ADL DEP"3"4-6&ADL NON DEP"4"4-6&ADL DEP"5"7+&ADL NON DEP"6"7+&ADL DEP"
-la values co_adl comorbadlbl
+gen dialysis = periflag
+label var periflag "Peritoneal"
+label var hemoflag "Hemodialysis"
 
+gen adl_yes = adl_dep_core
+gen adl_no = 0
+replace adl_no = 1 if adl_dep_core==0
 
+gen nhres_yes = nhres
+gen nhres_no = 0
+replace nhres_no = 1 if nhres==0
 
-drop if prob_unknown==1
+gen srh_cat = srh_pf
+label var srh_cat "Self Reported Health"
+label var srh_pf "Poor/Fair"
+label var srh_gve "Good/VG/Excellent"
 
+gen lcats = .
+replace lcats = 1 if likelydem==1
+replace lcats = 2 if likelycind==1
+replace lcats = 3 if likelynormal==1
+replace lcats = 4 if prob_unknown==1
 
+gen bmi_cat = bmi_under_25
+gen bmi_over_25 = 0
+replace bmi_over_25 = 1 if bmi_under_25==0
 
 
-/*
-cap la drop comorbadlbl
-la define comorbadlbl 1"0-4&ADL NON DEP"2"0-4&ADL DEP"3"5+&ADL NON DEP"4"5+&ADL DEP" 
-la values co_adl comorbadlbl 
-*/
+label var bmi_cat "Body Mass Index"
 
-sts graph, by(co_adl) xtitle(Analysis Time = weeks)
+gen comorbcats = .
+replace comorbcats = 1 if comorb_0_3==1
+replace comorbcats = 2 if comorb_4_6==1
+replace comorbcats = 3 if comorb_7==1
+label var comorbcats "Comorbidities"
 
+gen op_start = 0
+replace op_start = 1 if ip_start==0
+label var op_start "Outpatient Start"
 
+gen init = ip_start
+label var init "Incident Dialysis"
 
-stset death_weeks, failure(died==1)
-stset death_weeks, failure(died==1) exit(death_weeks==52)
 
-foreach x of varlist comorb_0_4 comorb_5 {
+label var age_65_74 "65-74"
+label var age_75_84 "75-84"
+label var age_85 "85+"
+label var sex "Sex"
+label var female "Female"
+label var male "Male"
+label var non_white "Not White"
+label var hseduc "HS Education"
+label var hs_yes "Yes"
+label var hs_no "No"
+label var dialysis "Hemodialysis"
+label var adl_yes "Yes"
+label var adl_no "No"
+label var nhres_yes "Yes"
+label var nhres_no "No"
+label var bmi_over_25 ">25"
+label var bmi_under_25 "<25"
+label var lcats "Cognitive Status"
 
-sts graph, strata(adl_dep_core) adjustfor(`x') xtitle(Analysis Time = Weeks) 
-*graph export "E:/Files to move out/Omari/20170613/`x'.pdf", as(pdf) replace
-graph export "E:/Files to move out/Omari/20170613/`x'_1yr.pdf", as(pdf) replace
-}
+preserve
 
+keep if prob_unknown==1
+drop if pdem<0.5 | pdem2<0.5 | pdem3<0.5
+drop if comorb_dementia==1
+drop if memory_hrs==1
 
+replace core_year = core_year - 2
 
+cap drop _m
+drop likely* pdem*
 
- 
+keep id core_year
+save "E:\data\Dialysis\int_data\dem_check.dta", replace
+use "E:\data\Dialysis\int_data\dem_check.dta", clear
+replace core_year = core_year-2
 
- 
-sts graph , strata(con_cat) adjustfor(agecat) xtitle(Analysis Time = Weeks) 
+merge 1:1 id core_year using "E:\data\hrs_cleaned\core_00_to_12.dta" 
 
-la define iplbl 0"Outpatient"1"Inpatient"
-la values ip_start iplbl
+keep if _m==3
+tab memory_hrs
+gen likelydem = 0
+keep id likelydem
 
+save "E:\data\Dialysis\int_data\dem_check.dta", replace
 
-sts graph , by(comorb_renal) xtitle(Analysis Time = Weeks) 
+restore
 
+replace likelydem = . if prob_unknown==1
+replace likelydem=0 if (pdem<0.5 | pdem2 <0.5 | pdem3 <0.5) & prob_unknown==1
+replace likelydem = 1 if comorb_dementia==1 & prob_unknown==1
+replace likelydem = 1 if memory_hrs==1 & prob_unknown==1
 
-local depvars age_75_84 age_85 female non_white comorb_4_6 comorb_7
-local depvars1 age_75_84 age_85 female non_white adl_dep_core comorb_4_6 comorb_7
-local depvars2 age_75_84 age_85 female non_white likelydem likelycind comorb_4_6 comorb_7
-local depvars3 age_75_84 age_85 female non_white adl_dep_core comorb_4_6 comorb_7 likelydem likelycind
+cap drop _m
+rename likelydem likelydem1
+merge 1:1 id using "E:\data\Dialysis\int_data\dem_check.dta"
 
-*stcox `depvars'
-*estimates store coxmod
+replace likelydem1 = 0 if likelydem==0
+drop likelydem
+rename likelydem1 likelydem
 
-/*cloglog died `depvars', eform
-estimates store base
-*/
-cloglog died_30d `depvars', eform
-estimates store base1
-cloglog died_6m `depvars', eform
-estimates store base2
-cloglog died_1yr `depvars', eform
-estimates store base3
+drop if likelydem==.
+replace lcats = 0 if likelydem==0
 
-cloglog died_30d `depvars1', eform
-estimates store base4
-cloglog died_6m `depvars1', eform
-estimates store base5
-cloglog died_1yr `depvars1', eform
-estimates store base6
+gen likelynodem = 0
+replace likelynodem = 1 if likelydem==0
+label var likelynodem "Likely Not Demented"
 
-cloglog died_30d `depvars2', eform
-estimates store base7
-cloglog died_6m `depvars2', eform
-estimates store base8
-cloglog died_1yr `depvars2', eform
-estimates store base9
 
-cloglog died_30d `depvars3', eform
-estimates store base10
-cloglog died_6m `depvars3', eform
-estimates store base11
-cloglog died_1yr `depvars3', eform
-estimates store base12
-
-
-cd "E:\projects\Dialysis\archive_logs"
-*outreg2 [coxmod base base1 base2 base3] using regtab2, excel eform
-outreg2 [base1 base2 base3 base4 base5 base6 base7 base8 base9 base10 base11 base12] using regtab2, excel eform
-
-
-/*
-mat ctab=J(`rd',2,.) 
-local s = 1
-
-foreach x of local c_vars {
-
-tab `x', matcell(A)
-mat ctab[`s',1] = A[2,1]
-mat ctab[`s',2] = (A[2,1]/277)*100
-
-local s = `s'+1
-}
-
-mat ctab[19, 1] = r(N)
-mat rownames ctab= `c_vars' "Sample Size"
-
-frmttable using "E:\projects\Dialysis\archive_logs\comorb_count.doc", replace statmat(ctab) ///
-varlabels title("Charlson Comorbidities + CAD") ctitles("Comorbidity" "# of People" "%") sdec(2) ///
-note("In the Cox Model, Cancer is a combination of Any Malignancy and Metastatic Solid Tumor")
-
-
-
-local c_vars comorb_chf comorb_myocard comorb_perivascular comorb_cerebrovascular comorb_dementia comorb_pulmonary comorb_rheumatic comorb_peptic comorb_liver comorb_uncdiabetes comorb_comdiabetes comorb_plegia comorb_renal comorb_malignancy comorb_msliver comorb_tumor comorb_aids comorb_cad
-egen co_dist = anycount(`c_vars'), values(1)
-*/
-
-/*Logrank/Univariate tests */
-stset death_weeks, id(bid_hrs) failure(died==1)
-
-*sts graph, by(agecat) xtitle("Analysis Time = Weeks")
-
-local ivars age_75_84 age_85 female hseduc non_white periflag comorb_5_0d_n12m comorb_3_0d_n12m dm_flag comorb_13_0d_n12m ///
-comorb_32_0d_n12m comorb_16_0d_n12m comorb_1_0d_n12m srh_pf adl_dep_core nhres ip_start likelydem likelycind prob_unknown ///
-bmi_under_25
-
-local ivars age_75_84 age_85 female hseduc non_white periflag comorb_dementia comorb_perivascular comorb_diabetes comorb_renal ///
-comorb_cad comorb_cancer comorb_chf srh_pf adl_dep_core nhres ip_start likelydem likelycind prob_unknown ///
-bmi_25 bmi_50 bmi_75
-
-local ivars1 age_75_84 age_85 female hseduc non_white periflag comorb_dementia comorb_perivascular comorb_diabetes ///
-comorb_cad comorb_cancer comorb_chf srh_pf adl_dep_core nhres ip_start likelydem likelycind prob_unknown ///
-bmi_25 bmi_50 bmi_75
-
-stcox `ivars', tvc(comorb_diabetes) texp(_t)
-
-/*
-estimates store reg4
-outreg2 [reg4] using regtab1, excel eform
-foreach x of local ivars {
-stcox `ivars', tvc(`x') texp(ln(_t))
-estimates store reg4
-outreg2 [reg4] using regtab1, excel eform
-}
-
-
-
-foreach x of local ivars {
-
-sts graph, by(`x')
-
-graph export "E:/projects/Dialysis/archive_code/Diagnostics/KM Curves/`x'.pdf", as(pdf) replace
-
-stphplot, by (`x')
-graph export "E:/projects/Dialysis/archive_code/Diagnostics/Neg Log KM Curves/`x'.pdf", as(pdf) replace
-}
-
-*/
-
-
- 
- 
-
-
-local idem age_75_84 age_85 female hseduc non_white
-stcox `idem' comorb_4_6 comorb_7
-stcox `idem' comorb_chf comorb_micad comorb_perivascular comorb_cerebrovascular comorb_renal comorb_pulmonary comorb_liv comorb_diabetes comorb_cancer comorb_other
-stcox `idem' adl_dep_core
-stcox `idem' likelydem likelycind prob_unknown 
-
-/*
-stcox `ivars', tvc(periflag) texp(_t)
-stcox `ivars', tvc(periflag) texp(ln(_t))
-*/
-
-stpm2 `ivars', scale(hazard) df(3) tvc(comorb_renal) dftvc(2) eform
-cap drop hr_tvc
-predict hr_tvc, hrnumerator(comorb_renal 1) hrdenominator(comorb_renal 0)
-predict hr_tvc, 
-
-
-foreach x of local ivars {
-
-stcox (`ivars'), tvc(`x') texp(ln(_t))
-}
-
-
-
-
-
-/*
-stcox i.age_65_74 if bmi!=.
-outreg, stats(e_b p) varlabels
-
-foreach x of local ivars1 {
-
-stcox i.`x' if bmi!=.
-outreg, merge stats(e_b p) varlabels
-outreg, merge stats (e_b p) store(out) varlabels
-}
-
-outreg using table3, basefont(fs10) replay(out) 
-
-
-
-stcox i.age_65_74 if bmi!=.
-
-estout using table2, cells(b p) eform
-
-
-*/
-
-local ivars age_75_84 age_85 female hseduc non_white periflag comorb_dementia comorb_perivascular comorb_diabetes comorb_renal ///
-comorb_cad comorb_cancer comorb_chf srh_pf adl_dep_core nhres ip_start likelydem likelycind prob_unknown ///
-bmi_25 bmi_50 bmi_75
-
-
-local rn: word count `ivars'
-di `rn'
-
-mat tab1=J(`rn',5,.)
-local r = 1
-
-foreach x of local ivars {
-
-stcox `x' if bmi!=., strata(ip_start)
-qui return list
-matrix A = r(table)
-matrix tab1[`r', 1] = A[1,1]
-matrix tab1[`r', 2] = A[4,1]
-matrix tab1[`r', 3] = A[5,1]
-matrix tab1[`r', 4] = A[6,1]
-
-local r = `r' + 1
-}
-mat rownames tab1= `ivars'
-mat list tab1
-
-frmttable using "E:\projects\Dialysis\archive_logs\unadjusted_associations.doc", replace statmat(tab1) ///
-varlabels title("Bivariate Relationships in Cox Model") ctitles("Variables" "Hazard Ratio" "P-Value" "95% CI, Lower" "95% CI, Upper") sdec(3) ///
-note()
-
-
-
-
-
-
-pwcorr `ivars1'
-stcox i.(`ivars'), strata(ip_start)
-
-
-/*
-foreach x of local ivars {
-
-sts test `x'
-stphplot, by(`x') adjust(ip_start)
-
-graph export "E:/projects/Dialysis/archive_logs/20170522/stratified/`x'.pdf", as(pdf) replace
-}
-
-/*
-sts gen surv = s, by(agecat)
-keep surv bid_hrs_21
-rename surv f_surv
-rename surv r_serv
-merge 1:1 bid_hrs_21 using "E:\projects\Dialysis\full_surv.dta"
-save "E:\projects\Dialysis\full_surv.dta", replace
-*/
-
-
-sts graph , by(agecat) xtitle(Analysis Time = Weeks) 
-
-
-H="Table 1 Fisher"
 local ivars age_65_74 age_75_84 age_85 female male white non_white hs_yes hs_no ///
 periflag hemoflag adl_yes adl_no nhres_yes nhres_no srh_pf srh_gve bmi_over_25 bmi_under_25 /// 
 likelynormal likelydem likelycind prob_unknown comorbcats comorb_0_3 comorb_4_6 comorb_7 ///
 local cvars c_con
 local full agecat age_65_74 age_75_84 age_85 sex female male race_t white non_white ///
 hseduc hs_yes hs_no dialysis periflag hemoflag adl_dep_core adl_yes adl_no nhres nhres_yes ///
-nhres_no srh_cat srh_pf srh_gve bmi_cat bmi_over_25 bmi_under_25 lcats likelynormal ///
-likelydem likelycind comorbcats comorb_0_3 comorb_4_6 comorb_7 c_con
+nhres_no srh_cat srh_pf srh_gve bmi_cat bmi_over_25 bmi_under_25 lcats ///
+likelydem likelynodem comorbcats comorb_0_3 comorb_4_6 comorb_7  ///
+init op_start ip_start c_con
+
 local rd: word count `full' 1 
+
 di `rd'
 mat tab1=J(`rd',7,.)
 
@@ -7473,7 +6323,7 @@ tab agecat died_1yr, exact
 mat tab1[1,7]=r(p_exact)
 
 local i = 5
-local ivars2 sex race_t hseduc dialysis adl_dep_core nhres srh_cat bmi_cat lcats
+local ivars2 sex race_t hseduc dialysis adl_dep_core nhres srh_cat bmi_cat lcats 
 foreach x of local ivars2 {
 
 		tab `x' died_30d, exact
@@ -7486,11 +6336,18 @@ foreach x of local ivars2 {
 		}
 
 tab comorbcats died_30d, exact
-mat tab1[34,3]=r(p_exact)
+mat tab1[32,3]=r(p_exact)
 tab comorbcats died_6m, exact
-mat tab1[34,5]=r(p_exact)
+mat tab1[32,5]=r(p_exact)
 tab comorbcats died_1yr, exact
-mat tab1[34,7]=r(p_exact)
+mat tab1[32,7]=r(p_exact)
+
+tab init died_30d, exact
+mat tab1[36,3]=r(p_exact)
+tab init died_6m, exact
+mat tab1[36,5]=r(p_exact)
+tab init died_1yr, exact
+mat tab1[36,7]=r(p_exact)
 
 		
 local i=2
@@ -7667,7 +6524,7 @@ foreach x of varlist bmi_over_25 bmi_under_25 {
 	local ++i
 }
 local i = 30
-foreach x of varlist likelynormal likelydem likelycind {
+foreach x of varlist likelydem likelynodem {
 
 	sum `x'
 	mat tab1[`i',1]=r(mean)*100 // overall percentage
@@ -7685,7 +6542,7 @@ foreach x of varlist likelynormal likelydem likelycind {
 	local ++i
 }
 
-local i = 34
+local i = 33
 foreach x of varlist comorb_0_3 comorb_4_6 comorb_7 {
 
 	sum `x'
@@ -7703,6 +6560,27 @@ foreach x of varlist comorb_0_3 comorb_4_6 comorb_7 {
 	mat tab1[`i',6]=r(mean)*100
 	local ++i
 }
+
+
+local i = 37
+foreach x of varlist op_start ip_start{
+
+	sum `x'
+	mat tab1[`i',1]=r(mean)*100 // overall percentage
+	
+	sum died_30d if `x'==1
+	mat tab1[`i',2]=r(mean)*100	// percentage for died 30days
+
+	
+	sum died_6m if `x'==1
+	mat tab1[`i',4]=r(mean)*100
+
+	
+	sum died_1yr if `x'==1
+	mat tab1[`i',6]=r(mean)*100
+	local ++i
+}
+
 
 
 di `i'
@@ -7738,25 +6616,19 @@ varlabels title("Fisher Exact P-Values") ctitles("Variables" "Total, %" "0-30d, 
 note("")
 
 
-gen cog_stat = .
-replace cog_stat = 1 if likelydem==1
-replace cog_stat = 2 if likelycind==1
-replace cog_stat = 3 if likelynormal==1
-replace cog_stat = 4 if prob_unknown==1
+H="Survival Analysis"
+/* Final Model for Paper */
 
-la define coglbl 1"Likely Dementia"2"Likely CIND"3"Likely Normal"4"Likely Status Unknown"
-la values cog_stat coglbl
+cloglog died_30d `depvars', eform
+estimates store base10
+cloglog died_6m `depvars', eform
+estimates store base11
+cloglog died_1yr `depvars', eform
+estimates store base12
 
-la define adlbl 0"Non-Dependent"1"Dependent"
-la values adl_dep_core adlbl
-tab cog_stat adl_dep_core, col
 
-la define conlbl 1"0-3 Comorbidities"2"4-6 Comorbidities"3"7+ Comorbidities"
-la values con_cat3 conlbl
-
-tab cog_stat con_cat3, col
-tab cog_stat nhres, col
-
+cd "E:\projects\Dialysis\archive_logs"
+outreg2 [base10 base11 base12] using regtab2, excel eform stats(coef se pval ci)
 
 H="****Everything below not apart of main project****"
 

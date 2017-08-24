@@ -5115,3 +5115,538 @@ margins period#s_female, dydx(ind_n1_ivw)
 marginsplot, yline(0)
 graph save xtgee_fx, replace
 graph export xtgee_fx.pdf, replace
+
+H="diff-in-diff regressions"
+
+
+clear all
+set more off
+capture log close
+
+local datapath "E:\data\spouse_claims\spouse_claims_comparison\final_data\"
+local logpath "E:\data\spouse_claims\spouse_claims_comparison\logs\"
+
+cd `logpath'
+use `datapath'\spouse_claims_comparison_sample if !missing(index_date), clear
+label var s_northe "Northeast"
+label var s_midw "Midwest"
+label var s_west "West"
+label var s_south "South"
+label var nw1 "Networth lowest quartile"
+foreach s in r s {
+	label var `s'_comorb_cat2 "`s' comorbidities mild"
+	label  var `s'_comorb_cat3 "`s' comorbidities mod/severe"
+}
+label var ind_n1_ivw "Indicator Bereaved Spouse"
+label var r_age_at_core "R age at n1 ivw"
+label var s_age_at_core "S age at n1 ivw"
+
+local match ragecat r_comorb_cat2 r_comorb_cat3 r_adl_independent_core ///
+r_srh_pf sagecat ///
+s_comorb_cat2 s_comorb_cat3 ///
+s_female s_hseduc s_black s_hisp s_adl_independent_core s_srh_pf ///
+r_nhres r_adl_iadl_sp_helper s_nhres
+
+local region s_northeast 
+local match r_age_at_core r_adl_independent r_comorb_cat2 r_comorb_cat3 ///
+s_age_at_core s_female s_black s_hseduc s_comorb_cat2 s_comorb_cat3
+
+log using `logpath'comparison_regressions_diff_in_diff.txt, text replace
+
+rename tot_paid_by_mc_wi_p12m tot12m1
+rename tot_paid_by_mc_wi_p24m tot24m1
+rename tot_paid_by_mc_wi_12m tot12m0
+rename tot_paid_by_mc_wi_24m tot24m0
+egen tot6m0=rowtotal(tot_paid_by_mc_wi_m_1_to_3 tot_paid_by_mc_wi_m_4_to_6)
+egen tot6m1=rowtotal(tot_paid_by_mc_wi_m_1_to_3p tot_paid_by_mc_wi_m_4_to_6p)
+*preserve
+
+
+forvalues i=1(3)24 {
+	rename tot_paid_by_mc_wi_m_`i'_to_`=`i'+2' tot`=floor((`i'-1)/3)+1'
+	rename tot_paid_by_mc_wi_m_`i'_to_`=`i'+2'p tot`=floor((`i'+24-1)/3)+1'
+}
+
+drop tot_*
+keep s_id `match' `region' ind_n1_ivw tot* index_d core_year cem_w ffs*
+reshape long tot tot6m tot12m tot24m, i(s_id index_date) j(period)
+/*replace period=-period
+replace period=period-8 if period>8*/
+replace period=-period+9 if period<=8
+
+
+label var ind_n1_ivw "Bereavement indicator"
+label define ind_n1_ivw 0 "Control" 1 "Bereaved"
+label values ind_n1_ivw ind_n1_ivw
+replace tot=1 if tot<=0
+
+gen post=period>=9
+gen bpost=post & ind_n1_ivw
+local replace replace
+
+foreach g in "0,1" 0 1 {
+	local who "Full Sample"
+	if "`g'"=="0" local who "Men"
+	if "`g'"=="1" local who "Women"
+	foreach x in 1 2 3{
+		mat tab`x'=J(1,3,.)
+		qui outreg, clear
+		local per "& inrange(period,7,10)"
+		local per2 "& inrange(period,5,12)"
+		if `x'==2 local per `per2'
+		if `x'==3 local per
+		reg tot ind_n1_ivw##post [pw=cem_w] if inlist(s_female,`g') `per', cluster(s_id)
+		qui outreg, varlabels stats(b p) merge
+		reg tot ind_n1_ivw##post `match' i.core_year [pw=cem_w] if ///
+		inlist(s_female,`g') `per', cluster(s_id)
+		qui outreg, varlabels stats(b p) merge
+		reg tot ind_n1_ivw##post `match2' `region' i.core_year ///
+		[pw=cem_w] if inlist(s_female,`g') `per', cluster(s_id)
+		qui outreg, varlabels stats(b p) merge store(outr`x')
+
+}	
+	qui outreg using diff_in_diff_regressions, `replace' replay(outr1) ///
+	title("OLS quarterly spending 6m pre-post, `who'")
+	qui outreg using diff_in_diff_regressions, addtable replay(outr2) ///
+	title("OLS quarterly spending 12m pre-post, `who'")
+	qui outreg using diff_in_diff_regressions, addtable replay(outr3) ///
+	title("OLS quarterly spending 24m pre-post, `who'")
+	local replace addtable
+}
+
+
+
+foreach g in "0,1" 0 1 {
+
+	local who "Full Sample"
+	if "`g'"=="0" local who "Men"
+	if "`g'"=="1" local who "Women"
+	foreach x in 1 2 3  {
+		qui outreg, clear
+		local per "& inrange(period,7,10)"
+		local per2 "& inrange(period,5,12)"
+		if `x'==2 local per `per2'
+		if `x'==3 local per
+		glm tot ind_n1_ivw##post [pw=cem_w] if inlist(s_female,`g') `per', cluster(s_id) link(log) fam(gamma)
+		qui outreg, varlabels stats(b p) merge
+		margins ind_n1_ivw, dydx(post) post
+		mat results=e(b)
+		mat tab`x'[1,1]=results[1,4]-results[1,3]
+		glm tot ind_n1_ivw##post `match' i.core_year [pw=cem_w] if ///
+		inlist(s_female,`g') `per', cluster(s_id) link(log) fam(gamma)
+		qui outreg, varlabels stats(b p) merge
+		margins ind_n1_ivw, dydx(post) post
+		mat results=e(b)
+		mat tab`x'[1,2]=results[1,4]-results[1,3]
+		glm tot ind_n1_ivw##post `match2' `region' i.core_year ///
+		[pw=cem_w] if inlist(s_female,`g') `per', cluster(s_id) link(log) fam(gamma)
+		qui outreg, varlabels stats(b p) merge store(outr`x')
+		margins ind_n1_ivw, dydx(post) post
+		mat results=e(b)
+		mat tab`x'[1,3]=results[1,4]-results[1,3]
+		
+}	
+	qui outreg using diff_in_diff_regressions, `replace' replay(outr1) ///
+	title("GLM quarterly spending 6m pre-post, `who'") 
+	frmttable  using diff_in_diff_regressions, addtable statmat(tab1) title("Marginal effects") ///
+	sdec(2) rtitles("BereavedXPost") ctitles("" "Simple" "Match Vars" "All vars") 
+	qui outreg using diff_in_diff_regressions, addtable replay(outr2) ///
+	title("GLM quarterly spending 12m pre-post, `who'")
+	frmttable  using diff_in_diff_regressions, addtable statmat(tab2) title("Marginal effects") ///
+	sdec(2) rtitles("BereavedXPost") ctitles("" "Simple" "Match Vars" "All vars") 
+	qui outreg using diff_in_diff_regressions, addtable replay(outr3) ///
+	title("GLM quarterly spending 24m pre-post, `who'")
+	frmttable  using diff_in_diff_regressions, addtable statmat(tab3) title("Marginal effects") ///
+	sdec(2) rtitles("BereavedXPost") ctitles("" "Simple" "Match Vars" "All vars") 
+	local replace addtable
+}
+
+foreach g in "0,1" 0 1 {
+	local who "Full Sample"
+	if "`g'"=="0" local who "Men"
+	if "`g'"=="1" local who "Women"
+	foreach x in 6m 12m 24m {
+		mat tab`x'=J(1,3,.)
+		qui outreg, clear
+		local per 
+		reg tot`x' ind_n1_ivw##post [pw=cem_w] if inlist(s_female,`g') `per', cluster(s_id)
+		qui outreg, varlabels stats(b p) merge
+		reg tot`x' ind_n1_ivw##post `match' i.core_year [pw=cem_w] if ///
+		inlist(s_female,`g') `per', cluster(s_id)
+		qui outreg, varlabels stats(b p) merge
+		reg tot`x' ind_n1_ivw##post `match2' `region' i.core_year ///
+		[pw=cem_w] if inlist(s_female,`g') `per', cluster(s_id)
+		qui outreg, varlabels stats(b p) merge store(outr`x')
+
+}	
+	qui outreg using diff_in_diff_regressions, `replace' replay(outr6m) ///
+	title("OLS total spending 6m pre-post, `who'")
+	qui outreg using diff_in_diff_regressions, addtable replay(outr12m) ///
+	title("OLS total spending 12m pre-post, `who'")
+	qui outreg using diff_in_diff_regressions, addtable replay(outr24m) ///
+	title("OLS total spending 24m pre-post, `who'")
+	local replace addtable
+}
+foreach g in "0,1" 0 1 {
+
+	local who "Full Sample"
+	if "`g'"=="0" local who "Men"
+	if "`g'"=="1" local who "Women"
+	foreach x in 6m 12m 24m {
+		qui outreg, clear
+		local per "& inrange(period,7,10)"
+		local per2 "& inrange(period,5,12)"
+		glm tot`x' ind_n1_ivw##post [pw=cem_w] if inlist(s_female,`g') `per', cluster(s_id) link(log) fam(gamma)
+		qui outreg, varlabels stats(b p) merge
+		margins ind_n1_ivw, dydx(post) post
+		mat results=e(b)
+		mat tab`x'[1,1]=results[1,4]-results[1,3]
+		glm tot`x' ind_n1_ivw##post `match' i.core_year [pw=cem_w] if ///
+		inlist(s_female,`g') `per', cluster(s_id) link(log) fam(gamma)
+		qui outreg, varlabels stats(b p) merge
+		margins ind_n1_ivw, dydx(post) post
+		mat results=e(b)
+		mat tab`x'[1,2]=results[1,4]-results[1,3]
+		glm tot`x' ind_n1_ivw##post `match2' `region' i.core_year ///
+		[pw=cem_w] if inlist(s_female,`g') `per', cluster(s_id) link(log) fam(gamma)
+		qui outreg, varlabels stats(b p) merge store(outr`x')
+		margins ind_n1_ivw, dydx(post) post
+		mat results=e(b)
+		mat tab`x'[1,3]=results[1,4]-results[1,3]
+		
+}	
+	qui outreg using diff_in_diff_regressions, `replace' replay(outr12m) ///
+	title("GLM total spending 6m pre-post, `who'") 
+	frmttable  using diff_in_diff_regressions, addtable statmat(tab6m) title("Marginal effects") ///
+	sdec(2) rtitles("BereavedXPost") ctitles("" "Simple" "Match Vars" "All vars") 
+	qui outreg using diff_in_diff_regressions, addtable replay(outr12m) ///
+	title("GLM total spending 12m pre-post, `who'")
+	frmttable  using diff_in_diff_regressions, addtable statmat(tab12m) title("Marginal effects") ///
+	sdec(2) rtitles("BereavedXPost") ctitles("" "Simple" "Match Vars" "All vars") 
+	qui outreg using diff_in_diff_regressions, addtable replay(outr24m) ///
+	title("GLM total spending 24m pre-post, `who'")
+	frmttable  using diff_in_diff_regressions, addtable statmat(tab24m) title("Marginal effects") ///
+	sdec(2) rtitles("BereavedXPost") ctitles("" "Simple" "Match Vars" "All vars") 
+	local replace addtable
+}
+
+
+H="3 month table medians"
+/*three month tables 
+variables are tot_paid_by_mc_
+			  n_ip_admit_
+			  n_op_visits_
+			  n_hospd_
+we want N if !=., N if !=0, mean, old 6m vars for total and gender*/
+
+
+capture log close
+
+clear all
+set more off
+
+//Server file paths
+local logpath E:\data\spouse_claims\spouse_claims_comparison\logs\graphs
+local projdatapath E:\data\spouse_claims\spouse_claims_comparison\final_data\
+
+log using `logpath'\comparison_3month_tables.txt, text replace
+
+cd `projdatapath'
+
+use spouse_claims_comparison_sample.dta if !missing(index_date)
+gen cont_ffs__mos=cont_ffs_n_mos
+keep if ffs_at_index==1
+preserve
+mat doub=J(1,12,0)
+forvalues i=3(3)12 {
+	mat doub[1,`i']=1
+}
+foreach x in tot_paid_by_mc_wi_  {
+	foreach p in "" "p" {
+		mat spending`p'=J(8,12,.)
+
+		local r=1
+		local c=1
+
+		gen `x'`p'=0
+		forvalues i=1(3)24 {
+		
+		foreach g in 0 1 {
+		foreach treat in 1 0 {
+			qui sum `x'm_`i'_to_`=`i'+2'`p' if s_female==`g' & ind_n1_ivw==`treat' /*& cont_ffs_`p'_mos>=`i'*/ [aw=cem_w],d
+			mat spending`p'[`r',`c']=r(p50)
+			mat spending`p'[`r',`c'+1]=r(p25)
+			mat spending`p'[`r',`c'+2]=r(p75)
+			local c=`c'+3
+}
+}
+	local r=`r'+1
+	local c=1
+}
+		/*foreach n in 6 12 18 24 {
+			qui sum `x'`p'`n'm 
+			mat spending`p'[`r',6]=r(mean)
+			local r=`r'+2
+}
+*/
+	mat rownames spending`p'="0-3" "3-6" "6-9" "9-12" "12-15" "15-18" "18-21" "21-24"
+
+}
+	if "tot_paid_by_mc_wi_"=="`x'" {
+		local this replace
+}
+	else {
+		local this addtable
+}
+	frmttable using `logpath'\3month_spending_util_tables, `this' statmat(spending) title("`x' 24m prior to index date") ///
+	 ctitles("" "Men" "" "Women"\"" "Bereaved" "Control""Bereaved" "Control" ) sdec(2) doubles(doub) substat(1)
+	 
+	frmttable using `logpath'\3month_spending_util_tables, addtable statmat(spendingp) title("`x' , 24m after index date") ///
+	 ctitles("" "Men" "" "Women"\"" "Bereaved" "Control" "Bereaved" "Control") sdec(2) doubles(doub) substat(1)
+	 
+}
+/*
+restore
+preserve
+mat ip=J(8,5,.)
+mat ipaft=J(8,5,.)
+
+local r=1 
+local c=1
+gen yes=1
+gen ever=0
+forvalues i=1(3)24 {
+	sum yes if cont_ffs_n_mos>=`i'
+	mat ip[`r',1]=r(N)
+	sum ip_admit_ind_m_`i'_to_`=`i'+2' if cont_ffs_n_mos>=`i'
+	mat ip[`r',2]=r(N)*r(mean)
+	mat ip[`r',3]=r(mean)*100
+	replace ever=1 if ip_admit_ind_m_`i'_to_`=`i'+2'==1
+	sum ever
+	mat ip[`r',4]=r(mean)*100
+	sum ever if cont_ffs_n_mos>=`i'
+	mat ip[`r',5]=r(mean)*100
+	local r=`r'+1
+}
+
+replace ever=0
+local r=1
+
+forvalues i=1(3)24 {
+	sum yes if cont_ffs_p_mos>=`i'
+	mat ipaft[`r',1]=r(N)
+	sum ip_admit_ind_m_`i'_to_`=`i'+2'p if cont_ffs_p_mos>=`i'
+	mat ipaft[`r',2]=r(N)*r(mean)
+	mat ipaft[`r',3]=r(mean)*100
+	replace ever=1 if ip_admit_ind_m_`i'_to_`=`i'+2'p==1
+	sum ever
+	mat ipaft[`r',4]=r(mean)*100
+	sum ever if cont_ffs_p_mos>=`i'
+	mat ipaft[`r',5]=r(mean)*100
+	local r=`r'+1
+}
+
+foreach a in "" "aft" {
+	mat rownames ip`a'="0-3" "3-6" "6-9" "9-12" "12-15" "15-18" "18-21" "21-24"
+}
+	
+frmttable using `logpath'\3month_ip_admit_ind, statmat(ip) ///
+title("Indicator IP admission prior to index date") sdec(0,0,2) replace ///
+ctitles("" "N in scope" "N Yes" "% Yes" "% Cumul" "% Cumul in scope") ///
+note(In scope defined as continuous fee for service Medicare at the ///
+point of period closest to index date)
+	
+frmttable using `logpath'\3month_ip_admit_ind, statmat(ipaft) ///
+title("Indicator IP admission after index date") sdec(0,0,2) addtable ///
+ctitles("" "N in scope" "N Yes" "% Yes" "% Cumul" "% Cumul in scope") ///
+note(In scope defined as continuous fee for service Medicare at the ///
+point of period closest to index date)
+
+mat ip=J(8,5,.)
+mat ipaft=J(8,5,.)
+
+local r=1 
+local c=1
+replace ever=0
+keep if inscope_p_mos>=24
+
+forvalues i=1(3)24 {
+	sum yes if cont_ffs_n_mos>=`i'
+	mat ip[`r',1]=r(N)
+	sum ip_admit_ind_m_`i'_to_`=`i'+2' if cont_ffs_n_mos>=`i'
+	mat ip[`r',2]=r(N)*r(mean)
+	mat ip[`r',3]=r(mean)*100
+	replace ever=1 if ip_admit_ind_m_`i'_to_`=`i'+2'==1
+	sum ever
+	mat ip[`r',4]=r(mean)*100
+	sum ever if cont_ffs_n_mos>=`i'
+	mat ip[`r',5]=r(mean)*100
+	local r=`r'+1
+}
+
+replace ever=0
+local r=1
+
+forvalues i=1(3)24 {
+	sum yes if cont_ffs_p_mos>=`i'
+	mat ipaft[`r',1]=r(N)
+	sum ip_admit_ind_m_`i'_to_`=`i'+2'p if cont_ffs_p_mos>=`i'
+	mat ipaft[`r',2]=r(N)*r(mean)
+	mat ipaft[`r',3]=r(mean)*100
+	replace ever=1 if ip_admit_ind_m_`i'_to_`=`i'+2'p==1
+	sum ever
+	mat ipaft[`r',4]=r(mean)*100
+	sum ever if cont_ffs_p_mos>=`i'
+	mat ipaft[`r',5]=r(mean)*100
+	local r=`r'+1
+}
+
+foreach a in "" "aft" {
+	mat rownames ip`a'="0-3" "3-6" "6-9" "9-12" "12-15" "15-18" "18-21" "21-24"
+}
+	
+frmttable using `logpath'\3month_ip_admit_ind, statmat(ip) ///
+title("Indicator IP admission prior to index date" "24m survivors only") sdec(0,0,2) addtable ///
+ctitles("" "N in scope" "N Yes" "% Yes" "% Cumul" "% Cumul in scope") ///
+note(In scope defined as continuous fee for service Medicare at the ///
+point of period closest to index date)
+	
+frmttable using `logpath'\3month_ip_admit_ind, statmat(ipaft) ///
+title("Indicator IP admission after index date" "24m survivors only") sdec(0,0,2) addtable ///
+ctitles("" "N in scope" "N Yes" "% Yes" "% Cumul" "% Cumul in scope") ///
+note(In scope defined as continuous fee for service Medicare at the ///
+point of period closest to index date)
+
+
+H="3 month graphs--medians"
+/*General data setup for the dataset
+Limited to decedents with FFS MC 6m prior to Index Date, partner at time of Index Date,
+with mc id*/
+
+capture log close
+
+clear all
+set more off
+
+//Server file paths
+local logpath E:\data\spouse_claims\spouse_claims_comparison\logs
+local projdatapath E:\data\spouse_claims\spouse_claims_comparison\final_data\
+
+
+cd `projdatapath'
+
+use spouse_claims_comparison_sample.dta if !missing(index_date)
+
+cd `logpath'\graphs
+svyset [pw=cem_w]
+//note-you can use these next lines to drop the top 3% of pre-Index Date_spenders
+/*
+gen perstime=s_cont_ffs_n_mos
+replace perstime=24 if perstime>24
+gen npt=s_tot_paid_by_mc_24m/perstime
+gen pperstime=s_cont_ffs_p_mos
+replace pperstime=24 if ppers>24
+gen ppt=s_tot_paid_by_mc_p24m/pperstime
+gen pt=npt+ppt
+gsort -npt
+drop if _n<50
+*/
+
+forvalues i=1(3)24 {
+	rename tot_paid_by_mc_wi_m_`i'_to_`=`i'+2' tot`=floor((`i'-1)/3)+1'
+	rename tot_paid_by_mc_wi_m_`i'_to_`=`i'+2'p tot`=floor((`i'+24-1)/3)+1'
+}
+
+drop tot_*
+keep s_female ind_n1_ivw cem_w tot* s_id index_date
+reshape long tot, i(s_id index_date) j(period)
+/*replace period=-period
+replace period=period-8 if period>8*/
+replace period=-period+9 if period<=8
+replace period=period-9
+replace period=period+1 if period>=0
+label define period -8 "21-24m" -7 "19-21" -6 "16-18" -5 "13-15" -4 "9-12" ///
+ -3 "7-9" -2 "4-6" -1 "0-3" 8 "21-24m" 7 "19-21" 6 "16-18" 5 "13-15" 4 "9-12" ///
+ 3 "7-9" 2 "4-6" 1 "0-3" 
+label values period period
+
+
+preserve
+
+collapse (mean) mean=tot (p50) median=tot (p25)p25=tot (p75) p75=tot ///
+(p95) p95=tot (p90) p90=tot (count) n=tot ///
+(sem) se=tot [aw=cem_w], by(s_female period ind_n1_ivw)
+
+
+by s_female period ind_n1_ivw, sort: gen ulci=mean + invttail(n-1,0.025)*(se)
+by s_female period ind_n1_ivw, sort: gen llci=mean -invttail(n-1,0.025)*se
+/*
+twoway (connected mean period if s_female==0 & ind_n1_ivw==1) ///
+(connected mean period if s_female==0 & ind_n1_ivw==0) ///
+(connected median period if s_female==0 & ind_n1_ivw==1) ///
+(connected median period if s_female==0 & ind_n1_ivw==0) , ///
+ xline(0) xtitle("Months from index date")  ///
+ xlab(-8 -4 -1 1 4 8, valuelabel)  yscale(range(1500 3500))  ylabel(1500 2000 2500 3000 3500) ///
+note("WI Adjusted to 2012 $")  legend(order( 1 "Bereaved Spouses Mean" 2 "Matched Spouses Mean" ///
+3 "Bereaved Median" 4 "Matched Median")) ///
+title("Male spouses MC Spending Trajectory")
+
+twoway (connected mean period if s_female==0 & ind_n1_ivw==1) ///
+(connected mean period if s_female==0 & ind_n1_ivw==0) ///
+(rcap llci ulci period if s_female==0 & ind_n1_ivw==1) ///
+(rcap llci ulci period if s_female==0 & ind_n1_ivw==0) 
+*/
+
+foreach g in  0 1 {
+	local gend 
+	if "`g'"=="0" local gend "Male"
+	if "`g'"=="1" local gend "Female"
+
+twoway (connected median period if inlist(s_female,`g') & ind_n1_ivw==1) ///
+(connected median period if inlist(s_female,`g') & ind_n1_ivw==0) , ///
+xline(0) xtitle("Months from index date")  ///
+ xlab(-8 -4 -1 1 4 8, valuelabel) yscale(range(0 600))  ylabel(0 200 400 600) ///
+note("WI Adjusted to 2012 $") subtitle("All `gend' Respondents")  legend(order( 1 "Bereaved Spouses" 2 "Matched Spouses")) ///
+
+graph save mc_costs_median_comparison_spouse_all, replace
+graph export "Non-CI graphs/mc_costs_median_comparison_spouse_`g'all3months.pdf", replace
+
+
+
+twoway (connected median period if inlist(s_female,`g') & ind_n1_ivw==1) ///
+(connected median period if inlist(s_female,`g') & ind_n1_ivw==0) ///
+(line p25 period if inlist(s_female,`g') & ind_n1_ivw==1) ///
+(line p25 period if inlist(s_female,`g') & ind_n1_ivw==0) ///
+(line p75 period if inlist(s_female,`g') & ind_n1_ivw==1) ///
+(line p75 period if inlist(s_female,`g') & ind_n1_ivw==0) ///
+/*(line p90 period if inlist(s_female,`g') & ind_n1_ivw==1) ///
+(line p90 period if inlist(s_female,`g') & ind_n1_ivw==0)  ///
+(line p95 period if inlist(s_female,`g') & ind_n1_ivw==1) ///
+(line p95 period if inlist(s_female,`g') & ind_n1_ivw==0)*/ , ///
+ xline(0) xtitle("Months from index date")  ///
+ xlab(-8 -4 -1 1 4 8, valuelabel)  ///
+note("WI Adjusted to 2012 $")  legend(order( 1 "Bereaved Spouses" 2 "Matched")) ///
+title("`gend' spouses MC Spending Trajectory, medians and IQR")
+graph save mc_costs_median_iqr_comparison_spouse_all, replace
+graph export "Non-CI graphs/mc_costs_median_iqr_comparison_spouse_`g'all3months.pdf", replace
+
+
+twoway /*(connected median period if inlist(s_female,`g') & ind_n1_ivw==1) ///
+(connected median period if inlist(s_female,`g') & ind_n1_ivw==0) ///
+(line p25 period if inlist(s_female,`g') & ind_n1_ivw==1) ///
+(line p25 period if inlist(s_female,`g') & ind_n1_ivw==0)*/ ///
+(line p75 period if inlist(s_female,`g') & ind_n1_ivw==1) ///
+(line p75 period if inlist(s_female,`g') & ind_n1_ivw==0) ///
+(line p90 period if inlist(s_female,`g') & ind_n1_ivw==1) ///
+(line p90 period if inlist(s_female,`g') & ind_n1_ivw==0)/*  ///
+(line p95 period if inlist(s_female,`g') & ind_n1_ivw==1) ///
+(line p95 period if inlist(s_female,`g') & ind_n1_ivw==0)*/ , ///
+ xline(0) xtitle("Months from index date")  ///
+ xlab(-8 -4 -1 1 4 8, valuelabel)  ///
+note("WI Adjusted to 2012 $")  legend(order( 1 "Bereaved Spouses" 2 "Matched")) ///
+title("`gend' spouses MC Spending Trajectory, 75th & 90th percentiles")
+graph save mc_costs_top_comparison_spouse_all, replace
+graph export "Non-CI graphs/mc_costs_top_comparison_spouse_`g'all3months.pdf", replace
+
+}
+

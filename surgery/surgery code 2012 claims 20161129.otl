@@ -15501,3 +15501,1107 @@ sts graph, by(high_illness_burden) ///
 legend(label(1 "Low Illness Burden") label(2 "High Illness Burden"))
 log close
  
+
+
+H="updated lee index 080317"
+capture log close
+set more off
+clear all
+local datapath E:\data\surgery\2012_update\final_data
+local logpath E:\data\surgery\2012_update\logs
+
+cd `datapath'
+
+use surg_charls_util_final.dta if procedure_date-c_ivw_date_n1<=(365.25*3) ///
+& age_at_surg>=65.5 & procedure_date>=td(01jan2001) & part_ab_1y==1 & hmo_d_1y==0
+gen year=core_year_n1
+gen hhid=hhid_n1
+gen pn=pn_n1
+merge 1:1 hhid pn year using E:\data\hrs_oop_2010\received_data\2012\helper_hours_2012.dta, keep(match master) gen(helpmerge)
+rename year core_year
+merge 1:1 id core_year using "E:\data\hrs_public_2012\dementia\pdem_withvarnames_ebl.dta", keep(match master) gen(demmerge)
+replace n_hp=0 if missing(n_hp)
+replace death_date=. if death_date<procedure_date 
+//note-040417-going back to died_365=365 days post surgery rather than discharge
+*replace died_365d=death_date<=is_disch_date+365
+gen n_helpers_cat=n_hp
+replace n_helpers_cat=2 if n_hp>2
+replace n_helpers_cat=0 if hlphrs==0
+gen n_help_0=n_hp==0 | hlphrs==0
+gen n_help_1=n_hp==1 & hlphrs>0 & !missing(hlphrs)
+gen n_help_2plus=n_hp>1 & hlphrs>0 & !missing(hlphrs)
+gen ind_help_any=n_hp>0 & hlphrs>0 & !missing(hlphrs) 
+gen whiteoth=white_e | other_na
+label var whiteoth "White / Other race"
+gen adl_diff_index_n1=0 
+gen missadldif=0
+foreach x of varlist adl_diff_*n1 {
+replace adl_diff_index_n1=adl_diff_index_n1+`x' if !missing(`x')
+replace missadldif=1 if `x'==.
+}
+gen adl_impair_n1=adl_independent_core_n1==0 if !missing(adl_independent_core_n1)
+gen adl_diff_impair_n1=adl_diff_index_n1>0 if !missing(adl_diff_index_n1)
+gen adl_diff_no_help=adl_diff_impair_n1==1 & adl_impair_n1==0 if !missing(adl_diff_impair_n1) & !missing(adl_impair_n1)
+gen adl_diff_1=adl_diff_index_n1==1 if !missing(adl_diff_index_n1) & adl_diff_no_help==1
+gen adl_diff_2plus=adl_diff_index_n1>1 if !missing(adl_diff_index_n1) & adl_diff_no_help==1
+
+gen adl_1=adl_index_core_n1==1 if !missing(adl_impair_n1)
+gen adl_2=adl_index_core_n1>=2 if !missing(adl_impair_n1)
+label var adl_1 "Dependent in 1 ADL"
+label var adl_2 "Dependent in 2+ ADLs"
+gen iadl_diff_index_n1=0
+
+gen missiadldif=0
+foreach x of varlist iadl_diff_*n1 {
+replace iadl_diff_index_n1=iadl_diff_index_n1+`x' if !missing(`x')
+replace missiadldif=1 if `x'==.
+}
+gen iadl_diff_impair_n1=iadl_diff_index_n1>0 if !missing(iadl_diff_index_n1)
+
+gen charls_gt2_ind=charls_index_wt>2 if !missing(charls_index)
+gen el_ge_3_ind=comorb_all>=3 if !missing(comorb_all)
+gen charls_diab=charls_10 | charls_11
+label var charls_diab "Diabetes, complicated or uncomplicated"
+foreach x of varlist *m1 {
+replace `x'=0 if missing(`x')
+}
+
+local symp dyspnea swelling_feet dizzy back_pain headache fatigue cough falls ///
+incont
+
+foreach x of local symp {
+	gen `x'_n1n2=`x'_hrs_n1
+	replace `x'_n1n2=`x'_hrs_n2 if missing(`x'_n1n2)
+	local lab : var label `x'_hrs_n1
+	label var `x'_n1n2 "`lab' n1 or n2"
+	local symp1 `symp1' `x'_hrs_n1
+	local symp2 `symp2' `x'_n1n2
+}
+gen op_visits_ge10_12m_ind=n_op_visits_12>=10 & !missing(n_op_visits_12m)
+gen n_adm_pre_is=n_ip_admit_12m
+replace n_adm_pre_is=n_adm_pre_is-1 if admit_on_index==0 & !inlist(ip_paid_by_mc_in,0,.) ///
+& n_adm_pre_is>0
+foreach x in n_ed_op_visits_12m n_ip_admit_12m {
+replace `x'=0 if missing(`x')
+}
+egen ip_ed_12m=rowtotal(n_ed_op_visits_12m n_ip_admit_12m)
+gen high_utilization_ind=ip_ed_12m>=2 |  op_visits_ge10_12m_ind==1
+gen bmi_lt25_n1=bmi_n1<25 if !missing(bmi_n1)
+/*gen leeindex_n1=1
+qui replace leeindex_n1=leeindex_n1+1 if age_at_surg<70
+qui replace leeindex_n1=leeindex_n1+2 if  age_at_surg>=70 & age_at_surg<75	
+qui replace leeindex_n1=leeindex_n1+3 if age_at_surg>=75 & age_at_surg<80
+qui replace leeindex_n1=leeindex_n1+4 if age_at_surg>=80 & age_at_surg<85
+qui replace leeindex_n1=leeindex_n1+6 if age_at_surg>=85
+qui replace leeindex_n1=leeindex_n1+2 if female ==0
+qui replace leeindex_n1=leeindex_n1+1 if charls_diab==1
+qui replace leeindex_n1=leeindex_n1+2 if charls_16==1
+qui replace leeindex_n1=leeindex_n1+2 if charls_6==1
+qui replace leeindex_n1=leeindex_n1+2 if charls_1==1
+qui replace leeindex_n1=leeindex_n1+2 if smoke_curr_n1==1
+qui replace leeindex_n1=leeindex_n1+1 if bmi_lt25_n1==1
+qui replace leeindex_n1=leeindex_n1+2 if adl_diff_bh_n1==1
+qui replace leeindex_n1=leeindex_n1+2 if iadl_diff_m_n1==1
+qui replace leeindex_n1=leeindex_n1+1 if fl_diff_push_n1==1
+qui replace leeindex_n1=leeindex_n1+2 if fl_diff_wk_many_n1==1
+*/
+gen charls_cancer=charls_14 | charls_16
+label var charls_cancer "Cancer"
+gen leeindex_n1=1
+qui replace leeindex_n1=leeindex_n1+1 if age_at_surg<70
+qui replace leeindex_n1=leeindex_n1+2 if  age_at_surg>=70 & age_at_surg<75	
+qui replace leeindex_n1=leeindex_n1+3 if age_at_surg>=75 & age_at_surg<80
+qui replace leeindex_n1=leeindex_n1+4 if age_at_surg>=80 & age_at_surg<85
+qui replace leeindex_n1=leeindex_n1+6 if age_at_surg>=85
+qui replace leeindex_n1=leeindex_n1+2 if female ==0
+qui replace leeindex_n1=leeindex_n1+1 if dm_hrs_n1==1
+qui replace leeindex_n1=leeindex_n1+2 if cancer_hrs_n1==1
+qui replace leeindex_n1=leeindex_n1+2 if lung_hrs_n1== 1
+qui replace leeindex_n1=leeindex_n1+2 if chf_hrs_n1 ==1
+qui replace leeindex_n1=leeindex_n1+2 if smoke_curr_n1==1
+qui replace leeindex_n1=leeindex_n1+1 if bmi_lt25_n1==1
+qui replace leeindex_n1=leeindex_n1+2 if adl_diff_bh_n1==1
+qui replace leeindex_n1=leeindex_n1+2 if iadl_diff_m_n1==1
+qui replace leeindex_n1=leeindex_n1+1 if fl_diff_push_n1==1
+qui replace leeindex_n1=leeindex_n1+2 if fl_diff_wk_many_n1==1
+
+gen pain_mod_or_sev=pain_level_hrs_n1>=2 & pain_hrs_n1==1
+gen pain_none_mild=pain_hrs_n1==0 | pain_level_hrs_n1==1
+gen pain_mod=pain_level_hrs_n1==2
+gen pain_sev=pain_level_hrs_n1==3
+gen lee_index_ge13_ind=leeindex_n1>13
+gen pr_dem_gt50_n1=pdem>.5 if !missing(pdem)
+gen tot_preop_illness_burden=0
+label var tot_preop "Total Preop Illness Burden (mean, sd)"
+gen cesd_tot_gt3_n1=cesd_tot_n1>3 if !missing(cesd_tot_n1)
+gen symptom_burden=!pain_none_mild if !missing(pain_none_mild)
+replace symptom_burden=1 if cesd_tot_gt3_n1==1
+foreach x in comorb_31_0_n12m adl_impair_n1 charls_gt2_ind high_utilizat lee_index_ge13 ///
+ ind_help_any {
+	replace tot_preop_illness_burden=tot_preop_illness_burden+`x' if !missing(`x')
+}
+
+gen high_illness_burden=tot_preop_illness_burden>=2 if !missing(tot_preop_illness_burden)
+gen age_lt75=age_at_surg<75
+gen age_75_84=age_at_surg>=75 & age_at_surg<85
+gen age_85plus=age_at_surg>=85
+//2/8/17--using first occurance to determine
+gen readmission_365d_ind=first_readmit-is_disch_d<=365
+gen readmission_30d_ind=first_readmit-is_disch_d<=30
+/*gen readmission_365d_ind=0
+gen readmission_30d_ind=n_ip_admit_m1p>0 & !missing(n_ip_admit_m1p)
+forvalues i=1/12 {
+	replace readmission_365d_ind=1 if n_ip_admit_m`i'p>0 & !missing(n_ip_admit_m`i'p)
+}*/
+gen ind_hs_any=n_hs_days_post>=1 if !missing(n_hs_days_post)
+*replace ind_hs_any=0 if n_hs_days_post<4
+label var n_hosp_days_presurg_index "Days in hospital index stay pre surgery"
+label var ind_hs_any "Any Hospice post surgery"
+gen ind_hs_lte3=n_hs_days_p<=3
+label var n_hs_days_tot "Total Hospice days (mean sd)"
+gen n_hs_days_cond=n_hs_days_tot if n_hs_days_tot
+label var n_hs_days_cond "Total Hospice days if any"
+label var n_hs_days_postsurg "Hospice days post-surgery (mean,sd)"
+gen n_hs_days_postsurg_cond=n_hs_days_postsurg if n_hs_days_post
+label var n_hs_days_postsurg_cond "Hospice days post-surgery, if any"
+label var age_lt75 "Age at surgery <75"
+label var age_75_84 "Age at surgery 75-84"
+label var age_85 "Age at surgery 85+"
+label var female "Female"
+label var adl_diff_no "Reported ADL difficulty, no help"
+label var adl_diff_1 "Reported difficulty with 1 ADL, no help"
+label var adl_diff_2 "Reported difficulty with 2+ ADLs, no help"
+label var iadl_diff_imp "Reported difficulty with IADLs"
+label var n_help_0 "Total Helpers: 0"
+label var n_help_1 "Total Helpers: 1"
+label var n_help_2 "Total Helpers: 2+"
+label var pr_dem_gt50_n1 "Probability of Dementia >.5"
+label var comorb_31_0_n12m "Dementia, from claims"
+label var charls_gt2 "Charlson score >2"
+label var lee_index_ge13 "Lee Index 14+ at n1 ivw"
+label var symptom_burden "Symptom Burden" 
+label var pain_none_mild "Pain: none or mild"
+label var pain_mod_or_sev "Pain: moderate or severe"
+label var pain_mod "Pain: moderate"
+label var pain_sev "Pain: severe"
+label var cesd_tot_gt3 "CESD total >3"
+label var comp_any "Any complication"
+label var readmission_30d_ind "Hospital readmission within 30d of surgery"
+label var readmission_365d_ind "Hospital readmission within 365d of surgery"
+label var died_365d "Died within 365 days of surgery"
+label var ind_icu_po "ICU stay within 365 days of surgery"
+label var ind_ed_po "ED visit within 365 days of surgery"
+label var ind_hs_lte3 "<=3 days hospice"
+label var n_hs_days_postsurg "Days on hospice after surgery"
+label var n_hosp_days_postsurg_index "Days in hospital index stay after surgery"
+label var n_hosp_days_postsurg_postindex "Days in hospital post index stay 365 days post surgery"
+label var died_in_ho "Died in hospital after index stay, from claims"
+label var died_index_stay "Died in hospital during index stay"
+label var n_icu_d "ICU days within 365 days of surgery"
+label var ind_icu_30d "ICU stay 30 days pre-death"
+label var ind_ed_30d "ED stay 30 days pre-death"
+foreach x of varlist n_icu_d* {
+gen `x'_cond=`x' if `x'>0
+label var `x'_cond "ICU days within 365 days of surgery, if any"
+}
+label var high_utilization "High utilization 12m prior"
+label var ind_help_any "1+ helper, 1+ hr/wk"
+label var adl_impair_n1 "Dependent in 1+ ADL"
+gen n_hosp_days_postindex_cond= n_hosp_days_postsurg_post if  n_hosp_days_postsurg_post>0
+label var n_hosp_days_postindex_cond "Days in hospital post index stay if any"
+replace died_index_stay=0 if death_date-procedure_date==469
+local vars age_lt75 age_75_84 age_85plus female white_e black_e hisp_eth_e other_na_api_race_e ///
+whiteoth adl_independent_core_n1 ///
+adl_diff_no_help adl_1 adl_2 iadl_diff_impair_n1 n_help_0 n_help_1 n_help_2plus ///
+nhres_n1 comorb_31_0_n12m pr_dem_gt50_n1 charls_gt2_ind charls_cancer charls_diab charls_2 ///
+comorb_32_0_n12m charls_3 charls_4 charls_6 charls_13 ///
+lee_index_ge13_ind symptom_burden pain_none_mild pain_mod_or_sev pain_mod pain_sev ///
+cesd_tot_gt3_n1 `symp1' `symp2'
+local rn : word count `vars' 1
+local r=1
+local c=1
+
+mat tab=J(`rn',3,.)
+mat stars=J(`rn',3,0)
+
+foreach x of local vars {
+	sum female
+	local tot=r(N)
+	foreach i in "0,1"  {
+		sum `x' if inlist(high_illness,`i')
+			mat tab[`r',`c']=r(mean)*r(N)
+			mat tab[`r',`c'+1]=r(mean)*100
+			mat tab[`r',`c'+2]=`tot'-r(N)
+			local c=`c'+2
+}	
+	/*tab `x' high_illness, chi2
+	mat tab[`r',7]=r(p)
+	mat stars[`r',7]=(r(p)<.05)+(r(p)<.01)*/
+	local c=1
+	local r=`r'+1
+}
+foreach i in "0,1" {
+	sum tot_preop_illness_burden if inlist(high_illness,`i')
+	mat tab[`r',`c']=r(N)
+	*mat tab[`r'-1,`c']=r(mean)
+	*mat tab[`r'-1,`c'+1]=r(sd)
+	local c=`c'+2
+}
+
+mat rownames tab=`vars' N
+
+frmttable using "`logpath'\surgery_update_tables.rtf", statmat(tab) ///
+ctitles("" "Full Sample N" "%/SD" "Missing") title("Table 1: Cohort Characteristics") varlabels ///
+sdec(0,2,0) replace annotate(stars) asymbol(*,**) ///
+
+
+local rn : word count `vars' 1
+local r=1
+local c=1
+
+mat tab=J(`rn',6,.)
+mat stars=J(`rn',6,0)
+
+foreach x of local vars {
+	foreach i in 1 0 {
+		sum `x' if inlist(high_illness,`i')
+			mat tab[`r',`c']=r(mean)*r(N)
+			mat tab[`r',`c'+1]=r(mean)*100
+			local c=`c'+2
+}	
+	if !inlist("`x'","age_lt75", "age_75_84","age_85plus","white_e","black_e", ///
+	"hisp_eth_e", "whiteoth","other_na_api_race_e") & !inlist("`x'", "adl_1", "adl_2", ///
+	"adl_diff_no_help") {
+	tab `x' high_illness, chi2
+	mat tab[`r',5]=r(p)
+	mat stars[`r',5]=(r(p)<.05)+(r(p)<.01)
+}
+	if "`x'"=="age_lt75" {
+	tab age_cat_2 high_illness, chi2
+mat tab[`r',5]=r(p)
+}
+	if "`x'"=="white_e"{
+gen racecat=whiteoth
+replace racecat=2 if black
+replace racecat=3 if hisp_eth_e
+tab racecat high_illness, chi2
+mat tab[`r',5]=r(p)
+}
+
+	local c=1
+	local r=`r'+1
+}
+foreach i in 1 0 {
+	sum tot_preop_illness_burden if inlist(high_illness,`i')
+	mat tab[`r',`c']=r(N)
+	*mat tab[`r'-1,`c']=r(mean)
+	*mat tab[`r'-1,`c'+1]=r(sd)
+	local c=`c'+2
+}
+mat rownames tab=`vars' N
+
+frmttable using "`logpath'\surgery_update_tables.rtf", statmat(tab) ctitles("" "High illness burden" "" "Low illness burden" "" "P-value" \ ///
+"" "N/mean" "%/SD" "N/mean" "%/SD" "") title("Table 1a: Cohort Characteristics, by illness burden") varlabels ///
+sdec(0,2,0,2,2) addtable annotate(stars) asymbol(*,**) ///
+note("High illness burden is 2 or more of ADL dependency, 1+ helper (>=1 hour/week), presence of dementia diagnosis from Medicare claims, high utilization (2+ ED visits and/or IP admissions or 10+ OP visits 12m prior), 13+ on the Lee index at n1 interview, and >2 on the Charlson comorbidity index")
+
+
+ 
+mat tab2=J(6,8,.)
+local r=1
+local c=3
+preserve
+replace tot_preop_ill=5 if tot_preop_ill==6
+sum tot_preop_illness_burden
+local denom=r(N)
+ forvalues i=0/5 {
+	sum tot_preop_illness_burden if tot_preop_illness_burden==`i'
+	mat tab2[`r',1]=r(N)
+	mat tab2[`r',2]=(r(N)/`denom')*100
+	local r=`r'+1
+}
+local r=1
+foreach x in comorb_31_0_n12m adl_impair_n1 charls_gt2_ind high_utilizat lee_index_ge13 ///
+ ind_help_any {
+	forvalues i=0/5 {
+		sum `x' if tot_preop_illness_burden==`i'
+		mat tab2[`r',`c']=r(mean)*100
+		local r=`r'+1
+}
+	local c=`c'+1
+	local r=1
+}
+restore
+mat rownames tab2=0 1 2 3 4 "5/6"
+mat colnames tab2="N" "% of total" comorb_31_0_n12m adl_impair_n1 charls_gt2_ind high_utilization lee_index_ge13_ind ///
+ ind_help_any 
+frmttable using "`logpath'\surgery_update_tables.rtf", statmat(tab2) ///
+/*ctitles("Illness Burden" "N" "% of total" "% die index stay" "% die 365d" ///
+"% readmit 30d" "% readmit 365d")*/ sdec(0,2) ///
+title("Table 2. Preoperative Illness Burden Among Cohort") addtable varlabels
+
+mat tab2=J(6,6,.)
+local r=1
+local c=3
+preserve
+replace tot_preop_ill=5 if tot_preop_ill==6
+sum tot_preop_illness_burden
+local denom=r(N)
+ forvalues i=0/5 {
+	sum tot_preop_illness_burden if tot_preop_illness_burden==`i'
+	mat tab2[`r',1]=r(N)
+	mat tab2[`r',2]=(r(N)/`denom')*100
+	local r=`r'+1
+}
+local r=1
+foreach x in died_index_stay died_30d ///
+ readmission_30d_ind readmission_365d_ind {
+	forvalues i=0/5 {
+		sum `x' if tot_preop_illness_burden==`i'
+		mat tab2[`r',`c']=r(mean)*100
+		local r=`r'+1
+}
+	local c=`c'+1
+	local r=1
+}
+restore
+mat rownames tab2=0 1 2 3 4 "5/6"
+frmttable using "`logpath'\surgery_update_tables.rtf", statmat(tab2) ///
+ctitles("Illness Burden" "N" "% of total" "% die index stay" "% die 365d" ///
+"% readmit 30d" "% readmit 365d") sdec(0,2) ///
+title("Table 2. Preoperative Illness Burden Among Cohort") addtable varlabels
+
+
+
+
+preserve
+foreach a in b c d {
+
+if "`a'"=="d" drop if died_365d 
+if "`a'"=="d" local gp "Survived 365d post surgery"
+local vars comp_any readmission_30d_ind readmission_365d_ind ind_icu_postsurg ///
+ind_ed_postsurg n_hosp_days_presurg_index n_hosp_days_postsurg_index ///
+n_hosp_days_postsurg_postindex died_365d ///
+died_index_stay 
+local rn : word count `vars' 1
+mat tab3=J(`rn',7,.)
+mat stars=J(`rn',7,0)
+local r=1
+local c=1
+
+foreach x in `vars' {
+	sum `x'
+	local denom=r(N)
+	foreach i in "0,1" 1 0 {
+	if !inlist(substr("`x'",1,2),"n_") {
+	sum `x' if inlist(high_illness_burden,`i')
+		mat tab3[`r',`c']=r(N)*r(mean)
+		mat tab3[`r',`c'+1]=r(mean)*100
+}
+	else {
+		sum `x' if inlist(high_illness_burden,`i'),d
+		mat tab3[`r',`c']=r(mean)
+		mat tab3[`r',`c'+1]=r(sd)
+}		
+	local c=`c'+2
+}
+	tab `x' high_illness_burden, chi2
+	mat tab3[`r',7]=r(p)
+	mat stars[`r',7]=(r(p)<.05)+(r(p)<.01)
+	if inlist(substr("`x'",1,2),"n_") {
+		ttest `x', by(high_illness)
+		mat tab3[`r',7]=r(p)
+		mat stars[`r',7]=(r(p)<.05)+(r(p)<.01)
+}
+
+	local r=`r'+1
+	local c=1
+}
+	foreach i in "0,1" 1 0 {
+		sum female if inlist(high_ill,`i')
+		mat tab3[`r',`c']=r(N)
+		local c=`c'+2
+}
+mat rownames tab3=`vars' N
+
+frmttable using "`logpath'\surgery_update_tables.rtf", addtable statmat(tab3) ///
+ctitles("" "Full Sample" "" "High Illness Burden" "" "Low Illness Burden" "" ///
+"p-value"\ "" "N/mean" "%/SD" "N/mean" "%/SD" "" "%/SD" "") ///
+title("Table 3. A Comparison of Adverse outcomes" "`gp'") ///
+sdec(0,2,0,2,0,2,2\0,2,0,2,0,2,2\0,2,0,2,0,2,2\0,2,0,2,0,2,2\0,2,0,2,0,2,2\ ///
+2,2,2,2,2,2,2 ///
+\2,2,2,2,2,2,2\2,2,2,2,2,2,2\0,2,0,2,0,2,2) annotate(stars) asymbol(*,**) varlabels
+drop if died_index_stay
+local gp "Did not die during index stay"
+}
+restore
+label var loc_hosp_x "Died in hospital, from exit"
+local deathtime "Full sample" 
+foreach time in 1 /*2 3*/ {
+
+	local eoli1 ind_icu_postsurg 
+	local eolc1 n_icu_days_postsurg n_icu_days_postsurg_cond
+	local eolc2 n_hs_days_postsurg n_hs_days_postsurg_cond n_hosp_days_presurg_index n_hosp_days_postsurg_index ///
+	n_hosp_days_postsurg_postindex n_hosp_days_postindex_cond 
+	local eoli2 ind_hs_any ind_ed_postsurg ind_ed_30d_pre_death ind_icu_30d_pre_death
+	local eoli3 died_index_stay died_in_hospital loc_hosp_x
+	local rn: word count `eoli1' `eolc1' `eoli2' `eolc2' `eoli3' N
+	
+	mat tab4=J(`rn',7,.)
+	mat stars=J(`rn',7,0)
+	local r=1
+	local c=1
+
+	preserve
+	if `time'==1 {
+		local deathtime "Death<=365 days post-surgery"
+		keep if died_365d
+}
+	if `time'==2 {
+		local deathtime "Died index stay"
+		keep if died_index_stay
+}
+	if `time'==3 {
+		local deathtime "Death 31-365 days post-surgery"
+		keep if died_356d & !died_index_stay
+}
+
+foreach num in 1 2 3 {
+foreach x in `eoli`num'' {
+	sum `x'
+	foreach i in "0,1" 1 0 {
+		sum `x' if inlist(high_illness_burden,`i')
+		mat tab4[`r',`c']=r(N)*r(mean)
+		mat tab4[`r',`c'+1]=r(mean)*100
+		local c=`c'+2
+}
+	tab `x' high_illness_burden, chi2
+	mat tab4[`r',7]=r(p)
+	mat stars[`r',7]=(r(p)<.05)+(r(p)<.01)
+	local c=1
+	local r=`r'+1
+}
+foreach x in `eolc`num'' {
+	foreach i in "0,1" 1 0 {
+		sum `x' if inlist(high_illness_burden,`i'),d
+		mat tab4[`r',`c']=r(mean)
+		mat tab4[`r',`c'+1]=r(sd)
+		local c=`c'+2
+}
+	ttest `x', by(high_illness)
+	mat tab4[`r',7]=r(p)
+	mat stars[`r',7]=(r(p)<.05)+(r(p)<.01)
+	local r=`r'+1
+	local c=1
+}
+
+}	
+foreach i in "0,1" 1 0 {
+	sum female if inlist(high_illness_burden,`i')
+	mat tab4[`r',`c']=r(N)
+	local c=`c'+2
+}
+
+mat rownames tab4=`eoli1' `eolc1' `eoli2' `eolc2' `eoli3' N
+
+frmttable using "`logpath'\surgery_update_tables.rtf", addtable statmat(tab4) ///
+ctitles("" "Full Sample" "" "High Illness Burden" "" "Low Illness Burden" "" ///
+"p-value"\ "" "N/mean" "%/SD" "N/mean" "%/SD" "N/mean" "%/SD" "") title("Table 4. End of Life Care Outcomes", ///
+"`deathtime'") varlabels ///
+sdec(0,2,0,2,0,2,2\2,2,2,2,2,2,2\2,2,2,2,2,2,2\0,2,0,2,0,2,2\0,2,0,2,0,2,2\ ///
+0,2,0,2,0,2,2\0,2,0,2,0,2,2\2,2,2,2,2,2,2\ ///
+2,2,2,2,2,2,2\2,2,2,2,2,2,2\2,2,2,2,2,2,2\2,2,2,2,2,2,2\2,2,2,2,2,2,2\ ///
+0,2,0,2,0,2,2\0,2,0,2,0,2,2\0,2,0,2,0,2,2\0) annotate(stars) asymbol(*,**)
+
+	local eoli1 ind_icu_postsurg ind_icu_30d_pre_death ind_ed_postsurg ind_ed_30d_pre_death ind_hs_lte3 
+	local eolc1 n_hs_days_postsurg n_hs_days_postsurg_cond n_hosp_days_presurg_index n_hosp_days_postsurg_index ///
+	n_hosp_days_postsurg_postindex n_hosp_days_postindex_cond 
+	local eoli2 died_in_hospital loc_hosp_x
+	local eolc2 
+	local rn: word count 1  `eolc1' 
+mat tab4=J(`rn',9,.)
+mat stars=J(`rn',9,0)
+local r=1
+local c=1
+foreach num in 1 2 {
+foreach x in `eola`num'' {
+	sum `x'
+	foreach i in "0,1" 1 {
+		sum `x' if inlist(high_illness_burden,`i')
+		mat tab4[`r',`c']=r(N)*r(mean)
+		mat tab4[`r',`c'+1]=r(mean)*100
+		local c=`c'+3
+}
+	tab `x' high_illness_burden, chi2
+	mat tab4[`r',5]=r(p)
+	mat stars[`r',5]=(r(p)<.05)+(r(p)<.01)
+	local c=1
+	local r=`r'+1
+}
+foreach x in `eolc`num'' {
+	foreach i in "0,1" 1 {
+		sum `x' if inlist(high_illness_burden,`i'),d
+		mat tab4[`r',`c']=r(p50)
+		mat tab4[`r',`c'+1]=r(p25)
+		mat tab4[`r',`c'+2]=r(p75)
+		local c=`c'+3
+}
+	ttest `x', by(high_illness)
+	*mat tab4[`r',7]=r(p)
+	*mat stars[`r',7]=(r(p)<.05)+(r(p)<.01)
+	local r=`r'+1
+	local c=1
+}
+
+}	
+foreach i in "0,1" 1 {
+	sum female if inlist(high_illness_burden,`i')
+	mat tab4[`r',`c']=r(N)
+	local c=`c'+3
+}
+
+mat rownames tab4=`eola1' `eolc1' N
+
+frmttable using "`logpath'\surgery_update_tables.rtf", addtable statmat(tab4) ///
+ctitles("" "" "Full Sample" "" ""  "High Illness Burden" ///
+\ "" "Median" "25th percentile" "75th percentile"  ///
+"Median" "25th percentile" "75th percentile" ) title("Table 4. End of Life Care Outcomes among decedents", ///
+"`deathtime'") varlabels ///
+sdec(0,0,0,0,0,0) annotate(stars) asymbol(*,**)
+
+restore
+foreach dt in 1 0  {
+preserve
+keep if died_365d & died_index_stay==`dt'
+
+
+local eoli1 ind_icu_postsurg 
+local eolc1 n_icu_days_postsurg n_icu_days_postsurg_cond
+local eolc2 n_hs_days_postsurg n_hs_days_postsurg_cond n_hosp_days_presurg_index n_hosp_days_postsurg_index ///
+n_hosp_days_postsurg_postindex n_hosp_days_postindex_cond 
+local eoli2  ind_icu_30d_pre_death ind_ed_postsurg ind_ed_30d_pre_death ind_hs_any
+local eoli3 died_index_stay died_in_hospital loc_hosp_x
+local rn: word count `eoli1' `eolc1' `eoli2' `eolc2' `eoli3' N
+
+	
+mat tab4=J(`rn',7,.)
+mat stars=J(`rn',7,0)
+local r=1
+local c=1
+
+if `dt'==0 local deathtime "Death<=365 days post-surgery, not within index stay"
+if `dt'==1 local deathtime "Died index stay"
+foreach num in 1 2 3 {
+foreach x in `eoli`num'' {
+	cap sum `x'
+	foreach i in "0,1" 1 0 {
+		cap sum `x' if inlist(high_illness_burden,`i')
+		mat tab4[`r',`c']=r(N)*r(mean)
+		mat tab4[`r',`c'+1]=r(mean)*100
+		local c=`c'+2
+}
+	cap tab `x' high_illness_burden, chi2
+	mat tab4[`r',7]=r(p)
+	mat stars[`r',7]=(r(p)<.05)+(r(p)<.01)
+	local c=1
+	local r=`r'+1
+}
+foreach x in `eolc`num'' {
+	foreach i in "0,1" 1 0 {
+		cap sum `x' if inlist(high_illness_burden,`i'),d
+		mat tab4[`r',`c']=r(mean)
+		mat tab4[`r',`c'+1]=r(sd)
+		local c=`c'+2
+}
+	cap ttest `x', by(high_illness)
+	mat tab4[`r',7]=r(p)
+	mat stars[`r',7]=(r(p)<.05)+(r(p)<.01)
+	local r=`r'+1
+	local c=1
+}
+
+}	
+foreach i in "0,1" 1 0 {
+	sum female if inlist(high_illness_burden,`i')
+	mat tab4[`r',`c']=r(N)
+	local c=`c'+2
+}
+
+mat rownames tab4=`eoli1' `eolc1' `eoli2' `eolc2' `eoli3' N
+
+frmttable using "`logpath'\surgery_update_tables.rtf", addtable statmat(tab4) ///
+ctitles("" "Full Sample" "" "High Illness Burden" "" "Low Illness Burden" "" ///
+"p-value"\ "" "N/mean" "%/SD" "N/mean" "%/SD" "N/mean" "%/SD" "") title("Table 4. End of Life Care Outcomes", ///
+"`deathtime'") varlabels ///
+sdec(0,2,0,2,0,2,2\2,2,2,2,2,2,2\2,2,2,2,2,2,2\0,2,0,2,0,2,2\0,2,0,2,0,2,2\ ///
+0,2,0,2,0,2,2\0,2,0,2,0,2,2\2,2,2,2,2,2,2\ ///
+2,2,2,2,2,2,2\2,2,2,2,2,2,2\2,2,2,2,2,2,2\2,2,2,2,2,2,2\2,2,2,2,2,2,2\ ///
+0,2,0,2,0,2,2\0,2,0,2,0,2,2\0,2,0,2,0,2,2\0) annotate(stars) asymbol(*,**)
+	local eoli1 ind_icu_postsurg ind_icu_30d_pre_deathind_ed_postsurg ind_ed_30d_pre_death ind_hs_lte3 
+	local eolc1 n_hs_days_postsurg n_hs_days_postsurg_cond n_hosp_days_presurg_index n_hosp_days_postsurg_index ///
+	n_hosp_days_postsurg_postindex n_hosp_days_postindex_cond 
+	local eoli2 died_in_hospital loc_hosp_x
+	local eolc2 
+	local rn: word count 1  `eolc1' 
+mat tab4=J(`rn',9,.)
+mat stars=J(`rn',9,0)
+local r=1
+local c=1
+foreach num in 1 2 {
+foreach x in `eola`num'' {
+	sum `x'
+	foreach i in "0,1" 1 {
+		sum `x' if inlist(high_illness_burden,`i')
+		mat tab4[`r',`c']=r(N)*r(mean)
+		mat tab4[`r',`c'+1]=r(mean)*100
+		local c=`c'+3
+}
+	tab `x' high_illness_burden, chi2
+	mat tab4[`r',5]=r(p)
+	mat stars[`r',5]=(r(p)<.05)+(r(p)<.01)
+	local c=1
+	local r=`r'+1
+}
+foreach x in `eolc`num'' {
+	foreach i in "0,1" 1 {
+		sum `x' if inlist(high_illness_burden,`i'),d
+		mat tab4[`r',`c']=r(p50)
+		mat tab4[`r',`c'+1]=r(p25)
+		mat tab4[`r',`c'+2]=r(p75)
+		local c=`c'+3
+}
+	cap ttest `x', by(high_illness)
+	*mat tab4[`r',7]=r(p)
+	*mat stars[`r',7]=(r(p)<.05)+(r(p)<.01)
+	local r=`r'+1
+	local c=1
+}
+
+}	
+foreach i in "0,1" 1 {
+	sum female if inlist(high_illness_burden,`i')
+	mat tab4[`r',`c']=r(N)
+	local c=`c'+3
+}
+
+mat rownames tab4=`eola1' `eolc1' N
+
+frmttable using "`logpath'\surgery_update_tables.rtf", addtable statmat(tab4) ///
+ctitles("" "" "Full Sample" "" ""  "High Illness Burden" ///
+\ "" "Median" "25th percentile" "75th percentile"  ///
+"Median" "25th percentile" "75th percentile" ) title("Table 4. End of Life Care Outcomes among decedents", ///
+"`deathtime'") varlabels ///
+sdec(0,0,0,0,0,0) annotate(stars) asymbol(*,**)
+
+restore
+}
+
+}
+save `datapath'\surgery_sample.dta, replace
+
+
+H="km curves"
+/*surgery project analysis
+
+Created 1/15/2014 to run preliminary logit regressions of illness burden on mortality
+
+Have to manually add in variable labels to word document, varlabels
+not working with categorical variables for some reason
+
+This version runs with the mortality outcome time windows of:
+0-30 days
+31-180 days
+31-365 days
+
+Does stset on the dataset and saves it for other analyses that follow so always run this code 
+if dataset is changed*/
+
+capture log close
+
+clear all
+set mem 500m
+set matsize 800
+set more off
+
+local texpath E:\data\surgery\2012_update\logs\tex\
+local logpath E:\data\surgery\2012_update\logs
+local datapath E:\data\surgery\2012_update\final_data\
+
+log using `logpath'\10_Surgery_code_analysis1.txt, text replace
+cd `logpath'
+use `datapath'surgery_sample.dta
+
+numlabel, add
+
+tab died_0_30 died_31_180, missing
+tab died_0_30 died_31_365, missing
+
+***********************************************************************
+***********************************************************************
+//Survival analysis
+***********************************************************************
+***********************************************************************
+
+//first assign a new date, end_date
+//This is either the death date or the follow up date
+//Follow up date is set to actual follow up date (from p1 core or claims) or 
+//Dec 31,2011 since DOD file from HRS/NDI should be complete thru 2011
+format death_date %td
+//tab death_date, missing
+*gen end_date=.
+format end_date %td
+replace end_date=death_date if died_ind==1 //use DOD if present
+replace end_date=c_ivw_date_p1 if end_date==. & (c_ivw_date_p1-procedure_date >= 365) //p1 ivw date if +1yr ps
+replace end_date=follow_up_dt_1yr_ps if end_date==. //use claims follow up date
+replace end_date= mdy(12,31,2011) if end_date==. & ind_exit==0
+tab end_date, missing
+//lose the one obs has an exit interview but no death date
+
+//indicator for missing information within 1 year of death
+*gen proced_to_end_dt = end_date - procedure_date
+tab proced_to_end_dt core_year_p1 if died_ind==0
+*gen censor_1y_ind = .
+replace censor_1y_ind = 1 if proced_to_end_dt<365 & died_ind==0
+replace censor_1y_ind = 0 if proced_to_end_dt>=365 | (proced_to_end_dt<365 & died_ind==1)
+replace censor_1y_ind = . if end_date==.
+tab censor_1y_ind, missing
+//no censored observations!
+//the observaton with an exit ivw and no dod will be dropped from the data for the km curve
+
+//2 observations die on date of surgery
+tab stay_dstn_cd index_los if(death_date<=procedure_date )
+tab procedure_date death_date if(death_date<procedure_date)
+tab procedure_date end_date if(death_date<procedure_date)
+tab id if(death_date<procedure_date)
+
+//save dataset with end date assigned
+*save `datapath'surgery_final_n12m_sample_clean_end_date.dta, replace
+drop _d _t _t0
+//set for 1 year outcomes only by specifying exit time
+/*stset end_date, failure(died_365d) origin(procedure_date) ///
+exit(time is_disch_date + 365)
+*/
+local t=1
+tokenize first_icu first_er first_readmit death_date
+cap log close
+foreach x in ind_icu_post ind_ed_post readmission_365 died_365d {
+log using `logpath'/stset_`x'.txt, text replace
+preserve
+/*tempfile t1
+save `t1'
+replace high_illness_burden=2
+append using `t1'*/
+qui replace end_date=is_disch_date if death_date>is_disch_date & died_index_stay
+local lab : var label `x'
+replace end_date=``t'' if ``t''<end_date
+stset end_date, failure(`x'=1) origin(procedure_date) ///
+exit(time procedure_date + 365) enter(procedure_date)
+sts graph, by(high_illness_burden) /*tmax(400)*/ ///
+legend(label(1 "Low Illness Burden") label(2 "High Illness Burden") ///
+label(3 "Full sample")) ///
+title("`lab'") //note("Exit at first failure or 365 days post discharge, censored at death date")
+graph export `logpath'\KMCurve`x'.pdf, replace
+local t=`t'+1
+stdes
+sts test high_ill
+restore
+log close
+}
+
+//set with no end date, looks at outcomes > 1 year where present
+//stset end_date, failure(died_ind) origin(procedure_date)
+
+stdes
+
+//save dataset with stset assigned
+*saveold `datapath'surgery_final_n12m_sample_clean_stset.dta, replace version(11)
+
+
+tab censor_1y_ind if _st==1
+tab procedure_date if censor_1y_ind==1 & _st==1, missing
+tab  c_ivw_date_p1 if censor_1y_ind==1 & _st==1, missing
+
+tab procedure_date admit_12m_post if censor_1y_ind==1 & _st==1, missing
+tab procedure_date snf_days_post_12m if censor_1y_ind==1 & _st==1, missing
+
+tab adl_cat_core_n1 if procedure_date==d(20mar2002) & censor_1y_ind==1 & _st==1
+
+******************************************************************
+******************************************************************
+//Run regression - effect of illness burden on mortality
+//Exclude the discharge location variables, include diabetes
+******************************************************************
+******************************************************************
+//base categories are age=65-73, srh=very good/excellent 
+//adl = independent, disch destination = home
+//no disch destination rehab (b/c no obs)
+local xvars_no_disch ib1.age_cat i.comorb_1_0_n12m i.comorb_32_0_n12m ///
+	i.comorb_31_0_n12m i.comorb_13_0_n12m i.el_diab ///
+	ib1.srh_cat_core ib0.adl_cat_core i.nhres_n1 i.admit_ind_6m_pre ///
+	/*ib1.stay_dstn_cat i2.stay_dstn_cat i4.stay_dstn_cat ///
+	i5.stay_dstn_cat i6.stay_dstn_cat*/ i.comp_any
+
+logit died_0_30 i.high_illness_burden `xvars_no_disch' if _st==1, /*vce(r)*/ or
+estat ic
+outreg, ///
+	stats(e_b e_ci) ctitles("","0-30-Day") ///
+	title("Effect of illness burden on mortality") ///
+	note("Odds ratios, 95% confidence intervals reported" \ ///
+	"Base categories are Age: 65-74, Self-reported health: Excellent or very good," \ ///
+	"and ADL: Independent.") ///
+	varlabels store(table4) starlevels(10 5 1)
+
+logit died_31_180 i.high_illness_burden `xvars_no_disch' if died_0_30==0 & _st==1, /*vce(r)*/ or
+estat ic
+outreg, ///
+	stats(e_b e_ci)  ctitles("","31-180-Day") ///
+	varlabels merge(table4) starlevels(10 5 1)
+
+logit died_31_365 i.high_illness_burden `xvars_no_disch' if died_0_30==0 & _st==1, /*vce(r)*/ or
+estat ic
+outreg using `logpath'\logit_age, ///
+	stats(e_b e_ci)  ctitles("","31-365-Day") ///
+	varlabels merge(table4) starlevels(10 5 1) replace		
+
+	
+	
+******************************************************************
+******************************************************************
+//Run regression - effect of illness burden on mortality
+//All controls
+******************************************************************
+******************************************************************
+//base categories are age=65-73, race=white, tics=normal srh=very good/excellent 
+//adl = independent, disch destination = home
+//variables omitted b/c no obs: race=other, tics=demented, disch=rehab
+local xvars_30d_all ib1.age_cat i.female i1.re_cat i2.re_cat ib3.re_cat ///
+	i1b.tics_cat_miss i2.tics_cat_miss i4.tics_cat_miss ///
+	i.el_cancer i.comorb_1_0_n12m i.comorb_32_0_n12m i.comorb_31_0_n12m ///
+	i.comorb_13_0_n12m i.el_diab ib1.srh_cat_core ib0.adl_cat_core ///
+	i.nhres_n1 i.admit_ind_6m_pre ///
+	ib1.stay_dstn_cat i2.stay_dstn_cat i4.stay_dstn_cat ///
+	i5.stay_dstn_cat i6.stay_dstn_cat i.comp_any
+
+//For 180 day mortality regression
+//variables omitted b/c no obs: tics=demented, disch=expired 
+local xvars_180d_all ib1.age_cat i.female ib3.re_cat ///
+	i1b.tics_cat_miss i2.tics_cat_miss i4.tics_cat_miss ///
+	i.el_cancer i.comorb_1_0_n12m i.comorb_32_0_n12m i.comorb_31_0_n12m ///
+	i.comorb_13_0_n12m i.el_diab ib1.srh_cat_core ib0.adl_cat_core ///
+	i.nhres_n1 i.admit_ind_6m_pre ///
+	ib1.stay_dstn_cat i2.stay_dstn_cat i3.stay_dstn_cat ///
+	i4.stay_dstn_cat i5.stay_dstn_cat i.comp_any	
+
+//For 365 day mortality regression
+//variables omitted b/c no obs: tics=demented, disch=expired 
+local xvars_180d_all ib1.age_cat i.female ib3.re_cat ///
+	i1b.tics_cat_miss i2.tics_cat_miss i3.tics_cat_miss i4.tics_cat_miss ///
+	i.el_cancer i.comorb_1_0_n12m i.comorb_32_0_n12m i.comorb_31_0_n12m ///
+	i.comorb_13_0_n12m i.el_diab ib1.srh_cat_core ib0.adl_cat_core ///
+	i.nhres_n1 i.admit_ind_6m_pre ///
+	ib1.stay_dstn_cat i2.stay_dstn_cat i3.stay_dstn_cat ///
+	i4.stay_dstn_cat i5.stay_dstn_cat i.comp_any	
+
+logit died_0_30 i.high_illness_burden `xvars_30d_all'  if _st==1, /*vce(r)*/ or
+outreg, ///
+	stats(e_b e_ci) ctitles("","30-Day") ///
+	title("Effect of illness burden on mortality - All covariates") ///
+	note("Odds ratios, 95% confidence intervals reported" \ ///
+	"Base categories are Age: 65-74, Race: White, TICS: Normal," \ ///
+	"Self-reported health: Excellent or very good," \ ///
+	"ADL: Independent, and Discharged to Home.") ///
+	varlabels store(table5) starlevels(10 5 1)
+
+logit died_31_180 i.high_illness_burden `xvars_180d_all' if died_0_30==0 & _st==1, /*vce(r)*/ or
+outreg, ///
+	stats(e_b e_ci)  ctitles("","180-Day") ///
+	varlabels merge(table5) starlevels(10 5 1)
+
+logit died_31_365 i.high_illness_burden `xvars_180d_all' if died_0_30==0 & _st==1, /*vce(r)*/ or
+outreg using `logpath'\logit_age, ///
+	stats(e_b e_ci)  ctitles("","365-Day") ///
+	varlabels merge(table5) starlevels(10 5 1) addtable		
+
+
+
+***********************************************************************************
+***********************************************************************************
+//KM Curve
+***********************************************************************************
+***********************************************************************************
+sts list
+sts graph
+sts graph, by(high_illness_burden) /*tmax(400)*/ ///
+legend(label(1 "Low Illness Burden") label(2 "High Illness Burden")) //label(3 "85 and older"))
+graph export `logpath'\KMCurve.png, replace
+
+local allxvars high_illness_burden age_cat female re_cat tics_cat_miss ///
+	el_cancer comorb_1_0_n12m comorb_32_0_n12m comorb_31_0_n12m ///
+	comorb_13_0_n12m el_diab srh_cat_core adl_cat_core ///
+	nhres_n1 admit_ind_6m_pre ///
+	stay_dstn_cat comp_any
+
+foreach v in `allxvars'{
+sts test `v', logrank
+}
+
+***********************************************************************************
+***********************************************************************************
+//Run complementary log log model
+***********************************************************************************
+***********************************************************************************
+cloglog died_0_30 high_illness_burden `xvars_no_disch' if _st==1, eform
+outreg, ///
+ 	stats(e_b e_ci) ctitles("","0-30-Day") ///
+	title("Effect of illness burden on mortality - Complementary log log model") ///
+	note("Hazard ratios, 95% confidence intervals reported" \ ///
+	"Base categories are Age: 65-74, Self-reported health: Excellent or very good," \ ///
+	"and ADL: Independent.") ///
+	varlabels store(table6) starlevels(10 5 1)
+
+cloglog died_31_180 high_illness_burden `xvars_no_disch' if died_0_30==0 & _st==1, eform
+outreg, ///
+ 	stats(e_b e_ci) ctitles("","31-180-Day") ///
+	varlabels merge(table6) starlevels(10 5 1)
+
+cloglog died_31_365 high_illness_burden `xvars_no_disch' if died_0_30==0 & _st==1, eform
+outreg using `logpath'\logit_age, ///
+	stats(e_b e_ci) ctitles("","31-365-Day") ///
+	varlabels merge(table6) starlevels(10 5 1) addtable
+
+	
+log close
+
+
+H="regressions (Liz's code)"
+//AAST ABSTRACT USING FULL COHORT DATA//
+
+capture log close
+set more off
+clear all
+local datapath E:\data\surgery\2012_update\final_data
+local logpath E:\data\surgery\2012_update\logs
+
+cd `datapath'
+
+
+log using `logpath'\egs_surgery_output.txt,text replace
+use `datapath'\surgery_sample.dta, clear
+//median pre/post length of stay for high/low burden and ranksum comparison for all patients, for those who died in-hospital, and live discharges
+
+foreach var of varlist n_hosp_days_presurg_index n_hosp_days_postsurg_index {
+by high_illness_burden, sort: summarize `var', d
+ranksum `var', by(high_illness_burden)
+}
+foreach var of varlist n_hosp_days_presurg_index n_hosp_days_postsurg_index {
+by high_illness_burden, sort: summarize `var'  if died_index_stay == 1, d
+ranksum `var' if died_index_stay == 1, by(high_illness_burden)
+}
+foreach var of varlist n_hosp_days_presurg_index n_hosp_days_postsurg_index {
+by high_illness_burden, sort: summarize `var' if died_index_stay == 0, d
+ranksum `var' if died_index_stay == 0, by(high_illness_burden)
+}
+
+//create age group variable//
+gen agegrp = 1 if age_lt75 == 1
+replace agegrp = 2 if age_75_84 == 1
+replace agegrp = 3 if age_85plus == 1
+label define agegrp 1 "<75 years" 2 "75-84 years" 3 ">=85 years"
+label values agegrp agegrp
+label variable agegrp "Age group at surgery"
+
+//create race variable//
+gen race = 1 if white_e == 1 | whiteoth == 1
+replace race = 2 if black_e == 1
+replace race = 3 if hisp_eth_e == 1
+replace race = 4 if other_na_api_race_e == 1
+label define race 1 "White" 2 "Black" 3 "Hispanic" 4 "Other"
+label values race race
+label variable race "Race"
+
+//logistic regression models with age and sex 
+logistic comp_any i.high_illness_burden i.agegrp i.female i.race
+logistic died_index_stay i.high_illness_burden i.agegrp i.female i.race
+logistic died_index_stay i.high_illness_burden i.agegrp i.female i.race i.comp_any
+drop _*
+stset n_hosp_days_postsurg_index, failure(died_index_stay == 1)
+stcox i.high_illness_burden i.agegrp i.female i.race
+stcox i.high_illness_burden i.agegrp i.female i.race i.comp_any
+
+//compare length of stay using competing risks regression / CIF for competing risk of death//
+stset n_hosp_days_postsurg_index, failure(died_index_stay == 0)
+stcrreg i.high_illness_burden i.agegrp i.female i.race, compete(died_index_stay == 1)
+stcurve, cif at1(high_illness_burden = 0) at2 (high_illness_burden = 1) ylabels(0 .25 .5 .75 1)
+
+
+
+
+//ACS ABSTRACT USING PATIENTS WHO SURVIVED IN-HOSPITAL//
+//demographics//
+foreach var of varlist agegrp female race adl_independent_core_n1 adl_diff_no_help adl_1 adl_2 iadl_diff_impair_n1 comorb_31_0_n12m charls_gt2_ind symptom_burden comp_any {
+tab `var' high_illness_burden if died_index_stay != 1, col chi2
+}
+
+//compare total LOS for EGS admission//
+gen los_total = n_hosp_days_presurg_index + n_hosp_days_postsurg_index
+label variable los_total "Total LOS EGS admission"
+foreach var of varlist n_hosp_days_presurg_index n_hosp_days_postsurg_index los_total {
+summarize `var' if died_index_stay != 1, d
+by high_illness_burden, sort: summarize `var' if died_index_stay != 1, d
+ranksum `var' if died_index_stay != 1, by(high_illness_burden)
+}
+
+//note---040417--altered so that index date is procedure date rather than discharge
+//keeping the exclusion of those that died during the index stay
+
+//logistic regression for outcomes//
+di "Unrestricted Regressions"
+foreach var of varlist ind_ed_postsurg readmission_365d_ind ind_icu_postsurg died_365d {
+logistic `var' i.high_illness_burden i.agegrp i.female i.race if died_index_stay != 1
+logistic `var' i.high_illness_burden i.agegrp i.female i.race i.comp_any if died_index_stay != 1
+}
+di "Restricted to those who survive index stay"
+foreach var of varlist ind_ed_postsurg readmission_365d_ind ind_icu_postsurg died_365d {
+logistic `var' i.high_illness_burden i.agegrp i.female i.race //if died_index_stay != 1
+logistic `var' i.high_illness_burden i.agegrp i.female i.race i.comp_any //if died_index_stay != 1
+}
+
+/* NOTE
+If possible, I would prefer to do a competing risks regression: questions
+1. Were all patients followed for up to 365 days or death? Or were some censored < 365 days after discharge?  If so, what is the last date of follow-up?
+2. Do you have the following data:
+   a. date of discharge
+   b. date of death: use to create time variable for time2death after discharge (or loss to follow-up)
+   c. date of first readmission: use to create time2readmission after discharge (replace with time2death if not readmitted)
+   d. date of first ED visit: use to create time2ed after discharge (replace with time2death if no ED visit)
+   e. date of first readmission with an ICU stay: use to create time2icu after discharge (replace with time2death if no ICU admission)
+3. If these data are available, the code for competing risks regression below can be used... I made some code for defining the time variables as well.
+*/
+
+//generate time variables for outcome vs. death//
+gen time2death = 1 + (death_date - index_date) if died_365d == 1
+replace time2death = 365 if died_365d != 1
+gen time2ed = 1 + (first_er - index_date) if ind_ed_postsurg == 1
+replace time2ed = 365 if ind_ed_postsurg != 1
+gen time2readmission = 1 + (first_readmit - index_date) if readmission_365d_ind == 1
+replace time2readmission = 365 if readmission_365d_ind != 1
+gen time2icu = 1 + (first_icu - index_date) if ind_icu_postsurg == 1
+replace time2icu = 365 if ind_icu_postsurg != 1
+
+//competing risks regression for outcomes//
+drop _*
+stset time2ed, failure(ind_ed_postsurg == 1)
+stcrreg i.high_illness_burden i.agegrp i.female i.race i.comp_any if died_index_stay != 1, compete(ind_ed_postsurg == 0)
+drop _*
+stset time2readmission, failure(readmission_365d_ind == 1)
+stcrreg i.high_illness_burden i.agegrp i.female i.race i.comp_any if died_index_stay != 1, compete(readmission_365d_ind == 0)
+drop _*
+stset time2icu, failure(ind_icu_postsurg == 1)
+stcrreg i.high_illness_burden i.agegrp i.female i.race i.comp_any if died_index_stay != 1, compete(ind_icu_postsurg == 0)
+drop _*
+stset time2death, failure(died_365d == 1)
+stcrreg i.high_illness_burden i.agegrp i.female i.race i.comp_any if died_index_stay != 1, compete(died_365d == 0)
+sts graph, by(high_illness_burden) ///
+legend(label(1 "Low Illness Burden") label(2 "High Illness Burden"))
+log close
+ 

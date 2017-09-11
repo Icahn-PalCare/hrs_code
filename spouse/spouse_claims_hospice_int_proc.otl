@@ -9474,3 +9474,375 @@ frmttable using "`logpath'\quarterly_spending_matched.rtf", replace statmat(tab)
 title(Quarterly MC Expenditures) note("All means, medians, and significance tests based on propensity matched sample" ///
 "S included if has FFS for the first month (closest to index date) in period" ///
 "Bivariate GLM with log link and gamma family") 
+
+
+H="hsr revision"
+/*Limited to decedents with FFS MC 6m prior to death, married at time of death,
+with spouse mc id*/
+clear all
+mata: mata clear
+set more off
+capture log close
+import excel "E:\data\Dartmouth_misc\EOL_mc_2yrs_HRR\DAP_HRR_03_07_to_merge.xls", sheet("Sheet1") firstrow case(lower) clear
+keep hrr totalmedic
+rename hrr hrrnum
+xtile eol_spending_quintile=tot, nq(5)
+xtile eol_spending_quartile=tot, nq(4)
+gen eol_spending_3_cat=eol_spending_quartile
+replace eol_spending_3_cat=eol_spending_3_cat-1 if inlist(eol_spending_3_cat,3,4)
+label define eol_spending_3_cat 1 "Bottome Quartile" 2 "Middle 50%" 3 "Top quartile"
+label values eol_spending_3_cat eol_spending_3_cat
+gen eol_spending_low=eol_spending_3_cat==1
+gen eol_spending_mid=eol_spending_3_cat==2
+gen eol_spending_high=eol_spending_3_cat==3
+label var eol_spending_low "Bottom Quartile EOL spending by Dartmouth HRR"
+label var eol_spending_mid "Middle 50% EOL spending by Dartmouth HRR"
+label var eol_spending_high "Top Quartile EOL spending by Dartmouth HRR"
+label var eol_spending_3_cat "EOL Spending Group by Dartmouth HRR, Adjusted"
+label var eol_spending_quintile "EOL Spending Quintile by Dartmouth HRR, Adjusted"
+tempfile temp1
+save "`temp1'"
+
+
+
+use "E:\data\hrs_public_2012\dementia\pdem_withvarnames_ebl.dta", clear
+destring id, gen(r_id)
+rename core_year r_core_year_n1
+tempfile temp2
+save `temp2'
+
+//Server file paths
+global logpath E:\data\spouse_claims\logs
+local projdatapath E:\data\spouse_claims\data\int_data
+
+
+cd `projdatapath'
+
+use spouse_claims_v1 if s_core_year_n1<2012 & r_death_year<=2011 //& (r_part_ab_6m==1 & r_hmo_d_6m==0)
+*merge 1:1 r_id s_id using "E:\data\spouse_intensive\int_data\spouse_intens_data_ps_set.dta" , gen(spmerge) ///
+ *keep(match)
+merge 1:1 r_id s_id using "E:\data\spouse_intensive\int_data\spouse_data_full.dta" , gen(spmerge) keep(match)
+merge 1:1 r_id r_core_year_n1 using `temp2', gen(demmerge) keep(match master)
+merge m:1 hrrnum using `temp1', gen(hrrmerge) keep(match master)
+*********************************************************
+*********************************************************
+//indicators of intensity-hospice 3+days, top quartile spending last 6m, and death in hosp (already there)
+gen r_hs_3d_6m=r_hs_los_6m>=3
+
+local shrscomorbs s_cancer_hrs_n1 s_lung_hrs_n1 s_heart_hrs_n1 s_chf_hrs_n1 ///
+ s_stroke_hrs_n1 s_memory_hrs_n1 s_htn_hrs_n1 s_dm_hrs_n1 s_psych_hrs_n1
+local rhrscomorbs r_cancer_hrs_n1 r_lung_hrs_n1 r_heart_hrs_n1 r_chf_hrs_n1 ///
+ r_stroke_hrs_n1 r_memory_hrs_n1 r_htn_hrs_n1 r_dm_hrs_n1 r_psych_hrs_n1
+
+//get quartile of spending for match
+gen s_tot_paid_by_mc_wi_6m18m=s_tot_paid_by_mc_wi_18m-s_tot_paid_by_mc_wi_6m ///
+if s_cont_ffs_n_mos>=18
+xtile spend_quart=s_tot_paid_by_mc_wi_6m18m , nq(4)
+gen spend_quart4=spend_quart==4
+sum r_tot_paid_by_mc_wi_6m, d
+gen r_spending_6m_high=r_tot_paid_by_mc_wi_6m>=r(p75)
+
+label var r_hs_3d "R Hospice use 3+ days last 6m"
+label var r_spending_6m_high "R Medicare spending top quartile last 6m"
+
+
+gen r_spend_or_hosp_death=r_spending_6m_high==1 | r_loc_==1
+foreach s in r s {
+foreach n in n1 n2 {
+gen `s'_hrs_comorb_none_`n'=`s'_comor_c_hrs_`n'==0 if !missing(`s'_comor_c_hrs_`n')
+gen `s'_hrs_comorb_mild_`n'=`s'_comor_c_hrs_`n'==1 if !missing(`s'_comor_c_hrs_`n')
+gen `s'_hrs_comorb_modsev_`n'=`s'_comor_c_hrs_`n'>=2 if !missing(`s'_comor_c_hrs_`n')
+foreach x in none mild {
+	label var `s'_hrs_comorb_`x'_`n' "SR comorbidities: `x'"
+}
+label var `s'_hrs_comorb_modsev_`n' "SR comorbidities: Mod/Severe"
+gen `s'_adl_impair_`n'=!`s'_adl_independent_core_`n' if !missing(`s'_adl_independent_core_`n')
+label var `s'_adl_impair_`n' "Dependent in ADLs"
+}
+}
+replace likely_dem=pdem>.5 if !missing(pdem)
+//where r&s highly correlated, use s
+local rvarsa r_nw_midlow_n1 r_nw_midhigh_n1 r_nw_highest_n1 ///
+r_nhres_n1 r_srh_pf_n1 r_advdir_x r_dexp_x  r_adl_impair_n1 ///
+cc_3_alzhdmta_n12mn6m cc_6_chrnkidn_n12mn6m cc_ami_isch_n12mn6m ///
+cc_8_chf_n12mn6m cc_9_diabetes_n12mn6m cc_7_copd_n12mn6m ///
+cc_16_strketia_n12mn6m cc_cncr_chronic_n12mn6m cc_15_ra_oa_n12mn6m ///
+cc_13_depressn_n12mn0 cc_all_count_6m12m_2
+
+tab eol_spending_quartile, gen(eol_spend_quart)
+label var eol_spend_quart1 "Quartile EOL spending by HRR: Low"
+label var eol_spend_quart2 "Quartile EOL spending by HRR: Mid-low"
+label var eol_spend_quart3 "Quartile EOL spending by HRR: Mid-high"
+label var eol_spend_quart4 "Quartile EOL spending by HRR: High"
+local region eol_spend_quart2 eol_spend_quart3 eol_spend_quart4
+//categorical spouse primary helper, duration'
+tab r_adl_sp_helper_x r_iadl_sp_helper_x, missing
+gen r_s_help_dur_cat = 0 if r_adl_sp_helper_x==0 & r_iadl_sp_helper_x==0
+replace r_s_help_dur_cat = 1 if r_adl_sp_helper_x==1 | r_iadl_sp_helper_x==1
+replace r_s_help_dur_cat = 2 if (r_adl_sp_helper_x==1 | r_iadl_sp_helper_x==1) ///
+ & ( r_adl_sp_helper_n1==1 | r_iadl_sp_helper_n1==1)
+la def help 0 "S not primary helper x" 1 "S primary helper x only" 2 "S primary helper x+n1"
+la val r_s_help_dur_cat help
+tab r_s_help_dur_cat, gen(r_s_help_dur_ind)
+label var r_s_help_dur_ind2 "S primary helper x only" 
+label var r_s_help_dur_ind3 "S primary helper x+n1"
+local rvars r_age r_nhres_n1 r_srh_pf_n1 r_advdir_x r_dexp_x r_adl_impair_n1 ///
+ likely_dem r_cancer_hrs_n1 r_hrs_comorb_modsev_n1 r_hrs_comorb_mild_n1 r_champus_n1
+
+local svars s_age s_female s_nw_lowest_n1 s_white_e ///
+s_hseduc s_srh_pf_n1 s_hrs_comorb_none_n1 s_hrs_comorb_mild_n1 s_adl_impair_n1 ///
+r_s_help_dur_ind1
+
+/*local n1s srh_pf hrs_comorb_mild hrs_comorb_mod ///
+nw_midlow nw_midhigh nw_highest  hrs_comorb_mod hrs_comorb_mild ///
+adl_independent_core nhres */
+sum `rvars' `svars' `region'
+foreach x of local n1s {
+foreach s in r s {
+replace `s'_`x'_n1=`s'_`x'_n2 if r_death_date_e-`s'_c_ivw_date_n1<=183
+}
+}
+
+gen int_any_of5_1m=0
+foreach x in cpr enteral_nut gastro_tude trach intubation {
+replace int_any_of5_1m=1 if int_`x'_1m==1
+}
+tab int_any_of5 int_any_1m
+
+local treatvars r_loc_hosp_x r_spending_6m_high r_int_any_30d r_hs_3d_6m ///
+r_icu_x
+ 
+tokenize `treatvars'
+local max : word count `treatvars'
+
+gen quartile_weight=.
+gen topquartile_weight=.
+gen surv_12_weight=.
+gen surv_24_weight=.
+gen surv_12=s_cont_ffs_p_mos>=12 & r_s_death>=366
+gen surv_24=s_cont_ffs_p_mos>=24 & r_s_death>=731
+
+
+//first sort data randomly
+set seed 2000
+gen x=uniform()
+sort x
+
+forvalues i=1/`max' {
+di "`i'"
+log using $logpath\spouse_claims_match_``i''`time'_canc_heart_va.txt, text replace
+sum `rvars' `svars' `region'
+*******************************************************************
+//propensity score generation
+
+
+cap drop ip_* logitpscore
+
+//generate pscore variable hs_pscore
+pscore ``i'' `rvars`time'' `svars`time'' `region', pscore(ip_pscore) blockid(ip_block) logit
+
+*psgraph, treated(``i'') pscore(ip_pscore)
+
+*******************************************************************
+//implement radius matching
+gen logitpscore=ln(ip_pscore/(1-ip_pscore))
+sum logitpscore
+
+sca cal_ps1=r(sd)*0.02
+sca list cal_ps1
+local caliper cal_ps1
+
+psmatch2  ``i'' ,outcome(s_admit_ind_p12m) pscore(ip_pscore) radius caliper(`=`caliper'') logit
+//note this creates varaible _weight
+
+*******************************************************************
+//look at balance of propensity score across variables
+psgraph, pscore(ip_pscore)
+di "``i''"
+pstest `rvars`time'' `svars`time'' `region' ,treated(``i'') both hist
+
+local rn : word count `rvars`time'' `svars`time'' `region'
+mat vr=J(`rn',6,.)
+//compare variance of covariates before and after matching
+local var=1
+foreach v in `rvars`time'' `svars`time''  {
+qui sum `v' if ``i''==1 //get variance treated before matching
+mat vr[`var',1]=r(Var)
+qui sum `v' if ``i''==0 //get variance comparison before matching
+mat vr[`var',2]=r(Var)
+mat vr[`var',3]= vr[`var',1]/vr[`var',2] //ratio
+qui sum `v' if ``i''==1 & _support==1 //get variance treated after matching
+mat vr[`var',4]=r(Var)
+qui sum `v' if ``i''==0 [iweight=_weight] //get variance comparison after matching
+mat vr[`var',5]=r(Var)
+mat vr[`var',6]= (vr[`var',4]) / (vr[`var',5]) //ratio
+local var=`var'+1
+}
+
+mat rownames vr=`rvars`time'' `svars`time'' `region'
+
+mat list vr
+
+//what gets dropped from sample using this match?
+tab _support, missing
+tab _support if ``i''==1, missing //n=4 treated dropped, off comm support
+tab _support if ``i''==0, missing
+tab _weight if ``i''==1, missing
+sum _weight if ``i''==0 //n=9 control dropped, no weight assigned
+
+rename _weight w_``i''`time'
+
+/*
+forvalues quart=0/1 {
+drop ip_pscore ip_block logitpscore x
+gen x=uniform()
+sort x
+
+//generate pscore variable hs_pscore
+pscore ``i'' `rvars`time'' `svars`time'' `region' if spend_quart4==`quart', ///
+pscore(ip_pscore) blockid(ip_block) logit
+tab ``i''
+tab ``i'' if spend_quart4==`quart'
+tab ``i'' if spend_quart4==`quart' & !missing(ip_pscore)
+di "PS graph1"
+di "``i''"
+*psgraph, treated(``i'') pscore(ip_pscore)
+
+*******************************************************************
+//implement radius matching
+gen logitpscore=ln(ip_pscore/(1-ip_pscore))
+sum logitpscore
+
+sca cal_ps1=r(sd)*0.02
+sca list cal_ps1
+local caliper cal_ps1
+
+psmatch2  ``i''  if spend_quart4==`quart',outcome(s_admit_ind_p12m) pscore(ip_pscore) radius caliper(`=`caliper'') logit
+//note this creates varaible _weight
+di "PS graph2"
+*******************************************************************
+//look at balance of propensity score across variables
+psgraph, pscore(ip_pscore)
+di "``i''"
+di "Spending quartile pre-death=`quart'"
+pstest `rvars`time'' `svars`time'' `region' if spend_quart4==`quart',treated(``i'') both hist
+/*
+//look at quantile-quantile plots for continuous variables
+foreach v in r_age cc_all_count_6m12m_2{
+gen `v'_treated = `v' if ``i''==1 & _support==1
+gen `v'_comparison = `v' if ``i''==0 & _support==1
+qqplot `v'_treated `v'_comparison
+graph save `logpath'/qqplot_`v'_cg, replace
+}
+*/
+local rn : word count `rvars`time'' `svars`time'' `region'
+mat vr=J(`rn',6,.)
+di "Compare variance here"
+//compare variance of covariates before and after matching
+local var=1
+foreach v in `rvars`time'' `svars`time'' `region' {
+qui sum `v' if ``i''==1 //get variance treated before matching
+mat vr[`var',1]=r(Var)
+qui sum `v' if ``i''==0 //get variance comparison before matching
+mat vr[`var',2]=r(Var)
+mat vr[`var',3]= vr[`var',1]/vr[`var',2] //ratio
+qui sum `v' if ``i''==1 & _support==1 //get variance treated after matching
+mat vr[`var',4]=r(Var)
+qui sum `v' if ``i''==0 [iweight=_weight] //get variance comparison after matching
+mat vr[`var',5]=r(Var)
+mat vr[`var',6]= (vr[`var',4]) / (vr[`var',5]) //ratio
+local var=`var'+1
+}
+
+mat rownames vr=`rvars`time'' `svars`time'' `region'
+
+mat list vr
+
+//what gets dropped from sample using this match?
+tab _support, missing
+tab _support if ``i''==1, missing //n=4 treated dropped, off comm support
+tab _support if ``i''==0, missing
+tab _weight if ``i''==1, missing
+sum _weight if ``i''==0 //n=9 control dropped, no weight assigned
+
+replace quartile_weight=_w if missing(quartile_we)
+}
+*/
+foreach quart in 12 24 {
+drop ip_pscore ip_block logitpscore
+
+//generate pscore variable hs_pscore
+pscore ``i'' `rvars`time'' `svars`time'' `region' if surv_`quart'==1, ///
+pscore(ip_pscore) blockid(ip_block) logit
+tab ``i''
+tab ``i'' if surv_`quart'==1
+tab ``i'' if surv_`quart'==1 & !missing(ip_pscore)
+di "PS graph1"
+di "``i''"
+*psgraph, treated(``i'') pscore(ip_pscore)
+
+*******************************************************************
+//implement radius matching
+gen logitpscore=ln(ip_pscore/(1-ip_pscore))
+sum logitpscore
+
+sca cal_ps1=r(sd)*0.02
+sca list cal_ps1
+local caliper cal_ps1
+
+psmatch2  ``i''  if surv_`quart'==1,outcome(s_admit_ind_p12m) pscore(ip_pscore) radius caliper(`=`caliper'') logit
+//note this creates varaible _weight
+di "PS graph2"
+*******************************************************************
+//look at balance of propensity score across variables
+psgraph, pscore(ip_pscore)
+di "``i''"
+di "24m Survivors only"
+pstest `rvars`time'' `svars`time'' `region' if surv_`quart'==1,treated(``i'') both hist
+/*
+//look at quantile-quantile plots for continuous variables
+foreach v in r_age cc_all_count_6m12m_2{
+gen `v'_treated = `v' if ``i''==1 & _support==1
+gen `v'_comparison = `v' if ``i''==0 & _support==1
+qqplot `v'_treated `v'_comparison
+graph save `logpath'/qqplot_`v'_cg, replace
+}
+*/
+local rn : word count `rvars`time'' `svars`time'' `region'
+mat vr=J(`rn',6,.)
+di "Compare variance here"
+//compare variance of covariates before and after matching
+local var=1
+foreach v in `rvars`time'' `svars`time'' `region' {
+qui sum `v' if ``i''==1 //get variance treated before matching
+mat vr[`var',1]=r(Var)
+qui sum `v' if ``i''==0 //get variance comparison before matching
+mat vr[`var',2]=r(Var)
+mat vr[`var',3]= vr[`var',1]/vr[`var',2] //ratio
+qui sum `v' if ``i''==1 & _support==1 //get variance treated after matching
+mat vr[`var',4]=r(Var)
+qui sum `v' if ``i''==0 [iweight=_weight] //get variance comparison after matching
+mat vr[`var',5]=r(Var)
+mat vr[`var',6]= (vr[`var',4]) / (vr[`var',5]) //ratio
+local var=`var'+1
+}
+
+mat rownames vr=`rvars`time'' `svars`time'' `region'
+
+mat list vr
+
+//what gets dropped from sample using this match?
+tab _support, missing
+tab _support if ``i''==1, missing //n=4 treated dropped, off comm support
+tab _support if ``i''==0, missing
+tab _weight if ``i''==1, missing
+sum _weight if ``i''==0 //n=9 control dropped, no weight assigned
+
+replace surv_`quart'_weight=_w if missing(surv_`quart'_we)
+}
+
+log close
+}
+
+save spouse_claims_intensmatched, replace
+

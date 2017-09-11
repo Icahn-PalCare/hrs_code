@@ -361,8 +361,8 @@ gen rdd=r_death_date if ind_ & cem_matched==1
 by cem_strata matchid, sort: egen index_date=max(rdd)
 gen index_month=month(index_date)
 gen index_year=year(index_date)
-/*replace index_date=. if s_death_date<index_date
-replace index_date=. if s_c_ivw_date>index_date*/
+*replace index_date=. if s_death_date<index_date
+*replace index_date=. if s_c_ivw_date>index_date
 log close
 saveold  "E:\data\spouse_claims\spouse_claims_comparison\int_data\spouse_cem1.dta", replace version(12)
 
@@ -4384,7 +4384,6 @@ point of period closest to index date)
 
 
 H="three month spending graphs"
-/*General data setup for the dataset
 Limited to decedents with FFS MC 6m prior to Index Date, partner at time of Index Date,
 with mc id*/
 
@@ -5141,6 +5140,252 @@ label var ind_n1_ivw "Indicator Bereaved Spouse"
 label var r_age_at_core "R age at n1 ivw"
 label var s_age_at_core "S age at n1 ivw"
 
+local match2 r_age_at_core r_comorb_cat2 r_comorb_cat3 r_adl_independent_core ///
+r_srh_pf  s_age_at_core ///
+s_comorb_cat2 s_comorb_cat3 ///
+s_female s_hseduc s_black s_hisp s_adl_independent_core s_srh_pf ///
+r_nhres s_nhres r_adl_iadl_sp_helper s_adl_iadl_sp_helper s_medicaid ///
+s_nw_quartile_65
+
+local region s_northeast 
+local match r_age_at_core r_adl_independent r_comorb_cat2 r_comorb_cat3 ///
+s_age_at_core s_female s_black s_hseduc s_srh_pf s_comorb_cat2 s_comorb_cat3
+
+foreach x in age_at_core comorb_cat2 comorb_cat3 adl_independent_core srh_pf female ///
+ black hisp nhres adl_iadl_sp_helper {
+	local lab: var label r_`x'
+	label var r_`x' "R: `lab'"
+	label var s_`x' "Sp: `lab'"
+}
+
+log using `logpath'comparison_regressions_diff_in_diff.txt, text replace
+
+rename tot_paid_by_mc_wi_p12m tot12m9
+rename tot_paid_by_mc_wi_p24m tot24m9
+rename tot_paid_by_mc_wi_12m tot12m1
+rename tot_paid_by_mc_wi_24m tot24m1
+egen tot6m1=rowtotal(tot_paid_by_mc_wi_m_1_to_3 tot_paid_by_mc_wi_m_4_to_6)
+egen tot6m9=rowtotal(tot_paid_by_mc_wi_m_1_to_3p tot_paid_by_mc_wi_m_4_to_6p)
+*preserve
+
+
+local match2 c.r_age_at_core r_comorb_cat2 r_comorb_cat3 r_adl_independent_core ///
+r_srh_pf  c.s_age_at_core ///
+s_comorb_cat2 s_comorb_cat3 ///
+s_female s_hseduc s_black s_hisp s_adl_independent_core s_srh_pf ///
+r_nhres s_nhres r_adl_iadl_sp_helper s_adl_iadl_sp_helper s_medicaid ///
+s_nw_quartile_65
+
+forvalues i=1(3)24 {
+	rename tot_paid_by_mc_wi_m_`i'_to_`=`i'+2' tot`=floor((`i'-1)/3)+1'
+	rename tot_paid_by_mc_wi_m_`i'_to_`=`i'+2'p tot`=floor((`i'+24-1)/3)+1'
+}
+
+drop tot_*
+keep s_id `match' `match2' `region' ind_n1_ivw tot* index_d core_year cem_w ffs*
+reshape long tot tot6m tot12m tot24m, i(s_id index_date) j(period)
+/*replace period=-period
+replace period=period-8 if period>8*/
+replace period=-period+9 if period<=8
+
+
+local region s_northeast 
+local match c.r_age_at_core r_adl_independent r_comorb_cat2 r_comorb_cat3 ///
+c.s_age_at_core s_female s_black s_hseduc s_srh_pf s_comorb_cat2 s_comorb_cat3
+
+label var ind_n1_ivw "Bereavement indicator"
+label define ind_n1_ivw 0 "Control" 1 "Bereaved"
+label values ind_n1_ivw ind_n1_ivw
+replace tot=1 if tot<=0
+
+gen post=period>=9
+gen bpost=post & ind_n1_ivw
+local replace replace
+
+foreach g in "0,1" 0 1 {
+	local who "Full Sample"
+	if "`g'"=="0" local who "Men"
+	if "`g'"=="1" local who "Women"
+	foreach x in 1 2 3{
+		mat tab`x'=J(2,3,.)
+		qui outreg, clear
+		local per "& inrange(period,7,10)"
+		local per2 "& inrange(period,5,12)"
+		if `x'==2 local per `per2'
+		if `x'==3 local per
+		reg tot ind_n1_ivw##post [iw=cem_w] if inlist(s_female,`g') `per', cluster(s_id)
+		qui outreg, varlabels stats(b p) merge
+		reg tot ind_n1_ivw##post i.(`match') i.core_year [iw=cem_w] if ///
+		inlist(s_female,`g') `per', cluster(s_id)
+		qui outreg, varlabels stats(b p) merge
+		reg tot ind_n1_ivw##post i.(`match2' `region') i.core_year ///
+		[iw=cem_w] if inlist(s_female,`g') `per', cluster(s_id)
+		qui outreg, varlabels stats(b p) merge store(outr`x')
+
+}	
+	qui outreg using diff_in_diff_regressions, `replace' replay(outr1) ///
+	title("OLS quarterly spending 6m pre-post, `who'")
+	qui outreg using diff_in_diff_regressions, addtable replay(outr2) ///
+	title("OLS quarterly spending 12m pre-post, `who'")
+	qui outreg using diff_in_diff_regressions, addtable replay(outr3) ///
+	title("OLS quarterly spending 24m pre-post, `who'")
+	local replace addtable
+}
+
+
+
+foreach g in "0,1" 0 1 {
+
+	local who "Full Sample"
+	if "`g'"=="0" local who "Men"
+	if "`g'"=="1" local who "Women"
+	foreach x in 1 2 3  {
+		qui outreg, clear
+		local per "& inrange(period,7,10)"
+		local per2 "& inrange(period,5,12)"
+		if `x'==2 local per `per2'
+		if `x'==3 local per
+		glm tot ind_n1_ivw##post [iw=cem_w] if inlist(s_female,`g') `per', cluster(s_id) link(log) fam(gamma)
+		qui outreg, varlabels stats(e_b p) merge
+		margins ind_n1_ivw, dydx(post) post 
+		mat results=e(b)
+		mat tab`x'[1,1]=results[1,4]-results[1,3]
+		test [1.post]1.ind_n1_ivw=[1.post]0.ind_n1_ivw
+		mat tab`x'[2,1]=r(p)
+		glm tot ind_n1_ivw##post i.(`match') i.core_year [iw=cem_w] if ///
+		inlist(s_female,`g') `per', cluster(s_id) link(log) fam(gamma)
+		qui outreg, varlabels stats(e_b p) merge
+		margins ind_n1_ivw, dydx(post) post 
+		mat results=e(b)
+		mat tab`x'[1,2]=results[1,4]-results[1,3]
+		test [1.post]1.ind_n1_ivw=[1.post]0.ind_n1_ivw
+		mat tab`x'[2,3]=r(p)
+		glm tot ind_n1_ivw##post i.(`match2' `region') i.core_year ///
+		[iw=cem_w] if inlist(s_female,`g') `per', cluster(s_id) link(log) fam(gamma)
+		qui outreg, varlabels stats(e_b p) merge store(outr`x')
+		margins ind_n1_ivw, dydx(post) post 
+		mat results=e(b)
+		mat tab`x'[1,3]=results[1,4]-results[1,3]
+		test [1.post]1.ind_n1_ivw=[1.post]0.ind_n1_ivw
+		mat tab`x'[2,3]=r(p)
+				
+}	
+	qui outreg using diff_in_diff_regressions, `replace' replay(outr1) ///
+	title("GLM quarterly spending 6m pre-post, `who'") 
+	qui frmttable  using diff_in_diff_regressions, addtable statmat(tab1) title("Marginal effects") ///
+	sdec(2) rtitles("BereavedXPost") ctitles("" "Simple" "Match Vars" "All vars") 
+	qui outreg using diff_in_diff_regressions, addtable replay(outr2) ///
+	title("GLM quarterly spending 12m pre-post, `who'")
+	qui frmttable  using diff_in_diff_regressions, addtable statmat(tab2) title("Marginal effects") ///
+	sdec(2) rtitles("BereavedXPost") ctitles("" "Simple" "Match Vars" "All vars") 
+	qui outreg using diff_in_diff_regressions, addtable replay(outr3) ///
+	title("GLM quarterly spending 24m pre-post, `who'")
+	qui frmttable  using diff_in_diff_regressions, addtable statmat(tab3) title("Marginal effects") ///
+	sdec(2) rtitles("BereavedXPost") ctitles("" "Simple" "Match Vars" "All vars") 
+	local replace addtable
+}
+
+foreach g in "0,1" 0 1 {
+	local who "Full Sample"
+	if "`g'"=="0" local who "Men"
+	if "`g'"=="1" local who "Women"
+	foreach x in 6m 12m 24m {
+		mat tab`x'=J(2,3,.)
+		qui outreg, clear
+		local per 
+		reg tot`x' ind_n1_ivw##post [iw=cem_w] if inlist(s_female,`g') `per', cluster(s_id)
+		qui outreg, varlabels stats(b p) merge
+		reg tot`x' ind_n1_ivw##post i.(`match') i.core_year [iw=cem_w] if ///
+		inlist(s_female,`g') `per', cluster(s_id)
+		qui outreg, varlabels stats(b p) merge
+		reg tot`x' ind_n1_ivw##post i.(`match2' `region') i.core_year ///
+		[iw=cem_w] if inlist(s_female,`g') `per', cluster(s_id)
+		qui outreg, varlabels stats(b p) merge store(outr`x')
+
+}	
+	qui outreg using diff_in_diff_regressions, `replace' replay(outr6m) ///
+	title("OLS total spending 6m pre-post, `who'")
+	qui outreg using diff_in_diff_regressions, addtable replay(outr12m) ///
+	title("OLS total spending 12m pre-post, `who'")
+	qui outreg using diff_in_diff_regressions, addtable replay(outr24m) ///
+	title("OLS total spending 24m pre-post, `who'")
+	local replace addtable
+}
+foreach g in "0,1" 0 1 {
+
+	local who "Full Sample"
+	if "`g'"=="0" local who "Men"
+	if "`g'"=="1" local who "Women"
+	foreach x in 6m 12m 24m {
+		qui outreg, clear
+		local per "& inrange(period,7,10)"
+		local per2 "& inrange(period,5,12)"
+		glm tot`x' ind_n1_ivw##post [iw=cem_w] if inlist(s_female,`g') `per', cluster(s_id) link(log) fam(gamma)
+		qui outreg, varlabels stats(e_b p) merge
+		margins ind_n1_ivw, dydx(post) post 
+		mat results=e(b)
+		mat tab`x'[1,1]=results[1,4]-results[1,3]
+		test [1.post]1.ind_n1_ivw=[1.post]0.ind_n1_ivw
+		mat tab`x'[2,1]=r(p)
+		glm tot`x' ind_n1_ivw##post i.(`match') i.core_year [iw=cem_w] if ///
+		inlist(s_female,`g') `per', cluster(s_id) link(log) fam(gamma)
+		qui outreg, varlabels stats(e_b p) merge
+		margins ind_n1_ivw, dydx(post) post 
+		mat results=e(b)
+		mat tab`x'[1,2]=results[1,4]-results[1,3]
+		test [1.post]1.ind_n1_ivw=[1.post]0.ind_n1_ivw
+		mat tab`x'[2,2]=r(p)
+		glm tot`x' ind_n1_ivw##post i.(`match2' `region') i.core_year ///
+		[iw=cem_w] if inlist(s_female,`g') `per', cluster(s_id) link(log) fam(gamma)
+		qui outreg, varlabels stats(e_b p) merge store(outr`x')
+		margins ind_n1_ivw, dydx(post) post
+		mat results=e(b)
+		mat tab`x'[1,3]=results[1,4]-results[1,3]
+		test [1.post]1.ind_n1_ivw=[1.post]0.ind_n1_ivw
+		mat tab`x'[2,3]=r(p)
+		
+}	
+	qui outreg using diff_in_diff_regressions, `replace' replay(outr12m) ///
+	title("GLM total spending 6m pre-post, `who'") 
+	qui frmttable  using diff_in_diff_regressions, addtable statmat(tab6m) title("Marginal effects") ///
+	sdec(2) rtitles("BereavedXPost") ctitles("" "Simple" "Match Vars" "All vars") 
+	qui outreg using diff_in_diff_regressions, addtable replay(outr12m) ///
+	title("GLM total spending 12m pre-post, `who'")
+	qui frmttable  using diff_in_diff_regressions, addtable statmat(tab12m) title("Marginal effects") ///
+	sdec(2) rtitles("BereavedXPost") ctitles("" "Simple" "Match Vars" "All vars") 
+	qui outreg using diff_in_diff_regressions, addtable replay(outr24m) ///
+	title("GLM total spending 24m pre-post, `who'")
+	qui frmttable  using diff_in_diff_regressions, addtable statmat(tab24m) title("Marginal effects") ///
+	sdec(2) rtitles("BereavedXPost") ctitles("" "Simple" "Match Vars" "All vars") 
+	local replace addtable
+}
+
+
+H="diff-in-diff regressions (9/6)"
+
+
+clear all
+set more off
+capture log close
+
+local datapath "E:\data\spouse_claims\spouse_claims_comparison\final_data\"
+local logpath "E:\data\spouse_claims\spouse_claims_comparison\logs\"
+
+cd `logpath'
+use `datapath'\spouse_claims_comparison_sample_bday if !missing(index_date), clear
+label var s_northe "Northeast"
+label var s_midw "Midwest"
+label var s_west "West"
+label var s_south "South"
+label var nw1 "Networth lowest quartile"
+foreach s in r s {
+	label var `s'_comorb_cat2 "`s' comorbidities mild"
+	label  var `s'_comorb_cat3 "`s' comorbidities mod/severe"
+}
+label var ind_n1_ivw "Indicator Bereaved Spouse"
+label var r_age_at_core "R age at n1 ivw"
+label var s_age_at_core "S age at n1 ivw"
+
 local match ragecat r_comorb_cat2 r_comorb_cat3 r_adl_independent_core ///
 r_srh_pf sagecat ///
 s_comorb_cat2 s_comorb_cat3 ///
@@ -5168,7 +5413,9 @@ forvalues i=1(3)24 {
 }
 
 drop tot_*
-keep s_id `match' `region' ind_n1_ivw tot* index_d core_year cem_w ffs*
+local match2 `match' r_srh_pf s_hseduc s_black s_hisp medicaid r_nhres s_nhres ///
+r_adl_iadl_sp_helper 
+keep s_id `match' `match2' `region' ind_n1_ivw tot* index_d core_year cem_w ffs*
 reshape long tot tot6m tot12m tot24m, i(s_id index_date) j(period)
 /*replace period=-period
 replace period=period-8 if period>8*/
@@ -5326,6 +5573,251 @@ foreach g in "0,1" 0 1 {
 	qui outreg using diff_in_diff_regressions, addtable replay(outr24m) ///
 	title("GLM total spending 24m pre-post, `who'")
 	frmttable  using diff_in_diff_regressions, addtable statmat(tab24m) title("Marginal effects") ///
+	sdec(2) rtitles("BereavedXPost") ctitles("" "Simple" "Match Vars" "All vars") 
+	local replace addtable
+}
+
+
+H="diff-in-diff regressions topcoded"
+
+
+clear all
+set more off
+capture log close
+
+local datapath "E:\data\spouse_claims\spouse_claims_comparison\final_data\"
+local logpath "E:\data\spouse_claims\spouse_claims_comparison\logs\"
+
+cd `logpath'
+use `datapath'\spouse_claims_comparison_sample if !missing(index_date), clear
+label var s_northe "Northeast"
+label var s_midw "Midwest"
+label var s_west "West"
+label var s_south "South"
+label var nw1 "Networth lowest quartile"
+foreach s in r s {
+	label var `s'_comorb_cat2 "`s' comorbidities mild"
+	label  var `s'_comorb_cat3 "`s' comorbidities mod/severe"
+}
+label var ind_n1_ivw "Indicator Bereaved Spouse"
+label var r_age_at_core "R age at n1 ivw"
+label var s_age_at_core "S age at n1 ivw"
+
+
+local match2 r_age_at_core r_comorb_cat2 r_comorb_cat3 r_adl_independent_core ///
+r_srh_pf  s_age_at_core ///
+s_comorb_cat2 s_comorb_cat3 ///
+s_female s_hseduc s_black s_hisp s_adl_independent_core s_srh_pf ///
+r_nhres s_nhres r_adl_iadl_sp_helper s_adl_iadl_sp_helper s_medicaid ///
+s_nw_quartile_65
+
+local region s_northeast 
+local match r_age_at_core r_adl_independent r_comorb_cat2 r_comorb_cat3 ///
+s_age_at_core s_female s_black s_hseduc s_comorb_cat2 s_comorb_cat3
+
+log using `logpath'comparison_regressions_diff_in_diff_topcoded.txt, text replace
+
+rename tot_paid_by_mc_wi_p12m tot12m9
+rename tot_paid_by_mc_wi_p24m tot24m9
+rename tot_paid_by_mc_wi_12m tot12m1
+rename tot_paid_by_mc_wi_24m tot24m1
+egen tot6m1=rowtotal(tot_paid_by_mc_wi_m_1_to_3 tot_paid_by_mc_wi_m_4_to_6)
+egen tot6m9=rowtotal(tot_paid_by_mc_wi_m_1_to_3p tot_paid_by_mc_wi_m_4_to_6p)
+*preserve
+
+
+forvalues i=1(3)24 {
+	rename tot_paid_by_mc_wi_m_`i'_to_`=`i'+2' tot`=floor((`i'-1)/3)+1'
+	rename tot_paid_by_mc_wi_m_`i'_to_`=`i'+2'p tot`=floor((`i'+24-1)/3)+1'
+}
+
+drop tot_*
+keep s_id `match' `region' `match2' ind_n1_ivw tot* index_d core_year cem_w ffs*
+reshape long tot tot6m tot12m tot24m, i(s_id index_date) j(period)
+/*replace period=-period
+replace period=period-8 if period>8*/
+replace period=-period+9 if period<=8
+
+
+label var ind_n1_ivw "Bereavement indicator"
+label define ind_n1_ivw 0 "Control" 1 "Bereaved"
+label values ind_n1_ivw ind_n1_ivw
+*replace tot=1 if tot<=0
+
+forvalues i=1/16{
+foreach g in 0 1 {
+foreach n in 0 1 {
+qui sum tot if s_female==`g' & period==`i' & ind_n1_ivw==`n' [aw=cem_w],d
+replace tot=r(p99) if s_female==`g' & period==`i' & tot>r(p99) & !missing(tot)
+}
+}
+}
+
+/*
+forvalues i=1/16 {
+foreach g in 0 1 {
+foreach x in 0 1 {
+qui sum tot if period==`i' & s_female==`g' & ind_n1_ivw==`x' [aw=cem_w],d
+replace tot=r(p99) if tot>r(p99) & period==`i' & s_female==`g' & ind_n1_ivw==`x' ///
+& !missing(tot)
+}
+}
+}
+*/twoway (hist pct if ind_n1_ivw==1, color(navy%30) width(5) start(0) frac) (hist pct if ind_n1_ivw==0, color(red%30) width(5) start(0) frac) if inrange(period,5,8) & s_female==0, by(period) legend(order(1 "Bereaved" 2 "Matched"))
+gen top=.
+replace top=tot
+sum tot, d
+replace top=r(p95) if top>r(p95) & !missing(top)
+twoway (kdensity top if ind_n1_ivw==1, color(navy%30) ) (kdensity top if ind_n1_ivw==0, color(red%30) ) if inrange(period,5,8) & s_female==0, by(period) legend(order(1 "Bereaved" 2 "Matched"))
+
+gen post=period>=9
+gen bpost=post & ind_n1_ivw
+local replace replace
+/*
+foreach g in "0,1" 0 1 {
+	local who "Full Sample"
+	if "`g'"=="0" local who "Men"
+	if "`g'"=="1" local who "Women"
+	foreach x in 1 2 3{
+		mat tab`x'=J(1,3,.)
+		qui outreg, clear
+		local per "& inrange(period,7,10)"
+		local per2 "& inrange(period,5,12)"
+		if `x'==2 local per `per2'
+		if `x'==3 local per
+		reg tot ind_n1_ivw##post [pw=cem_w] if inlist(s_female,`g') `per', cluster(s_id)
+		qui outreg, varlabels stats(b p) merge
+		reg tot ind_n1_ivw##post `match' i.core_year [pw=cem_w] if ///
+		inlist(s_female,`g') `per', cluster(s_id)
+		qui outreg, varlabels stats(b p) merge
+		reg tot ind_n1_ivw##post `match2' `region' i.core_year ///
+		[pw=cem_w] if inlist(s_female,`g') `per', cluster(s_id)
+		qui outreg, varlabels stats(b p) merge store(outr`x')
+
+}	
+	qui outreg using diff_in_diff_regressions_topcoded, `replace' replay(outr1) ///
+	title("OLS quarterly spending 6m pre-post, `who'")
+	qui outreg using diff_in_diff_regressions_topcoded, addtable replay(outr2) ///
+	title("OLS quarterly spending 12m pre-post, `who'")
+	qui outreg using diff_in_diff_regressions_topcoded, addtable replay(outr3) ///
+	title("OLS quarterly spending 24m pre-post, `who'")
+	local replace addtable
+}
+
+
+*/
+foreach g in "0,1" 0 1 {
+
+	local who "Full Sample"
+	if "`g'"=="0" local who "Men"
+	if "`g'"=="1" local who "Women"
+	foreach x in 1 2 3  {
+		mat tab`x'=J(1,3,.)
+		qui outreg, clear
+		local per "& inrange(period,7,10)"
+		local per2 "& inrange(period,5,12)"
+		if `x'==2 local per `per2'
+		if `x'==3 local per
+		glm tot ind_n1_ivw##post [pw=cem_w] if inlist(s_female,`g') `per', cluster(s_id) link(log) fam(gamma)
+		qui outreg, varlabels stats(e_b p) merge
+		*margins ind_n1_ivw, dydx(post) post
+		mat results=e(b)
+		mat tab`x'[1,1]=results[1,4]-results[1,3]
+		glm tot ind_n1_ivw##post `match' i.core_year [pw=cem_w] if ///
+		inlist(s_female,`g') `per', cluster(s_id) link(log) fam(gamma)
+		qui outreg, varlabels stats(e_b p) merge
+		*margins ind_n1_ivw, dydx(post) post
+		mat results=e(b)
+		mat tab`x'[1,2]=results[1,4]-results[1,3]
+		glm tot ind_n1_ivw##post `match2' `region' i.core_year ///
+		[pw=cem_w] if inlist(s_female,`g') `per', cluster(s_id) link(log) fam(gamma)
+		qui outreg, varlabels stats(e_b p) merge store(outr`x')
+		*margins ind_n1_ivw, dydx(post) post
+		mat results=e(b)
+		mat tab`x'[1,3]=results[1,4]-results[1,3]
+		
+}	
+	qui outreg using diff_in_diff_regressions_topcoded, `replace' replay(outr1) ///
+	title("GLM quarterly spending 6m pre-post, `who'") 
+	frmttable  using diff_in_diff_regressions_topcoded, addtable statmat(tab1) title("Marginal effects") ///
+	sdec(2) rtitles("BereavedXPost") ctitles("" "Simple" "Match Vars" "All vars") 
+	qui outreg using diff_in_diff_regressions_topcoded, addtable replay(outr2) ///
+	title("GLM quarterly spending 12m pre-post, `who'")
+	frmttable  using diff_in_diff_regressions_topcoded, addtable statmat(tab2) title("Marginal effects") ///
+	sdec(2) rtitles("BereavedXPost") ctitles("" "Simple" "Match Vars" "All vars") 
+	qui outreg using diff_in_diff_regressions_topcoded, addtable replay(outr3) ///
+	title("GLM quarterly spending 24m pre-post, `who'")
+	frmttable  using diff_in_diff_regressions_topcoded, addtable statmat(tab3) title("Marginal effects") ///
+	sdec(2) rtitles("BereavedXPost") ctitles("" "Simple" "Match Vars" "All vars") 
+	local replace addtable
+}
+/*
+foreach g in "0,1" 0 1 {
+	local who "Full Sample"
+	if "`g'"=="0" local who "Men"
+	if "`g'"=="1" local who "Women"
+	foreach x in 6m 12m 24m {
+		mat tab`x'=J(1,3,.)
+		qui outreg, clear
+		local per 
+		reg tot`x' ind_n1_ivw##post [pw=cem_w] if inlist(s_female,`g') `per', cluster(s_id)
+		qui outreg, varlabels stats(b p) merge
+		reg tot`x' ind_n1_ivw##post `match' i.core_year [pw=cem_w] if ///
+		inlist(s_female,`g') `per', cluster(s_id)
+		qui outreg, varlabels stats(b p) merge
+		reg tot`x' ind_n1_ivw##post `match2' `region' i.core_year ///
+		[pw=cem_w] if inlist(s_female,`g') `per', cluster(s_id)
+		qui outreg, varlabels stats(b p) merge store(outr`x')
+
+}	
+	qui outreg using diff_in_diff_regressions_topcoded, `replace' replay(outr6m) ///
+	title("OLS total spending 6m pre-post, `who'")
+	qui outreg using diff_in_diff_regressions_topcoded, addtable replay(outr12m) ///
+	title("OLS total spending 12m pre-post, `who'")
+	qui outreg using diff_in_diff_regressions_topcoded, addtable replay(outr24m) ///
+	title("OLS total spending 24m pre-post, `who'")
+	local replace addtable
+}*/
+foreach g in "0,1" 0 1 {
+
+	local who "Full Sample"
+	if "`g'"=="0" local who "Men"
+	if "`g'"=="1" local who "Women"
+	foreach x in 6m 12m 24m {
+		mat tab`x'=J(1,3,.)
+		qui outreg, clear
+		local per "& inrange(period,7,10)"
+		local per2 "& inrange(period,5,12)"
+		glm tot`x' ind_n1_ivw##post [pw=cem_w] if inlist(s_female,`g') `per', cluster(s_id) link(log) fam(gamma)
+		qui outreg, varlabels stats(e_b p) merge
+		*margins ind_n1_ivw, dydx(post) post
+		mat results=e(b)
+		mat tab`x'[1,1]=results[1,4]-results[1,3]
+		glm tot`x' ind_n1_ivw##post `match' i.core_year [pw=cem_w] if ///
+		inlist(s_female,`g') `per', cluster(s_id) link(log) fam(gamma)
+		qui outreg, varlabels stats(e_b p) merge
+		*margins ind_n1_ivw, dydx(post) post
+		mat results=e(b)
+		mat tab`x'[1,2]=results[1,4]-results[1,3]
+		glm tot`x' ind_n1_ivw##post `match2' `region' i.core_year ///
+		[pw=cem_w] if inlist(s_female,`g') `per', cluster(s_id) link(log) fam(gamma)
+		qui outreg, varlabels stats(e_b p) merge store(outr`x')
+		*margins ind_n1_ivw, dydx(post) post
+		mat results=e(b)
+		mat tab`x'[1,3]=results[1,4]-results[1,3]
+		
+}	
+	qui outreg using diff_in_diff_regressions_topcoded, `replace' replay(outr12m) ///
+	title("GLM total spending 6m pre-post, `who'") 
+	frmttable  using diff_in_diff_regressions_topcoded, addtable statmat(tab6m) title("Marginal effects") ///
+	sdec(2) rtitles("BereavedXPost") ctitles("" "Simple" "Match Vars" "All vars") 
+	qui outreg using diff_in_diff_regressions_topcoded, addtable replay(outr12m) ///
+	title("GLM total spending 12m pre-post, `who'")
+	frmttable  using diff_in_diff_regressions_topcoded, addtable statmat(tab12m) title("Marginal effects") ///
+	sdec(2) rtitles("BereavedXPost") ctitles("" "Simple" "Match Vars" "All vars") 
+	qui outreg using diff_in_diff_regressions_topcoded, addtable replay(outr24m) ///
+	title("GLM total spending 24m pre-post, `who'")
+	frmttable  using diff_in_diff_regressions_topcoded, addtable statmat(tab24m) title("Marginal effects") ///
 	sdec(2) rtitles("BereavedXPost") ctitles("" "Simple" "Match Vars" "All vars") 
 	local replace addtable
 }

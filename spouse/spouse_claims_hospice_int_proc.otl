@@ -12258,3 +12258,69 @@ addtable varlabels annotate(stars) asymbol(*,**) ///
 
 
 
+
+
+H="kernel density for HSR revision"
+
+
+capture log close
+
+clear all
+set more off
+
+//Amy's PC
+local  logpath E:\data\spouse_claims\logs
+local datapath E:\data\spouse_claims\data\int_data
+
+log using "`logpath'\Spouse_intensive_table1.txt", text replace
+
+cd `datapath'
+
+//use sample with no missingness - saved when first round of psmatching done
+use spouse_claims_intensmatched_prior.dta 
+rename w_radi w_prior
+merge 1:1 s_id using spouse_claims_intensmatched_noprior.dta, keepusing(w_ra) nogen
+rename w_radi w_noprior
+local rvarsa2 c.r_age r_nhres_n1 r_srh_pf_n1 r_advdir_x r_dexp_x r_adl_impair_n1 ///
+ likely_dem r_cancer_hrs_n1 /*r_hrs_comorb_none_n1*/ r_hrs_comorb_mild_n1 ///
+ r_hrs_comorb_modsev_n1 r_champus_n1
+
+local svarsa2 c.s_age s_female s_nw_lowest_n1 /*s_nw_midlow_n1 s_nw_midhigh_n1 s_nw_highest_n1*/ s_white_e ///
+s_hseduc s_srh_pf_n1 /*s_hrs_comorb_none_n1*/ s_hrs_comorb_mild_n1 s_hrs_comorb_modsev_n1 ///
+s_adl_impair_n1 ///
+r_s_helper_x 
+
+local region /*eol_spend_quart2 eol_spend_quart3*/ eol_spend_quart4
+
+ebalance r_loc_ `rvarsa2' `svarsa2'
+rename _webal w_ebal
+gen loc=r_loc_
+
+outreg, clear
+foreach x in noprior prior {
+	qui  glm s_tot_paid_by_mc_wi_p12m i.(r_loc_  `rvarsa2' ///
+ `svarsa2' `region' i.r_death_year) [pw=w_`x'] , link(log) fam(gamma) robust
+	qui outreg, merge varlabels stats(e_b p)
+	predict p`x'1 if r_loc_==1
+	replace r_loc_=0
+	predict p`x'0 if loc==1
+	replace r_loc_=loc
+	gen mfx_`x'=p`x'1-p`x'0
+	local svarsa2 `svarsa2' spend_quart
+}
+outreg, replay
+
+foreach x in prior noprior {
+qui sum mfx_`x',d
+local med`x'=r(p50)
+local p25`x'=r(p25)
+local p75`x'=r(p75)
+local mean`x'=r(mean)
+
+di `med`x''
+di `p25`x''
+di `p75`x''
+di `mean`x''
+}
+
+twoway kdensity mfx_noprior || kdensity mfx_prior, //xline(`medprior') xline(`mednoprior') xline(`meanprior') xline(`meannoprior')

@@ -144,7 +144,7 @@ quit;
 note--I haven't figured out how to make this generalized to any given year (10/9/17)
 */
 data all_insurance;
-set all_insurance&numyrs.;
+set all_insurance_&numyrs.;
 
 buyin_&numyrs.y=trimn(left(buyin_&numyrs.bef))||trimn(left(buyin_4bef))||trimn(left(buyin_3bef))||trimn(left(buyin_2bef))||trimn(left(buyin_1bef))||trimn(left(buyin_iy));
 hmo_&numyrs.y=trimn(left(hmo_&numyrs.bef))||trimn(left(hmo_4bef))||trimn(left(hmo_3bef))||trimn(left(hmo_2bef))||trimn(left(hmo_1bef))||trimn(left(hmo_iy));
@@ -409,10 +409,10 @@ run;
 %mend;
 
 %macro mpsplit(time=);
-%mp(source=ip,equ=~,name=&i.m);
-%mp(source=snf,equ=,name=&i.m);
-%mp(source=ip,equ=~,name=&i.m);
-%mp(source=snf,equ=,name=&i.m);
+%mp(source=ip,equ=~,name=%eval(12*&i.)m);
+%mp(source=snf,equ=,name=%eval(12*&i.)m);
+%mp(source=ip,equ=~,name=p%eval(12*&i.)m);
+%mp(source=snf,equ=,name=p%eval(12*&i.)m);
 %mend;
 
 
@@ -449,4 +449,624 @@ begins with claims lists from "Get S MC claims lists..." section
 
 final dataset is spo_mc_i.hrs_elix_cc_pay*/
 
+
+
+
+H="MC Spending"
+/*get spouse medicare costs by claim type and total, adjusted for inflation
+to 2012$, monthly, 60m before and after R's death
+
+begins with claims lists from "Get S MC claims lists..." section
+
+final dataset is proj_int.hrs_elix_cc_pay*/
+
+
+
+%macro mp_index_dt(source=);
+*get claims that overlap with date of death;
+
+data &source._meet_admit;
+set proj_int.&source._meet_60m;
+if index_date=admit_date and admit_date~=disch_date;
+admit_on_index_date=1;
+run;
+
+
+data &source._meet_both;
+set proj_int.&source._meet_60m;
+if index_date=disch_date and admit_date=disch_date;
+admit_on_index_date=1;
+disch_on_index_date=1;
+run;
+
+
+
+
+data &source._cost;
+set &source._meet_admit &source._meet_both;
+array list pmt_amt passthru;
+do over list;
+if list=. then list=0;
+end;
+
+if year(admit_date)>=2012 then rate=1;
+if year(admit_date)=2011 then rate=1.03902;
+if year(admit_date)=2010 then rate=1.07086;
+if year(admit_date)=2009 then rate=1.10835;
+if year(admit_date)=2008 then rate=1.1439;
+if year(admit_date)=2007 then rate=1.1923;
+if year(admit_date)=2006 then rate=1.25586;
+if year(admit_date)=2005 then rate=1.30783;
+if year(admit_date)=2004 then rate=1.37027;
+if year(admit_date)=2003 then rate=1.43908;
+if year(admit_date)=2002 then rate=1.50337;
+if year(admit_date)=2001 then rate=1.57963;
+if year(admit_date)=2000 then rate=1.65519;
+if year(admit_date)<=1999 then rate=1.72641;
+
+
+&source._paid_by_mc=rate*(pmt_amt+passthru);
+&source._paid_by_mc_index_dt=(1/(disch_date-admit_date+1))*&source._paid_by_mc;
+run;
+
+proc sql;
+create table &source._pay as select distinct bid_hrs_21,index_date,
+sum(&source._paid_by_mc_index_dt) as &source._paid_by_mc_index_dt,
+sum(admit_on_index_date) as &source._admit_dod, sum(disch_on_index_date) as &source._disch_dod
+from &source._cost group by bid_hrs_21,index_date;
+quit;
+
+%mend;
+%mp_index_dt(source=ip);
+%mp_index_dt(source=snf);
+
+
+%macro claims_index_dt(source=);
+*get claims that start with date of death;
+
+data &source._meet_admit;
+set proj_int.&source._meet_60m;
+if index_date=admit_date; 
+run;
+
+
+
+data &source._cost;
+set &source._meet_admit;
+array list pmt_amt passthru;
+do over list;
+if list=. then list=0;
+end;
+
+if year(admit_date)>=2012 then rate=1;
+if year(admit_date)=2011 then rate=1.03902;
+if year(admit_date)=2010 then rate=1.07086;
+if year(admit_date)=2009 then rate=1.10835;
+if year(admit_date)=2008 then rate=1.1439;
+if year(admit_date)=2007 then rate=1.1923;
+if year(admit_date)=2006 then rate=1.25586;
+if year(admit_date)=2005 then rate=1.30783;
+if year(admit_date)=2004 then rate=1.37027;
+if year(admit_date)=2003 then rate=1.43908;
+if year(admit_date)=2002 then rate=1.50337;
+if year(admit_date)=2001 then rate=1.57963;
+if year(admit_date)=2000 then rate=1.65519;
+if year(admit_date)<=1999 then rate=1.72641;
+
+
+&source._paid_by_mc_index_dt=rate*(pmt_amt);
+run;
+
+proc sql;
+create table &source._pay as select distinct bid_hrs_21,index_date,
+sum(&source._paid_by_mc_index_dt) as &source._paid_by_mc_index_dt
+from &source._cost group by bid_hrs_21,index_date;
+quit;
+
+%mend;
+
+%claims_index_dt(source=op);
+%claims_index_dt(source=pb);
+%claims_index_dt(source=hh);
+%claims_index_dt(source=hs);
+%claims_index_dt(source=dm);
+
+data mc_costs_doda;
+merge ip_pay snf_pay op_pay pb_pay hh_pay hs_pay dm_pay ;
+bid_hrs_21=bid_hrs_21;
+by bid_hrs_21 index_date;
+run;
+
+
+data mc_costs_dod;
+set mc_costs_doda;
+tot_paid_by_mc_index_dt=ip_paid_by_mc_index_dt+snf_paid_by_mc_index_dt+op_paid_by_mc_index_dt +
+pb_paid_by_mc_index_dt+hs_paid_by_mc_index_dt+dm_paid_by_mc_index_dt;
+run;
+
+
+%macro mp_claims(days_start=,days_bef_index=,source=,name=);
+
+*first get claims lists for the specific claims type, snf or ip;
+data &source._meet;
+set proj_int.&source._meet_60m;
+win_start_dt=index_date-&days_bef_index;
+win_stop_dt=index_date-&days_start;
+format admit_date disch_date win_start_dt win_stop_dt date9.;
+run;
+
+/*identify claims where entire claim is within the x months prior to death*/
+data &source._meet_1;
+set &source._meet;
+if win_start_dt<=admit_date<win_stop_dt and
+	win_start_dt<=disch_date<win_stop_dt;
+run;
+
+/*identify claims where start before window but end during window*/
+data &source._meet_2;
+set &source._meet;
+if win_start_dt>admit_date and
+	win_start_dt<=disch_date<win_stop_dt;
+run;
+
+/*identify fraction of claims to be attributed to period before death
+by just using the fraction of time that was included in the time window*/
+data &source._meet_3;
+set &source._meet_2;
+pct_xm=(disch_date-win_start_dt)/(disch_date-admit_date+1);
+array list pmt_amt passthru;
+do over list;
+if list=. then list=0;
+/*scale the partial claims by the time within the x month period*/
+list=list*pct_xm;
+end;
+
+run;
+
+/*claims where start within window but end after R's death*/
+data &source._meet_4;
+set &source._meet;
+if win_start_dt<=admit_date<win_stop_dt and
+	disch_date>=win_stop_dt;
+run;
+
+/*again fraction to attribute to window*/
+data &source._meet_5;
+set &source._meet_4;
+pct_xm=(win_stop_dt-admit_date+1)/(disch_date-admit_date+1);
+array list pmt_amt passthru;
+do over list;
+if list=. then list=0;
+/*scale the partial claims by the time within the x month period*/
+list=list*pct_xm;
+end;
+run;
+
+/*claims where start before and end after window*/
+data &source._meet_6;
+set &source._meet;
+if win_start_dt>admit_date and
+	disch_date>=win_stop_dt;
+run;
+
+/*again fraction to attribute to window*/
+data &source._meet_7;
+set &source._meet_6;
+pct_xm=(win_stop_dt-win_start_dt)/(disch_date-admit_date+1);
+array list pmt_amt passthru;
+do over list;
+if list=. then list=0;
+/*scale the partial claims by the time within the x month period*/
+list=list*pct_xm;
+end;
+run;
+
+/*merge claims into single dataset, adjust for inflation
+Uses CPI for Medical Services from BLS website, accessed 5/4/2015*/
+data &source._cost;
+set &source._meet_1 &source._meet_3 &source._meet_5 &source._meet_7;
+array list pmt_amt passthru;
+do over list;
+if list=. then list=0;
+end;
+
+if year(admit_date)>=2012 then rate=1;
+if year(admit_date)=2011 then rate=1.03902;
+if year(admit_date)=2010 then rate=1.07086;
+if year(admit_date)=2009 then rate=1.10835;
+if year(admit_date)=2008 then rate=1.1439;
+if year(admit_date)=2007 then rate=1.1923;
+if year(admit_date)=2006 then rate=1.25586;
+if year(admit_date)=2005 then rate=1.30783;
+if year(admit_date)=2004 then rate=1.37027;
+if year(admit_date)=2003 then rate=1.43908;
+if year(admit_date)=2002 then rate=1.50337;
+if year(admit_date)=2001 then rate=1.57963;
+if year(admit_date)=2000 then rate=1.65519;
+if year(admit_date)<=1999 then rate=1.72641;
+
+
+&source._paid_by_mc=rate*(pmt_amt+passthru);
+run;
+
+*calculates total of mc charges for the claim type by hrs bid;
+proc sql;
+create table &source._pay as select distinct bid_hrs_21,index_date,
+sum(&source._paid_by_mc) as &source._paid_by_mc 
+from &source._cost group by bid_hrs_21,index_date;
+quit;
+
+/*merge into a full bid list of those s's with ffs mc 6m or more*/
+proc sql;
+create table &source._&name. as select 
+a.bid_hrs_21,a.index_date,coalesce(b.&source._paid_by_mc,0) as &source._paid_by_mc_&name.
+from proj_int.index a
+left join
+ &source._pay b
+ on trim(left(a.bid_hrs_21))=trim(left(b.bid_hrs_21)) and a.index_date=b.index_date;
+ quit;
+
+proc sort data=&source._&name.; by bid_hrs_21 index_date; run;
+
+%mend;
+
+
+
+%macro claims(days_start=,days_bef_index=,source=,name=);
+
+*first get claims lists for the specific claims type, not snf or ip;
+data &source._meet;
+set proj_int.&source._meet_60m;
+win_start_dt=index_date-&days_bef_index;
+win_stop_dt=index_date-&days_start;
+format admit_date disch_date win_start_dt win_stop_dt date9.;
+run;
+
+/*identify claims where start of claim is within the x months prior to death*/
+data proj_int.&source._meet&name.;
+set &source._meet;
+if win_start_dt<=admit_date<win_stop_dt;
+run;
+
+
+/*adjust for inflation
+Uses CPI for Medical Services from BLS website, accessed 5/4/2015*/
+data &source._cost;
+set proj_int.&source._meet&name.;
+array list pmt_amt passthru;
+do over list;
+if list=. then list=0;
+end;
+
+if year(admit_date)>=2012 then rate=1;
+if year(admit_date)=2011 then rate=1.03902;
+if year(admit_date)=2010 then rate=1.07086;
+if year(admit_date)=2009 then rate=1.10835;
+if year(admit_date)=2008 then rate=1.1439;
+if year(admit_date)=2007 then rate=1.1923;
+if year(admit_date)=2006 then rate=1.25586;
+if year(admit_date)=2005 then rate=1.30783;
+if year(admit_date)=2004 then rate=1.37027;
+if year(admit_date)=2003 then rate=1.43908;
+if year(admit_date)=2002 then rate=1.50337;
+if year(admit_date)=2001 then rate=1.57963;
+if year(admit_date)=2000 then rate=1.65519;
+if year(admit_date)<=1999 then rate=1.72641;
+
+
+&source._paid_by_mc=rate*(pmt_amt);
+run;
+
+*calculates total of mc charges for the claim type by hrs bid;
+proc sql;
+create table &source._pay as select distinct bid_hrs_21,index_date,
+sum(&source._paid_by_mc) as &source._paid_by_mc 
+from &source._cost group by bid_hrs_21,index_date;
+quit;
+
+/*merge into a full bid list of those s's with ffs at death*/
+proc sql;
+create table &source._&name. as select 
+a.bid_hrs_21,a.index_date,coalesce(b.&source._paid_by_mc,0) as &source._paid_by_mc_&name.
+from proj_int.index a
+left join
+ &source._pay b
+ on trim(left(a.bid_hrs_21))=trim(left(b.bid_hrs_21)) and a.index_date=b.index_date;
+ quit;
+
+proc sort data=&source._&name.; by bid_hrs_21 index_date; run;
+
+%mend;
+
+
+
+
+/****************************************************************/
+/*all claims, time periods after R's death********************/
+/****************************************************************/
+%macro mp_claims_p(days_start=,days_aft_index=,source=,name=);
+
+*first get claims lists for the specific claims type, snf or ip;
+data &source._meet;
+set proj_int.&source._meet_p60m;
+win_end_dt=index_date+&days_aft_index;
+win_start_dt=index_date+&days_start;
+format admit_date disch_date win_end_dt win_start_dt date9.;
+run;
+
+/*identify claims where entire claim is within the x months after death*/
+data &source._meet_1;
+set &source._meet;
+if win_start_dt<admit_date<=win_end_dt and
+	win_start_dt<disch_date<=win_end_dt;
+run;
+
+/*identify claims where start before window but end during window*/
+data &source._meet_2;
+set &source._meet;
+if win_start_dt>=admit_date and
+	win_start_dt<disch_date<=win_end_dt;
+run;
+
+/*identify fraction of claims to be attributed to period after death
+by just using the fraction of time that was included in the time window*/
+data &source._meet_3;
+set &source._meet_2;
+pct_xm=(disch_date-win_start_dt)/(disch_date-admit_date+1);
+array list pmt_amt passthru;
+do over list;
+if list=. then list=0;
+/*scale the partial claims by the time within the x month period*/
+list=list*pct_xm;
+end;
+run;
+
+/*claims where start within window but end after window*/
+data &source._meet_4;
+set &source._meet;
+if win_start_dt<admit_date<=win_end_dt and
+	disch_date>win_end_dt ;
+run;
+
+/*again fraction to attribute to window*/
+data &source._meet_5;
+set &source._meet_4;
+pct_xm=(win_end_dt-admit_date+1)/(disch_date-admit_date+1);
+array list pmt_amt passthru;
+do over list;
+if list=. then list=0;
+/*scale the partial claims by the time within the x month period*/
+list=list*pct_xm;
+end;
+run;
+
+/*claims where start before window but end after window*/
+data &source._meet_6;
+set &source._meet;
+if win_start_dt>=admit_date and
+	disch_date>win_end_dt ;
+run;
+
+/*again fraction to attribute to window*/
+data &source._meet_7;
+set &source._meet_6;
+pct_xm=(win_end_dt -win_start_dt)/(disch_date-admit_date+1);
+array list pmt_amt passthru;
+do over list;
+if list=. then list=0;
+/*scale the partial claims by the time within the x month period*/
+list=list*pct_xm;
+end;
+run;
+/*merge claims into single dataset, adjust for inflation*/
+data &source._cost;
+set &source._meet_1 &source._meet_3 &source._meet_5 &source._meet_7;
+array list pmt_amt passthru;
+do over list;
+if list=. then list=0;
+end;
+
+if year(admit_date)>=2012 then rate=1;
+if year(admit_date)=2011 then rate=1.03902;
+if year(admit_date)=2010 then rate=1.07086;
+if year(admit_date)=2009 then rate=1.10835;
+if year(admit_date)=2008 then rate=1.1439;
+if year(admit_date)=2007 then rate=1.1923;
+if year(admit_date)=2006 then rate=1.25586;
+if year(admit_date)=2005 then rate=1.30783;
+if year(admit_date)=2004 then rate=1.37027;
+if year(admit_date)=2003 then rate=1.43908;
+if year(admit_date)=2002 then rate=1.50337;
+if year(admit_date)=2001 then rate=1.57963;
+if year(admit_date)=2000 then rate=1.65519;
+if year(admit_date)<=1999 then rate=1.72641;
+
+&source._paid_by_mc=rate*(pmt_amt+passthru);
+run;
+
+*calculates total of mc charges for the claim type by hrs bid;
+proc sql;
+create table &source._pay as select distinct bid_hrs_21,index_date,
+sum(&source._paid_by_mc) as &source._paid_by_mc 
+from &source._cost group by bid_hrs_21,index_date;
+quit;
+
+/*merge into a full bid list of those s's with ffs mc at death*/
+proc sql;
+create table &source._&name. as select 
+a.bid_hrs_21,a.index_date,coalesce(b.&source._paid_by_mc,0) as &source._paid_by_mc_&name.
+from proj_int.index a
+left join
+ &source._pay b
+ on trim(left(a.bid_hrs_21))=trim(left(b.bid_hrs_21)) and a.index_date=b.index_date;
+ quit;
+
+proc sort data=&source._&name.; by bid_hrs_21 index_date; run;
+
+%mend;
+
+
+
+
+/****************************************************************/
+/*all claims, time periods after R's death********************/
+/****************************************************************/
+%macro claims_p(days_start=,days_aft_index=,source=,name=);
+
+*first get claims lists for the specific claims type, snf or ip;
+data &source._meet;
+set proj_int.&source._meet_p60m;
+win_end_dt=index_date+&days_aft_index;
+win_start_dt=index_date+&days_start;
+format admit_date disch_date win_end_dt win_start_dt date9.;
+run;
+
+/*identify claims where entire claim is within the x months after death*/
+data proj_int.&source._meet&name.;
+set &source._meet;
+if win_start_dt<admit_date<=win_end_dt;
+run;
+
+
+/*adjust for inflation*/
+data &source._cost;
+set proj_int.&source._meet&name.;
+array list pmt_amt;
+do over list;
+if list=. then list=0;
+end;
+
+if year(admit_date)>=2012 then rate=1;
+if year(admit_date)=2011 then rate=1.03902;
+if year(admit_date)=2010 then rate=1.07086;
+if year(admit_date)=2009 then rate=1.10835;
+if year(admit_date)=2008 then rate=1.1439;
+if year(admit_date)=2007 then rate=1.1923;
+if year(admit_date)=2006 then rate=1.25586;
+if year(admit_date)=2005 then rate=1.30783;
+if year(admit_date)=2004 then rate=1.37027;
+if year(admit_date)=2003 then rate=1.43908;
+if year(admit_date)=2002 then rate=1.50337;
+if year(admit_date)=2001 then rate=1.57963;
+if year(admit_date)=2000 then rate=1.65519;
+if year(admit_date)<=1999 then rate=1.72641;
+
+&source._paid_by_mc=rate*(pmt_amt);
+run;
+
+*calculates total of mc charges for the claim type by hrs bid;
+proc sql;
+create table &source._pay as select distinct bid_hrs_21,index_date,
+sum(&source._paid_by_mc) as &source._paid_by_mc 
+from &source._cost group by bid_hrs_21,index_date;
+quit;
+
+/*merge into a full bid list of those s's with ffs mc at death*/
+proc sql;
+create table &source._&name. as select 
+a.bid_hrs_21,a.index_date,coalesce(b.&source._paid_by_mc,0) as &source._paid_by_mc_&name.
+from proj_int.index a
+left join
+ &source._pay b
+ on trim(left(a.bid_hrs_21))=trim(left(b.bid_hrs_21)) and a.index_date=b.index_date;
+ quit;
+
+proc sort data=&source._&name.; by bid_hrs_21 index_date; run;
+
+%mend;
+
+%macro days_nesting();
+
+%do i=1 %to 5 ;
+
+
+%mp_claims(days_start=floor((&i.-1)*365),days_bef_index=floor(&i.*365), source=snf,  name=%eval(12*&i.)m);
+%mp_claims(days_start=floor((&i.-1)*365),days_bef_index=floor(&i.*365), source=ip,  name=%eval(12*&i.)m);
+%claims(days_start=floor((&i.-1)*365),days_bef_index=floor(&i.*365), source=pb,  name=%eval(12*&i.)m);
+%claims(days_start=floor((&i.-1)*365),days_bef_index=floor(&i.*365), source=op,  name=%eval(12*&i.)m);
+%claims(days_start=floor((&i.-1)*365),days_bef_index=floor(&i.*365), source=hh,  name=%eval(12*&i.)m);
+%claims(days_start=floor((&i.-1)*365),days_bef_index=floor(&i.*365), source=hs,  name=%eval(12*&i.)m);
+%claims(days_start=floor((&i.-1)*365),days_bef_index=floor(&i.*365), source=dm,  name=%eval(12*&i.)m);
+
+%mp_claims_p(days_start=floor((&i.-1)*365),days_aft_index=floor(&i.*365), source=snf,  name=p%eval(12*&i.)m);
+%mp_claims_p(days_start=floor((&i.-1)*365),days_aft_index=floor(&i.*365), source=ip,  name=p%eval(12*&i.)m);
+%claims_p(days_start=floor((&i.-1)*365),days_aft_index=floor(&i.*365), source=op,  name=p%eval(12*&i.)m);
+%claims_p(days_start=floor((&i.-1)*365),days_aft_index=floor(&i.*365), source=pb,  name=p%eval(12*&i.)m);
+%claims_p(days_start=floor((&i.-1)*365),days_aft_index=floor(&i.*365), source=hh,  name=p%eval(12*&i.)m);
+%claims_p(days_start=floor((&i.-1)*365),days_aft_index=floor(&i.*365), source=hs,  name=p%eval(12*&i.)m);
+%claims_p(days_start=floor((&i.-1)*365),days_aft_index=floor(&i.*365), source=dm,  name=p%eval(12*&i.)m);
+
+
+%end;
+%mend;
+
+%days_nesting();
+
+
+
+
+%macro merge(l=,source=,time=,p=);
+data &source._&time._m1;
+set &source._m1&p.;
+run;
+
+%do i=2 %to 24 ;
+%let l = %eval(&i.-1) ;
+
+data &source._&time._m&i.;
+merge &source._&time._m&l. &source._m&i.&p.;
+run;
+%end;
+
+data &source._&time.;
+set &source._&time._m24;
+run;
+%mend;
+
+%merge(source=ip,time=bef,p=);
+%merge(source=ip,time=aft,p=p);
+%merge(source=snf,time=bef,p=);
+%merge(source=snf,time=aft,p=p);
+%merge(source=op,time=bef,p=);
+%merge(source=op,time=aft,p=p);
+%merge(source=pb,time=bef,p=);
+%merge(source=pb,time=aft,p=p);
+%merge(source=hh,time=bef,p=);
+%merge(source=hh,time=aft,p=p);
+%merge(source=hs,time=bef,p=);
+%merge(source=hs,time=aft,p=p);
+%merge(source=dm,time=bef,p=);
+%merge(source=dm,time=aft,p=p);
+
+/*now merge into single dataset of MC costs and get totals for each time window*/
+data mc_costs_all;
+merge ip_bef snf_bef op_bef pb_bef hh_bef hs_bef dm_bef 
+ip_aft snf_aft op_aft pb_aft hh_aft hs_aft dm_aft;
+by bid_hrs_21 index_date;
+run;
+
+%macro total();
+
+data mc_costs_all2;
+set mc_costs_all;
+%do i=1 %to 24;
+tot_paid_by_mc_m&i.=ip_paid_by_mc_m&i. + snf_paid_by_mc_m&i. + op_paid_by_mc_m&i. + 
+pb_paid_by_mc_m&i. + hh_paid_by_mc_m&i. + hs_paid_by_mc_m&i. + dm_paid_by_mc_m&i.;
+tot_paid_by_mc_m&i.p=ip_paid_by_mc_m&i.p + snf_paid_by_mc_m&i.p + op_paid_by_mc_m&i.p + 
+pb_paid_by_mc_m&i.p + hh_paid_by_mc_m&i.p + hs_paid_by_mc_m&i.p + dm_paid_by_mc_m&i.p;
+%end;
+run;
+%mend;
+
+%total();
+
+data mc_costs_all3;
+merge mc_costs_all2 mc_costs_dod;
+by  bid_hrs_21 index_date;
+run;
+
+/*save permanent dataset*/
+data proj_int.mc_costs_monthly;
+set mc_costs_all3;
+run;
 

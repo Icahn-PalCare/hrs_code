@@ -117,7 +117,7 @@ gen died_30d = 0
 replace died_30d = 1 if mortality <=30
 
 gen died_6m = 0
-replace died_6m = 1 if mortality <=180
+replace died_6m = 1 if mortality <=183
 
 
 
@@ -186,6 +186,8 @@ foreach x in `keepid' {
 
 replace n1_ingap = 1 if id=="`x'"
 }
+
+recast int age, force
 
 
 gen timegap_p1 = 0

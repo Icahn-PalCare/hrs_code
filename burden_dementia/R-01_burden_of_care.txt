@@ -1340,6 +1340,7 @@ set more off
 capture log close
 
 local datapath "E:\data\burden_dementia\int_data"
+local fdpath "E:\data\burden_dementia\final_data"
 local logpath "E:\data\burden_dementia\logs"
 local ooppath "E:\data\burden_dementia\oopdata"
 
@@ -1648,7 +1649,7 @@ drop `x'_ba
 local lab : var label `x'
 label var `x'_b "`lab' at baseline"
 }
-
+replace networth_adj2012_b=1 if networth_adj2012_b<=0
 //discounting--why?
 forvalues i=1/5 {
 	foreach x in tot_paid_by_mc annual_oop annual_hlp {
@@ -1763,3 +1764,141 @@ legend(label(1 "% NW remaining, demented") label(2 "% remaining, nondemented") /
 label(3 "% OOP>NW, demented") label(4 "% OOP>NW, nondemented"))
 graph save "E:\data\burden_dementia\logs\networth_oop_over_time", replace
 graph export "E:\data\burden_dementia\logs\networth_oop_over_time.pdf", replace
+restore
+save "`fdpath'/burden_dementia_sample_long.dta", replace
+
+
+H="quick sample estimate for incident dementia"
+use "E:\data\hrs_cleaned\core_00_to_14.dta", clear
+merge 1:1 id core_year using E:\data\hrs_public_2014\dementia\pdem_withvarnames_00_14, ///
+keep(match) nogen
+merge 1:1 id core_year using "E:\data\serious_ill\int_data\core_ids_1yr_criteria_5.dta", ///
+keep(match master) nogen
+
+gen a70=age_at>=70
+drop if missing(pdem)
+gen dem=inrange(pdem,0.5,1)
+by id, sort: egen firstdem=min(cond(dem==1),core_year,.)
+by id: egen firstobs=min(core_year)
+keep if a70==1 & core_year>=2000
+replace criteria_smi=0 if smi_count==1 & smi_dem==1
+drop if firstdem>core_year
+by id: egen develops_smi=max(criteria_smi)
+keep if firstdem==core_year
+log using "E:\data\burden_dementia\logs\incident_dem.txt", text replace
+tab firstdem 
+tab firstdem if firstdem>firstobs
+tab firstdem if !missing(death_date)
+gen ffs12=part_ab_12m==1 & hmo_d_12m==0 
+tab firstdem if ffs12
+tab firstdem if criteria_smi==1 & ffs12
+tab firstdem if develops_smi==1 & !criteria_smi
+keep if firstdem>firstobs
+tab firstdem if ffs12
+tab firstdem if criteria_smi==1 & ffs12
+tab firstdem if develops_smi==1 & !criteria_smi
+log close
+
+
+H="H1a: nw<oop in first 4yrs and public exp. last year"
+
+
+H="H1c: nw<oop earlier for vulnerable subgroups"
+/*H1C: Vulnerable subgroups (African Americans, Hispanics, those w/o a HS diploma,
+unmarried) of older adults with ADRD are more likely to exhaust household wealth 
+earlier (e.g. prior to the last year of life) compared to non-vulnerable adults 
+w/ ADRD and all older adults w/o ADRD*/
+
+
+clear all
+set more off
+capture log close
+
+local datapath "E:\data\burden_dementia\int_data"
+local fdpath "E:\data\burden_dementia\final_data"
+local logpath "E:\data\burden_dementia\logs"
+local ooppath "E:\data\burden_dementia\oopdata"
+
+cd `logpath'
+
+use "`fdpath'/burden_dementia_sample_long.dta", replace
+by id: egen ex=min(year)
+drop if ex!=0
+drop ex
+
+gen ind_ndd=pdem_gt50_n1==1
+gen ind_nd=pdem_gt50_n1==0
+label var ind_ndd "Non-disadvantaged with dementia"
+label var ind_nd "Non-dementia"
+gen ind_nhs=!hseduc
+label var ind_nhs "No HS degree"
+by id: gen ind_unm=married_o_x==0 if year==0
+label var ind_unm "Not married at death"
+sort id year
+by id: carryforward ind_nhs ind_unm, replace
+foreach x in black hisp_eth ind_nhs ind_unm {
+	replace ind_ndd=0 if `x'==1
+	gen ind_`x'd=pdem_gt50_n1==1 & `x'==1
+}
+
+label var ind_black "Dementia & Black"
+label var ind_hisp_eth "Dementia & Hispanic"
+label var ind_ind_nhs "Dementia & no HS diploma"
+label var ind_ind_unm "Dementia & unmarried at death"
+
+local group ind_nd ind_ndd ind_black ind_hisp_eth ind_ind_nhs ind_ind_unm
+sum `group'
+tab1 `group'
+local cn : word count `group'
+
+mat tab=J(8,`cn'*3,.)
+mat stars=J(8,`cn'*3,0)
+local r=1
+local c=1
+
+foreach x of local group {
+	sum networth_adj2012_b if year==0 & `x'==1
+	mat tab[`r',`c']=r(mean)
+	if `c'>1 {
+		ttest networth_adj2012_b if year==0 & (ind_nd==1 | `x'==1), by(`x')
+		mat tab[`r',`c'+1]=r(p)
+		mat stars[`r',`c'+1]=(r(p)<.05)+(r(p)<.01)
+}
+	if `c'!=4 {
+		ttest networth_adj2012_b if year==0 & (ind_ndd==1 | `x'==1), by(`x')
+		mat tab[`r',`c'+2]=r(p)
+		mat stars[`r',`c'+2]=(r(p)<.05)+(r(p)<.01)
+}	
+local c=`c'+3
+}
+local r=`r'+1
+local c=1
+forvalues i=6(-1)0 {
+	foreach x of local group {
+		di "`x'"
+		sum oop_gt_nw if year==`i' & `x'==1
+		mat tab[`r',`c']=r(mean)*100
+		di "`r'"
+		di "`c'"
+		if `c'>1 {
+			tab oop_gt_nw `x' if year==`i' & (ind_nd==1 | `x'==1), chi2
+			mat tab[`r',`c'+1]=r(p)
+			mat stars[`r',`c'+1]=(r(p)<.05)+(r(p)<.01)
+}
+		if `c'!=4 {
+			tab oop_gt_nw `x' if year==`i' & (ind_ndd==1 | `x'==1), chi2
+			mat tab[`r',`c'+2]=r(p)
+			mat stars[`r',`c'+2]=(r(p)<.05)+(r(p)<.01)
+}			
+	local c=`c'+3
+}
+	local r=`r'+1
+	local c=1
+}
+
+frmttable, statmat(tab) sdec(2) title("OOP and NW by Vulnerable subgroups") ///
+ctitles("" "no dementia" "non-vulnerable" "black" "hisp" "no hs degree" "unmarried") ///
+rtitles("Mean NW at baseline (2012$)"\"P-relative to No dementia"\ ///
+"P-relative to white, married HS grad"\ ///
+"OOP>NW at death"\""\""\"Year 5"\""\""\"Year 4"\""\""\"Year 3"\""\""\"Year 2"\ ///
+""\""\"Year 1"\""\""\"Year 0"\""\"") substat(2) annotate(stars) asymbol(*,**)

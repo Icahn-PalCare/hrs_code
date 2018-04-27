@@ -608,3 +608,252 @@ note("HRS respondents from 2004 wave , 65+ with 12m FFS Medicare prior to interv
 "*-P<.05,**-P<.01, different from heaviest smokers" "-- Indicates censored for cell size")
 
 
+
+
+H="Cox regressions"
+cd E:\data\smoking\logs
+
+use "E:\data\burden_dementia\oopdata\raw hrs\health.dta", clear
+gen height_in=V517*12+V518
+rename *, l
+keep hhid pn height_in
+gen core_year=1992
+tempfile t1
+save `t1'
+use "E:\data\burden_dementia\oopdata\raw hrs\br21.dta", clear
+rename *, l
+gen height_in=v306
+gen core_year=1994
+keep hhid pn height_in core_year
+append using `t1'
+append using "E:\data\hrs_cleaned\core_00_to_14.dta"
+sort hhid pn core_year
+by hhid pn: carryforward height_in, replace
+replace bmi = wgt_curr / (height_in * height_in) * 703
+keep hhid pn bmi height_in core_year
+tempfile t2
+save `t2'
+
+
+use "E:\data\hrs_cleaned\core_00_to_14.dta" if core_year<=2004, clear
+merge 1:1 id core_year using "E:\data\serious_ill\int_data\core_ids_1yr_criteria_5.dta", ///
+nogen keep(match)
+drop bmi height_in
+merge 1:1 hhid pn core_year using `t2', keep(match master) nogen
+drop death*
+sort id core_year
+by id: gen lastbmi=bmi[_n-1]
+by id: gen lastwgt=wgt_curr[_n-1]
+keep if core_year
+
+merge m:1 id using "E:\data\hrs_cleaned\death_date_2012.dta" , nogen keep(match master)
+rename death_all death_date
+
+merge m:1 hhid pn using "E:\data\hrs_public_2012\core\core2004.dta", keep(match master) 
+svyset [pw=wgtr]
+
+//frailty, functional domains
+
+/*dizziness--dizzy_hrs
+difficulty lifting ten pounds--fl_diff_lift
+nutritive functioning, bmi<18.5 or 10+% weightloss*/
+gen ind_low_bmi=bmi<=18.5
+gen ind_weightloss=(lastwgt-wgt_curr)/lastwgt>=.1
+gen ind_nutritive=ind_low_bmi==1 | ind_weightloss==1
+label var ind_nutri "BMI<=18.5 or 10%+ weightloss"
+label var ind_low_bmi "BMI<=18.5"
+label var ind_weightloss "10%+ weightloss"
+
+/* get number of falls, frailty index uses 2+
+if report any falls but don't know how many mark as yes for 2+ (coded as 98 in data)
+jc080
+*/
+gen ind_fall_mult=jc080>=2 & jc079==1
+label var ind_fall_mult "2+ falls in past two years"
+
+/*cognitive impairment 
+tics<=10 or proxy report of fair/poor memory*/
+gen ind_cognitive=tics_tot<=10 | inlist(jd501,4,5)
+label var ind_cognitive "Problem with cognitive functioning"
+
+//sensory problems--fair or poor eyesight or hearing
+gen ind_hearing=inlist(jc103,4,5) if jc103<=5
+gen ind_vision=inlist(jc095,4,5,6) if jc095<=6
+gen ind_sensory=ind_hearing==1 | ind_vision==1 if !missing(ind_hearing) | !missing(ind_vision)
+label var ind_sensory "Sensory problems"
+label var ind_hearing "Fair or poor hearing"
+label var ind_vision "Fair or poor eyesight (or legally blind)"
+
+//physical functioning
+egen ind_physical=rowtotal(dizzy_hrs ind_fall_mult fl_diff_lift)
+replace ind_physical=ind_physical>=1 if !missing(ind_physical)
+label var ind_physical "Problem with physical functioning"
+
+egen frailty_index=rowtotal(ind_physical ind_sensory ind_cognitive ind_nutritive)
+gen ind_frail=frailty_index>=2 if !missing(frailty_index)
+label var frailty_index "Index of problems in functional domains"
+label var ind_frail "Frail (deficiencies in 2+ domains"
+
+
+
+gen time2death=death_date-c_ivw_date
+
+gen time=time2death
+replace time=td(31dec2012)-c_ivw_date if time>td(31dec2012)-c_ivw_date
+gen died=time2death==time
+label var died "Died under observation (through Dec. 2012)"
+keep if core_year==2004 & time2d>=1 
+
+
+
+
+
+gen age_cat=1 if inrange(age_at_core,10,49)
+replace age_cat=2 if inrange(age_at_core,51,60)
+replace age_cat=3 if inrange(age_at_core,61,70)
+replace age_cat=4 if inrange(age_at_core,71,80)
+replace age_cat=5 if inrange(age_at_core,81,130)
+label define age_cat 1 "Age <50" 2 "51-60" 3 "61-70" 4 "71-80" 5 "81+"
+label values age_cat age_cat
+/*smoking categories
+jc118 jc119 jc120
+-never smoked
+-previously smoked, not currently
+-currently smoke<20
+20-40 (1 or 2 packs)
+>40 (3+ packs)
+amt not given*/
+
+gen smokes_cat=smoke_ever+1
+replace smokes_cat=3 if jc118<20
+replace smokes_cat=4 if (jc118>=20 & jc118<=40) | inlist(jc119,1)
+replace smokes_cat=5 if (jc118>40 & jc118<900) | (jc119>=2 & jc119<=20)
+label define smokes_cat 1 "Never smoked" 2 "Formerly smoked" 3 "Currently smokes <20 cigarettes/day" ///
+4 "Currently smokes 20-40 cigarettes/day (1 pack)" 5 "Smokes >40 cigarettes/day (2+ packs)"
+label values smokes_cat smokes_cat
+drop if smokes_cat==2 & smoke_curr==1
+tab smokes_cat, gen(smoke)
+forvalues i=1/5 {
+local lab : label smokes_cat `i'
+label var smoke`i' "`lab'"
+}
+
+replace smokes_cat=4 if smokes_cat==5
+label define smokes_cat 4 "20+/day", modify
+
+stset time [pw=wgtr], failure(died)
+
+gen time_years=ceil(time/365.25)
+gen time_biann=ceil(time*2/365.25)
+gen time_mos=ceil(time*12/365.25)
+
+
+stset time_y, failure(died)
+
+local vars age_cat female lung_hrs heart_hrs chf_hrs smokes_cat ///
+adl_impair_core ind_frail
+
+
+
+
+levelsof age_cat, local(levels)
+foreach l of local levels {
+gen age`l'=age_cat==`l'
+local lab : label age_cat `l'
+label var age`l' "`lab'"
+local age `age' age`l'
+}
+local age age1 age3 age4 age5 
+local vars `age' female lung_hrs heart_hrs chf_hrs ///
+adl_impair_core ind_frail
+
+stphplot, by(smokes_cat) adjust(`vars')
+graph save PH_plot, replace
+graph export PH_plot.pdf, replace
+
+
+sum `vars'
+outreg, clear
+foreach x in "" _m _b _y {
+local name "Day" 
+if "`x'"=="_m" local name "Month"
+if "`x'"=="_b" local name "6 Months"
+if "`x'"=="_y" local name "Year"
+
+stset time`x' [pw=wgtr], failure(died)
+stcox i.( smokes_cat) `vars'
+outreg, merge varlabels stats(e_b p) ctitles("" "`name'")
+}
+stcox i.( smokes_cat) `vars' ,  basesurv(surv0)
+
+predict hr1, basehc
+predict sr1, basesurv
+predict ch1, basech
+foreach x of local vars {
+local base `base' `x'=0
+}
+
+
+outreg using "E:\data\smoking\logs\smoking_cox_survival.rtf", replace replay ///
+title("Cox models with survival time measured at different intervals")
+log using PH_test, replace
+
+estat phtest, detail
+log close
+translate PH_test.smcl PH_test.pdf, replace
+
+mat tab=J(9,2,.)
+forvalues i=1/9 {
+sum ch1 if _t==`i'
+mat tab[`i',1]=`i'
+mat tab[`i',2]=r(mean)
+}
+frmttable using "E:\data\smoking\logs\smoking_cox_survival.rtf", addtable ///
+statmat(tab) title("Baseline Cumulative Hazard") sdec(0,5) ctitles("Year" "CH") ///
+note("Baseline hazard, all covariates set to zero")
+
+
+
+stcurve, hazard
+graph save "Hazard function", replace
+graph export "Hazard function.pdf", replace
+
+stcurve, hazard at1(smokes_cat=1) at2(smokes_cat=2) at3(smokes_cat=3) at4(smokes_cat=4)
+graph save "Hazard function by smoking status", replace
+graph export "Hazard function by smoking status.pdf", replace
+
+
+stcoxkm, by(smokes_cat)
+graph save "Predicted vs observed survival", replace
+graph export "Predicted vs observed survival.pdf", replace
+
+local vars i.age_cat female lung_hrs heart_hrs chf_hrs ///
+adl_impair_core ind_frail
+outreg, clear
+stcox i.( smokes_cat) `vars' if age_at<65
+outreg, varlabels stats(e_b p) ctitles("" "51-64")
+stcox i.( smokes_cat) `vars' if age_at>=65
+outreg, varlabels stats(e_b p) ctitles("" "65+") merge
+
+drop _m
+merge 1:1 id using "E:\data\smoking\int_data\smoking_int_dataset"
+local age age1 age3 age4 age5 
+
+local ffsvars i.age_cat female copd_ind chf_ind comorb_32_0_1yr ckd_ind ///
+adl_impair_core ind_frail
+
+gen ip_er_exac=(ip_exac==1 | er_exac==1) & copd_ind==1
+replace op_exac=0 if copd_ind==0
+label var ckd_ind "CKD, claims"
+label var ckd_lev "CKD Level"
+label var ip_er_exac "COPD with inpatient or ED exacerbation"
+label var op_exac "COPD with outpatient exacerbation"
+label var diab_ind "Diabetes"
+label var hyp_ind "Hypertension"
+label var copd_ind "COPD, claims"
+label var chf_ind "CHF, claims"
+stcox i.( smokes_cat) `ffsvars' if _m==3
+outreg, varlabels stats(e_b p) ctitles("" "65+ with 12m FFS") merge title("Cox models by age")
+
+outreg using smoking_cox_survival.rtf, addtable replay
+

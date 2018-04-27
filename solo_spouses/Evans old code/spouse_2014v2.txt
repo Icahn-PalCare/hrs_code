@@ -1,0 +1,4113 @@
+= V4 Outline MultiLine NoSorting TabWidth=30
+
+H="Spouse outcomes project"
+Use the HRS datasets already cleaned (using HRS_Processing.txt sas/stata code)
+
+hrs_cln.core_00_to_12.sas7bdat - core, with observation for each core interview, includes
+net worth data, TICS score and interview date from restricted dataset
+
+hrs_cln.exit_02_to_12_dt.sas7bdat - exit dataset with interview date added from restricted dataset
+
+hrs_cln.restricted_v2012.sas7bdat - restricted dataset
+
+Steps are:
+1. Add r's medicare xwalk to r's exit interview dataset
+2. Merge restricted info to r's exit data
+3. Get Spouse id from Rand and get S's mc xwalk id
+4. Merge in the following:
+	r's core n1 and n2 interviews
+	s's core n1, n2, p1 interviews
+	s's exit and restricted information
+5. Medicare FFS determination based on 6 months pre-r's death date
+6. Use claims to get additional medicare usage data 
+	(LOS, Elixhauser comorbidities, chronic conditions)
+7. Merge in regional data
+8. Define sample based on interviews, Medicare coverage, spouse interviews
+
+
+
+H="Merge 2012 exit, restricted and mc xwalk ids to get decedent dataset"
+/*
+Create respondant dataset with exit, restricted HRS and medicare xwalk
+
+Resulting dataset is:
+spo_int.exit_restricted_02_to_12_v1
+*/
+
+/*Set libnames for the project*/
+libname hrs_cln 'E:\data\hrs_cleaned'; /*(contains exit, restricted, and core ivw's)*/
+libname spo_int 'E:\data\spouse 2.0\int_data';
+libname rand 'E:\data\hrs_public_2012\rand2012\main';
+libname medi 'E:\data\cms_DUA_24548_2012';
+
+/*******************************************************************/
+/*******************************************************************/
+/*  Bring medicare xwalk id to exit interview dataset              */
+/*******************************************************************/
+/*******************************************************************/
+
+data exit_1;
+set hrs_cln.exit_02_to_12_dt;
+run;
+
+/*just keep cleaned variables from exit interview*/
+data exit;
+set exit_1(keep=ID EXIT_YEAR PROXY_EXIT FEMALE MARITAL MARRIED MARITAL_SEP MARITAL_DIV MARITAL_WID MARITAL_NEV
+MARITAL_SD MARITAL_MISSING MARRIED_OR_PART_V2 MEDICARE MEDICAREB MEDICAID CHAMPUS HMO MEDIGAP CATINSUR NHRES
+HOSPICE FREQRELG CHILD GCHIL ALLCHIL RESCHIL RESCHIL_D RESSPOUSE HHM LIVEALONE LOCATION LOC_HOSP
+ICU VENT DIALYSIS DEC_ALL DEC_LIM DEC_WHLD DEC_COMF DEC_CAT DEXP EOLDEC CAPACITY DURATION ADAPP
+ADPROB DECMAKER LWILL LW_ALL LW_LIM LW_WHLD LW_COMF LW_CAT HCP DISCUSS ADVDIR EOLPLAN
+ADL_BEDBOUND DAYS_BED_ILL ADL_DR ADL_WK ADL_BH ADL_E ADL_TX ADL_T ADL_INDEX ADL_CAT ADL_INDEPENDENT
+ADL_PARTIAL ADL_SEVERE IADL_MP IADL_GR IADL_PH IADL_RX IADL_M IADL_IND IADL_CAT IADL_INDEPENDENT
+IADL_PARTIAL IADL_SEVERE ADL_SP_HELPER ADL_OTH_HELPER IADL_SP_HELPER IADL_OTH_HELPER adl_helper_count iadl_helper_count adl_helper_1-adl_helper_7 iadl_helper_1-iadl_helper_6 HH_WORKER CANCER_HRS LUNG_HRS HEART_HRS CHF_HRS STROKE_HRS MEMORY_HRS FALLS_HRS
+INCONT_HRS PAIN_HRS PAIN_LEVEL_HRS HTN_HRS DM_HRS PSYCH_HRS ARTH_HRS COMOR_IN_HRS COMOR_C_HRS 
+dyspnea_hrs no_appet_hrs vomit_hrs depr_exit delirium_exit fatigue_hrs
+nhres_2yr_exit nh_stays_exit nh_nights_exit nh_ins_exit e_ivw_day e_ivw_month e_ivw_year 
+e_ivw_date e_ivw_day_imp ) ;
+run;
+
+/*HRS - CMS 2012 crosswalk initial processing 
+xwalk file: cmsxref2012.sas7bdat
+*/
+
+data crosswalk_1;
+set medi.cmsxref2012;
+keep bid_hrs_21 hhid pn;
+run;
+
+/*get 2 variables bid_hrs = claims id, id=HRS id*/
+data crosswalk_2;
+set crosswalk_1;
+bid_hrs=bid_hrs_21;
+id=trim(hhid)||trim(pn);
+drop hhid pn;
+drop bid_hrs_21;
+run;
+
+proc sort data= crosswalk_2;
+by bid_hrs;
+run;
+
+proc sort data=exit_1;
+by id;
+run;
+
+/*bring in xwalk id to exit interview dataset*/
+proc sql;
+create table exit_xwalk as select
+a.*,b.bid_hrs from
+exit a
+left join
+crosswalk_2 b
+on a.id=b.id;
+quit;
+
+/*check for missing xwalk ids
+480 r's with exit interviews are missing xwalk ids*/
+data check1;
+set exit_xwalk ;
+if bid_hrs ='';
+run;
+
+/*create indicator for having xwalk id*/
+data exit_xwalk_1;
+set exit_xwalk;
+xwalk_yes=.;
+if bid_hrs ='' then xwalk_yes=0;
+if bid_hrs~='' then xwalk_yes=1;
+run;
+
+proc freq;
+table xwalk_yes*exit_year /missprint;
+run;
+
+/*keep a version before renaming so can use it later to get spouse exit*/
+data exit_xwalk_2;
+set exit_xwalk_1;
+run;
+
+/*******************************************************************/
+/*******************************************************************/
+/* Rename variables with r_ prefix and _x suffix for exit dataset  */
+/*******************************************************************/
+/*******************************************************************/
+*options macrogen mprint mlogic;
+%macro rename2(lib,dsn,pre,first);
+options pageno=1 nodate;
+proc contents data=&lib..&dsn;
+title "Before Renaming All Variables";
+run;
+proc sql noprint;
+select nvar into :num_vars
+from dictionary.tables
+where libname="&LIB" and
+memname="&DSN";
+select distinct(name) into :var1-
+:var%TRIM(%LEFT(&num_vars))
+from dictionary.columns
+where libname="&LIB" and
+memname="&DSN" ;
+quit;
+run;
+proc datasets library=&LIB;
+modify &DSN;
+rename
+%do i=1 %to &num_vars;
+
+&&var&i=&first.&&var&i.&&pre.
+%end;
+;
+quit;
+run;
+options pageno=1 nodate;
+proc contents data=&lib..&dsn;
+title "After Renaming All Variables";
+run;
+%mend ;
+%rename2(WORK,EXIT_XWALK_2,_x,r_);
+
+data exit_xwalk_3;
+set exit_xwalk_2;
+rename r_id_x=r_id;
+rename r_bid_hrs_x=r_BID_hrs;
+rename r_xwalk_yes_x=r_xwalk_yes;
+run;
+
+proc print data=exit_xwalk_3(keep=r_id r_BID_hrs obs=10);
+run;
+proc sort data=exit_xwalk_3;
+by r_id;
+run;
+
+/*******************************************************************/
+/*******************************************************************/
+/*  Merge the exit w/ mc xwalk with the restricted dataset         */
+/*******************************************************************/
+/*******************************************************************/
+
+proc contents data=hrs_cln.restr_tracker_v2014;
+run;
+
+data restricted;
+set hrs_cln.restr_tracker_v2014;
+run;
+
+proc sort data=exit_xwalk_3 nodupkey;
+by r_id;
+run;
+
+/*replace id with character id so restricted dataset can be merged in
+to the exit dataset*/
+data restricted_2;
+set restricted;
+length id_new $9 hhid $6 pn $3;
+id_new=hhid||pn;
+drop id;
+rename id_new=id;
+run;
+
+/*get restricted dataset that is just decedents*/
+proc sql;
+create table restricted_r as select * from
+restricted_2 where id in (select r_id from exit_xwalk_3);
+quit;
+
+
+/*rename variables in restricted dataset with r_ prefix and _e suffix*/
+%rename2(WORK,RESTRICTED_R,_e,r_);
+
+data restricted_r3;
+set restricted_r;
+rename r_id_e=r_id;
+run;
+proc print data=restricted_r3(keep=r_id obs=10);
+run;
+proc sort data=restricted_r3 nodupkey;
+by r_id;
+run;
+
+/*this dataset = 9243 decedents from 2002 - 2014 exit interviews*/
+proc sql;
+create table exit_restricted_02_to_14(drop=r_id2) as 
+select *
+from  exit_xwalk_3 a
+left join
+restricted_r3(rename=(r_id=r_id2)) b
+on a.r_id=b.r_id2;
+quit;
+
+/*this dataset = 9243 decedents from 2002 - 2014 exit interviews*/
+data spo_int.exit_restricted_02_to_14_v1;
+set exit_restricted_02_to_14;
+if r_id<0 or r_id=. then delete;
+run;
+
+/*uses 2010 cause of death file, not updated for 2012 as of June 4, 2015*/
+proc freq;
+table r_CAUSE_DEATH_12_N_e;
+run;
+
+proc freq data=spo_int.exit_restricted_02_to_10_v1;
+table r_CAUSE_DEATH_12_N_e;
+run;
+
+
+/*there are a handful of observations where the death year
+is several years before the exit interview year*/
+data death_year;
+set spo_int.exit_restricted_02_to_14_v1;
+r_death_year=year(r_death_date_e);
+run;
+
+proc freq;
+table r_death_year*r_EXIT_YEAR_x /missprint;
+run;
+
+proc means data= spo_int.exit_restricted_02_to_14_v1; var r_death_date_e; run;
+
+H="Get spouse id from Rand spouse mc xwalk id"
+/*Gets spouse id for each decedent from rand xwave file
+Get spouse medicare xwalk id from xwalk file */
+
+libname spo_int 'E:\data\spouse 2.0\int_data';
+libname rand 'E:\data\hrs_public_2014\rand2014\main';
+*libname rand 'C:\HRS\rand2010\data';
+
+
+/**********************************************************/
+/******* Get spouse id from rand                  *********/
+/**********************************************************/
+/*pull each wave spouse id from rand xwave data file
+wave 5 = 2000
+wave 6 = 2002 ... wave 10 = 2010
+*/
+
+proc contents data=rand.rndhrs_o; run;
+
+
+options fmterr=no;
+data sp_rand;
+set rand.rndhrs_o(keep=hhid pn s1HHIDPN s2HHIDPN S3HHIDPN S4HHIDPN S5HHIDPN s6HHIDPN s7HHIDPN s8HHIDPN s9HHIDPN s10HHIDPN s11HHIDPN);
+
+id=hhid*1000+pn;
+keep id s1HHIDPN s2HHIDPN S3HHIDPN S4HHIDPN S5HHIDPN s6HHIDPN s7HHIDPN s8HHIDPN s9HHIDPN s10HHIDPN s11HHIDPN;
+label id="HRS resp ID";
+run;
+
+
+proc contents data=sp_rand; run; 
+
+/*need to get id from decedent dataset into numeric format to match
+that in rand so can merge*/
+data exit_restr;
+set spo_int.exit_restricted_02_to_14_v1;
+id_num=r_id+0;
+label id_num="HRS resp ID";
+run;
+
+/*merge all wave spouse ids to exit dataset*/
+proc sql;
+create table exit_02_to_14_sp_1(drop=id) as
+select * from 
+exit_restr a
+left join 
+sp_rand b
+ on a.id_num=b.id;
+quit;
+
+/*assign the spouse id as that reported in the the core interview
+in the 2 years prior to exit interview
+first check if spouse id listed in exit year
+if no exit year, then try core the n1 core year
+use x = wave number (1998=wave 1, 2000=wave2, etc) to get the 
+specific wave spouse id b/c rand is a xwave dataset*/
+data exit_02_to_14_sp_2;
+set exit_02_to_14_sp_1;
+missing M;
+x=(r_EXIT_YEAR_x-1992)/2+1;
+sp_id_var=('s'||trim(left(x))||"HHIDPN");
+*the spouse id at the exit interview year,or n1 core;
+if ~missing(vvaluex('s'||trim(left(x))||"HHIDPN")) then sp_id = vvaluex('s'||trim(left(x))||"HHIDPN")+0 ;
+if sp_id =. & ~missing(vvaluex('s'||trim(left(x-1))||"HHIDPN")) then
+	sp_id = vvaluex('s'||trim(left(x-1))||"HHIDPN")+0 ;
+label sp_id ="spouse hrs id from resp's exit year or the wave before exit year";
+run;
+
+proc freq data=exit_02_to_14_sp_2; table sp_id /missprint; run;
+
+proc freq; table x*sp_id_var /missprint; run;
+
+/**********************************************************/
+/******* Get spouse medicare id from xwalk file   *********/
+/**********************************************************/
+libname medi 'E:\data\cms_DUA_24548_2012';
+
+data crosswalk_1_sp;
+set medi.cmsxref2012;
+keep bid_hrs_21 hhid pn;
+run;
+
+/*get 2 variables bid_hrs = claims id, id=HRS id*/
+data crosswalk_2_sp;
+set crosswalk_1_sp;
+bid_hrs=bid_hrs_21;
+id=trim(hhid)||trim(pn);
+drop hhid pn;
+drop bid_hrs_21;
+run;
+
+/*convert id from xwalk to numeric variable type*/
+data crosswalk_3_sp;
+set crosswalk_2_sp;
+id_num=input(id,9.);
+label id_num="HRS hhidpn";
+drop id;
+rename id_num=id;
+run;
+
+proc sort data=crosswalk_3_sp nodupkey;
+by id;
+run;
+
+/* bring in mc xwalk id if in xwalk file
+sp_bid = . if missing from xwalk file */
+proc sql;
+create table exit_02_to_14_sp_3 as
+select a.*,b.bid_hrs as sp_bid label="spouse medicare id " from 
+exit_02_to_14_sp_2 a
+left join 
+crosswalk_3_sp b
+on a.sp_id=b.id;
+quit;
+
+data spo_int.exit_restricted_02_to_14_sp;
+set exit_02_to_14_sp_3(drop=r_id s1hhidpn s2hhidpn s3hhidpn 
+s4hhidpn s5hhidpn s6hhidpn s7hhidpn s8hhidpn s9hhidpn s10hhidpn s11hhidpn
+x sp_id_var ) ;
+rename id_num = r_id; /*numeric id*/
+if sp_bid='' then s_xwalk_yes=0;
+if sp_bid~='' then s_xwalk_yes=1;
+label s_xwalk_yes="Spouse has Medicare xwalk id";
+run;
+
+proc freq; table r_xwalk_yes*s_xwalk_yes r_exit_year_x*s_xwalk_yes; run;
+
+
+H="xxx - Add r's n1 core and s's p1 core interviews to dataset"
+
+/*******************************************************************/
+/*******************************************************************/
+/*  get the negative one core variables for the spouse             */
+/*******************************************************************/
+/*******************************************************************/
+
+
+
+/*get list of all spouse core interviews before r's death date*/
+proc sql;
+create table s_n1_core_before_death(drop=id)
+as select a.id_new as r_id,b.*,a.sp_id
+ from spo_int.exit_restricted_02_to_10_sp(where=(sp_id>0)) a 
+ inner join
+core_00_to_10_idnum b
+  on a.sp_id=b.id and a.death_date>b.c_ivw_date;
+  quit;
+
+proc sort data=s_n1_core_before_death ;
+by sp_id c_ivw_date;
+run;
+
+/*just keep the n1 core interview for the spouse
+**2561 interviews*/
+data sp_core_n1;
+set s_n1_core_before_death;
+by sp_id c_ivw_date;
+if last.sp_id;
+run;
+
+proc freq;
+table core_year;
+run;
+
+/*list of spouses with no n1 core per the list above*/
+proc sql;
+create table temp1 as select a.*,b.sp_id as sp_id2
+from s_n1_core_before_death a left join
+sp_core_n1 b
+on a.sp_id=b.sp_id and a.core_year=b.core_year;
+quit;
+data temp2;
+set temp1;
+if sp_id2=.;
+run;
+
+proc sort data=temp2 ;
+by sp_id c_ivw_date;
+run;
+
+/*look at n2 core from spouse where n1 core was present, just to get
+an idea of where n2 cores are available **1953 n2 cores ??*/
+data sp_core_n2;
+set temp2;
+by sp_id c_ivw_date;
+if last.sp_id;
+run;
+proc freq;
+table core_year;
+run;
+/*******************************************************************/
+/*******************************************************************/
+/*  Get the p1 core interview for the spouse                       */
+/*******************************************************************/
+/*******************************************************************/
+
+/*get list of all spouse core interviews post r's death*/
+proc sql;
+create table p1_core_after_death(drop=id)
+as select a.id_new as r_id,b.*,a.sp_id
+ from spo_int.exit_restricted_02_to_10_sp(where=(sp_id>0)) a 
+ inner join
+core_00_to_10_idnum b
+  on a.sp_id=b.id and a.death_date<b.c_ivw_date;
+  quit;
+
+proc sort data=p1_core_after_death ;
+by sp_id c_ivw_date;
+run;
+
+/*just keep first interview after r's death
+**2274 interviews*/
+data sp_core_p1;
+set p1_core_after_death;
+by sp_id c_ivw_date;
+if first.sp_id;
+run;
+
+/*******************************************************************/
+/*******************************************************************/
+/*  rename variables with s_ and r_ prefixes and _n1 _p1 suffix    */
+/*******************************************************************/
+/*******************************************************************/
+
+*options macrogen mprint mlogic;
+%macro rename2(lib,dsn,pre,first);
+options pageno=1 nodate;
+proc contents data=&lib..&dsn;
+title "Before Renaming All Variables";
+run;
+proc sql noprint;
+select nvar into :num_vars
+from dictionary.tables
+where libname="&LIB" and
+memname="&DSN";
+select distinct(name) into :var1-
+:var%TRIM(%LEFT(&num_vars))
+from dictionary.columns
+where libname="&LIB" and
+memname="&DSN" ;
+quit;
+run;
+proc datasets library=&LIB;
+modify &DSN;
+rename
+%do i=1 %to &num_vars;
+
+&&var&i=&first.&&var&i.&&pre.
+%end;
+;
+quit;
+run;
+options pageno=1 nodate;
+proc contents data=&lib..&dsn;
+title "After Renaming All Variables";
+run;
+%mend ;
+%rename2(WORK,RESP_CORE_N1,_n1,r_);
+%rename2(WORK,SP_CORE_P1,_p1,s_);
+%rename2(WORK,SP_CORE_N1,_n1,s_);
+*%rename2(WORK,RESP_CORE_N2,_n2,r_);
+*%rename2(WORK,SP_CORE_N2,_n2,s_);
+
+/*******************************************************************/
+/*******************************************************************/
+/*  Merge s and r interviews into singlet dataset                  */
+/*******************************************************************/
+/*******************************************************************/
+
+/*prepare resp n1 core for merge*/
+data RESP_CORE_N1;
+set RESP_CORE_N1;
+r_id=r_r_id_n1;
+run;
+proc print data=RESP_CORE_N1(keep=r_id obs=10);
+run;
+proc sort data=RESP_CORE_N1;
+by r_id;
+run;
+
+/*prepare spouse core n1 for merge*/
+data SP_CORE_N1;
+set SP_CORE_N1;
+sp_id=s_sp_id_n1;
+r_id=s_r_id_n1;
+run;
+proc print data=SP_CORE_N1(keep=r_id sp_id obs=10);
+run;
+proc sort data=SP_CORE_n1;
+by r_id;
+run;
+
+/*prepare spouse p1 core for merge*/
+data SP_CORE_P1;
+set SP_CORE_P1;
+sp_id=s_sp_id_P1;
+r_id=s_r_id_p1;
+run;
+proc print data=SP_CORE_p1(keep=r_id sp_id obs=10);
+run;
+proc sort data=SP_CORE_p1;
+by r_id;
+run;
+
+/*merge the datasets by respondant id*/
+data spo_int.r_sp_core_n1_p1;
+merge RESP_CORE_N1 SP_CORE_N1 SP_CORE_P1;
+by r_id;
+run;
+
+
+/*******************************************************************/
+/*******************************************************************/
+/*  Bring core interviews into decedent's restr and exit data      */
+/*******************************************************************/
+/*******************************************************************/
+
+/*Note this should be updated when do final dataset to bring
+in the spouses restricted information and also add prefixes to
+variable names from restricted and exit*/
+
+proc sql;
+create table spo_int.exit_rest_r_s_core_n1_p1
+ as select * from
+spo_int.exit_restricted_02_to_10_sp a 
+left join 
+spo_int.r_sp_core_n1_p1 b
+on a.id_new=b.r_id;
+quit;
+
+
+
+
+
+
+H="Get r's core interviews"
+/*Get r's n1 and n2 core interviews*/
+
+libname hrs_cln 'E:\data\hrs_cleaned';
+libname spo_int 'E:\data\spouse 2.0\int_data';
+
+
+/*******************************************************************/
+/*******************************************************************/
+/*  get the negative one core variables for the respondent         */
+/*******************************************************************/
+/*******************************************************************/
+
+/*convert the id from the core dataset to a numeric variable*/
+data core_00_to_14_idnum;
+set hrs_cln.core_00_to_14;
+id_num=input(id,9.);
+label id_num="HRS hhidpn";
+drop id;
+rename id_num=id;
+run;
+
+
+/*list of all core interviews before death date*/
+proc sql;
+create table r_n1_core_before_death(drop=id)
+as select b.*,b.id as r_id label="respondent's id"
+ from spo_int.exit_restricted_02_to_14_sp a 
+ inner join
+core_00_to_14_idnum b
+  on a.r_id=b.id and a.r_death_date_e>b.c_ivw_date;
+  quit;
+
+proc sort data=r_n1_core_before_death ;
+by r_id c_ivw_date;
+run;
+
+/*keep only the n1 core interview
+7665 interviews identified
+of these, 167 are in 1998 so will be dropped because no n2 core*/
+data resp_core_n1;
+set r_n1_core_before_death;
+by r_id c_ivw_date;
+if last.r_id;
+run;
+proc freq;
+table core_year;
+run;
+
+/*******************************************************************/
+/*******************************************************************/
+/*  get the negative 2 core variables for the respondent         */
+/*******************************************************************/
+/*******************************************************************/
+/*list of all core interviews before n1 interview*/
+
+proc sql;
+create table r_n2_core_before_death(drop=id)
+as select b.*,b.id as r_id label="respondent's id"
+ from resp_core_n1 a 
+ inner join
+core_00_to_14_idnum b
+  on a.r_id=b.id and a.c_ivw_date>b.c_ivw_date;
+  quit;
+
+proc sort data=r_n2_core_before_death ;
+by r_id c_ivw_date;
+run;
+
+/*keep only the n2 core interview
+7343 interviews identified*/
+data resp_core_n2;
+set r_n2_core_before_death;
+by r_id c_ivw_date;
+if last.r_id;
+run;
+proc freq;
+table core_year;
+run;
+
+
+
+H="Get s's core, restricted and exit interviews"
+/*Get spouse's n1, n2, and p1 core interviews
+and s's exit interview and restricted data*/
+
+/*******************************************************************/
+/*******************************************************************/
+/******         Spouse n1 interview                         ********/ 
+/*******************************************************************/
+/*******************************************************************/
+
+/*get list of all spouse core interviews before r's death date*/
+proc sql;
+create table s_n1_core_before_death(drop=id)
+as select b.*,a.sp_id,a.r_id
+ from spo_int.exit_restricted_02_to_14_sp(where=(sp_id>0)) a 
+ inner join
+core_00_to_14_idnum b
+  on a.sp_id=b.id and a.r_death_date_e>b.c_ivw_date;
+  quit;
+
+proc sort data=s_n1_core_before_death ;
+by sp_id c_ivw_date;
+run;
+
+/*just keep the n1 core interview for the spouse
+**3021 interviews*/
+data sp_core_n1;
+set s_n1_core_before_death;
+by sp_id c_ivw_date;
+if last.sp_id;
+run;
+
+proc freq;
+table core_year;
+run;
+
+/*******************************************************************/
+/*******************************************************************/
+/******         Spouse n2 interview                         ********/ 
+/*******************************************************************/
+/*******************************************************************/
+proc sql;
+create table s_n2_core_before_death(drop=id)
+as select b.*,a.sp_id,a.r_id
+ from sp_core_n1 a 
+ inner join
+core_00_to_14_idnum b
+  on a.sp_id=b.id and a.c_ivw_date>b.c_ivw_date;
+  quit;
+
+proc sort data=s_n2_core_before_death ;
+by sp_id c_ivw_date;
+run;
+
+/*just keep the n2 core interview for the spouse
+**2938 interviews*/
+data sp_core_n2;
+set s_n2_core_before_death;
+by sp_id c_ivw_date;
+if last.sp_id;
+run;
+
+proc freq;
+table core_year;
+run;
+
+
+/*******************************************************************/
+/*******************************************************************/
+/******         Spouse p1 interview                         ********/ 
+/*******************************************************************/
+/*******************************************************************/
+
+/*get list of all spouse core interviews after r's death date*/
+proc sql;
+create table s_p1_core_after_death(drop=id)
+as select b.*,a.sp_id,a.r_id
+ from spo_int.exit_restricted_02_to_14_sp(where=(sp_id>0)) a 
+ inner join
+core_00_to_14_idnum b
+  on a.sp_id=b.id and a.r_death_date_e<b.c_ivw_date;
+  quit;
+
+proc sort data=s_p1_core_after_death ;
+by sp_id c_ivw_date;
+run;
+
+/*just keep the p1 core interview for the spouse
+**2682 interviews*/
+data sp_core_p1;
+set s_p1_core_after_death;
+by sp_id c_ivw_date;
+if first.sp_id;
+run;
+
+proc freq;
+table core_year;
+run;
+
+
+/*******************************************************************/
+/*******************************************************************/
+/******         Spouse restricted data, add xwalk id        ********/ 
+/*******************************************************************/
+/*******************************************************************/
+
+data restricted;
+set hrs_cln.restr_tracker_v2014;
+run;
+
+proc sort data=restricted nodupkey; by id ; run;
+
+proc sql;
+create table s_restr
+as select * from restricted  
+where id in (select sp_id from spo_int.exit_restricted_02_to_14_sp) ;
+quit;
+
+/*get spouse id list from exit/restr dataset*/
+data spid;
+set spo_int.exit_restricted_02_to_14_sp(keep=sp_id sp_bid s_xwalk_yes);
+if sp_id~='' & sp_id~=0;
+run;
+
+proc sort data=spid out=spid_2 nodupkey; by sp_id; run;
+
+/*bring in spouse xwalk id and indicator*/
+proc sql;
+create table s_restr_a as select a.*,b.sp_bid,b.s_xwalk_yes from
+s_restr a left join
+spid_2 b
+on a.id=b.sp_id;
+quit;
+
+data s_restr_1;
+set s_restr_a;
+rename id=sp_id;
+run;
+
+proc freq; table s_xwalk_yes; run;
+
+/*******************************************************************/
+/*******************************************************************/
+/******         Spouse exit interview                       ********/ 
+/*******************************************************************/
+/*******************************************************************/
+
+/*get id in exit-xwalk dataset to number format*/
+data exit_xwalk_1a;
+set exit;
+id_num = input(id,9.);
+run;
+
+proc contents;
+run;
+
+/*988 spouse exit interviews */
+proc sql;
+create table s_exit
+as select * from exit_xwalk_1a  
+where id_num in (select sp_id from spo_int.exit_restricted_02_to_14_sp) ;
+quit;
+
+data s_exit_1;
+set s_exit;
+rename id_num=sp_id;
+drop id;
+run;
+
+
+H="Merge r+s interviews into single dataset"
+/*First rename variables*/
+
+%rename2(WORK,RESP_CORE_N1,_n1,r_);
+%rename2(WORK,RESP_CORE_N2,_n2,r_);
+
+%rename2(WORK,SP_CORE_P1,_p1,s_);
+%rename2(WORK,SP_CORE_N1,_n1,s_);
+%rename2(WORK,SP_CORE_N2,_n2,s_);
+
+%rename2(WORK,S_RESTR_1,_e,s_);
+%rename2(WORK,S_EXIT_1,_x,s_);
+
+/*Rename id variables and sort to prepare to merge*/
+
+/*r's n1 core*/
+data resp_core_n1_a;
+set RESP_CORE_N1;
+rename r_r_id_n1 = r_id;
+run;
+
+proc sort data=resp_core_n1_a nodupkey;
+by r_id;
+run;
+
+/*r's n2 core*/
+data resp_core_n2_a;
+set RESP_CORE_N2;
+rename r_r_id_n2 = r_id; 
+run;
+
+proc sort data=resp_core_n2_a nodupkey;
+by r_id;
+run;
+
+
+/*s's p1 core*/
+data sp_core_p1_a;
+set SP_CORE_P1;
+rename s_sp_id_p1 = s_id; 
+rename s_r_id_p1 = r_id;
+run;
+
+proc sort data=sp_core_p1_a nodupkey;
+by r_id;
+run;
+
+/*s's n1 core*/
+data sp_core_n1_a;
+set SP_CORE_N1;
+rename s_sp_id_n1 = s_id;
+rename s_r_id_n1= r_id;
+run;
+
+proc sort data=sp_core_n1_a nodupkey;
+by r_id;
+run;
+
+/*s's n2 core*/
+data sp_core_n2_a;
+set SP_CORE_N2;
+rename s_sp_id_n2 = s_id;
+rename s_r_id_n2 = r_id;
+run;
+
+proc sort data=sp_core_n2_a nodupkey;
+by r_id;
+run;
+
+/*s's restricted (no r_id in this dataset)*/
+data s_restr_1_a;
+set S_RESTR_1;
+rename s_sp_id_e = s_id ;
+run;
+
+proc sort data=s_restr_1_a nodupkey;
+by s_id;
+run;
+
+/*s's exit (no r_id in this dataset)*/
+data s_exit_1_a;
+set S_EXIT_1;
+rename s_sp_id_x = s_id; 
+run;
+
+proc sort data=s_exit_1_a nodupkey;
+by s_id;
+run;
+
+/*merge datasets*/
+/*Step 1, merge r's interviews with exit/restricted dataset*/
+/*Sort r's exit and restricted dataset including r and s xwalk ids*/
+proc sort data=spo_int.exit_restricted_02_to_14_sp out=r_ex_restr;
+by r_id;
+run;
+
+proc contents; run;
+
+data r_x_r_n1_n2;
+merge r_ex_restr resp_core_n1_a resp_core_n2_a ;
+by r_id;
+run;
+
+/*Step 2, bring in spouse core interviews*/
+proc sort data=r_x_r_n1_n2;
+by r_id;
+run;
+
+data r_all_s_n1_n2_p1;
+merge r_x_r_n1_n2 sp_core_n1_a sp_core_n2_a sp_core_p1_a ;
+by r_id;
+run;
+
+/*Step 3, merge in spouse exit and restricted*/
+data spouse_x_e;
+merge s_restr_1_a s_exit_1_a ;
+by s_id;
+run;
+
+proc sort data=r_all_s_n1_n2_p1;
+by s_id;
+run;
+
+proc sql;
+create table r_s_core_x_e(drop=s_id2) as select a.*, b.* from 
+r_all_s_n1_n2_p1 a
+left join
+spouse_x_e(rename=(s_id=s_id2)) b
+on a.s_id=b.s_id2;
+quit;
+
+proc contents; run;
+
+/*drop extra id variables*/
+data r_s_core_x_e_1;
+set r_s_core_x_e;
+rename sp_bid=s_bid_hrs;
+drop sp_id;
+label r_BID_hrs = "R's claims ID";
+run;
+
+proc freq data=r_s_core_x_e_1;
+table r_core_year_n1 r_core_year_n2;
+run;
+
+/*Final dataset:
+Contains: R's core n1, n2, exit, restricted, mc id and S's core n1, n2, p1, exit, restricted, mc id
+r_ prefix: respondant
+s_ prefix: spouse
+_n1 _n2 _3 suffix: pre-r's death core interviews (n3 is just education info)
+_p1 suffix: post-r's death core interview for spouse
+_x suffix: exit interview
+_e suffix: restricted HRS*/
+proc sort data=r_s_core_x_e_1 out=spo_int.r_s_core_x_e nodupkey;
+by r_id;
+run;
+
+proc contents data=r_s_core_x_e_1;
+run;
+
+proc export data=spo_int.r_s_core_x_e outfile="E:\data\spouse 2.0\int_data\r_s_core_x_e.dta" dbms=stata replace; run;
+
+
+/* Merge HRS helper file in Stata */
+
+use "E:\data\hrs_oop_2010\received_data\2012\helper_hours_2012.dta" 
+
+gen r_hhidpn_n1 = hhid+pn
+
+rename year r_core_year_n1
+
+save "E:\data\spouse 2.0\int_data\helperfile.dta", replace
+
+
+use "E:\data\spouse 2.0\int_data\r_s_core_x_e.dta", clear 
+
+merge 1:1 r_hhidpn_n1 r_core_year_n1 using "E:\data\spouse 2.0\int_data\helperfile.dta", keepus(n_hp n_s)
+
+H="Medicare FFS determination"
+/*Create indicator variables for Respondant
+1. Parts a and b coverage for 6 months prior to death
+2. No HMO coveage during that time (so fee for service)
+*/
+
+libname spo_int 'E:\data\spouse\int_data';
+libname medi 'E:\data\cms_DUA_24548_2012';
+
+/*sort claims denominator file*/
+proc sort data=medi.dn_2000_2012 out=dn_2000_20122  nodupkey;
+by BID_HRS_21 year;
+run;
+
+/***********************************************************/
+/*first, backfill missing hrs dod with dod from claims denominator file*/
+data r_dod_missing;
+set spo_int.r_s_core_x_e;
+if r_death_date_e=.;
+run;
+
+*n=126 obs have missing dod in the HRS restricted dataset but have exit interview
+do they have a dod in the claims denominator file?;
+proc sql;
+create table r_dod_missing1 as select BID_HRS_21,year,death_date 
+from dn_2000_20122
+where BID_HRS_21 in(select r_BID_hrs from r_dod_missing);
+quit;
+
+proc sort data=r_dod_missing1; by BID_HRS_21 year;
+run;
+
+*just keep latest year since looking for dod, n=116;
+data r_dod_missing2;
+set r_dod_missing1;
+by BID_HRS_21;
+if last.BID_HRS_21;
+run;
+
+*n=110 that have claims dod but no HRS dod;
+data r_dod_missing3(rename=(death_date=claims_dod));
+set r_dod_missing2;
+if death_date~=.;
+format death_date date9.;
+run;
+
+/*if dod is missing from hrs, then fill in with claims dod for pulling claims relative to dod*/
+proc sql;
+create table r_sp as select a.*,b.claims_dod from
+spo_int.r_s_core_x_e a left join
+r_dod_missing3 b
+on a.r_BID_hrs=b.BID_HRS_21;
+quit;
+
+data r_sp_1;
+set r_sp;
+dod_hrs_claims=r_death_date_e;
+use_claims_dod=0;
+if r_death_date_e=. and claims_dod~=. then do;
+	dod_hrs_claims=claims_dod;
+	use_claims_dod=1;
+	end;
+run;
+
+*now only n=16 missing dod;
+data miss_dod_incl_claims;
+set r_sp_1;
+if dod_hrs_claims=.;
+run;
+
+/*assign death year using merged dataset with all r and s info
+save this so can use it later*/
+data spo_int.r_sp_2;
+set r_sp_1;
+r_death_year=year(dod_hrs_claims);
+run;
+
+proc freq; table r_death_year use_claims_dod /missprint; run;
+
+/***********************************************************/
+/*get denominator file for just death year
+for those with xwalk id only*/
+proc sql;
+create table dn_death_y as select
+a.*,b.buyin12,b.year,b.HMOIND12
+from spo_int.r_sp_2 a inner join
+dn_2000_20122 b
+on trim(left(a.r_BID_hrs))=trim(left(b.BID_hrs_21))
+and a.r_death_year=b.year;
+quit;
+
+proc freq data=dn_death_y;
+table r_death_year use_claims_dod /missprint;
+run;
+
+/*7214 from exit have denominator file linked*/
+proc sql;
+select count(distinct r_BID_hrs) from dn_death_y;
+quit;
+
+data dn_death_y2;
+set dn_death_y;
+death_month=month(dod_hrs_claims);
+if length(trim(left(buyin12)))=12 and death_month>0 then do;
+buyin_dy=substr(trim(left(buyin12)),1,death_month);
+hmo_dy=substr(trim(left(HMOIND12)),1,death_month);
+end;
+else do;
+buyin_dy=trim(left(buyin12));
+hmo_dy=trim(left(HMOIND12));
+end;
+format dod_hrs_claims date9.;
+run;
+proc means n;
+var  death_month;
+run;
+
+/*Check year prior to death to backfill for death dates
+in the first half of the year (since doing 6 mo look back)*/
+/* 6838 have the -1 year dn file*/
+proc sql;
+create table dn_death_y_bef as select
+a.r_BID_hrs,a.year as death_year,
+b.year as death_year_bef,
+b.year,b.buyin12,b.HMOIND12
+from dn_death_y a inner join
+dn_2000_20122 b
+on trim(left(a.r_BID_hrs))=trim(left(b.BID_hrs_21))
+and 0<a.year-b.year<=1 order by r_bid_hrs,year;
+quit;
+
+proc sql;
+create table all_insurance as select a.*,b.buyin12 as buyin_bef,b.HMOIND12 as hmo_bef from
+dn_death_y2 a
+left join
+dn_death_y_bef b
+on trim(left(a.r_BID_hrs))=trim(left(b.r_BID_hrs));
+quit;
+
+/*merge death year and year before death buy-in and hmo variables
+Trim so the final variable _6m is 6 months pre-death
+Note: indicator variables for parts a and b and hmo are null if don't
+have information for full 6 months pre-death*/
+data all_insurance2;
+set all_insurance;
+buyin_2y=trim(left(buyin_bef))||trim(left(buyin_dy));
+hmo_2y=trim(left(hmo_bef))||trim(left(hmo_dy));
+
+buyin_2y_r=reverse(trim(buyin_2y));
+hmo_2y_r=reverse(trim(hmo_2y));
+
+/*create 6 month variable*/
+if length(buyin_2y_r)>5 then buyin_6m_r=substr(trim(left(buyin_2y_r)),1,6);
+if length(hmo_2y_r)>5 then hmo_6m_r=substr(trim(left(hmo_2y_r)),1,6);
+
+if length(buyin_2y_r)<6 then buyin_6m_r="";
+if length(hmo_2y_r)<6 then hmo_6m_r="";
+
+buyin_6m=reverse(trim(buyin_6m_r));
+hmo_6m=reverse(trim(hmo_6m_r));
+
+/*create indicator variable for mc coverage 6 mo. 0=no, 1=yes*/
+if length(buyin_6m)=6 then do;
+if indexc(buyin_6m,"0","1","2","A","B") then part_ab_6m=0;
+if indexc(buyin_6m,"0","1","2","A","B")=0 then part_ab_6m=1;
+end;
+if length(hmo_6m)=6 then do;
+if index(hmo_6m,"00000") then hmo_d_6m=0;
+if index(hmo_6m,"00000")=0 then hmo_d_6m=1;
+end;
+
+run;
+
+/*70 observations don't have full denominator data re insurance status
+either died Before July 2000 or are missing year -1 dn file*/
+proc freq;
+table part_ab_6m hmo_d_6m;
+run;
+
+data zzzztest;
+set all_insurance2;
+if part_ab_6m=.;
+run;
+
+proc freq; table r_exit_year_x /missprint; run;
+
+/*****************************************************************************/
+/* get list of r's claims death dates to bring into main dataset */
+proc sort data=dn_2000_20122 out=dn_2000_2012_3; 
+by BID_HRS_21 year;
+run;
+
+data dn_2000_2012_4;
+set dn_2000_2012_3;
+by BID_HRS_21;
+if last.BID_HRS_21;
+run;
+
+data spo_int.claims_dod(rename=(death_date=r_claims_dod));
+set dn_2000_2012_4(keep=BID_HRS_21 death_date);
+if death_date~=.;
+format death_date date9.;
+run;
+
+/*merge claims dod into insurance info dataset*/
+proc sql;
+create table all_insurance3 as select
+a.*, b.r_claims_dod from
+all_insurance2 a left join
+spo_int.claims_dod b
+on a.r_BID_hrs=b.BID_HRS_21;
+quit;
+
+
+/*****************************************************************************/
+/*bring in insurance indicators and claims death date to full decedent dataset*/
+proc sql;
+create table spo_int.r_sp_core_n1_p1_n2_ins as select
+a.*, b.part_ab_6m as r_part_ab_6m , b.hmo_d_6m as r_hmo_d_6m , 
+	 b.r_claims_dod
+from spo_int.r_s_core_x_e a
+left join all_insurance3 b
+on trim(left(a.r_BID_hrs))=trim(left(b.r_BID_hrs));
+quit;
+
+proc freq;
+table r_part_ab_6m*r_hmo_d_6m;
+run;
+
+
+H="xxxx Get counts for sample size estimate - Stata"
+/*export to stata and get table to illustrate sample size per KO requirements*/
+
+proc export data=spo_int.exit_rest_r_s_core_n1_p1_ins
+outfile="E:\data\spouse\int_data\exit_rest_r_s_core_n1_p1_ins.dta"
+replace;
+run;
+
+/**********************************************************************/
+/*         STATA DO FILE STARTS HERE                                  */
+/**********************************************************************/
+/*Spouse project 2000-2010 HRS dataset
+Sample size estimate sent to Katherine on 12/20/13*/ 
+
+capture log close
+
+clear all
+set mem 500m
+set matsize 800
+set more off
+
+local logpath E:\data\spouse\logs\
+
+log using `logpath'2000_2010_sample-LOG.txt, text replace
+
+cd "E:\data\spouse\int_data\"
+
+use exit_rest_r_s_core_n1_p1_ins.dta
+
+mat deced_core=J(6,1,.)
+
+//all decedents from 2002-2010 exit interviews
+sum exit_year, detail
+mat deced_core[1,1]=r(N)
+
+gen n1core_ind=.
+replace n1core_ind=0 if  r_core_year_n1==.
+replace n1core_ind=1 if  r_core_year_n1!=.
+tab n1core_ind, missing
+
+//decedents with n1 core interview
+sum exit_year if n1core_ind==1, detail
+mat deced_core[2,1]=r(N)
+
+//decedents with n1 core + xwalk
+sum exit_year if n1core_ind==1 & xwalk_yes==1, detail
+mat deced_core[3,1]=r(N)
+
+//with ffs mc last 6 months of life
+//have parst a and b coverage and no hmo
+gen byte ins_ind=.
+replace ins_ind=1 if part_ab_6m==1 & hmo_d_6m==0
+replace ins_ind=0 if part_ab_6m!=1 | hmo_d_6m!=0
+tab ins_ind, missing
+
+//decedents with n1 core + xwalk + ffs mc last 6 months of life
+sum exit_year if n1core_ind==1 & xwalk_yes==1 & ins_ind==1, detail
+mat deced_core[4,1]=r(N)
+
+//decedents with n1 core + xwalk + married
+sum exit_year if n1core_ind==1 & xwalk_yes==1 & ins_ind==1 & married==1, detail
+mat deced_core[5,1]=r(N)
+
+//have spouse p1 interview
+gen byte sp1core_ind=.
+replace sp1core_ind=0 if s_core_year_p1==.
+replace sp1core_ind=1 if s_core_year_p1!=.
+tab sp1core_ind, missing
+
+//decedents with n1 core + xwalk + married + spouse p1 interview
+sum exit_year if n1core_ind==1 & xwalk_yes==1 & ins_ind==1 & married==1 & sp1core_ind==1, detail
+mat deced_core[6,1]=r(N)
+
+mat list deced_core
+
+	
+frmttable using `logpath'\2010_sample_est , statmat(deced_core) ///
+	title("2010 sample size estimate - requiring an n1 core interview") ///
+	ctitle("","n") rtitle("All decedents from exit interviews" \ "With n1 core interview" \ ///
+	"With mc xwalk id" \ "With FFS mc last 6 months of life" \ "Married at time of death" \ ///
+	"Spouse p1 core interview") ///
+	sdec(0) replace
+
+
+tab exit_year if n1core_ind==1 & xwalk_yes==1 & ins_ind==1 & married==1 & sp1core_ind==1
+
+log close
+
+
+H="Create additional medicare use variables from claims"
+/*Variables required are:
+1. Number of IP, SNF and hospice days in last 2 years of life
+1a. Hospice initial enrollment date
+1b. Hospice home or inpatient
+2. Elixhauser comorbidities
+3. Chronic conditions
+*/
+
+/*Medicare claims files - 2012*/
+libname medi 'E:\data\cms_DUA_24548_2012';
+
+/*project working data folder*/
+libname spo_int 'E:\data\spouse\int_data';
+
+proc contents data=spo_int.r_sp_core_n1_p1_n2_ins;
+run;
+
+/*first, get list of mc id's and death dates for each r
+7521 decedents have xwalk id
+if missing the death date from the restricted dataset, use the claims dod*/
+data r_dod;
+set spo_int.r_sp_core_n1_p1_n2_ins;
+if r_xwalk_yes=1;
+death_date=r_death_date_e;
+use_claims_dod=0;
+if r_death_date_e=. & r_claims_dod~=. then do;
+	death_date=r_claims_dod;
+	use_claims_dod=1;
+	end;
+ind_dod_yes=0;
+if death_date~=. then ind_dod_yes=1;
+keep r_BID_hrs death_date use_claims_dod ind_dod_yes;
+run;
+
+proc freq; table use_claims_dod ind_dod_yes; run;
+
+/*keep a version for just those r's with xwalk and dod n=7508*/
+data r_dod_2;
+set r_dod;
+if ind_dod_yes=1;
+run;
+
+/*****************************************************************/
+/*Get lists of IP, SNF and hospice claims 2 years before death */
+/*****************************************************************/
+
+/*macro to get claims before death*/
+%macro claims(days_start=,days_bef_death=,source=,suf=);
+
+/*claims fully within 2 years of death date*/
+proc sql;
+create table &source._meet_1 as select a.*,b.death_date
+from medi.&source._2000_2012 a inner join
+r_dod_2 b
+on trim(left(a.bid_hrs_21))=trim(left(b.r_bid_hrs))
+and &days_start<=b.death_date-a.admit_date<=&days_bef_death ;
+quit;
+
+/*claims that start earlier than 2 years but span into 2 years before death*/
+proc sql;
+create table &source._meet_2 as select a.*,b.death_date
+from medi.&source._2000_2012 a inner join
+r_dod_2 b
+on trim(left(a.bid_hrs_21))=trim(left(b.r_bid_hrs))
+and b.death_date-a.admit_date>&days_bef_death and b.death_date-a.disch_date<=&days_bef_death;
+quit;
+
+data &source._meet_&suf.(compress=yes);
+set &source._meet_1 &source._meet_2;
+run;
+%mend;
+
+/*run for hospice*/
+%claims(days_start=0,days_bef_death=(365*2),source=hs,suf=24m);
+/*medpar (ip + snf)*/
+%claims(days_start=0,days_bef_death=(365*2),source=mp,suf=24m);
+
+/*split medpar claims list into separate lists for ip and snf claims*/
+data snf_meet_24m;
+set mp_meet_24m(where=(trim(left(SSLSSNF))="N"));
+run;
+
+data ip_meet_24m;
+set mp_meet_24m(where=(trim(left(SSLSSNF))~="N"));
+run;
+
+/*get hospice claims last 1 year and 6m of life for additional LOS variable*/
+%claims(days_start=0,days_bef_death=(365),source=hs,suf=12m);
+%claims(days_start=0,days_bef_death=(183),source=hs,suf=6m);
+
+
+/*****************************************************************/
+/*Use macro to get hospice, ip and snf days */
+/*****************************************************************/
+
+%macro los(source=,days_bef_death=,days=);
+/*for claims that span the 2 years before death cutoff, change admit
+date to calculate los*/
+data &source._meet_3;
+set &source._meet_&days_bef_death.;
+if admit_date < (death_date - &days. ) then admit_date=(death_date - &days. );
+run;
+
+data &source._meet_4;
+set &source._meet_3;
+los = disch_date - admit_date;
+if los=0 then los=1;
+run;
+
+proc sort data=&source._meet_4 nodupkey;
+by bid_hrs_21 admit_date disch_date;
+run;
+
+proc means;
+var los;
+run;
+
+proc sql;
+create table spo_int.&source.&days_bef_death. as select 
+bid_hrs_21,sum(los) as &source._los_&days_bef_death. from &source._meet_4
+group by bid_hrs_21;
+quit;
+
+proc means;
+var &source._los: ;
+run;
+
+%mend;
+
+/*macro saves datasets to spo_int library*/
+%los(source=hs,days_bef_death=24m,days=(365*2));
+%los(source=ip,days_bef_death=24m,days=(365*2));
+%los(source=snf,days_bef_death=24m,days=(365*2));
+%los(source=hs,days_bef_death=12m,days=(365));
+%los(source=hs,days_bef_death=6m,days=(183));
+
+/**********************************************************/
+/*******Get hospice enrollment date       *****/
+/**********************************************************/
+/*start with list of claims last 6m of life, get earliest claim*/
+proc sort data=hs_meet_6m; 
+by bid_hrs_21 admit_date; 
+run;
+
+data hs_enrol_1;
+set hs_meet_6m;
+by bid_hrs_21;
+if first.bid_hrs_21;
+run;
+
+data hs_enrol_2;
+set hs_enrol_1;
+days_enr_to_dod=death_date-admit_date;
+run;
+
+proc freq; table days_enr_to_dod ;
+run;
+
+data spo_int.hs_enrol_3(keep=bid_hrs_21 hs_enrol_dt );
+set hs_enrol_2(rename=( admit_date = hs_enrol_dt));
+label hs_enrol_dt="Hospice enrollment date, from claims 6m pre death";
+run;
+/*****************************************************************/
+/*get hospice hospital based from last 1 year claims */
+/*****************************************************************/
+/*start with list of claims last 12m of life, get earliest claim*/
+proc sort data=hs_meet_12m; 
+by bid_hrs_21 admit_date; 
+run;
+
+/*type service 1=hospice,non-hospital based, 2=hospice,hospital based*/
+proc freq; table FAC_TYPE*TYPESRVC; run;
+
+data hs_type_1;
+set hs_meet_12m;
+by bid_hrs_21;
+if first.bid_hrs_21;
+if typesrvc=2 then hs_hospital_based_12m=1;
+if typesrvc=1 then hs_hospital_based_12m=0;
+run;
+
+proc freq; table hs_hospital_based_12m;
+run;
+
+data spo_int.hs_type_2(keep=bid_hrs_21 hs_hospital_based_12m);
+set hs_type_1;
+label hs_hospital_based_12m="Hospice,hospital based, from claims 12m pre death";
+run;
+
+
+/*****************************************************************/
+/*pull los and hospice enrollment date variables into main dataset*/
+/*****************************************************************/
+/*try compressing the main dataset before adding new variables*/
+data ivws(compress=yes);
+set spo_int.r_sp_core_n1_p1_n2_ins;
+run;
+
+proc sql;
+create table add_los1 as select a.*, b.hs_los_24m from
+ivws a
+left join
+spo_int.hs24m b
+on a.r_bid_hrs = b.bid_hrs_21;
+quit;
+
+proc sql;
+create table add_los1_1 as select a.*, b.hs_enrol_dt from
+add_los1 a
+left join
+spo_int.hs_enrol_3 b
+on a.r_bid_hrs = b.bid_hrs_21;
+quit;
+
+proc sql;
+create table add_los1_1a as select a.*,b.hs_hospital_based_12m from
+add_los1_1 a
+left join
+spo_int.hs_type_2 b
+on a.r_bid_hrs = b.bid_hrs_21;
+quit;
+
+proc sql;
+create table add_los2 as select a.*, b.ip_los_24m from
+add_los1_1a a
+left join
+spo_int.ip24m b
+on a.r_bid_hrs = b.bid_hrs_21;
+quit;
+
+proc sql;
+create table add_los2a as select a.*, b.snf_los_24m from
+add_los2 a
+left join
+spo_int.snf24m b
+on a.r_bid_hrs = b.bid_hrs_21;
+quit;
+
+proc sql;
+create table add_los2b as select a.*, b.hs_los_12m from
+add_los2a a
+left join
+spo_int.hs12m b
+on a.r_bid_hrs = b.bid_hrs_21;
+quit;
+
+proc sql;
+create table add_los2c as select a.*, b.hs_los_6m from
+add_los2b a
+left join
+spo_int.hs6m b
+on a.r_bid_hrs = b.bid_hrs_21;
+quit;
+
+
+/*if have ffs medicare 6m before death, then fill in medicare use variables,
+if don't have ffs mc then leave medicare use variables missing*/
+data spo_int.add_los3;
+set add_los2c ;
+array list ip_los_24m snf_los_24m hs_los_24m  hs_los_12m hs_los_6m;
+do over list;
+if list=. & r_part_ab_6m=1 & r_hmo_d_6m=0 then list=0;
+if r_part_ab_6m~=1 or r_hmo_d_6m~=0 then list=.;
+end;
+run;
+
+proc freq; table r_part_ab_6m*r_hmo_d_6m hs_hospital_based_12m; run;
+
+proc means;
+var hs_los_24m ip_los_24m snf_los_24m hs_los_12m hs_los_6m;
+run;
+
+/*the dataset spo_int.add_los3 has all of the survey data and the los
+for ip, snf, and hs for 2 years prior to r's death*/
+
+/**********************************************************/
+/**********************************************************/
+/*  Get list of diagnoses across all claims before death  */
+/**********************************************************/
+/**********************************************************/
+
+/*First need to get lists of claims across all claim
+types for 12 months before death and 6-12m before death*/
+
+/*use claims macro created above, re-run for 12 months across
+all claim types, list includes claims fully within 1 year and 
+those that span the 1 year cutoff*/
+
+/*run for 0-12m before death*/
+%claims(days_start=0,days_bef_death=365,source=hh,suf=12m); /*home health*/
+%claims(days_start=0,days_bef_death=365,source=hs,suf=12m); /*hospice*/
+%claims(days_start=0,days_bef_death=365,source=mp,suf=12m); /*medpar*/
+%claims(days_start=0,days_bef_death=365,source=dm,suf=12m); /*dme*/
+%claims(days_start=0,days_bef_death=365,source=op,suf=12m); /*outpatient*/
+%claims(days_start=0,days_bef_death=365,source=pb,suf=12m); /*carrier*/
+/*run for 6-12m before death*/
+%claims(days_start=184,days_bef_death=365,source=hh,suf=6m12m); /*home health*/
+%claims(days_start=184,days_bef_death=365,source=hs,suf=6m12m); /*hospice*/
+%claims(days_start=184,days_bef_death=365,source=mp,suf=6m12m); /*medpar*/
+%claims(days_start=184,days_bef_death=365,source=dm,suf=6m12m); /*dme*/
+%claims(days_start=184,days_bef_death=365,source=op,suf=6m12m); /*outpatient*/
+%claims(days_start=184,days_bef_death=365,source=pb,suf=6m12m); /*carrier*/
+
+/*run for 0-24m, 0-18m and 0-6m before death
+Not used in creating this dataset, but used for spouse_mc_link code to
+get R utilization information pre-R's death*/
+%claims(days_start=0,days_bef_death=730,source=hh,suf=24m); /*home health*/
+%claims(days_start=0,days_bef_death=730,source=hs,suf=24m); /*hospice*/
+%claims(days_start=0,days_bef_death=730,source=mp,suf=24m); /*medpar*/
+%claims(days_start=0,days_bef_death=730,source=dm,suf=24m); /*dme*/
+%claims(days_start=0,days_bef_death=730,source=op,suf=24m); /*outpatient*/
+%claims(days_start=0,days_bef_death=730,source=pb,suf=24m); /*carrier*/
+
+%claims(days_start=0,days_bef_death=548,source=hh,suf=18m); /*home health*/
+%claims(days_start=0,days_bef_death=548,source=hs,suf=18m); /*hospice*/
+%claims(days_start=0,days_bef_death=548,source=mp,suf=18m); /*medpar*/
+%claims(days_start=0,days_bef_death=548,source=dm,suf=18m); /*dme*/
+%claims(days_start=0,days_bef_death=548,source=op,suf=18m); /*outpatient*/
+%claims(days_start=0,days_bef_death=548,source=pb,suf=18m); /*carrier*/
+
+%claims(days_start=0,days_bef_death=183,source=hh,suf=6m); /*home health*/
+%claims(days_start=0,days_bef_death=183,source=hs,suf=6m); /*hospice*/
+%claims(days_start=0,days_bef_death=183,source=mp,suf=6m); /*medpar*/
+%claims(days_start=0,days_bef_death=183,source=dm,suf=6m); /*dme*/
+%claims(days_start=0,days_bef_death=183,source=op,suf=6m); /*outpatient*/
+%claims(days_start=0,days_bef_death=183,source=pb,suf=6m); /*carrier*/
+
+/**********************************************************************/
+/* Intermediate step - save the datasets to use to get R costs 6, 12, 24m pre death*/
+/**********************************************************************/
+%macro save_claims(source=,suf=);
+data spo_int.&source._meet_&suf.;
+set &source._meet_&suf.;
+run;
+%mend;
+
+%save_claims(source=hh, suf=6m);
+%save_claims(source=hs, suf=6m);
+%save_claims(source=mp, suf=6m);
+%save_claims(source=dm, suf=6m);
+%save_claims(source=op, suf=6m);
+%save_claims(source=pb, suf=6m);
+
+%save_claims(source=hh, suf=12m);
+%save_claims(source=hs, suf=12m);
+%save_claims(source=mp, suf=12m);
+%save_claims(source=dm, suf=12m);
+%save_claims(source=op, suf=12m);
+%save_claims(source=pb, suf=12m);
+
+%save_claims(source=hh, suf=18m);
+%save_claims(source=hs, suf=18m);
+%save_claims(source=mp, suf=18m);
+%save_claims(source=dm, suf=18m);
+%save_claims(source=op, suf=18m);
+%save_claims(source=pb, suf=18m);
+
+%save_claims(source=hh, suf=24m);
+%save_claims(source=hs, suf=24m);
+%save_claims(source=mp, suf=24m);
+%save_claims(source=dm, suf=24m);
+%save_claims(source=op, suf=24m);
+%save_claims(source=pb, suf=24m);
+
+/**********************************************************************/
+/*Pull dx code lists */
+/**********************************************************************/
+%macro dx_time_range(range1=, range2=, suf=);
+/*pulls just dx codes from carrier claims*/
+data pb_last_&range2._dx(keep=bid_hrs_21 diag);
+set pb_meet_&suf.(keep=bid_hrs_21 PDGNS_CD DGNSCD01-DGNSCD12 );
+array dx PDGNS_CD DGNSCD01-DGNSCD12;
+do over dx;
+diag=dx ;
+output;
+end;
+run;
+proc sort data=pb_last_&range2._dx out=pb_last_&range2._dx2 nodupkey;
+by bid_hrs_21 diag;
+run;
+
+/*outpatient claims*/
+data op_last_&range2._dx(keep=bid_hrs_21 diag);
+set op_meet_&suf.(keep=bid_hrs_21 PDGNS_CD DGNSCD01-DGNSCD25  );
+array dx PDGNS_CD DGNSCD01-DGNSCD25 ;
+do over dx;
+diag=dx ;
+output;
+end;
+run;
+proc sort data=op_last_&range2._dx out=op_last_&range2._dx2 nodupkey;
+by bid_hrs_21 diag;
+run;
+
+/*medpar claims*/
+data mp_last_&range2._dx(keep=bid_hrs_21 diag);
+set mp_meet_&suf.(keep=bid_hrs_21 AD_DGNS DGNS_CD01-DGNS_CD25 );
+array dx D_DGNS DGNS_CD01-DGNS_CD25 ;
+do over dx;
+diag=dx ;
+output;
+end;
+run;
+proc sort data=mp_last_&range2._dx out=mp_last_&range2._dx2 nodupkey;
+by bid_hrs_21 diag;
+run;
+
+/*dme claims*/
+data dm_last_&range2._dx(keep=bid_hrs_21 diag);
+set dm_meet_&suf.(keep=bid_hrs_21 PDGNS_CD DGNSCD01-DGNSCD12 );
+array dx PDGNS_CD DGNSCD01-DGNSCD12 ;
+do over dx;
+diag=dx ;
+output;
+end;
+run;
+proc sort data=dm_last_&range2._dx out=dm_last_&range2._dx2 nodupkey;
+by bid_hrs_21 diag;
+run;
+
+/*home health agency*/
+data hh_last_&range2._dx(keep=bid_hrs_21 diag);
+set hh_meet_&suf.(keep=bid_hrs_21 PDGNS_CD DGNSCD01-DGNSCD25 );
+array dx PDGNS_CD DGNSCD01-DGNSCD25 ;
+do over dx;
+diag=dx ;
+output;
+end;
+run;
+proc sort data=hh_last_&range2._dx out=hh_last_&range2._dx2 nodupkey;
+by bid_hrs_21 diag;
+run;
+
+/*hospice*/
+data hs_last_&range2._dx(keep=bid_hrs_21 diag);
+set hs_meet_&suf.(keep=bid_hrs_21 PDGNS_CD DGNSCD01-DGNSCD25 );
+array dx PDGNS_CD DGNSCD01-DGNSCD25 ;
+do over dx;
+diag=dx ;
+output;
+end;
+run;
+proc sort data=hs_last_&range2._dx out=hs_last_&range2._dx2 nodupkey;
+by bid_hrs_21 diag;
+run;
+
+/*set diag variable length = 7 chars since that's the max length from the mc claims
+Need to do this because length varies across the different mc claim types*/
+data hs_last_&range2._dx3;
+length diag $7;
+set hs_last_&range2._dx2;
+run;
+data hh_last_&range2._dx3;
+length diag $7;
+set hh_last_&range2._dx2;
+run;
+data mp_last_&range2._dx3;
+length diag $7;
+set mp_last_&range2._dx2;
+run;
+data dm_last_&range2._dx3;
+length diag $7;
+set dm_last_&range2._dx2;
+run;
+data op_last_&range2._dx3;
+length diag $7;
+set op_last_&range2._dx2;
+run;
+data pb_last_&range2._dx3;
+length diag $7;
+set pb_last_&range2._dx2;
+run;
+
+data dx_all_last_&range2.;
+set hs_last_&range2._dx3
+hh_last_&range2._dx3
+mp_last_&range2._dx3
+dm_last_&range2._dx3
+op_last_&range2._dx3
+pb_last_&range2._dx3;
+run;
+proc sort data=dx_all_last_&range2.(where=(diag~="")) out=spo_int.dx_&range1._&range2 nodupkey;
+by bid_hrs_21 diag;
+run;
+
+%mend;
+
+/*run macro to create data file spo_int.dx_0d_n12m */
+%dx_time_range(range1=0d, range2=n12m, suf=12m);
+
+/*run macro to create data file spo_int.dx_6m_n12m */
+%dx_time_range(range1=6m, range2=n12m, suf=6m12m);
+
+/*6904 bid's have at least 1 dx in the 1 year before death*/
+proc sql;
+select count(distinct BID_hrs_21) from spo_int.dx_0d_n12m;
+quit;
+
+/*5889 have 1 dx 6-12m before death*/
+proc sql;
+select count(distinct BID_hrs_21) from spo_int.dx_6m_n12m;
+quit;
+
+
+H="r's elixhauser comorbidities from dx codes"
+/*creates indicators for each of the Elixhauser comorbidities
+based on the dx codes 12 months  before death
+
+resulting dataset is spo_int.hrs_elix_n12m*/
+
+/*rename macro - called within the elixhauser macro
+to add time suffix to variables
+
+lib=library
+dsn=dataset name
+pre=suffix to be added to all of the variable names
+*/
+
+%macro rename(lib,dsn,pre);
+options pageno=1 nodate;
+proc contents data=&lib..&dsn;
+title "Before Renaming All Variables";
+run;
+
+proc sql noprint;
+select nvar into :num_vars
+from dictionary.tables
+where libname="&LIB" and
+memname="&DSN";
+select distinct(name) into :var1-
+:var%TRIM(%LEFT(&num_vars))
+from dictionary.columns
+where libname="&LIB" and
+memname="&DSN";
+quit;
+run;
+
+proc datasets library=&LIB;
+modify &DSN;
+rename
+%do i=1 %to &num_vars;
+&&var&i=&&var&i.._&pre 
+%end;
+;
+quit;
+run;
+options pageno=1 nodate;
+proc contents data=&lib..&dsn;
+title "After Renaming All Variables";
+run;
+%mend rename;
+
+
+
+/*Elixhauser index macro
+Note includes additional 2 comorbidities: Dementia and Coronary Artery Disease*/
+
+%macro elixhauser(range1=, range2=);
+
+data dx_31_comor_&range2;
+set spo_int.dx_&range1._&range2(rename=(diag=dx_0));
+dx=trim(left(dx_0));
+
+if dx~="" then do;
+
+comorbi_1=0;
+comorbi_2=0;
+comorbi_3=0;
+comorbi_4=0;
+comorbi_5=0;
+comorbi_6=0;
+comorbi_7=0;
+comorbi_8=0;
+comorbi_9=0;
+comorbi_10=0;
+comorbi_11=0;
+comorbi_12=0;
+comorbi_13=0;
+comorbi_14=0;
+comorbi_15=0;
+comorbi_16=0;
+comorbi_17=0;
+comorbi_18=0;
+comorbi_19=0;
+comorbi_20=0;
+comorbi_21=0;
+comorbi_22=0;
+comorbi_23=0;
+comorbi_24=0;
+comorbi_25=0;
+comorbi_26=0;
+comorbi_27=0;
+comorbi_28=0;
+comorbi_29=0;
+comorbi_30=0;
+*end of intialize of 30 binary variables;
+*add dementia and CAD;
+dementia=0;
+cad=0;
+
+*do over dx;
+	*Congestive Heart Failure;
+	if (substr(dx,1,5)='39891' or
+		substr(dx,1,5)='40211' or
+		substr(dx,1,5)='40291' or
+		substr(dx,1,5)='40411' or
+		substr(dx,1,5)='40413' or
+		substr(dx,1,5)='40491' or
+		substr(dx,1,5)='40493' or
+		substr(dx,1,3)='428') 
+		and comorbi_1=0 
+		then comorbi_1=1;*add one binary variables here.;
+	*Cardiac Arrhythmias;
+	if (substr(dx,1,5)='42610' or
+		substr(dx,1,5)='42611' or
+		substr(dx,1,5)='42613' or
+		substr(dx,1,4)='4262' or
+		substr(dx,1,4)='4263' or
+		substr(dx,1,4)='4264' or
+		substr(dx,1,5)='42650' or
+		substr(dx,1,5)='42651' or
+		substr(dx,1,5)='42652' or
+		substr(dx,1,5)='42653' or
+		substr(dx,1,4)='4266' or
+		substr(dx,1,4)='4267' or
+		substr(dx,1,4)='4268' or
+		substr(dx,1,4)='4270' or
+		substr(dx,1,4)='4272' or
+		substr(dx,1,5)='42731' or
+		substr(dx,1,5)='42760' or
+		substr(dx,1,4)='4279' or
+		substr(dx,1,4)='7850' or
+		substr(dx,1,4)='V450' or
+		substr(dx,1,4)='V533')
+			and comorbi_2=0 
+		then comorbi_2=1;
+	* Valvular Disease ;
+	if (substr(dx,1,5)='09320' or
+		substr(dx,1,5)='09321' or
+		substr(dx,1,5)='09322' or
+		substr(dx,1,5)='09323' or
+		substr(dx,1,5)='09324' or
+		substr(dx,1,3)='394' or
+		substr(dx,1,3)='395' or
+		substr(dx,1,3)='396' or
+		substr(dx,1,4)='3970' or
+		substr(dx,1,4)='3971' or
+		substr(dx,1,4)='4240' or
+		substr(dx,1,4)='4241' or
+		substr(dx,1,4)='4242' or
+		substr(dx,1,4)='4243' or
+		substr(dx,1,4)='4244' or
+		substr(dx,1,4)='4245' or
+		substr(dx,1,4)='4246' or
+		substr(dx,1,4)='4247' or
+		substr(dx,1,4)='4248' or
+		substr(dx,1,5)='42490' or
+		substr(dx,1,5)='42491' or
+		substr(dx,1,4)='7463' or
+		substr(dx,1,4)='7464' or
+		substr(dx,1,4)='7465' or
+		substr(dx,1,4)='7466' or
+		substr(dx,1,4)='V422' or
+		substr(dx,1,5)='V433')
+			and comorbi_3=0 
+		then comorbi_3=1;
+	*Pulmonary Circulation Disorders;
+	if (substr(dx,1,3)='416' or
+		substr(dx,1,4)='4179')
+			and comorbi_4=0 
+		then comorbi_4=1;
+	*Peripheral Vascular Disorders;
+	if (substr(dx,1,3)='440' or
+		substr(dx,1,4)='4412' or
+		substr(dx,1,4)='4414' or
+		substr(dx,1,4)='4417' or
+		substr(dx,1,4)='4419' or
+		substr(dx,1,4)='4431' or
+		substr(dx,1,4)='4432' or
+		substr(dx,1,4)='4438' or
+		substr(dx,1,4)='4439' or
+		substr(dx,1,4)='4471' or
+		substr(dx,1,4)='5571' or
+		substr(dx,1,4)='5579' or
+		substr(dx,1,4)='V434')
+			and comorbi_5=0 
+		then comorbi_5=1;
+	*Hypertension;
+	if ((substr(dx,1,4)='4011' or
+		substr(dx,1,4)='4019')) or
+	   ((substr(dx,1,5)='40210' or
+		substr(dx,1,5)='40290' or
+		substr(dx,1,5)='40410' or
+		substr(dx,1,5)='40490' or
+		substr(dx,1,5)='40511' or
+		substr(dx,1,5)='40519' or
+		substr(dx,1,5)='40591' or
+		substr(dx,1,5)='40599')) 
+			and comorbi_6=0 
+		then comorbi_6=1;
+	*Paralysis;	
+	if (substr(dx,1,4)='3420' or
+		substr(dx,1,5)='34210' or
+		substr(dx,1,5)='34211' or
+		substr(dx,1,5)='34212' or
+		substr(dx,1,4)='3429' or
+		substr(dx,1,3)='343' or
+		substr(dx,1,3)='344')
+			and comorbi_7=0 
+		then comorbi_7=1;
+	*Other Neurological Disorders;
+	if (substr(dx,1,4)='3319' or
+		substr(dx,1,4)='3320' or
+		substr(dx,1,4)='3334' or
+		substr(dx,1,4)='3335' or
+		substr(dx,1,3)='334' or
+		substr(dx,1,3)='335' or
+		substr(dx,1,3)='340' or
+		substr(dx,1,4)='3411' or
+		substr(dx,1,4)='3418' or
+		substr(dx,1,4)='3419' or
+		substr(dx,1,5)='34500' or
+		substr(dx,1,5)='34501' or
+		substr(dx,1,5)='34510' or
+		substr(dx,1,5)='34511' or
+		substr(dx,1,4)='3454' or
+		substr(dx,1,5)='34550' or
+		substr(dx,1,5)='34551' or
+		substr(dx,1,4)='3458' or
+		substr(dx,1,5)='34590' or
+		substr(dx,1,5)='34591' or
+		substr(dx,1,4)='3481' or
+		substr(dx,1,4)='3483' or
+		substr(dx,1,4)='7803' or
+		substr(dx,1,4)='7843') 
+			and comorbi_8=0 
+		then comorbi_8=1;	
+	*Chronic Pulmonary Disease;
+	if (substr(dx,1,3)='490' or
+		substr(dx,1,3)='491' or
+		substr(dx,1,3)='492' or
+		substr(dx,1,4)='4930' or
+		substr(dx,1,4)='4931' or
+		substr(dx,1,4)='4932' or
+		substr(dx,1,4)='4938' or
+		substr(dx,1,5)='49390' or
+		substr(dx,1,5)='49391' or
+		substr(dx,1,3)='494' or
+		substr(dx,1,3)='495' or
+		substr(dx,1,3)='496' or
+		substr(dx,1,3)='497' or
+		substr(dx,1,3)='498' or
+		substr(dx,1,3)='499' or
+		substr(dx,1,3)='500' or
+		substr(dx,1,3)='501' or
+		substr(dx,1,3)='502' or
+		substr(dx,1,3)='503' or
+		substr(dx,1,3)='504' or
+		substr(dx,1,3)='505' or
+		substr(dx,1,4)='5064') 
+			and comorbi_9=0 
+		then comorbi_9=1;	
+	*Diabetes, uncomplicated;
+	if (substr(dx,1,4)='2500' or
+		substr(dx,1,4)='2501' or
+		substr(dx,1,4)='2502' or
+		substr(dx,1,4)='2503') 
+			and comorbi_10=0 
+		then comorbi_10=1;
+	*Diabetes, complicated;
+	if (substr(dx,1,4)='2504' or
+		substr(dx,1,4)='2505' or
+		substr(dx,1,4)='2506' or
+		substr(dx,1,4)='2507' or
+		substr(dx,1,4)='2509') 
+			and comorbi_11=0 
+		then comorbi_11=1;
+	*Hypothyroidism;
+	if (substr(dx,1,3)='243' or
+		substr(dx,1,4)='2440' or
+		substr(dx,1,4)='2441' or
+		substr(dx,1,4)='2442' or
+		substr(dx,1,4)='2448' or
+		substr(dx,1,4)='2449') 	
+			and comorbi_12=0 
+		then comorbi_12=1;
+	*Renal Failure;
+	if (substr(dx,1,5)='40311' or
+		substr(dx,1,5)='40391' or
+		substr(dx,1,5)='40412' or
+		substr(dx,1,5)='40492' or
+		substr(dx,1,3)='585' or
+		substr(dx,1,3)='586' or
+		substr(dx,1,4)='V420' or
+		substr(dx,1,4)='V451' or
+		substr(dx,1,4)='V560' or
+		substr(dx,1,4)='V568') 
+			and comorbi_13=0 
+		then comorbi_13=1;
+	*Liver Disease;
+	if (substr(dx,1,5)='07032' or
+		substr(dx,1,5)='07033' or
+		substr(dx,1,5)='07054' or
+		substr(dx,1,4)='4560' or
+		substr(dx,1,4)='4561' or
+		substr(dx,1,5)='45620' or
+		substr(dx,1,5)='45621' or
+		substr(dx,1,4)='5710' or
+		substr(dx,1,4)='5712' or
+		substr(dx,1,4)='5713' or
+		substr(dx,1,4)='5714' or
+		substr(dx,1,4)='5715' or
+		substr(dx,1,4)='5716' or
+		substr(dx,1,4)='5718' or
+		substr(dx,1,4)='5719' or
+		substr(dx,1,4)='5723' or
+		substr(dx,1,4)='5728' or
+		substr(dx,1,4)='V427') 
+			and comorbi_14=0 
+		then comorbi_14=1;
+	*Peptic Ulcer Disease excluding bleeding;
+	if (substr(dx,1,5)='53170' or
+		substr(dx,1,5)='53190' or
+		substr(dx,1,5)='53270' or
+		substr(dx,1,5)='53290' or
+		substr(dx,1,5)='53370' or
+		substr(dx,1,5)='53390' or
+		substr(dx,1,5)='53470' or
+		substr(dx,1,5)='53490' or
+		substr(dx,1,5)='V1271') 
+			and comorbi_15=0 
+		then comorbi_15=1;
+	*AIDS;
+	if (substr(dx,1,3)='042' or
+		substr(dx,1,3)='043' or
+		substr(dx,1,3)='044') 
+			and comorbi_16=0 
+		then comorbi_16=1;
+	*Lymphoma;
+	if (substr(dx,1,3)='200' or
+		substr(dx,1,4)='201' or
+		substr(dx,1,4)='2020' or
+		substr(dx,1,4)='2021' or
+		substr(dx,1,4)='2022' or
+		substr(dx,1,4)='2023' or
+		substr(dx,1,4)='2025' or
+		substr(dx,1,4)='2026' or
+		substr(dx,1,4)='2027' or
+		substr(dx,1,4)='2028' or
+		substr(dx,1,4)='2029' or
+		substr(dx,1,4)='2030' or
+		substr(dx,1,4)='2038' or
+		substr(dx,1,4)='2386' or
+		substr(dx,1,4)='2733' or
+		substr(dx,1,4)='V1071' or
+		substr(dx,1,4)='V1072' or
+		substr(dx,1,4)='V1079')
+			and comorbi_17=0 
+		then comorbi_17=1;
+	*Metastatic Cancer;
+	if (substr(dx,1,3)='196' or
+		substr(dx,1,3)='197' or
+		substr(dx,1,3)='198' or
+		substr(dx,1,4)='199') 
+			and comorbi_18=0 
+		then comorbi_18=1;	
+	*Solid Tumor without Metastisis;
+	if (substr(dx,1,2)='14' or
+		substr(dx,1,2)='15' or
+		substr(dx,1,2)='16' or
+		substr(dx,1,3)='170' or
+		substr(dx,1,3)='171' or
+		substr(dx,1,3)='172' or
+		substr(dx,1,3)='174' or
+		substr(dx,1,3)='175' or
+		substr(dx,1,3)='179' or
+		substr(dx,1,2)='18' or
+		substr(dx,1,3)='190' or
+		substr(dx,1,3)='191' or
+		substr(dx,1,3)='192' or
+		substr(dx,1,3)='193' or
+		substr(dx,1,3)='194' or
+		substr(dx,1,3)='195' or
+		substr(dx,1,3)='V10')
+			and comorbi_19=0 
+		then comorbi_19=1;
+	*Rheumatoid Arthritis/Collagen Vascular Diseases;
+	if (substr(dx,1,4)='7010' or
+		substr(dx,1,3)='710' or
+		substr(dx,1,3)='714' or
+		substr(dx,1,3)='720' or
+		substr(dx,1,3)='725') 
+			and comorbi_20=0 
+		then comorbi_20=1;
+	*Coagulopathy;
+	if (substr(dx,1,3)='286' or
+		substr(dx,1,4)='2871' or
+		substr(dx,1,4)='2873' or
+		substr(dx,1,4)='2874' or
+		substr(dx,1,4)='2875') 
+			and comorbi_21=0 
+		then comorbi_21=1;
+	*Obesity;
+	if (substr(dx,1,4)='2780')  
+			and comorbi_22=0 
+		then comorbi_22=1;
+	*Weight Loss;
+	if (substr(dx,1,3)='260' or
+		substr(dx,1,3)='261' or
+		substr(dx,1,3)='262' or
+		substr(dx,1,3)='263') 
+			and comorbi_23=0 
+		then comorbi_23=1;	
+	*Fluid and Electrolyte Disorders;
+	if (substr(dx,1,3)='276') 
+			and comorbi_24=0 
+		then comorbi_24=1;
+	*Blood Loss Anemia;
+	if (substr(dx,1,4)='2800') 
+			and comorbi_25=0 
+		then comorbi_25=1;
+	*Deficiency Anemias;
+	if (substr(dx,1,4)='2801' or
+		substr(dx,1,4)='2808' or
+		substr(dx,1,4)='2809' or
+		substr(dx,1,4)='2859') 
+			and comorbi_26=0 
+		then comorbi_26=1;
+	*Alcohol Abuse;
+	if (substr(dx,1,4)='2911' or
+		substr(dx,1,4)='2912' or
+		substr(dx,1,4)='2915' or
+		substr(dx,1,4)='2918' or
+		substr(dx,1,4)='2919' or
+		substr(dx,1,4)='3039' or
+		substr(dx,1,4)='3050' or
+		substr(dx,1,4)='V113') 
+			and comorbi_27=0 
+		then comorbi_27=1;
+	*Drug Abuse;
+	if (substr(dx,1,4)='2920' or
+		substr(dx,1,5)='29282' or
+		substr(dx,1,5)='29283' or
+		substr(dx,1,5)='29284' or
+		substr(dx,1,5)='29289' or
+		substr(dx,1,4)='2929' or
+		substr(dx,1,3)='304' or
+		substr(dx,1,4)='3052' or
+		substr(dx,1,4)='3053' or
+		substr(dx,1,4)='3054' or
+		substr(dx,1,4)='3055' or
+		substr(dx,1,4)='3056' or
+		substr(dx,1,4)='3057' or
+		substr(dx,1,4)='3058' or
+		substr(dx,1,4)='3059')
+			and comorbi_28=0 
+		then comorbi_28=1;	
+	*Psychoses;
+	if (substr(dx,1,3)='295' or
+		substr(dx,1,3)='296' or
+		substr(dx,1,3)='297' or
+		substr(dx,1,3)='298' or
+		substr(dx,1,4)='2991') 
+			and comorbi_29=0 
+		then comorbi_29=1;
+	*Depression;
+	if (substr(dx,1,4)='3004' or
+		substr(dx,1,5)='30112' or
+		substr(dx,1,4)='3090' or
+		substr(dx,1,4)='3091' or
+		substr(dx,1,3)='311')
+			and comorbi_30=0 
+		then comorbi_30=1;
+
+
+	*Dementia;
+	if (substr(dx,1,4) in ('3310','3311','3312','2900','2901',
+             '2902','2903','2912','2948','2949') or
+		substr(dx,1,5) in ('29410','29411','29040','29041','29042','29043')) 
+		and dementia=0 
+          then dementia=1;
+
+	*CAD coronary artery disease;
+	if (substr(dx,1,4) in ('4140','4142','4143','4148','4149') or 
+		substr(dx,1,3) in ('410','411','412','413') or
+		substr(dx,1,5) in ('V4581','V4582'))
+		and cad=0 
+          then cad=1;
+
+/* CAD list
+410.00-410.92
+411.0-411.89
+412
+413.0-413.9
+414.00-414.07
+414.2
+414.3
+414.8
+414.9
+V45.81
+V45.82 */
+
+end;
+run;
+
+
+/*check sums of each comorbidity for each ID*/
+proc sql;
+create table com_test1_&range2 as
+select distinct BID_hrs_21,
+sum(comorbi_1) as com_1,
+sum(comorbi_2) as com_2,
+sum(comorbi_3) as com_3,
+sum(comorbi_4) as com_4,
+sum(comorbi_5) as com_5,
+sum(comorbi_6) as com_6,
+sum(comorbi_7) as com_7,
+sum(comorbi_8) as com_8,
+sum(comorbi_9) as com_9,
+sum(comorbi_10) as com_10,
+sum(comorbi_11) as com_11,
+sum(comorbi_12) as com_12,
+sum(comorbi_13) as com_13,
+sum(comorbi_14) as com_14,
+sum(comorbi_15) as com_15,
+sum(comorbi_16) as com_16,
+sum(comorbi_17) as com_17,
+sum(comorbi_18) as com_18,
+sum(comorbi_19) as com_19,
+sum(comorbi_20) as com_20,
+sum(comorbi_21) as com_21,
+sum(comorbi_22) as com_22,
+sum(comorbi_23) as com_23,
+sum(comorbi_24) as com_24,
+sum(comorbi_25) as com_25,
+sum(comorbi_26) as com_26,
+sum(comorbi_27) as com_27,
+sum(comorbi_28) as com_28,
+sum(comorbi_29) as com_29,
+sum(comorbi_30) as com_30,
+sum(dementia) as com_31,
+sum(cad) as com_32
+from dx_31_comor_&range2
+group by BID_hrs_21;
+quit;
+
+/*define comorbidities as binary indicators*/
+data comorbidity_&range2.(keep=BID_hrs_21 comorb_1-comorb_32 comorb_all);
+set com_test1_&range2;
+array list_com com_1-com_30 com_31 com_32;
+array list_com_bin comorb_1-comorb_30 comorb_31 comorb_32;
+
+/*note this defines comorbidity 31 = dementia & 32 = cad*/
+do over list_com;
+  list_com_bin=0;
+
+  if list_com>0 then do;
+    list_com_bin=1;
+   end;
+
+end;
+
+/*define aggregate comorbidity as sum of 30 individual indicator vars.
+note: CAD not included in this aggregate score*/
+comorb_all=comorb_1+comorb_2+comorb_3+comorb_4+comorb_5+comorb_6+comorb_7+
+comorb_8+comorb_9+comorb_10+comorb_11+comorb_12+comorb_13+comorb_14+
+comorb_15+comorb_16+comorb_17+comorb_18+comorb_19+comorb_20+comorb_21+
+comorb_22+comorb_23+comorb_24+comorb_25+comorb_26+comorb_27+comorb_28+
+comorb_29+comorb_30+comorb_31;
+run;
+
+
+proc sort data=comorbidity_&range2. nodupkey;
+by BID_hrs_21;
+run;
+
+/*merges with list of r's with xwalk id and dod
+leaves blanks for comorbidities observations with no dx but with xwalk id*/
+proc sql;
+create table ids_w_xwalk_&range2._1 as
+select a.r_bid_hrs,b.*
+from r_dod_2 a 
+left join
+comorbidity_&range2. b
+on trim(left(a.r_bid_hrs))=trim(left(b.BID_hrs_21));
+quit;
+
+/*if comorbidity=null, set to zero for this group with the xwalk present*/
+data spo_int.elix_&range1._&range2;
+set ids_w_xwalk_&range2._1;
+array list comorb_1-comorb_32 comorb_all;
+do over list;
+	if list=. then list=0;
+	end;
+
+label comorb_1 ="Congestive Heart Failure";
+label comorb_2 ="Cardiac Arrhythmias";
+label comorb_3 ="Valvular Disease";
+label comorb_4 ="Pulmonary Circulation Disorders";
+label comorb_5 ="Peripheral Vascular Disorders";
+label comorb_6 ="Hypertension";
+label comorb_7 ="Paralysis";
+label comorb_8 ="Other Neurological Disorders";
+label comorb_9 ="Chronic Pulmonary Disease";
+label comorb_10 ="Diabetes, uncomplicated";
+label comorb_11 ="Diabetes, complicated";
+label comorb_12 ="Hypothyroidism";
+label comorb_13 ="Renal Failure";
+label comorb_14 ="Liver Disease";
+label comorb_15 ="Peptic Ulcer Disease excluding bleeding";
+label comorb_16 ="AIDS";
+label comorb_17 ="Lymphoma";
+label comorb_18 ="Metastatic Cancer";
+label comorb_19 ="Solid Tumor without Metastisis";
+label comorb_20 ="Rheumatoid Arthritis/Collagen Vascular Diseases";
+label comorb_21 ="Coagulopathy";
+label comorb_22 ="Obesity";
+label comorb_23 ="Weight Loss";
+label comorb_24 ="Fluid and Electrolyte Disorders";
+label comorb_25 ="Blood Loss Anemia";
+label comorb_26 ="Deficiency Anemias";
+label comorb_27 ="Alcohol Abuse";
+label comorb_28 ="Drug Abuse";
+label comorb_29 ="Psychoses";
+label comorb_30 ="Depression";
+label comorb_31 ="Dementia";
+label comorb_32 ="Coronary Artery Disease";
+
+/*drop extra bid field*/
+drop BID_HRS_21;
+run;
+
+data test;
+set spo_int.elix_&range1._&range2;
+run;
+
+/*calls rename macro*/
+%rename(WORK,TEST,&range1._&range2);
+
+/*rename r_BID_hrs_&range1._&range2=r_BID_hrs*/
+data spo_int.elix_&range1._&range2._2(rename =(r_BID_hrs_&range1._&range2=r_BID_hrs));
+set test;
+keep r_bid_hrs_&range1._&range2 comorb:;
+run;
+
+proc sort data=spo_int.elix_&range1._&range2._2;
+by r_bid_hrs;
+run;
+
+%mend;
+
+/*run macro to get elixhauser comorbidities 12 months pre-death
+resulting dataset is spo_int.elix_0d_n12m_2 which has r_bid_hrs to merge back to dataset*/
+%elixhauser(range1=0d, range2=n12m);
+
+proc freq data=spo_int.elix_0d_n12m;
+table comorb:;
+run;
+
+/*merge comorbidities into HRS dataset
+for observations with no mc xwalk, the comorbidities are left as null*/
+proc sql;
+create table spo_int.hrs_elix_n12m(drop=bid_hrs2)
+as select a.*,b.*
+from 
+spo_int.add_los3 a 
+left join
+spo_int.elix_0d_n12m_2(rename=(r_bid_hrs=bid_hrs2)) b
+on a.r_bid_hrs = b.bid_hrs2;
+quit;
+
+/*493 have no xwalk id or are missing dod so missing comorbidities*/
+proc freq data=spo_int.hrs_elix_n12m;
+table comorb: ;
+run;
+
+
+H="r's chronic conditions from dx codes"
+/*begin of chronic 21 conditions.
+Determines presence of 21 chronic conditions 12 months pre-death
+
+Note this pulls from a list of icd-9 codes associated with each of the chronic
+conditions. The file path may need to be updated depending on the PC the
+code is run from
+
+Dataset created is spo_int.hrs_elix_cc_n12m
+*/
+
+/*export lists of diagnosis codes to Stata*/
+proc export data=spo_int.dx_0d_n12m
+outfile="E:\data\spouse\int_data\dx_0d_n12m.dta" replace;
+run;
+
+proc export data=spo_int.dx_6m_n12m
+outfile="E:\data\spouse\int_data\dx_6m_n12m.dta" replace;
+run;
+
+
+/*******************************************************************/
+/*put the sas data to stata in to dot format
+This is STATA code*/
+/*******************************************************************/
+set more off
+clear
+
+//process diagnosis codes 12 months pre-surgery
+clear
+use "E:\data\spouse\int_data\dx_0d_n12m.dta",clear
+
+// convert diagnosis codes to string variables, tostring diag,gen(icd9_c)
+gen new=ltrim(diag)
+icd9 check new,gen(icd9_c)
+replace new="" if icd9_c>0 
+// convert into dot format (ex 12.1 instead of 121)
+icd9 clean new,dots 
+
+replace diag=new
+drop icd9_c new
+
+save "E:\data\spouse\int_data\dx_0d_n12m_2.dta",replace
+//save to csv so I can import into sas (sas won't import stata13 .dta files
+outsheet using "E:\data\spouse\int_data\dx_0d_n12m_2.csv", comma replace
+***********************************************
+clear all
+
+//process diagnosis codes 12 months pre-surgery
+clear
+use "E:\data\spouse\int_data\dx_6m_n12m.dta",clear
+
+// convert diagnosis codes to string variables, tostring diag,gen(icd9_c)
+gen new=ltrim(diag)
+icd9 check new,gen(icd9_c)
+replace new="" if icd9_c>0 
+// convert into dot format (ex 12.1 instead of 121)
+icd9 clean new,dots 
+
+replace diag=new
+drop icd9_c new
+
+save "E:\data\spouse\int_data\dx_6m_n12m_2.dta",replace
+outsheet using "E:\data\spouse\int_data\dx_6m_n12m_2.csv", comma replace
+
+/*******************************************************************/
+//Convert back to SAS
+//This is SAS Code
+/* to the cms 21 chronic comorbidity*/ /*******************************************************************/
+
+/*bring in formatted Stata datasets of dx codes*/
+proc import 
+datafile="E:\data\spouse\int_data\dx_0d_n12m_2.csv" 
+out=dx_0d_n12m_2 DBMS=csv replace;
+getnames=yes;
+run;
+
+proc import 
+datafile="E:\data\spouse\int_data\dx_6m_n12m_2.csv" 
+out=dx_6m_n12m_2 DBMS=csv replace;
+getnames=yes;
+run;
+
+/*bring in excel list of dx codes associated with each chronic condition*/
+proc import datafile='E:\data\spouse\ref_data\chronic_21_condition_icd9.xls'
+out=icd9_21_chronic dbms=xls replace;
+run;
+
+data icd9_21_chronic2;
+set icd9_21_chronic;
+/*create new variable of icd 9 code list NOT in dot format
+Don't actually use this variable in the following code*/
+icd9_wo_dot=compress(icd_9,".");
+run;
+proc contents data=icd9_21_chronic;
+run;
+
+/*creates macro variables of each of the chronic conditions listing of dx codes*/
+proc sql;
+select icd_9 into :chronic_desc1-:chronic_desc21 from icd9_21_chronic;
+quit;
+%put &chronic_desc10;
+%put &chronic_desc5;
+
+/*******************************************************************/
+/*Generate chronic conditions indicator variables using dx
+codes 12 months pre-death */
+/*******************************************************************/
+
+/*macro to create indicator variables for 21 chronic conditions
+resulting file has chronic conditions using dx codes 12 months 
+before death
+predeath= n12m */
+
+%macro cc(start=,predeath=);
+
+/*initialize the chronic conditions variables*/
+data list_&start._&predeath._dx;
+set dx_&start._&predeath._2;
+array list CC_1_AMI
+CC_2_ALZH
+CC_3_ALZHDMTA
+CC_4_ATRIALFB
+CC_5_CATARACT
+CC_6_CHRNKIDN
+CC_7_COPD
+CC_8_CHF
+CC_9_DIABETES
+CC_10_GLAUCOMA
+CC_11_HIPFRAC
+CC_12_ISCHMCHT
+CC_13_DEPRESSN
+CC_14_OSTEOPRS
+CC_15_RA_OA
+CC_16_STRKETIA
+CC_17_CNCRBRST
+CC_18_CNCRCLRC
+CC_19_CNCRPRST
+CC_20_CNCRLUNG
+CC_21_CNCREndM
+;
+do over list ;
+list=0;
+end;
+
+diag_string=diag;
+
+/* for dx codes that begin with numbers, process chronic cond variables*/
+if anydigit(substr(trim(left(diag_string)),1,1))=1 then do;
+diag=diag_string+0;
+
+if diag in (&chronic_desc1) then CC_1_AMI=1;
+if diag in (&chronic_desc2)  then CC_2_ALZH=1;
+if diag in (&chronic_desc3)  then CC_3_ALZHDMTA=1;
+if diag in (&chronic_desc4) then CC_4_ATRIALFB=1;
+if diag in (&chronic_desc5) then CC_5_CATARACT=1;
+if diag in (&chronic_desc6) then CC_6_CHRNKIDN=1;
+if diag in (&chronic_desc7) then CC_7_COPD=1;
+if diag in (&chronic_desc8) then CC_8_CHF=1;
+if diag in (&chronic_desc9) then CC_9_DIABETES=1;
+if diag in (&chronic_desc10) then CC_10_GLAUCOMA=1;
+if diag in (&chronic_desc11) then CC_11_HIPFRAC=1;
+if diag in (&chronic_desc12) then CC_12_ISCHMCHT=1;
+if diag in (&chronic_desc13) then CC_13_DEPRESSN=1;
+if diag in (&chronic_desc14) then CC_14_OSTEOPRS=1;
+if diag in (&chronic_desc15) then CC_15_RA_OA=1;
+if diag in (&chronic_desc16) then CC_16_STRKETIA=1;
+if diag in (&chronic_desc17) then CC_17_CNCRBRST=1;
+if diag in (&chronic_desc18) then CC_18_CNCRCLRC=1;
+if diag in (&chronic_desc19) then CC_19_CNCRPRST=1;
+if diag in (&chronic_desc20) then CC_20_CNCRLUNG=1;
+if diag in (&chronic_desc21) then CC_21_CNCREndM=1;
+end;
+
+/*deal with dx codes that start with letters
+Only two of them in the list we have to worry about*/
+if anydigit(substr(trim(left(diag_string)),1,1))=0 then do;
+if trim(left(diag_string)) in ("V431") then CC_5_CATARACT=1;
+if trim(left(diag_string)) in ("V801") then CC_10_GLAUCOMA=1;
+end;
+
+run;
+
+/*aggregate all chronic condition variables by bid*/
+proc sql;
+create table bid_dx_&start._&predeath.(rename=(bid_hrs_21=bid)) as
+select distinct bid_hrs_21,
+sum(CC_1_AMI) as CC_1_AMI,
+sum(CC_2_ALZH) as CC_2_ALZH,
+sum(CC_3_ALZHDMTA) as CC_3_ALZHDMTA,
+sum(CC_4_ATRIALFB) as CC_4_ATRIALFB,
+sum(CC_5_CATARACT) as CC_5_CATARACT,
+sum(CC_6_CHRNKIDN) as CC_6_CHRNKIDN,
+sum(CC_7_COPD) as CC_7_COPD,
+sum(CC_8_CHF) as CC_8_CHF,
+sum(CC_9_DIABETES) as CC_9_DIABETES,
+sum(CC_10_GLAUCOMA) as CC_10_GLAUCOMA,
+sum(CC_11_HIPFRAC) as CC_11_HIPFRAC,
+sum(CC_12_ISCHMCHT) as CC_12_ISCHMCHT,
+sum(CC_13_DEPRESSN) as CC_13_DEPRESSN,
+sum(CC_14_OSTEOPRS) as CC_14_OSTEOPRS,
+sum(CC_15_RA_OA) as CC_15_RA_OA,
+sum(CC_16_STRKETIA) as CC_16_STRKETIA,
+sum(CC_17_CNCRBRST) as CC_17_CNCRBRST,
+sum(CC_18_CNCRCLRC) as CC_18_CNCRCLRC,
+sum(CC_19_CNCRPRST) as CC_19_CNCRPRST,
+sum(CC_20_CNCRLUNG) as CC_20_CNCRLUNG,
+sum(CC_21_CNCREndM) as CC_21_CNCREndM
+
+from list_&start._&predeath._dx group by bid_hrs_21;
+quit;
+
+
+/*merges with table r's with hrs dataset by id*/
+ proc sql;
+ create table bid_dx_&start._&predeath.2(drop=bid) as 
+select a.r_bid_hrs,b.*
+ from r_dod_2 a
+ left join
+  bid_dx_&start._&predeath. b 
+ on trim(left(a.r_bid_hrs))=trim(left(b.bid));
+ quit;
+
+/*convert to chronic condition vars. to binary variables*/
+ data bid_dx_&start._&predeath.3;
+ set bid_dx_&start._&predeath.2;
+ array list CC_1_AMI
+CC_2_ALZH
+CC_3_ALZHDMTA
+CC_4_ATRIALFB
+CC_5_CATARACT
+CC_6_CHRNKIDN
+CC_7_COPD
+CC_8_CHF
+CC_9_DIABETES
+CC_10_GLAUCOMA
+CC_11_HIPFRAC
+CC_12_ISCHMCHT
+CC_13_DEPRESSN
+CC_14_OSTEOPRS
+CC_15_RA_OA
+CC_16_STRKETIA
+CC_17_CNCRBRST
+CC_18_CNCRCLRC
+CC_19_CNCRPRST
+CC_20_CNCRLUNG
+CC_21_CNCREndM
+;
+do over list ;
+if list>0 then list=1;
+if list<=0 then list=0;
+end;
+
+/*create aggregated indicators*/
+CC_AMI_isch=CC_1_AMI|CC_12_ISCHMCHT;
+CC_alzheim=CC_2_ALZH|CC_3_ALZHDMTA;
+CC_cncr_chronic=CC_17_CNCRBRST | CC_18_CNCRCLRC | CC_19_CNCRPRST | CC_20_CNCRLUNG | 
+	CC_21_CNCREndM ;
+
+/*label variables*/
+label CC_1_AMI="AMI"
+CC_2_ALZH="Alzheimer's disease"
+CC_3_ALZHDMTA="Alzheimer's or Dementia"
+CC_4_ATRIALFB="Atrial fibrillation"
+CC_5_CATARACT="Cataract"
+CC_6_CHRNKIDN="Chronic kidney disease"
+CC_7_COPD="COPD"
+CC_8_CHF="CHF"
+CC_9_DIABETES="Diabetes"
+CC_10_GLAUCOMA="Glaucoma"
+CC_11_HIPFRAC="Hip fracture"
+CC_12_ISCHMCHT="Ischemic heart disease"
+CC_13_DEPRESSN="Depression"
+CC_14_OSTEOPRS="Osteoporosis"
+CC_15_RA_OA="Arthritis"
+CC_16_STRKETIA="Stroke/TIA"
+CC_17_CNCRBRST="Breast cancer"
+CC_18_CNCRCLRC="Colorectal cancer"
+CC_19_CNCRPRST="Prostate cancer"
+CC_20_CNCRLUNG="Lung cancer"
+CC_21_CNCREndM="Endometrial cancer"
+CC_AMI_isch="AMI or Ischemic heart failure"
+CC_alzheim="Alzheimer's or dementia"
+CC_cncr_chronic="Cancer, all types"
+;
+run;
+
+
+proc means;
+var CC_1_AMI
+CC_2_ALZH
+CC_3_ALZHDMTA
+CC_4_ATRIALFB
+CC_5_CATARACT
+CC_6_CHRNKIDN
+CC_7_COPD
+CC_8_CHF
+CC_9_DIABETES
+CC_10_GLAUCOMA
+CC_11_HIPFRAC
+CC_12_ISCHMCHT
+CC_13_DEPRESSN
+CC_14_OSTEOPRS
+CC_15_RA_OA
+CC_16_STRKETIA
+CC_17_CNCRBRST
+CC_18_CNCRCLRC
+CC_19_CNCRPRST
+CC_20_CNCRLUNG
+CC_21_CNCREndM;
+run;
+
+%mend;
+
+%cc(start=0d,predeath=n12m);
+%cc(start=6m,predeath=n12m);
+
+/*so resulting datastets are bid_dx_0d_n12m3 and bid_dx_6m_n12m3 with 
+variable r_bid_hrs to merge*/
+
+/************************************************************/
+/*rename the 12 month pre-surgery chronic condition vars*/
+/************************************************************/
+
+/*creates dataset to use in the rename macro below*/
+data test;
+set bid_dx_0d_n12m3;
+run;
+
+/*rename macro to add _n12mn0 suffix to the chronic conditions variable names
+Data file is still work.test but variables renamed after running this macro*/
+%rename(WORK,TEST,n12mn0);
+
+/*Changes name of bid_hrs variable so no _n12mn0*/
+data spo_int.chronic_21_n12m_n0_0;
+set test;
+r_bid_hrs=r_bid_hrs_n12mn0;
+drop r_bid_hrs_n12mn0;
+run;
+
+/*same for 6-12m dataset*/
+data test;
+set bid_dx_6m_n12m3;
+run;
+%rename(WORK,TEST,n12mn6m);
+data spo_int.chronic_21_n12m_n6m_0;
+set test;
+r_bid_hrs=r_bid_hrs_n12mn6m;
+drop r_bid_hrs_n12mn6m;
+run;
+
+
+proc freq data=spo_int.chronic_21_n12m_n0_0;
+table cc_alzheim_n12mn0 cc_cncr_chronic_n12mn0;
+run;
+proc contents;
+run;
+
+proc freq data=spo_int.chronic_21_n12m_n6m_0;
+table cc_alzheim_n12mn6m cc_cncr_chronic_n12mn6m;
+run;
+
+/************************************************************/
+/*Merge into HRS dataset with elix already added */
+/************************************************************/
+/*merge chronic conditions into HRS dataset
+again leave cc's blank if no hrs xwalk idto claims or dod  *917 missing*/
+
+/*first merge the two cc datasets together*/
+proc sql;
+create table cc_6m12m_0m12m(drop=r_bid_hrs2) as select *
+from
+spo_int.chronic_21_n12m_n0_0 a
+left join
+spo_int.chronic_21_n12m_n6m_0(rename=(r_bid_hrs=r_bid_hrs2)) b
+on a.r_bid_hrs=b.r_bid_hrs2;
+quit;
+
+proc sql;
+create table spo_int.hrs_elix_cc_n12m(drop=bid_hrs2) as select a.*,
+b.*
+from 
+spo_int.hrs_elix_n12m a 
+left join
+cc_6m12m_0m12m(rename=(r_bid_hrs=bid_hrs2)) b
+on a.r_bid_hrs = b.bid_hrs2;
+quit;
+
+proc freq data=spo_int.hrs_elix_cc_n12m;
+table cc_alzheim_n12mn0 cc_cncr_chronic_n12mn0 cc_alzheim_n12mn6m cc_cncr_chronic_n12mn6m;
+run;
+
+
+
+
+H="r's intensive procedures last 6m of life"
+/*uses medpar claims to identify intensive procedures in the last
+6 months of life for R
+Intensive procedure definitions (6) from Evan's project, see 
+"Procedure_0312_2014.txt" for code. Based on Bernato reference.
+
+Indicator for intensive procedure is populated if R has a xwalk id
+(FFS medicare status does not matter)
+
+Adds to the chronic conditions dataset (spo_int.hrs_elix_cc_n12m)
+
+Final dataset is spo_int.hrs_elix_cc_n12m_intens*/
+
+/*first, get list of mc id's and death dates for each r
+7521 decedents have xwalk id
+if missing the death date from the restricted dataset, use the claims dod*/
+data r_dod;
+set spo_int.r_sp_core_n1_p1_n2_ins;
+if r_xwalk_yes=1;
+death_date=r_death_date_e;
+use_claims_dod=0;
+if r_death_date_e=. & r_claims_dod~=. then do;
+	death_date=r_claims_dod;
+	use_claims_dod=1;
+	end;
+ind_dod_yes=0;
+if death_date~=. then ind_dod_yes=1;
+keep r_BID_hrs death_date use_claims_dod ind_dod_yes;
+run;
+
+proc freq; table use_claims_dod ind_dod_yes; run;
+
+/*keep a version for just those r's with xwalk and dod n=7508*/
+data r_dod_intense;
+set r_dod;
+if ind_dod_yes=1;
+run;
+
+/*get ip claims with admission within 6m of R's death for obs with dod and xwalk*/
+%macro mp(month_n=,days_start=,days_bef_death=,source=,equ=);
+%let source0=mp;
+
+proc sql;
+create table &source._meet as select a.*,b.death_date
+from medi.&source0._2000_2012(where=(trim(left(SSLSSNF))&equ.="N")) a inner join
+r_dod_intense b
+on trim(left(a.bid_hrs_21))=trim(left(b.r_BID_hrs))
+and &days_start<=b.death_date-a.admit_date<=&days_bef_death;
+quit;
+
+%mend;
+
+%mp(month_n=6,days_start=0,days_bef_death=183,source=ip,equ=~ );
+
+/*restructures dataset so separate observation for each procedure*/
+data proc_long(keep=bid_hrs_21 pro procedure_date death_date);
+set ip_meet;
+array list PRCDR_CD01-PRCDR_CD25;
+array date PRCDR_DT01-PRCDR_DT25;
+do over list;
+if list~="" then do;
+pro=list+0; *turns procedure code into number, missing if has letters;
+if date=0000000 then date=.;
+procedure_date=datejul(date);
+output;
+end;
+end;
+format procedure_date date10. death_date date10.;
+run;
+
+data check_miss_date;
+set proc_long;
+miss_date=0;
+if procedure_date=. then miss_date=1;
+run;
+
+proc freq;
+table miss_date;
+run;
+
+/*identify intensive procedures and the dates for those procedures*/
+data proc_long_ba;
+set proc_long;
+array list 
+int_intubation
+int_trach
+int_gastro_tude
+int_hemodia
+int_enteral_nut
+int_cpr;
+do over list;
+list=0;
+end;
+
+if length(trim(left(pro)))>=3 then do;
+
+	if  substr(trim(left(pro)),1,3) in ("967")  then int_intubation =1;
+	if  substr(trim(left(pro)),1,3) in ("311") then  int_trach=1;
+	if  substr(trim(left(pro)),1,3) in ("432") then  int_gastro_tude=1;
+
+	if substr(trim(left(pro)),1,3) in ("966") then  int_enteral_nut=1;
+
+	if length(trim(left(pro)))>3 then do;
+		if substr(trim(left(pro)),1,4) in ("9604","9605") or 
+		  substr(trim(left(pro)),1,3) in ("967") then int_intubation =1;
+		if substr(trim(left(pro)),1,4) in ("3121","3129") or 
+		  substr(trim(left(pro)),1,3) in ("311") then int_trach=1;
+		if substr(trim(left(pro)),1,4) in ("4311","4319","4432")  or 
+		  substr(trim(left(pro)),1,3) in ("432") then int_gastro_tude=1;
+		if substr(trim(left(pro)),1,4) in ("3995") then int_hemodia=1;
+		if substr(trim(left(pro)),1,4) in ("9915") or 
+		  substr(trim(left(pro)),1,3) in ("966") then int_enteral_nut=1;
+		if substr(trim(left(pro)),1,4) in ("9960","9963") then int_cpr=1;
+	end;
+
+end;
+
+if int_intubation|
+int_trach|
+int_gastro_tude|
+int_hemodia|
+int_enteral_nut|
+int_cpr then date_proc=procedure_date;
+run;
+
+/*identify which procedure was first in 6 months before death
+Just keeps that first procedure date and count of each type of procedure
+(Data format is now one row per beneficiary) */
+proc sql;
+create table proc_sum_new as
+select distinct bid_hrs_21,
+min(date_proc) as first_proc_date_6m format=date10.
+label="first intensive procedure date in the last 6m,Barnato",
+sum(int_intubation) as int_intubation_6m,
+sum(int_trach) as int_trach_6m,
+sum(int_gastro_tude) as int_gastro_tude_6m,
+sum(int_hemodia) as int_hemodia_6m,
+sum(int_enteral_nut) as int_enteral_nut_6m,
+sum(int_cpr) as int_cpr_6m
+from proc_long_ba group by bid_hrs_21;
+quit;
+
+/*identify first procedure date, excluding the hemodial procedure category*/
+data excl_hemodia_1;
+set proc_long_ba;
+if int_hemodia=0;
+run;
+
+proc sql;
+create table excl_hemodia_2 as
+select distinct bid_hrs_21,
+min(date_proc) as first_proc_date_excl_hd_6m format=date10.
+label="first intensive procedure date in the last 6m,excluding hemodialysis proced."
+from excl_hemodia_1 group by bid_hrs_21;
+quit;
+
+/*add the first date excluding hemodialysis to the rest of the procedure info*/
+proc sql;
+create table proc_sum_new_2 as select a.*,b.first_proc_date_excl_hd_6m from
+proc_sum_new a left join
+excl_hemodia_2 b
+on a.bid_hrs_21=b.bid_hrs_21;
+quit;
+
+/*convert counts to indicator variables, add variable labels*/
+data proc_intensive_new;
+set proc_sum_new_2 ;
+array list int_intubation_6m
+int_trach_6m
+int_gastro_tude_6m
+int_hemodia_6m
+int_enteral_nut_6m
+int_cpr_6m
+;
+do over list;
+if list>0 then list=1;
+if list=. then list=0;
+end;
+label int_intubation_6m="intubation/mechanic ventilation,Barnato";
+label int_trach_6m="trachostomy,Barnato";
+label int_gastro_tude_6m="gastrostomy tube,Barnato";
+label int_hemodia_6m="hemodialysis,Barnato";
+label int_enteral_nut_6m="enteral/parenteral nutrition,Barnato";
+label int_cpr_6m="CPR,Barnato";
+
+if int_intubation_6m=1 |
+int_trach_6m=1 |
+int_gastro_tude_6m=1 |
+int_hemodia_6m=1 |
+int_enteral_nut_6m=1 |
+int_cpr_6m=1 then int_any_6m=1;
+else int_any_6m=0;
+label int_any_6m="Any of 6 intensive procedures, 1=yes";
+run;
+
+data miss_date;
+set proc_intensive_new;
+miss_date=0;
+if first_proc_date_6m=. then miss_date=1;
+run;
+
+proc freq;
+table int_any_6m*miss_date;
+run;
+
+
+/*n=1389 have at least 1 intensive procedure with date not missing in the 6m preceding death*/
+proc sql;
+select count(*),count(first_proc_date_6m)
+from proc_intensive_new where (int_intubation_6m
++int_trach_6m
++int_gastro_tude_6m
++int_hemodia_6m
++int_enteral_nut_6m
++int_cpr_6m)>0;
+quit;
+
+proc freq data=proc_intensive_new;
+table int:;
+run;
+
+/*merge with bid / death date list for those with xwalk id's*/
+proc sql;
+create table proc_intensive_6m(drop=bid_hrs_21) as select a.r_bid_hrs,a.death_date,b.*
+from r_dod_intense a 
+left join 
+proc_intensive_new b
+on trim(left(a.r_bid_hrs))=trim(left(b.bid_hrs_21));
+quit;
+
+/*if had xwalk but no procedure, set int_ indicators=0*/
+data spo_int.proc_intensive_6m_2;
+set proc_intensive_6m;
+array list int_intubation_6m
+int_trach_6m
+int_gastro_tude_6m
+int_hemodia_6m
+int_enteral_nut_6m
+int_cpr_6m
+int_any_6m
+;
+do over list;
+if list=. then list=0;
+end;
+days_1st_proc_death=death_date-first_proc_date_6m;
+if .<days_1st_proc_death<0 then days_1st_proc_death=0;
+label days_1st_proc_death="the days from the first procedure date in the last 6m to death";
+run;
+
+/****************************************************************/
+/*merge into full dataset, keep missing if no xwalk id*/
+/****************************************************************/
+proc sql;
+create table spo_int.hrs_elix_cc_n12m_intens(drop=bid_hrs2 death_date) as select a.*,
+b.*
+from 
+spo_int.hrs_elix_cc_n12m a 
+left join
+spo_int.proc_intensive_6m_2(rename=(r_bid_hrs=bid_hrs2)) b
+on a.r_bid_hrs = b.bid_hrs2;
+quit;
+
+proc freq data=spo_int.hrs_elix_cc_n12m_intens;
+table int_:;
+run;
+
+
+
+
+H="Merge in regional data"
+/*Use Ling's processed, merged regional data file
+Skip next heading section, this section should be revised
+if we want to revisit the regional controls
+
+starting datasets:
+spo_int.exit_rest_r_s_core_n1_p1_ins
+E:\data\Dartmouth_misc\zip_hrr_hci_bed_eol_3 - saved in E:/data/spouse/ref_data
+
+Wage index 2012 file
+E:\data\Dartmouth_misc\wage_index_2012 (SAS data file)
+Original downloaded file is under FY_2012_FR_cbsaoccmix_nooccmix subfolder
+File initial processing done in wage_index_setup.txt code 
+
+starting hrs dataset spo_int.hrs_elix_cc_n12m_intens
+
+Final dataset: spo_int.hrs_elix_cc_n12m_reg2
+
+*/
+
+libname ref "E:/data/spouse/ref_data";
+proc contents data=ref.zip_hrr_hci_bed_eol_3;
+run;
+
+/*get r's zip code from exit interviews*/
+data id_zip;
+set spo_int.hrs_elix_cc_n12m_intens(rename=(r_ZIP10_2000_e=r_ZIP10_e));
+/*use zip code variable from restricted dataset for year of exit interview*/
+zip_exit=vvaluex("r_zip"||substr(trim(left(r_exit_year_x)),3,2)||"_E" );
+run;
+
+/*2 obs have missing zip in exit year
+They have zip in previous wave so use that*/
+data zztestzip1;
+set id_zip;
+if zip_exit = "";
+run;
+
+/*if no zip in exit year, then use zip from wave prior to exit*/
+data id_zip_2;
+set id_zip;
+if zip_exit="" then zip_exit=vvaluex("r_zip"||substr(trim(left(r_exit_year_x-2)),3,2)||"_E"  );
+run;
+
+/*check to see if obs still have missing zip - none*/
+data zztestzip2;
+set id_zip_2;
+if zip_exit = "";
+run;
+
+proc sql outobs=10;
+select zip_exit  from id_zip_2;
+quit;
+
+/*convert zip to numeric variable*/
+data id_zip_3;
+set id_zip_2;
+zip_exit_n=zip_exit+0;
+drop zip_exit;
+run;
+
+proc contents data=ref.zip_hrr_hci_bed_eol_3; run;
+
+/*merge in the region data by zip code*/
+proc sql;
+create table spo_int.hrs_elix_cc_n12m_reg as select a.*,b.hci_index, b.hospital_beds,
+	b.physicians, b.specialists, b.wage_index_2008, b.hrrnum, b.hrrcity, b.hrrstate
+from id_zip_3 a 
+left join
+ref.zip_hrr_hci_bed_eol_3 b
+on a.zip_exit_n=b.zip;
+quit;
+
+/*2008 Wage index missing for 40% of the dataset so bring in separately*/
+proc freq data=spo_int.hrs_elix_cc_n12m_reg; table wage_index_2008; run;
+
+data hrs_add_wi;
+set spo_int.hrs_elix_cc_n12m_reg(drop=wage_index_2008);
+run;
+
+/*bring in 2012 wage index file*/
+libname da_ref "E:\data\Dartmouth_misc\Wage Index";
+data spo_int.wage_index;
+set da_ref.wage_index_2012;
+run;
+
+proc means;
+var wage_index_2012;
+run;
+
+/******************************************************************/
+/* Link CBSA codes and zip codes from the WI file*/
+/******************************************************************/
+/*Bring in xwalk file between CBSA codes and zip codes
+Note only keep variables needed from xwalk file because formats 
+are missing for some of the other text variables*/
+
+libname oop_ref "E:\data\Dartmouth_misc";
+
+data zip_cb;
+set oop_ref.xtract(keep=zip5 cbsa state);
+zip_n=zip5+0;
+/*If zip code is not missing, add state code*/
+if zip_n~=.;
+state_n=state+0;
+run;
+
+data zip_cb;
+set oop_ref.xtract(keep=zip5 cbsa metrodiv state);
+if metrodiv ~="" then cbsa=metrodiv;
+zip_n=zip5+0;
+/*If zip code is not missing, add state code*/
+if zip_n~=.;
+state_n=state+0;
+run;
+
+*Remove duplicate entries for zip5 and cbsa from xwalk file;
+*Goes from 399045 to 49289 rows;
+proc sort data=zip_cb out=zip_cb2 nodupkey;
+by zip_n cbsa;
+run;
+
+/*note several zip codes have multiple cbsa*/
+/*create dataset with just one entry for each zip code
+8029 zip codes have more than one cbsa code
+Just use the first one when sort*/
+proc sort data=zip_cb2 out=cbsa_zip_final nodupkey;
+by zip_n;
+run;
+
+/******************************************************************/
+/* Create dataset with cbsa, wage index and zip code */
+/******************************************************************/
+
+/*for zip codes with no cbsa, wage index is left missing
+there are also many cbsas with missing wage index*/
+proc sql;
+create table zip_cbsa_wage_index as
+select a.*,b.wage_index_2012 from
+cbsa_zip_final a
+left join
+spo_int.wage_index b
+on a.cbsa=b.cbsa;
+quit;
+
+/*Check for and remove duplicates by zip, keep first entry*/
+proc sort data=zip_cbsa_wage_index out=zip_cbsa_wage_index2 nodupkey;
+by zip_n;
+run;
+
+/* 9 zip codes without an associated cbsa */
+proc sql;
+select count(distinct zip_exit_n) from hrs_add_wi
+where zip_exit_n not in 
+(select zip_n from zip_cbsa_wage_index2);
+quit;
+
+/******************************************************************/
+/* Bring wage index and state code into main data file by zip-cbsa*/
+/******************************************************************/
+proc sql;
+create table hrs_wage_index as
+select a.*,b.wage_index_2012,b.state_n from 
+hrs_add_wi a
+left join 
+zip_cbsa_wage_index2 b
+on a.zip_exit_n=b.zip_n;
+quit;
+
+/*3830 observations do not have wage id by cbsa-zip*/
+proc sql; 
+select count(distinct r_id) from hrs_wage_index
+where wage_index_2012 is null ;
+quit;
+
+/******************************************************************/
+/* Bring wage index into cost file by state if missing above*/
+/******************************************************************/
+/*Get dataset with one wage index per state*/
+proc sort data=spo_int.wage_index out=wage_index3 nodupkey;
+by state_in_wage_index;
+run;
+
+data wage_index4;
+set wage_index3;
+if state_in_wage_index~='';
+run;
+
+proc freq; table state_in_wage_index; run;
+
+/*Merges in wage index if there's one for the state but was missing for the zip*/
+proc sql;
+create table spo_int.hrs_elix_cc_n12m_reg2 
+as select a.*,coalesce(a.wage_index_2012,b.wage_index_2012) as wage_index_2012_2
+from
+hrs_wage_index a
+left join
+wage_index4 b
+on a.state_n=b.state_in_wage_index;
+quit;
+
+/*check for missing values*/
+proc means;
+var wage_index_2012 wage_index_2012_2;
+run;
+
+/*57 obs have missing state so can't backfill using state wage index*/
+proc sql;
+select distinct state_n ,count(*) from spo_int.hrs_elix_cc_n12m_reg2 
+where wage_index_2012_2=. group by state_n;
+quit;
+
+/*who is missing wage index?
+most don't have valid zip codes*/
+data miss_wi;
+set spo_int.hrs_elix_cc_n12m_reg2;
+if wage_index_2012_2=.;
+run;
+
+proc freq; table state_n zip_exit_n;
+run;
+
+/******************************************************************/
+/* Get rural/urban indicator from AHRF*/
+/******************************************************************/
+/*note raw 2013 ascii file read in to sas using the .sas file in DOC subfolder*/
+libname ahrf 'E:\data\AHRF\DATA';
+
+data ahrf_raw;
+set ahrf.ahrf13_14;
+fips_cnty=f00011||f00012;
+run;
+
+data ahrf_raw;
+set ahrf.ahrf13_14;
+fips_cnty=f00011||f00012;
+run;
+
+proc freq; table f0002013; run;
+
+data ahrf_urban;
+set ahrf_raw;
+if f0002013=1 | f0002013=2 | f0002013=3 then urban_ind=1;
+if f0002013=4 | f0002013=5 | f0002013=6 | f0002013=7 | f0002013=8 | f0002013=9 then urban_ind=0;
+label urban_ind="Urban area, county level";
+run;
+
+proc freq; table urban_ind; run;
+
+/*crosswalk between zip and county code*/
+proc import datafile='E:\data\AHRF\ZIP_COUNTY_032010.xlsx'
+DBMS=xlsx out=zip_county
+replace;
+run;
+
+proc sql; create table zip_urban as select a.zip,a.county,b.urban_ind from
+zip_county a left join
+ahrf_urban b
+on a.county=b.fips_cnty;
+quit;
+
+proc freq; table urban_ind /missprint; run;
+
+/*get zip into number format*/
+data zip_urban2;
+set zip_urban;
+zip_n=zip+0;
+run;
+
+proc sort data=zip_urban2 nodupkey;
+by zip_n ;
+run;
+
+data sp_ds;
+set spo_int.hrs_elix_cc_n12m_reg2;
+run;
+
+/*merge urban indicator into dataset by zip code*/
+proc sql;
+create table spo_int.hrs_elix_cc_n12m_reg3 as select a.*,b.urban_ind
+from
+spo_int.hrs_elix_cc_n12m_reg2 a left join
+zip_urban2 b
+on a.zip_exit_n=b.zip_n;
+quit;
+
+proc freq; table urban_ind; run;
+
+H="xxxx = Process location level raw data"
+/*
+Can skip this step and just use the location data already processed
+by Ling saved:
+E:\data\Dartmouth_misc\zip_hrr_hci_bed_eol_3
+
+
+
+
+Process various data files with location data into a single file with a zip code link
+so can link up to zip code in HRS dataset
+
+Raw data is saved here:
+RG PC: C:\data\dartmouth\raw_data\
+Refer to readme.txt file for links / descriptions of data sources
+AK PC: Created new folder for Dartmouth data to be merged into 2010 dataset
+E:\data\Dartmouth_misc_2010\raw_data
+Working data saved in E:\data\Dartmouth_misc_2010
+
+Final dataset to link to HRS is:
+ */
+
+/***********************************************************************/
+/***********************************************************************/
+/*bring in excel data files
+two sections, one for RG PC, one for Amy's PC*/
+/***********************************************************************/
+/***********************************************************************/
+
+/***********************************************************************/
+/*AK filepaths*/
+/***********************************************************************//*
+/*the zip hrr crosswalk,from year 2007*/
+/*proc import datafile="E:\data\Dartmouth_misc\ZipHsaHrr07.xls"  */
+proc import datafile="E:\data\Dartmouth_misc_2010\raw_data\ZipHsaHrr07.xls"
+out=zip_hrr 
+replace;
+run;
+
+/*hci index at hrr level */
+/* proc import datafile="C:\data\Dartmouth_misc\hci_hrr.xls" */
+proc import datafile="E:\data\Dartmouth_misc_2010\raw_data\hci_hrr.xls" 
+out=hrr_hci_index 
+replace;
+run;
+
+/*capacity data per capita - number beds/physicians/specialists*/
+/*proc import datafile="E:\data\Dartmouth_misc\HRR_data_beds_specialist_per_capital.xls" */  
+proc import datafile="E:\data\Dartmouth_misc_2010\raw_data\HRR_data_beds_specialist_per_capital.xls"
+out=hrr_beds_per_capita 
+replace;
+run;
+proc contents ;
+run;
+
+/*Hrr_eol_ei_annals_2003*/
+/* proc import datafile="C:\projects\Hospice_impact_on_utilization\raw_data\Hrr_eol_ei_annals_2003.xls" */ 
+proc import datafile="E:\data\Dartmouth_misc_2010\raw_data\Hrr_eol_ei_annals_2003.xls"
+out=hrr_eol 
+replace;
+run;
+
+/*Wage index by CBSA from CMS*/
+/* proc import datafile="E:\data\Dartmouth_misc\wage_index_cbsa_2008.xls"  */
+proc import datafile="E:\data\Dartmouth_misc_2010\raw_data\wage_index_cbsa_2008.xls"  
+out=wage_index 
+replace;
+run;
+
+/*Create new libname for data to merge into 2010 dataset*/
+*libname d_raw "E:\data\Dartmouth_misc";
+libname d_raw "E:\data\Dartmouth_misc_2010\raw_data";
+libname d_wk "E:\data\Dartmouth_misc_2010";
+
+
+/***********************************************************************/
+/*RG filepaths*/
+/***********************************************************************/
+/*the zip hrr crosswalk,from year 2007*/
+proc import datafile="C:\data\dartmouth\raw_data\ZipHsaHrr07.xls"  out=zip_hrr 
+replace;
+run;
+
+/*hci index at hrr level */
+ proc import datafile="C:\data\dartmouth\raw_data\hci_hrr.xls"  out=hrr_hci_index 
+replace;
+run;
+
+/*2006 beds and physicians per capita dataset from Dartmouth*/
+proc import datafile="C:\data\dartmouth\raw_data\HRR_data_beds_specialist_per_capital.xls"  out=hrr_beds_per_capita 
+replace;
+run;
+proc contents ;
+run;
+
+/*Hrr_eol_ei_annals_2003*/
+proc import datafile="C:\data\dartmouth\raw_data\Hrr_eol_ei_annals_2003.xls" 
+out=hrr_eol 
+replace;
+run;
+
+/*Wage index by CBSA from CMS*/
+proc import datafile="C:\data\dartmouth\raw_data\wage_index_cbsa_2008.xls"  out=wage_index 
+replace;
+run;
+
+/*Create new libname for data to merge into 2010 dataset*/
+libname d_raw "C:\data\dartmouth\raw_data";
+libname d_wk "C:\data\dartmouth";
+
+/***********************************************************************/
+/***********************************************************************/
+/*Create single dataset with regional data at the HRR level
+Zip, HRR, HCI, capacity per capita, quintile of intensity, 
+pct with pal care, pct teaching hospitals */
+/***********************************************************************/
+/***********************************************************************/
+
+/*Add HCI index to zip code / HRR list*/
+proc sql;
+create table zip_hrr_hci as select a.*,b.hci_index
+from zip_hrr a 
+left join
+hrr_hci_index b
+on a.hrrnum=b.geoid;
+quit;
+
+proc means ;
+var hci_index;
+run;
+
+/*Add labels for beds/ physician per capita dataset*/
+data hrr_beds_per_capita2;
+set hrr_beds_per_capita;
+label hospital_beds="Acute Care Hospital Beds per 1,000 Residents,2006,at hrr";
+label Medical_Specialists="Medical_Specialists per 100,000 Residents,2006,at hrr";
+label Physicians="Physicians per 100,000 Residents,2006,at hrr";
+label Primary_Care="Primary_Care per 100,000 Residents,2006,at hrr";
+label Specialists="Total Specialists per 100,000 Residents,2006,at hrr";
+run;
+proc sort data=hrr_beds_per_capita2 out=hrr_beds_per_capita3 nodupkey;
+by hrr;
+run;
+
+/*merge capacity data with zip/hci dataset*/
+proc sql;
+create table zip_hrr_hci_bed(drop=hrr) as select *
+from zip_hrr_hci  a 
+left join
+hrr_beds_per_capita3 b
+on a.hrrnum=b.hrr;
+quit;
+
+proc means ;
+var hospital_beds;
+run;
+
+/*add quintile of intensity by HRR*/
+proc sql;
+create table zip_hrr_hci_bed_eol as select a.*,b.Quintile_of_Intensity as Quintile_of_eol
+from zip_hrr_hci_bed a 
+left join
+hrr_eol b
+on a.hrrnum=b.hrr_number;
+quit;
+
+/*no exclusions dataset?? not sure where this comes from...
+Appears to be a hospital level dataset with hospital
+characteristics that are then averaged by HRR to get
+the following variables:
+1. pct of  hospitals with Pal care at HRR level (canypal)
+2. pct of teaching hospitals at HRR level (medsch)
+*/
+proc contents data=d_raw.no_exclusions2;
+run;
+proc sql outobs=10;
+select distinct canypal from d_raw.no_exclusions2;
+quit;
+proc freq data=d_raw.no_exclusions2;
+table canypal uanypal medsch;
+run;
+
+data no_exclusions2;
+set d_raw.no_exclusions2;
+hrrnum=hrrcode+0;
+run;
+
+proc sql;
+create table pct_pal_hrr as
+select distinct hrrnum,sum(canypal)/count(*)*100 as pct_pal_hrr from no_exclusions2
+where hrrnum~=. and canypal~=. group by hrrnum;
+quit;
+proc means;
+var pct_pal_hrr;
+run;
+proc sql;
+create table pct_teach_hrr as
+select distinct hrrnum,sum(medsch)/count(*)*100 as pct_teach_hrr from no_exclusions2
+where hrrnum~=. and medsch~=. group by hrrnum;
+quit;
+proc means;
+var pct_teach_hrr;
+run;
+
+/*merge palliative care percentage with other zip-hrr level data*/
+proc sql;
+create table zip_hrr_hci_bed_eol_2 as select a.*,b.pct_pal_hrr
+from zip_hrr_hci_bed_eol a 
+left join
+pct_pal_hrr b
+on a.hrrnum=b.hrrnum;
+quit;
+
+/*Final merge to get the saved data file, includes:
+Hrr level, with zip:
+hci_index
+Beds per 1,000 Residents,2006,at hrr
+Specialist per 1,000 Residents,2006,at hrr
+Quintile_of_eol,
+pct_teach_hrr,pct teaching hosp
+pct_pal_hrr,pct palliative program
+*/
+proc sql;
+create table d_wk.zip_hrr_hci_bed_eol_3 as select a.*,b.pct_teach_hrr
+from zip_hrr_hci_bed_eol_2 a 
+left join
+pct_teach_hrr b
+on a.hrrnum=b.hrrnum;
+quit;
+
+/*****************************************************************************/
+/*Process wage index so have by zip rather than cbsa as received from cms
+Note, this is the same as was done for the oop project in the
+code file oop_mc_outline.otl*/
+/*****************************************************************************/ 
+
+/*Step 1: create clean xwalk between cbsa and zip*/
+
+/*Bring in xwalk file between CBSA codes and zip codes
+Note only keep variables needed from xwalk file because formats 
+are missing for some of the other text variables*/
+data zip_cb;
+set d_raw.xtract(keep=zip5 cbsa state);
+zip_n=zip5+0;
+cbsa_n=cbsa+0;
+/*If zip code is missing, add state code*/
+if zip_n~=.;
+state_n=state+0;
+run;
+
+*Remove duplicate entries for zip5 and cbsa from xwalk file;
+*Goes from 39904 to 49289 rows;
+proc sort data=zip_cb out=zip_cb2 nodupkey;
+by zip_n cbsa_n;
+run;
+
+*Check to see zip codes in a cbsa code for Rochester, NY;
+proc sql;
+select zip5, cbsa from zip_cb2
+where cbsa_n in (40380);
+quit;
+
+/*note several zip codes have multiple cbsa*/
+/*create dataset with just one entry for each zip code
+8029 zip codes have more than one cbsa code
+Just use the first one when sort*/
+
+/*this is a little different from Ling's original code
+Don't want to keep the entries where cbsa is missing for a zip code
+so drop those obs first, then sort, keep first and re-merge to get full
+list of zip codes*/
+/*for zip codes with cbsa codes*/
+data zip_cb3;
+set zip_cb2;
+if cbsa_n ~= .;
+run;
+
+proc sort data=zip_cb3 out=zip_cb4 nodupkey;
+by zip_n;
+run;
+
+/*for zip codes without cbsa codes*/
+data zip_cb3a;
+set zip_cb2;
+if cbsa_n = .;
+run;
+
+proc sort data=zip_cb3a out=zip_cb4a nodupkey;
+by zip_n;
+run;
+
+proc sql;
+create table zip_cb5 as select * from
+zip_cb4a
+where zip_n not in (select zip_n from zip_cb4); 
+quit;
+
+data cbsa_zip_final;
+set zip_cb4 zip_cb4;
+run;
+
+/*check - there should be no duplicates
+This is final xwalk of zip and cbsa*/
+proc sort data=cbsa_zip_final nodupkey;
+by zip_n;
+run;
+
+*Check to see zip codes in a cbsa code for Rochester, NY;
+proc sql;
+select zip_n, cbsa from cbsa_zip_final
+where cbsa_n in (40380);
+quit;
+
+/*Step 2: For cases with missing wage index at the cbsa level,
+replace with state average values*/
+
+/*replace those in 3 states missing wage_index as the state average*/
+data wage_index2;
+set wage_index;
+cbsa_n=cbsa_code+0;
+if trim(left(cbsa_code))~="";
+wage_index_2008=Full_Wage_Index;
+if index(trim(left(Urban_Area_Title)),", MA")>0 then MA=1;
+if index(trim(left(Urban_Area_Title)),", NJ")>0 then NJ=1;
+if index(trim(left(Urban_Area_Title)),", RI")>0 then RI=1;
+if state_in_wage_index=25 then wage_index_2008=1.0953286; 
+if state_in_wage_index=34 then wage_index_2008=1.092057; 
+if state_in_wage_index=44 then wage_index_2008=1.0783000; 
+run;
+
+*As a check look at observations from Rhode Island
+Mean is the assigned wage index for the state;
+proc freq data=wage_index2(where=(ri=1));
+table Urban_Area_Title;
+run;
+
+%let var=ri;
+proc means data=wage_index2;
+class &var;
+var wage_index_2008;
+run;
+
+/******************************************************************/
+/* Create dataset with cbsa, wage index and zip code */
+/******************************************************************/
+proc sql;
+create table zip_cbsa_wage_index as
+select a.*,b.wage_index_2008 from
+cbsa_zip_final a
+left join
+wage_index2 b
+on a.cbsa_n=b.cbsa_n;
+quit;
+
+/*Check for and remove duplicates by zip - no duplicates*/
+proc sort data=zip_cbsa_wage_index out=zip_cbsa_wage_index2 nodupkey;
+by zip_n;
+run;
+
+/******************************************************************/
+/*merge into the dataset using zip code*/
+/******************************************************************/
+
+/*sort files to prepare to merge*/
+proc sort data=zip_cbsa_wage_index out=zip_cbsa_wage_index2 nodupkey;
+by zip_n;
+run;
+
+proc sort data=d_wk.zip_hrr_hci_bed_eol_3 out=zip_old nodupkey;
+by zipcode07;
+run;
+
+proc sql;
+create table d_wk.zip_hrr_hci_bed_eol_4 as select a.*,b.wage_index_2008
+from zip_old a 
+left join
+zip_cbsa_wage_index2(where=(zip_n~=.)) b
+on a.zipcode07=b.zip_n;
+quit;
+
+/*21814 zip codes do not have wage index at the cbsa level*/
+proc freq;
+table wage_index_2008 /missprint;
+run;
+
+/*for these missing wage index, use the state average*/
+
+
+
+H="Create additional variables"
+/*creates the following additional variables:
+1. r_adl change between waves
+2. age at death
+3. female indicator
+4. hs education
+5. relig importance
+6. live alone different waves
+*/
+
+proc freq data=spo_int.hrs_elix_cc_n12m_reg3;
+table r_adl_cat_core_n1 r_adl_cat_core_n2 /missprint;
+run;
+
+data adl_change_1;
+set spo_int.hrs_elix_cc_n12m_reg3;
+
+/*initalize variable - stable ind = 1 if stays the same or improves (0 if declines)*/
+r_adl_stable_ind_n1n2=0;
+if ((r_adl_cat_core_n1=0) & (r_adl_cat_core_n2=0)) then r_adl_stable_ind_n1n2=1 ;
+* to account from those who improved from moderate to independent (overlap with r_adl_improved_n1n2);
+if ((r_adl_cat_core_n1=0) & (r_adl_cat_core_n2=1 | r_adl_cat_core_n2=2)) then r_adl_stable_ind_n1n2=1 ;
+
+r_adl_stable_partial_n1n2=0;
+if ((r_adl_cat_core_n1=1) & (r_adl_cat_core_n2=1)) then r_adl_stable_partial_n1n2=1 ;;
+* to account from those who improved from severe to moderate (overlap with r_adl_improved_n1n2);
+if ((r_adl_cat_core_n1=1) & (r_adl_cat_core_n2=2)) then r_adl_stable_partial_n1n2=1 ;
+
+r_adl_stable_severe_n1n2=0;
+ if ((r_adl_cat_core_n1=2) & (r_adl_cat_core_n2=2)) then r_adl_stable_severe_n1n2=1;
+
+r_adl_change_i_m_n1n2=0;
+if ((r_adl_cat_core_n1=1) & (r_adl_cat_core_n2=0)) then r_adl_change_i_m_n1n2=1 ;
+
+r_adl_change_i_s_n1n2=0;
+if ((r_adl_cat_core_n1=2) & (r_adl_cat_core_n2=0)) then r_adl_change_i_s_n1n2=1 ;
+
+r_adl_change_m_s_n1n2=0;
+if ((r_adl_cat_core_n1=2)& (r_adl_cat_core_n2=1)) then r_adl_change_m_s_n1n2=1 ;
+
+r_adl_improved_n1n2=0;
+ if ((r_adl_cat_core_n1=1) & (r_adl_cat_core_n2=2)) then r_adl_improved_n1n2=1;
+if ((r_adl_cat_core_n1=0) & (r_adl_cat_core_n2=1 | r_adl_cat_core_n2=2)) then r_adl_improved_n1n2=1 ;
+
+/*if n1 or n2 adl category is missing, new category for missing data so not dropped from analysis*/
+array list r_adl_stable_ind_n1n2 r_adl_stable_partial_n1n2 r_adl_stable_severe_n1n2 r_adl_change_i_m_n1n2 r_adl_change_i_s_n1n2 r_adl_change_m_s_n1n2 r_adl_improved_n1n2;
+do over list;
+if r_adl_cat_core_n1=. or  r_adl_cat_core_n2=.  then list=0;
+end;
+
+r_adl_change_n1n2_miss=0;
+if r_adl_cat_core_n1=. or  r_adl_cat_core_n2=.  then r_adl_change_n1n2_miss=1;
+
+
+label r_adl_stable_ind_n1n2="R ADL Ind. stable or improving n2 to n1, 1=Yes";
+label r_adl_stable_partial_n1n2="R ADL Partial Depend, stable n2 to n1, 1=Yes";
+label r_adl_stable_severe_n1n2="R ADL Severe Depend, stable n2 to n1, 1=Yes";
+label r_adl_change_i_m_n1n2="R ADL Indep. to Partial Depend n2 to n1, 1=Yes";
+label r_adl_change_i_s_n1n2="R ADL Indep. to Severe Depend n2 to n1, 1=Yes";
+label r_adl_change_m_s_n1n2="R ADL Partial to Severe Depend n2 to n1, 1=Yes";
+label r_adl_improved_n1n2="R ADL Improvement n2 to n1, 1=Yes";
+label r_adl_change_n1n2_miss="R ADL n2 to n1 unknown";
+
+r_adl_stable_ind_xn1=0;
+if ((r_adl_cat_x=0) & (r_adl_cat_core_n1=0)) then r_adl_stable_ind_xn1=1 ;
+* to account from those who improved from moderate to independent (overlap with r_adl_improved_xn1);
+if ((r_adl_cat_x=0) & (r_adl_cat_core_n1=1 | r_adl_cat_core_n1=2)) then r_adl_stable_ind_xn1=1 ;
+
+r_adl_stable_partial_xn1=0;
+if ((r_adl_cat_x=1) & (r_adl_cat_core_n1=1)) then r_adl_stable_partial_xn1=1 ;;
+* to account from those who improved from severe to moderate (overlap with r_adl_improved_xn1);
+if ((r_adl_cat_x=1) & (r_adl_cat_core_n1=2)) then r_adl_stable_partial_xn1=1 ;
+
+r_adl_stable_severe_xn1=0;
+ if ((r_adl_cat_x=2|r_adl_cat_x=3) & (r_adl_cat_core_n1=2)) then r_adl_stable_severe_xn1=1;
+
+r_adl_change_i_m_xn1=0;
+if ((r_adl_cat_x=1) & (r_adl_cat_core_n1=0)) then r_adl_change_i_m_xn1=1 ;
+
+r_adl_change_i_s_xn1=0;
+if ((r_adl_cat_x=2|r_adl_cat_x=3) & (r_adl_cat_core_n1=0)) then r_adl_change_i_s_xn1=1 ;
+
+r_adl_change_m_s_xn1=0;
+if ((r_adl_cat_x=2|r_adl_cat_x=3)& (r_adl_cat_core_n1=1)) then r_adl_change_m_s_xn1=1 ;
+
+r_adl_improved_xn1=0;
+ if ((r_adl_cat_x=1) & (r_adl_cat_core_n1=2)) then r_adl_improved_xn1=1;
+if ((r_adl_cat_x=0) & (r_adl_cat_core_n1=1 | r_adl_cat_core_n1=2)) then r_adl_improved_xn1=1 ;
+
+array list2 r_adl_stable_ind_xn1 r_adl_stable_partial_xn1 r_adl_stable_severe_xn1 r_adl_change_i_m_xn1 r_adl_change_i_s_xn1 r_adl_change_m_s_xn1 r_adl_improved_xn1;
+do over list2;
+if r_adl_cat_x=. or  r_adl_cat_core_n1=.  then list2=.;
+end;
+
+label r_adl_stable_ind_xn1="R ADL stable or improving n1 to exit, 1=Yes";
+label r_adl_stable_partial_xn1="R ADL Partial Depend, stable n1 to exit, 1=Yes";
+label r_adl_stable_severe_xn1="R ADL Severe Depend, stable n1 to exit, 1=Yes";
+label r_adl_change_i_m_xn1="R ADL Indep. to Partial Depend n1 to exit, 1=Yes";
+label r_adl_change_i_s_xn1="R ADL Indep. to Severe Depend n1 to exit, 1=Yes";
+label r_adl_change_m_s_xn1="R ADL Partial to Severe Depend n1 to exit, 1=Yes";
+label r_adl_improved_xn1="R ADL Improvement n1 to exit, 1=Yes";
+
+*For spouse n2 to n1;
+s_adl_stable_ind_n1n2=0;
+if ((s_adl_cat_core_n1=0) & (s_adl_cat_core_n2=0)) then s_adl_stable_ind_n1n2=1 ;
+* to account from those who improved from moderate to independent (overlap with s_adl_improved_n1n2);
+if ((s_adl_cat_core_n1=0) & (s_adl_cat_core_n2=1 | s_adl_cat_core_n2=2)) then s_adl_stable_ind_n1n2=1 ;
+
+s_adl_stable_partial_n1n2=0;
+if ((s_adl_cat_core_n1=1) & (s_adl_cat_core_n2=1)) then s_adl_stable_partial_n1n2=1 ;;
+* to account from those who improved from severe to moderate (overlap with s_adl_improved_n1n2);
+if ((s_adl_cat_core_n1=1) & (s_adl_cat_core_n2=2)) then s_adl_stable_partial_n1n2=1 ;
+
+s_adl_stable_severe_n1n2=0;
+ if ((s_adl_cat_core_n1=2) & (s_adl_cat_core_n2=2)) then s_adl_stable_severe_n1n2=1;
+
+s_adl_change_i_m_n1n2=0;
+if ((s_adl_cat_core_n1=1) & (s_adl_cat_core_n2=0)) then s_adl_change_i_m_n1n2=1 ;
+
+s_adl_change_i_s_n1n2=0;
+if ((s_adl_cat_core_n1=2) & (s_adl_cat_core_n2=0)) then s_adl_change_i_s_n1n2=1 ;
+
+s_adl_change_m_s_n1n2=0;
+if ((s_adl_cat_core_n1=2)& (s_adl_cat_core_n2=1)) then s_adl_change_m_s_n1n2=1 ;
+
+s_adl_improved_n1n2=0;
+ if ((s_adl_cat_core_n1=1) & (s_adl_cat_core_n2=2)) then s_adl_improved_n1n2=1;
+if ((s_adl_cat_core_n1=0) & (s_adl_cat_core_n2=1 | s_adl_cat_core_n2=2)) then s_adl_improved_n1n2=1 ;
+
+/*if n1 or n2 adl category is missing, then set to missing*/
+array slist s_adl_stable_ind_n1n2 s_adl_stable_partial_n1n2 s_adl_stable_severe_n1n2 s_adl_change_i_m_n1n2 s_adl_change_i_s_n1n2 s_adl_change_m_s_n1n2 s_adl_improved_n1n2;
+do over slist;
+if s_adl_cat_core_n1=. or  s_adl_cat_core_n2=.  then slist=.;
+end;
+
+label s_adl_stable_ind_n1n2="S ADL Ind. stable or improving n2 to n1, 1=Yes";
+label s_adl_stable_partial_n1n2="S ADL Partial Depend, stable n2 to n1, 1=Yes";
+label s_adl_stable_severe_n1n2="S ADL Severe Depend, stable n2 to n1, 1=Yes";
+label s_adl_change_i_m_n1n2="S ADL Indep. to Partial Depend n2 to n1, 1=Yes";
+label s_adl_change_i_s_n1n2="S ADL Indep. to Severe Depend n2 to n1, 1=Yes";
+label s_adl_change_m_s_n1n2="S ADL Partial to Severe Depend n2 to n1, 1=Yes";
+label s_adl_improved_n1n2="S ADL Improvement n2 to n1, 1=Yes";
+
+r_age=year(r_death_date_e)-year(r_birth_date_e);
+label r_age="R's Age at death";
+if r_gender_e=1 then r_female=0;
+if r_gender_e=2 then r_female=1; *from tracker;
+label r_female="R Female";
+
+s_age=year(r_death_date_e)-year(s_birth_date_e);
+label s_age="S's Age at R's death";
+if s_gender_e=1 then s_female=0;
+if s_gender_e=2 then s_female=1; *from tracker;
+label s_female="S Female";
+
+if r_degree_e in (0) then r_hseduc=0;
+if r_degree_e>0 then r_hseduc=1;
+label r_hseduc="R HS degree +";
+if s_degree_e in (0) then s_hseduc=0;
+if s_degree_e>0 then s_hseduc=1;
+label s_hseduc="S HS degree +";
+
+r_imprelig_vimp_n1=r_imprelig_n1<=1;
+if r_imprelig_n1=. then r_imprelig_vimp_n1=.;
+label r_imprelig_vimp_n1="R Religion very important";
+
+s_imprelig_vimp_n1=s_imprelig_n1<=1;
+if s_imprelig_n1=. then s_imprelig_vimp_n1=.;
+label s_imprelig_vimp_n1="S Religion very important";
+
+/*live alone core n1, n2?
+If household size = 0 and not nursing home resident, then yes*/
+if r_hhm_n1=0 and r_nhres_n1~=1 then r_livealone_n1=1;
+if r_hhm_n1>0 or r_nhres_n1=1 then r_livealone_n1=0;
+if r_hhm_n2=0 and r_nhres_n2~=1 then r_livealone_n2=1;
+if r_hhm_n2>0 or r_nhres_n2=1 then r_livealone_n2=0;
+
+run;
+
+proc freq; table r_female*s_female r_hseduc*s_hseduc; run;
+
+libname spo_fnl 'E:\data\spouse\final_data';
+
+data spo_fnl.spouse_data;
+set adl_change_1;
+run;
+
+option fmterr=no;
+proc export data=spo_fnl.spouse_data
+outfile="E:\data\spouse\final_data\spouse_data_full.dta" replace;
+run;
+
+
+ods rtf body="E:\data\spouse\logs\spouse_2012_variable_lists.rtf" ;
+
+proc contents data=spo_fnl.spouse_data; run;
+
+ods rtf close;
+
+
+
+
+
+H="Create table of eol symptoms for decedent"
+/*get tabulation of symptoms at EOL from exit interviews for decedents, exploratory*/
+capture log close
+
+clear all
+set more off
+set scheme s1color
+
+//Amy's PC
+local logpath E:\data\spouse\logs\sept2014
+local datapath E:\data\spouse\final_data
+
+log using "`logpath'\01-HRS_Spouse_symptoms_exit.txt", text replace
+
+cd `datapath'
+
+use spouse_data_full.dta
+******************************************************
+//drop if not married, with spouse interview before,after death
+tab r_married_x r_married_or_part_v2_x , missing
+keep if r_married_or_part_v2_x==1
+
+tab s_core_year_n1, missing
+tab s_core_year_p1, missing
+drop if s_core_year_n1==. | s_core_year_p1==.
+
+tab r_exit_year_x, missing
+******************************************************
+local sympt r_pain_hrs_x r_pain_level_hrs_x r_dyspnea_hrs_x r_no_appet_hrs_x ///
+r_vomit_hrs_x r_depr_exit_x r_delirium_exit_x r_fatigue_hrs_x r_incont_hrs_x
+
+foreach v in `sympt'{
+tab `v',missing
+}
+ 
+tab r_pain_level_hrs_x if r_pain_hrs_x==1, missing
+
+******************************************************
+log close
+

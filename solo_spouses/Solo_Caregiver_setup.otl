@@ -36,7 +36,7 @@ spo_int.exit_restricted_02_to_12_v1
 
 /*Set libnames for the project*/
 libname hrs_cln 'E:\data\hrs_cleaned'; /*(contains exit, restricted, and core ivw's)*/
-libname spo_int 'E:\data\spouse 2.0\int_data';
+libname spo_int 'E:\data\solo_spouses\int_data';
 libname rand 'E:\data\hrs_public_2012\rand2012\main';
 libname medi 'E:\data\cms_DUA_24548_2012';
 
@@ -47,7 +47,7 @@ libname medi 'E:\data\cms_DUA_24548_2012';
 /*******************************************************************/
 
 data exit_1;
-set hrs_cln.exit_02_to_12_dt;
+set hrs_cln.exit_02_to_14_dt;
 run;
 
 /*just keep cleaned variables from exit interview*/
@@ -242,13 +242,21 @@ set exit_restricted_02_to_14;
 if r_id<0 or r_id=. then delete;
 run;
 
-/*uses 2010 cause of death file, not updated for 2012 as of June 4, 2015*/
-proc freq;
-table r_CAUSE_DEATH_12_N_e;
+proc import datafile="E:\data\hrs_cleaned\death_date_2014.dta" out=death_2014 dbms=stata replace; run;
+
+data spo_int.exit_restricted_02_to_14_v1 (drop = r_death_date_e);
+set spo_int.exit_restricted_02_to_14_v1;
 run;
 
-proc freq data=spo_int.exit_restricted_02_to_10_v1;
-table r_CAUSE_DEATH_12_N_e;
+proc sql;
+create table exit_restricted_02_to_14_v1 as select a.*, b.death_date
+from spo_int.exit_restricted_02_to_14_v1 a
+inner join death_2014 b
+on a.r_id = b.id;
+quit;
+
+data spo_int.exit_restricted_02_to_14_v1 (rename=(death_date = r_death_date_e));
+set exit_restricted_02_to_14_v1;
 run;
 
 
@@ -263,13 +271,20 @@ proc freq;
 table r_death_year*r_EXIT_YEAR_x /missprint;
 run;
 
+
+proc freq;
+table r_death_year /missprint;
+run;
+
 proc means data= spo_int.exit_restricted_02_to_14_v1; var r_death_date_e; run;
+
+
 
 H="Get spouse id from Rand spouse mc xwalk id"
 /*Gets spouse id for each decedent from rand xwave file
 Get spouse medicare xwalk id from xwalk file */
 
-libname spo_int 'E:\data\spouse 2.0\int_data';
+libname spo_int 'E:\data\solo_spouses\int_data';
 libname rand 'E:\data\hrs_public_2014\rand2014\main';
 *libname rand 'C:\HRS\rand2010\data';
 
@@ -407,13 +422,25 @@ libname spo_int 'E:\data\solo_spouses\int_data';
 /*******************************************************************/
 
 /*convert the id from the core dataset to a numeric variable*/
+
+proc import datafile="E:\data\hrs_cleaned\core_00_to_14old.dta" out=core_00_to_14 dbms=stata replace; run; 
+
 data core_00_to_14_idnum;
-set hrs_cln.core_00_to_14;
+set core_00_to_14;
 id_num=input(id,9.);
 label id_num="HRS hhidpn";
 drop id;
 rename id_num=id;
 run;
+
+proc freq data=core_00_to_14_idnum; tables c_ivw_date; run;
+
+data spo_int.Exit_restricted_02_to_14_sp;
+set spo_int.Exit_restricted_02_to_14_sp;
+format r_death_date_e date9.;
+run;
+
+proc freq data=spo_int.Exit_restricted_02_to_14_sp; tables r_death_date_e; run; /* 9236 unique r_id with exits between 02 to 2014 and a known death date */
 
 
 /*list of all core interviews before death date*/
@@ -426,13 +453,13 @@ core_00_to_14_idnum b
   on a.r_id=b.id and a.r_death_date_e>b.c_ivw_date;
   quit;
 
+
 proc sort data=r_n1_core_before_death ;
 by r_id c_ivw_date;
 run;
 
 /*keep only the n1 core interview
-7665 interviews identified
-of these, 167 are in 1998 so will be dropped because no n2 core*/
+9094 with a N1 between 2000-2014 */
 data resp_core_n1;
 set r_n1_core_before_death;
 by r_id c_ivw_date;
@@ -463,7 +490,7 @@ by r_id c_ivw_date;
 run;
 
 /*keep only the n2 core interview
-7343 interviews identified*/
+8686 have both n1+n2*/
 data resp_core_n2;
 set r_n2_core_before_death;
 by r_id c_ivw_date;
@@ -485,11 +512,18 @@ and s's exit interview and restricted data*/
 /*******************************************************************/
 /*******************************************************************/
 
-/*get list of all spouse core interviews before r's death date*/
+data exit_restricted_02_to_14_sp;
+set spo_int.exit_restricted_02_to_14_sp;
+where sp_id>0;
+run;
+
+proc freq data=exit_restricted_02_to_14_sp; tables sp_id / missprint; run;
+
+/*get list of all spouse core interviews before r's death date - 3634 r with spouses at death*/
 proc sql;
 create table s_n1_core_before_death(drop=id)
 as select b.*,a.sp_id,a.r_id
- from spo_int.exit_restricted_02_to_14_sp(where=(sp_id>0) and (c_ivw_date ne .)) a 
+ from exit_restricted_02_to_14_sp a 
  inner join
 core_00_to_14_idnum b
   on a.sp_id=b.id and a.r_death_date_e>b.c_ivw_date;
@@ -500,7 +534,7 @@ by sp_id c_ivw_date;
 run;
 
 /*just keep the n1 core interview for the spouse
-**3021 interviews*/
+**3577 interviews*/
 data sp_core_n1;
 set s_n1_core_before_death;
 by sp_id c_ivw_date;
@@ -530,7 +564,7 @@ by sp_id c_ivw_date;
 run;
 
 /*just keep the n2 core interview for the spouse
-**2938 interviews*/
+**3465 interviews*/
 data sp_core_n2;
 set s_n2_core_before_death;
 by sp_id c_ivw_date;
@@ -824,130 +858,21 @@ use "E:\data\solo_spouses\int_data\r_s_core_x_e.dta", clear
 merge 1:1 r_hhidpn_n1 r_core_year_n1 using "E:\data\spouse 2.0\int_data\helperfile.dta", keepus(n_hp n_s)
 
 H="Regression"
-keep if s_hhidpn_n1!=. & s_c_ivw_date_n1!=. // & r_nhres_n1==0
-replace spouse_hlp = 0 if spouse_hlp==.
-
-gen spouse2 = 0 if spouse_hlp==1
-replace spouse2 = 1 if spouse_hlp==2
-
-
-gen solo_hlp = 0
-replace solo_hlp = 1 if spouse_hlp==1
-label var solo_hlp "Spouse is solo helper"
-
-local logpath "E:\projects\solo_spouses\archive_logs"
-log using `logpath'\logistic_reg.txt, text replace
-
-
-/* Spouse OLS regression */
-
-local rvars r_srh_pf_n1 r_adl_dependence_core_n1 r_demalz_core_n1 r_nw_midlow_n1 r_nw_midhigh_n1 r_nw_highest_n1 r_nhres_n1  r_dexp_x r_hospice_x r_advdir_x
-local svars s_srh_pf_n1 s_age_death s_female_n1 s_white_e s_comor_in_hrs_n1 s_psych_treat_n1 s_cesd_tot_ge3_n1 solo_hlp
-
-* Calculate change in CESD score pre & post spouse death 
-
-*cap gen s_cesd_change = s_cesd_tot_p1 - s_cesd_tot_n1
-
-logit s_cesd_tot_ge3_p1 `rvars' `svars'
-
-
-foreach x of varlist s_cesd_change `rvars' `svars' {
-
-cap drop miss_`x'
-
- gen miss_`x' = 0
- replace miss_`x' = 1 if `x'==. // number of missing values for variable
- tab miss_`x'
- 
- }
- /*
- recode r_demalz_core_n1 r_hospice_x (.=0) imputed 0 for missing values of dementia/alz and hospice care at death
- */
- 
-outreg using `logpath'\logistic_Results, ///
-varlabels stats(e_b e_ci p) nosubstat ///
-title("Logistic Regression: Outcome=Spouse CES-D score >=3 at P1") ///
-ctitles("" "Std. Coefficient" "95% CI" "P-value") ///
-note("Standardized Coefficients, <1 indicates less likely to be depressed post death," \ ///
-"Self-Rated Health to Comorbidites are R's N1" \ ///
-"Death Expected to Advance Directive are R's Exit" \ ///
-"Souse age to comorbidites are Spouse N1 variables") ///
-starlevels(10 5 1) summstat(N) landscape replace
-
-log close
-
-
-H="Table 1"
+use "E:\data\solo_spouses\int_data\r_s_core_x_e.dta", clear 
 
 gen spouse_hlp = 0 if n_s==0 & s_hhidpn_n1!=. // helper, no spouse
 replace spouse_hlp = 1 if n_hp==1 & n_s==1 // spouse solo helper
 replace spouse_hlp = 2 if n_hp>1 & n_hp!=. & n_s==1 // spouse non-solo hlp
 
-*la define spouselbl 0"helper, no spouse"1"Spouse solo helper"2"spouse non-solo"
+la define spouselbl 0"helper, no spouse"1"Spouse solo helper"2"spouse non-solo"
 la values spouse_hlp spouselbl
 
-
-preserve 
-
-keep if r_bid_hrs==" " | r_hhidpn_n1==.
-
-save appendlater.dta, replace
-
-restore
-
-drop if r_bid_hrs==" " | r_hhidpn_n1==.
-
-
-/* Decedent Characterisitcs 
-
-*get death year from exit to calculate decedent age
-
-cap drop _m
-
-merge 1:1 r_hhidpn_n1 r_bid_hrs using "E:\data\hrs_cleaned\death_date_2012.dta"
-
-drop if _m==2
-drop _m
-
-merge 1:1 r_hhidpn_n1 using "E:\data\YN295\int_data\death_2014.dta" 
-
-append using appendlater.dta
-
-save , replace
-
-list of vars for table 1:
-
-* respondent 
-
-age_death 
-
-r_srh_pf_n1 r_nhres_n1 r_dexp_x r_location_x r_adl_dependence_core_n1
-r_demalz_core_n1 r_female_n1 r_white_e r_networth_adj2012_n1
-
-r_comor_in_hrs_n1
-
-
-* spouse
-
-s_age_death s_age_ivw_n1 
-s_srh_pf_n1 s_female_n1 s_cesd_tot_n1 s_cesd_tot_ge3_n1
-s_networth_adj2012_n1
-
-s_comor_in_hrs_n1 s_time_exit_n1
-
-local r_vars1 r_age_death r_networth_adj2012_n1 r_comor_in_hrs_n1
-local r_vars2 r_srh_pf_n1 r_nhres_n1 r_dexp_x r_location_x r_adl_dependence_core_n1 //
-r_demalz_core_n1 r_female_n1 r_white_e
-
-local s_vars1 s_age_death s_age_ivw_n1 s_comor_in_hrs_n1 s_time_exit_n1 s_networth_adj2012_n1 s_cesd_tot_n1
-local s_vars2 s_cesd_tot_ge3_n1 s_srh_pf_n1 s_female_n1
-*/
+keep if s_hhidpn_n1!=.
 
 
 
 
-
-gen r_age_death = (death_all - r_birth_date_e)/365.25
+gen r_age_death = (r_death_date_e - r_birth_date_e)/365.25
 
 recast int r_age_death, force
 
@@ -964,7 +889,129 @@ label var r_adl_dependence_core_n1 "ADL dependent at N1"
 gen r_nonwhite_e = 0 if r_white_e!=.
 replace r_nonwhite_e =1 if r_white_e==0
 
-gen s_age_death = (death_all - s_birth_date_e)/365.25
+gen s_age_death = (r_death_date_e - s_birth_date_e)/365.25
+recast int s_age_death, force
+label var s_age_death "Spouse age at death"
+
+gen s_age_ivw_n1 = (s_c_ivw_date_n1 - s_birth_date_e)/365.25
+recast int s_age_ivw_n1, force
+label var s_age_ivw_n1 "Spouse age at N1"
+
+cap drop s_time_exit_n1
+gen s_time_exit_n1 = (r_e_ivw_date_x - s_c_ivw_date_n1)/30.4
+recast int s_time_exit_n1, force
+label var s_time_exit_n1 "Months between Exit & N1, Spouse"
+
+
+gen spouse2 = 0 if spouse_hlp==1
+replace spouse2 = 1 if spouse_hlp==2
+
+
+gen solo_hlp = 0
+replace solo_hlp = 1 if spouse_hlp==1
+label var solo_hlp "Spouse is solo helper"
+
+
+local logpath "E:\projects\solo_spouses\archive_logs"
+cap log close
+log using `logpath'\logistic_reg.txt, text replace
+
+
+/* Spouse OLS regression */
+
+local rvars r_srh_pf_n1 r_adl_dependence_core_n1 r_demalz_core_n1 r_nw_midlow_n1 r_nw_midhigh_n1 r_nw_highest_n1 r_nhres_n1  r_dexp_x r_hospice_x r_advdir_x
+local svars s_srh_pf_n1 s_age_death s_female_n1 s_white_e s_comor_in_hrs_n1 s_psych_treat_n1 s_cesd_tot_ge3_n1 solo_hlp
+
+
+*Calculate change in CESD score pre & post spouse death 
+
+cap gen s_cesd_change = s_cesd_tot_p1 - s_cesd_tot_n1
+
+
+
+foreach x of varlist s_cesd_change `rvars' `svars' {
+
+cap drop miss_`x'
+
+ gen miss_`x' = 0
+ replace miss_`x' = 1 if `x'==. // number of missing values for variable
+ tab miss_`x'
+ 
+ }
+
+recode r_demalz_core_n1 r_hospice_x (.=0) /* imputed 0 for missing values of dementia/alz and hospice care at death */
+
+ 
+logit s_cesd_tot_ge3_p1 `rvars' `svars'
+
+
+
+ 
+
+
+ 
+outreg using `logpath'\logistic_Results, ///
+varlabels stats(e_b e_ci p) nosubstat ///
+title("Logistic Regression: Outcome=Spouse CES-D score >=3 at P1") ///
+ctitles("" "Std. Coefficient" "95% CI" "P-value") ///
+note("Standardized Coefficients, <1 indicates less likely to be depressed post death," \ ///
+"Self-Rated Health to Comorbidites are R's N1" \ ///
+"Death Expected to Advance Directive are R's Exit" \ ///
+"Souse age to comorbidites are Spouse N1 variables") ///
+starlevels(10 5 1) summstat(N) landscape replace
+
+
+outreg, clear
+regress s_cesd_change `rvars' `svars'
+
+outreg using `logpath'\OLS_Results, ///
+varlabels stats(e_b e_ci p) nosubstat ///
+title("OLS Regression: Outcome=Spouse Change in CES-D score at P1") ///
+ctitles("" "Std. Coefficient" "95% CI" "P-value") ///
+note("Standardized Coefficients, <1 indicates less likely to be depressed post death," \ ///
+"Self-Rated Health to Comorbidites are R's N1" \ ///
+"Death Expected to Advance Directive are R's Exit" \ ///
+"Souse age to comorbidites are Spouse N1 variables") ///
+starlevels(10 5 1) summstat(N) landscape replace
+
+
+
+log close
+
+
+H="Table 1"
+use "E:\data\solo_spouses\int_data\r_s_core_x_e.dta", clear 
+
+gen spouse_hlp = 0 if n_s==0 & s_hhidpn_n1!=. // helper, no spouse
+replace spouse_hlp = 1 if n_hp==1 & n_s==1 // spouse solo helper
+replace spouse_hlp = 2 if n_hp>1 & n_hp!=. & n_s==1 // spouse non-solo hlp
+
+la define spouselbl 0"helper, no spouse"1"Spouse solo helper"2"spouse non-solo"
+la values spouse_hlp spouselbl
+
+keep if s_hhidpn_n1!=.
+
+
+
+
+gen r_age_death = (r_death_date_e - r_birth_date_e)/365.25
+
+recast int r_age_death, force
+
+label var r_age_death "R age at death"
+
+gen r_adl_dependence_core_n1 = 0 if r_adl_independent_core_n1!=.
+replace r_adl_dependence_core_n1 = 1 if r_adl_independent_core_n1==0
+
+gen r_demalz_core_n1 = 0 if r_dem_hrs_n1!=. | r_alz_hrs_n1!=.
+replace r_demalz_core_n1 = 1 if r_dem_hrs_n1==1 | r_alz_hrs_n1==1
+label var r_demalz_core_n1 "Dementia/Alzheimer's at N1"
+label var r_adl_dependence_core_n1 "ADL dependent at N1"
+
+gen r_nonwhite_e = 0 if r_white_e!=.
+replace r_nonwhite_e =1 if r_white_e==0
+
+gen s_age_death = (r_death_date_e - s_birth_date_e)/365.25
 recast int s_age_death, force
 label var s_age_death "Spouse age at death"
 
@@ -979,42 +1026,37 @@ label var s_time_exit_n1 "Months between Exit & N1, Spouse"
 
 
 
-preserve
+*preserve
 
-
-keep if s_hhidpn_n1!=. & s_c_ivw_date_n1!=. & r_nhres_n1==0
 replace spouse_hlp = 0 if spouse_hlp==.
 
 gen spouse2 = 0 if spouse_hlp==1
 replace spouse2 = 1 if spouse_hlp==2
 
 
-gen r_time_death_n1 = (death_all - r_c_ivw_date_n1)/30.4
+gen r_time_death_n1 = (r_death_date_e - r_c_ivw_date_n1)/30.4
 label var r_time_death_n1 "Months between Death and N1, R"
 
-gen s_time_death_n1 = (death_all - s_c_ivw_date_n1)/30.4
+gen s_time_death_n1 = (r_death_date_e - s_c_ivw_date_n1)/30.4
 label var s_time_death_n1 "Months between Death and N1, Spouse"
 
 
 
 
 *preserve
+*keep if r_nhres_x==0
 
 label var r_loc_hosp_x "Respondent Died in Hospital"
 label var s_cesd_tot_p1 "Total CESD Count at P1"
 label var s_cesd_tot_ge3_p1 "CESD Count 3+ at P1" 
 
-
 /********************************/
-
-cap gen s_cesd_change = s_cesd_tot_p1 - s_cesd_tot_n1
-cap label var s_cesd_change  "Average Change in CES-D"
 
 local r_vars1 r_age_death r_networth_adj2012_n1 r_comor_in_hrs_n1
 local r_vars2 r_srh_pf_n1 r_nhres_n1 r_dexp_x r_loc_hosp_x r_adl_dependence_core_n1 r_demalz_core_n1 r_female_n1 r_white_e
 
-local s_vars1 s_age_death s_age_ivw_n1 s_comor_in_hrs_n1 s_time_exit_n1 s_time_death_n1 s_networth_adj2012_n1 s_cesd_tot_n1 s_cesd_tot_p1 s_cesd_change 
-local s_vars2 s_cesd_tot_ge3_n1 s_cesd_tot_ge3_p1 s_srh_pf_n1 s_psych_treat_n1 s_female_n1
+local s_vars1 s_age_death s_age_ivw_n1 s_comor_in_hrs_n1 s_time_exit_n1 s_time_death_n1 s_networth_adj2012_n1 s_cesd_tot_n1 s_cesd_tot_p1
+local s_vars2 s_cesd_tot_ge3_n1 s_cesd_tot_ge3_p1 s_srh_pf_n1 s_female_n1
 
 
 local rd: word count 1 `r_vars1' `r_vars2' 1 `s_vars1' `s_vars2' 1
@@ -1109,15 +1151,14 @@ mat list tab1
 
 /*
 frmttable using "E:\projects\solo_spouses\archive_logs\table1_fullsample.doc", replace statmat(tab1) ///
-varlabels title("Summary Statistics: HRS couples with a Deceased Spouse as of Exit 2012") ctitles("Variables" "Non-Helping Spouse" "Spouse Helper, Solo" "Spouse Helper, Non-Solo") sdec(2) annotate(stars) asymbol(*,**) ///
+varlabels title("Summary Statistics: HRS couples with a Deceased Spouse as of Exit 2014") ctitles("Variables" "Non-Helping Spouse" "Spouse Helper, Solo" "Spouse Helper, Non-Solo") sdec(2) annotate(stars) asymbol(*,**) ///
 note("Sig test is Solo Spouse vs Non-Solo Spouse: *p<0.05, **p<0.01")
 */
 
 
 frmttable using "E:\projects\solo_spouses\archive_logs\table1_nonnursing.doc", replace statmat(tab1) ///
-varlabels title("Summary Statistics: HRS couples with a Deceased Spouse as of Exit 2012 (Non-nursing at decedant N1)") ctitles("Variables" "Non-Helping Spouse" "Spouse Helper, Solo" "Spouse Helper, Non-Solo") sdec(2) annotate(stars) asymbol(*,**) ///
+varlabels title("Summary Statistics: HRS couples with a Deceased Spouse as of Exit 2014") ctitles("Variables" "Non-Helping Spouse" "Spouse Helper, Solo" "Spouse Helper, Non-Solo") sdec(2) annotate(stars) asymbol(*,**) ///
 note("Sig test is Solo Spouse vs Non-Solo Spouse: *p<0.05, **p<0.01")
-
 
 
 H="********************"

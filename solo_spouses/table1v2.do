@@ -1,21 +1,13 @@
+use "E:\data\solo_spouses\int_data\r_s_core_x_e.dta", clear 
 
 gen spouse_hlp = 0 if n_s==0 & s_hhidpn_n1!=. // helper, no spouse
 replace spouse_hlp = 1 if n_hp==1 & n_s==1 // spouse solo helper
 replace spouse_hlp = 2 if n_hp>1 & n_hp!=. & n_s==1 // spouse non-solo hlp
 
-*la define spouselbl 0"helper, no spouse"1"Spouse solo helper"2"spouse non-solo"
+la define spouselbl 0"helper, no spouse"1"Spouse solo helper"2"spouse non-solo"
 la values spouse_hlp spouselbl
 
-
-preserve 
-
-keep if r_bid_hrs==" " | r_hhidpn_n1==.
-
-save appendlater.dta, replace
-
-restore
-
-drop if r_bid_hrs==" " | r_hhidpn_n1==.
+keep if s_hhidpn_n1!=.
 
 
 /* Decedent Characterisitcs 
@@ -67,7 +59,7 @@ local s_vars2 s_cesd_tot_ge3_n1 s_srh_pf_n1 s_female_n1
 
 
 
-gen r_age_death = (death_all - r_birth_date_e)/365.25
+gen r_age_death = (r_death_date_e - r_birth_date_e)/365.25
 
 recast int r_age_death, force
 
@@ -84,7 +76,7 @@ label var r_adl_dependence_core_n1 "ADL dependent at N1"
 gen r_nonwhite_e = 0 if r_white_e!=.
 replace r_nonwhite_e =1 if r_white_e==0
 
-gen s_age_death = (death_all - s_birth_date_e)/365.25
+gen s_age_death = (r_death_date_e - s_birth_date_e)/365.25
 recast int s_age_death, force
 label var s_age_death "Spouse age at death"
 
@@ -99,26 +91,25 @@ label var s_time_exit_n1 "Months between Exit & N1, Spouse"
 
 
 
-preserve
+*preserve
 
-
-keep if s_bid_hrs
 replace spouse_hlp = 0 if spouse_hlp==.
 
 gen spouse2 = 0 if spouse_hlp==1
 replace spouse2 = 1 if spouse_hlp==2
 
 
-gen r_time_death_n1 = (death_all - r_c_ivw_date_n1)/30.4
+gen r_time_death_n1 = (r_death_date_e - r_c_ivw_date_n1)/30.4
 label var r_time_death_n1 "Months between Death and N1, R"
 
-gen s_time_death_n1 = (death_all - s_c_ivw_date_n1)/30.4
+gen s_time_death_n1 = (r_death_date_e - s_c_ivw_date_n1)/30.4
 label var s_time_death_n1 "Months between Death and N1, Spouse"
 
 
 
 
 *preserve
+keep if r_nhres_x==0
 
 label var r_loc_hosp_x "Respondent Died in Hospital"
 label var s_cesd_tot_p1 "Total CESD Count at P1"
@@ -223,7 +214,13 @@ mat rownames tab1= "Decedent" `r_vars1' `r_vars2' "Spouse" `s_vars1' `s_vars2' "
 
 mat list tab1
 
+/*
+frmttable using "E:\projects\solo_spouses\archive_logs\table1_fullsample.doc", replace statmat(tab1) ///
+varlabels title("Summary Statistics: HRS couples with a Deceased Spouse as of Exit 2014") ctitles("Variables" "Non-Helping Spouse" "Spouse Helper, Solo" "Spouse Helper, Non-Solo") sdec(2) annotate(stars) asymbol(*,**) ///
+note("Sig test is Solo Spouse vs Non-Solo Spouse: *p<0.05, **p<0.01")
+*/
 
-frmttable using "E:\projects\spouse 2.0\archive_logs\table1_fullsample.doc", replace statmat(tab1) ///
-varlabels title("Summary Statistics: HRS couples with a Deceased Spouse as of Exit 2012") ctitles("Variables" "Non-Helping Spouse" "Spouse Helper, Solo" "Spouse Helper, Non-Solo") sdec(2) annotate(stars) asymbol(*,**) ///
+
+frmttable using "E:\projects\solo_spouses\archive_logs\table1_nonnursing.doc", replace statmat(tab1) ///
+varlabels title("Summary Statistics: HRS couples with a Deceased Spouse as of Exit 2014") ctitles("Variables" "Non-Helping Spouse" "Spouse Helper, Solo" "Spouse Helper, Non-Solo") sdec(2) annotate(stars) asymbol(*,**) ///
 note("Sig test is Solo Spouse vs Non-Solo Spouse: *p<0.05, **p<0.01")

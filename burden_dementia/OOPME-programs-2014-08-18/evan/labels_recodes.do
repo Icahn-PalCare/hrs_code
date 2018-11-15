@@ -1,6 +1,6 @@
 
 
-use $savedir/oopme_final.dta, clear
+use $savedir/oopme_final_2014.dta, clear
 
 lab def LOC_DIE 1 "1.Hospital" 2 "2.NH" 3 "3.Home" 4 "4.Hospice" 5 "5.ALF" 7 "7.Other" 8 "8.DK" 9 "9.RF", replace
 lab val loc_die LOC_DIE
@@ -85,4 +85,4 @@ notes total_OOP: "Totals may not be comparable across all waves---in particular,
 
 label data "OOPME ver: ${creation_version}: ${ver_description}" //rrd addition
 
-save $savedir/oopme_final.dta, replace
+save $savedir/oopme_final_2014.dta, replace

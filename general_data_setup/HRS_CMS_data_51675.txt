@@ -1,0 +1,736 @@
+= V4 Outline MultiLine NoSorting TabWidth=30
+
+H="Processing of all CMS data"
+10/9/18-This code will be used to process all CMS data for HRS.  On 3/07/18, we received MDS, OASIS, and Medicaid MAX files, as well as updated Medicare files, but all only run through 2012.  All files under DUA 51675 will be processed here.
+
+
+
+H="***********************************************"
+
+
+H="Medicare Processing"
+/*Processes Medicare claims received in March 2018
+
+Creates combined year files for 1998-2012 claims for use in other projects
+
+Code based on that in the oop_mc_outline.otl file
+
+Combined 1998-2012 files are saved here:
+E:\data\CMS_DUA_51675_2014\Merged
+
+*/
+
+libname medi_raw 'E:\data\cms_DUA_51675_2014\Received_20180307';
+
+libname medi_wk 'E:\data\CMS_DUA_51675_2014\Merged\SAS';
+
+/*10/11/18--because we have the same BID_HRS_21, we can reuse the crosswalk*/
+
+libname xw2008 'E:\data\hrs_restricted_2010\20131104_received\Medicare\Xref2008\distro';
+
+
+H="Denominator"
+/*process individual year denominator files into single file with
+2000-2012 data*/
+
+data medi_wk.dn_1998_2012;
+set  medi_raw.dn_1998 medi_raw.dn_1999 medi_raw.dn_2000 medi_raw.dn_2001 medi_raw.dn_2002 medi_raw.dn_2003 
+medi_raw.dn_2004 medi_raw.dn_2005 medi_raw.dn_2006 medi_raw.dn_2007 
+medi_raw.dn_2008 medi_raw.dn_2009 medi_raw.dn_2010 medi_raw.dn_2011 medi_raw.dn_2012;
+if RFRNC_YR<=12 then year=2000+RFRNC_YR;
+if RFRNC_YR>12 then year=1900+RFRNC_YR;
+bid_n=substr(trim(left(BID_HRS_21)),2,9)+0;
+BID=bid_n;
+
+/************************************************************************
+*************************************************************************
+Clean birth_date, death_date in date format from denominator file
+*************************************************************************
+************************************************************************/
+
+/*note we can't use dob dod from CMS denominator file since a lot of them are missing,they should come from restricted file*/
+if substr(trim(left(DEATH_DT)),1,1)~="0"  then do;
+death_year=substr(trim(left(DEATH_DT)),1,4)+0;
+death_month=substr(trim(left(DEATH_DT)),5,2)+0;
+death_day=substr(trim(left(DEATH_DT)),7,2)+0;
+death_date=mdy(death_month,death_day,death_year);
+end;
+if substr(trim(left(BENE_DOB)),1,1)~="0"  then do;
+birth_year=substr(trim(left(BENE_DOB)),1,4)+0;
+birth_month=substr(trim(left(BENE_DOB)),5,2)+0;
+birth_day=substr(trim(left(BENE_DOB)),7,2)+0;
+birth_date=mdy(birth_month,birth_day,birth_year);
+end;
+format death_date date9.;
+format birth_date date9.;
+run;
+
+proc export data=medi_wk.dn_1998_2012 outfile='E:\data\cms_dua_51675_2014\merged\stata\dn_1998_2012.dta' replace; 
+run;
+
+H="Medpar"
+/************************************************************************
+*************************************************************************
+Medpar 1998-2012 - processing steps
+*************************************************************************
+************************************************************************/
+%let source=mp;
+*/prints first 10 rows of mp_2000 file, just select variables listed below;
+proc sql outobs=10;
+select BID_HRS_21, ADMSNDT,DSCHRGDT,loscnt from medi_raw.&source._1998;
+quit;
+
+*creates merged medpar file 1998-2012 years;
+data medi_wk.&source._1998_2012;
+set medi_raw.&source._1998 medi_raw.&source._1999 medi_raw.&source._2000 medi_raw.&source._2001 medi_raw.&source._2002 medi_raw.&source._2003 medi_raw.&source._2004 medi_raw.&source._2005 medi_raw.&source._2006 medi_raw.&source._2007 medi_raw.&source._2008
+medi_raw.&source._2009 medi_raw.&source._2010 medi_raw.&source._2011
+medi_raw.&source._2012;
+*formats dates for admission and discharge;
+admit_date=datejul(ADMSNDT);
+if substr(trim(left(DSCHRGDT)),1,1) in ("1","2") then do;
+disch_date=datejul(DSCHRGDT);
+end;
+
+admit_year=year(admit_date);
+
+*calculate discharge date if null from admit date and los;
+if disch_date=. then disch_date=admit_date+loscnt;
+*format ID in this medpar file to match xwalk file;
+bid_n=substr(trim(left(BID_HRS_21)),2,9)+0;
+disch_year=year(disch_date);
+
+format admit_date date9.;
+format disch_date date9.;
+run;
+
+*Check for and remove dupicates;
+proc sort data=medi_wk.&source._1998_2012 out=temp2  nodupkey;
+by BID_n admit_date disch_date pmt_amt;
+run;
+
+/*create table bid of just observations that had multiple observations
+that match on id, admit date and discharge date
+They have different payment amounts though b/c of previous step*/
+proc sql;
+create table bid as
+select BID_n,admit_date, disch_date,count(*)
+from medi_wk.&source._1998_2012 group by
+BID_n,admit_date, disch_date having count(*)>1;
+
+*prints list of observations where match on id, admit date and disch date;
+select BID_n,admit_date, disch_date from medi_wk.&source._1998_2012
+where bid_n in (select bid_n from bid)
+;
+quit;
+
+* Variable list:
+MSNDT ADMSNDT CHAR Documentation 
+MEDPAR_ADMSN_DT: MEDPAR Admission Date 
+DSCHRGDT DSCHRGDT CHAR Documentation 
+MEDPAR_DSCHRG_DT: MEDPAR Discharge Date 
+loscnt;
+
+*identify observatons where discharge year is null - no observations identified;
+proc sql outobs=10;
+select BID_HRS_21, ADMSNDT,DSCHRGDT,loscnt from medi_wk.&source._1998_2012 where 
+disch_year=.;
+quit;
+*frequency table of admit and disch year vars;
+proc freq data=medi_wk.&source._1998_2012;
+table admit_year disch_year;
+run;
+
+proc export data=medi_wk.mp_1998_2012 outfile='E:\data\cms_dua_51675_2014\merged\stata\mp_1998_2012.dta' replace; 
+run;
+
+H="Inpatient"
+/************************************************************************
+*************************************************************************
+Inpatient 1998-2012 files *************************************************************************
+************************************************************************/
+
+
+*print first 10 observations from ip 2000 file;
+%let source=ip;
+proc sql outobs=10;
+select BID_HRS_21, FROM_DT,thru_DT,pmt_amt,PRCDRDT01,PRCDRDT02 from medi_raw.&source._2000;
+quit;
+
+proc sql outobs=10;
+select BID_HRS_21, FROM_DT,thru_DT,pmt_amt,PRCDRDT01,PRCDRDT02 from medi_raw.&source._2012;
+quit;
+
+*create ip merged file of 1998-2012 years;
+data medi_wk.&source._1998_2012;
+set medi_raw.&source._1998 medi_raw.&source._1999 medi_raw.&source._2000 medi_raw.&source._2001 medi_raw.&source._2002
+ medi_raw.&source._2003 medi_raw.&source._2004 medi_raw.&source._2005 medi_raw.&source._2006 medi_raw.&source._2007 medi_raw.&source._2008 medi_raw.&source._2009 medi_raw.&source._2010 medi_raw.&source._2011
+medi_raw.&source._2012;
+*create clean admit and discharge date variables;
+admit_date=mdy(substr(trim(left(FROM_DT)),5,2),substr(trim(left(FROM_DT)),7,2),substr(trim(left(FROM_DT)),1,4));
+disch_date=mdy(substr(trim(left(thru_DT)),5,2),substr(trim(left(thru_DT)),7,2),substr(trim(left(thru_DT)),1,4));
+
+admit_year=year(admit_date);
+
+*format ID number;
+bid_n=substr(trim(left(BID_HRS_21)),2,9)+0;
+if SGMT_NUM=1;
+run;
+
+/**************************************************************/
+/*The rest of these sorting steps create temp datasets to perform
+checks of the code, do not need to run them when doing final analysis
+*/
+/**************************************************************/
+
+*Check for and remove dupicates;
+proc sort data=medi_wk.&source._1998_2012 out=temp2  nodupkey;
+by BID_HRS_21 admit_date disch_date pmt_amt;
+run;
+
+/*create table bid of just observations that had multiple observations
+that match on id, admit date and discharge date
+They have different payment amounts though b/c of previous step*/
+proc sql;
+create table bid as
+select bid_n,admit_date, disch_date,count(*)
+from medi_wk.&source._1998_2012 group by
+BID_n,admit_date, disch_date having count(*)>1;
+
+quit;
+
+proc sql;
+create table temp3 as
+select * from medi_wk.&source._1998_2012
+where bid_n in (select bid_n from bid) group by bid_n,admit_date having count(*)>1 order by BID_n,admit_date, disch_date;
+
+quit;
+
+proc export data=medi_wk.ip_1998_2012 outfile='E:\data\cms_dua_51675_2014\merged\stata\ip_1998_2012.dta' replace; 
+run;
+
+H="SNF"
+/************************************************************************
+*************************************************************************
+SNF 1998-2012 files *************************************************************************
+************************************************************************/
+
+*print first 10 observations from snf 2000 file;
+%let source=sn;
+proc sql outobs=10;
+select BID_HRS_21, FROM_DT,thru_DT,pmt_amt from medi_raw.&source._2000;
+quit;
+
+proc sql outobs=10;
+select BID_HRS_21, FROM_DT,thru_DT,pmt_amt from medi_raw.&source._2012;
+quit;
+
+*create snf merged file of 1998-2012 years;
+data medi_wk.&source._1998_2012;
+set medi_raw.&source._1998 medi_raw.&source._1999 medi_raw.&source._2000 medi_raw.&source._2001 medi_raw.&source._2002
+ medi_raw.&source._2003 medi_raw.&source._2004 medi_raw.&source._2005 medi_raw.&source._2006 medi_raw.&source._2007 medi_raw.&source._2008 medi_raw.&source._2009  medi_raw.&source._2010 medi_raw.&source._2011
+medi_raw.&source._2012;
+*create clean admit and discharge date variables;
+admit_date=mdy(substr(trim(left(FROM_DT)),5,2),substr(trim(left(FROM_DT)),7,2),substr(trim(left(FROM_DT)),1,4));
+disch_date=mdy(substr(trim(left(thru_DT)),5,2),substr(trim(left(thru_DT)),7,2),substr(trim(left(thru_DT)),1,4));
+
+admit_year=year(admit_date);
+
+*format ID number;
+bid_n=substr(trim(left(BID_HRS_21)),2,9)+0;
+if SGMT_NUM=1;
+run;
+
+/**************************************************************/
+/*The rest of these sorting steps create temp datasets to perform
+checks of the code, do not need to run them when doing final analysis
+*/
+/**************************************************************/
+
+*Check for and remove dupicates;
+proc sort data=medi_wk.&source._1998_2012 out=temp2  nodupkey;
+by BID_HRS_21 admit_date disch_date pmt_amt;
+run;
+
+/*create table bid of just observations that had multiple observations
+that match on id, admit date and discharge date
+They have different payment amounts though b/c of previous step*/
+proc sql;
+create table bid as
+select bid_n,admit_date, disch_date,count(*)
+from medi_wk.&source._1998_2012 group by
+BID_n,admit_date, disch_date having count(*)>1;
+
+quit;
+
+proc sql;
+create table temp3 as
+select * from medi_wk.&source._1998_2012
+where bid_n in (select bid_n from bid) group by bid_n,admit_date having count(*)>1 order by BID_n,admit_date, disch_date;
+
+quit;
+
+proc export data=medi_wk.sn_1998_2012 outfile='E:\data\cms_dua_51675_2014\merged\stata\snf_1998_2012.dta' replace; 
+run;
+
+H="Outpatient"
+/************************************************************************
+*************************************************************************
+Outpatient 1998-2012 files *************************************************************************
+************************************************************************/
+
+*print first 10 observations from op 2000 file;
+%let source=op;
+proc sql outobs=10;
+select BID_HRS_21, FROM_DT,thru_DT,pmt_amt from medi_raw.&source._2000;
+quit;
+
+*create op merged file of 1998-2012 years;
+data medi_wk.&source._1998_2012;
+set medi_raw.&source._1998 medi_raw.&source._1999 medi_raw.&source._2000 medi_raw.&source._2001 medi_raw.&source._2002
+ medi_raw.&source._2003 medi_raw.&source._2004 medi_raw.&source._2005 medi_raw.&source._2006 medi_raw.&source._2007 medi_raw.&source._2008 medi_raw.&source._2009 medi_raw.&source._2010 medi_raw.&source._2011
+medi_raw.&source._2012;
+*create clean admit and discharge date variables;
+admit_date=mdy(substr(trim(left(FROM_DT)),5,2),substr(trim(left(FROM_DT)),7,2),substr(trim(left(FROM_DT)),1,4));
+disch_date=mdy(substr(trim(left(thru_DT)),5,2),substr(trim(left(thru_DT)),7,2),substr(trim(left(thru_DT)),1,4));
+
+admit_year=year(admit_date);
+
+*format ID number;
+bid_n=substr(trim(left(BID_HRS_21)),2,9)+0;
+if SGMT_NUM=1;
+run;
+
+/**************************************************************/
+/*The rest of these sorting steps create temp datasets to perform
+checks of the code, do not need to run them when doing final analysis
+
+The dataset is so big that SAS crashes when doing all these
+sort and temp dataset steps*/
+/**************************************************************/
+
+*Check for and remove dupicates;
+proc sort data=medi_wk.&source._1998_2012 out=temp2  nodupkey;
+by BID_HRS_21 admit_date disch_date pmt_amt;
+run;
+
+/*create table bid of just observations that had multiple observations
+that match on id, admit date and discharge date
+They have different payment amounts though b/c of previous step*/
+proc sql;
+create table bid as
+select bid_n,admit_date, disch_date,count(*)
+from medi_wk.&source._1998_2012 group by
+BID_n,admit_date, disch_date having count(*)>1;
+
+quit;
+
+proc sql;
+create table temp3 as
+select * from medi_wk.&source._1998_2012
+where bid_n in (select bid_n from bid) group by bid_n,admit_date having count(*)>1 order by BID_n,admit_date, disch_date;
+
+quit;
+
+proc export data=medi_wk.op_1998_2012 outfile='E:\data\cms_dua_51675_2014\merged\stata\op_1998_2012.dta' replace; 
+run;
+
+H="Carrier"
+
+/************************************************************************
+*************************************************************************
+Carrier (pb) 1998-2012 files 
+These claims datasets are very large so the 1998-2012 file created only
+has the variables needed in order to get the total claims charges and
+dx codes
+This is different from the other merged claims datasets created here
+*************************************************************************
+************************************************************************/
+
+
+%let source=pb;
+proc sql outobs=10;
+select BID_HRS_21, FROM_DT,thru_DT,pmt_amt from medi_raw.&source._2000;
+quit;
+
+
+*create individual years files with just variables that are needed;
+%macro yrs(yr=);
+data medi_wk.&source._&yr.temp;
+set medi_raw.&source._&yr (keep=BID_HRS_21 FROM_DT thru_DT pmt_amt SGMT_NUM PDGNS_CD PDVRSNCD DGNSCD01-DGNSCD12 
+DVRSCD01-DVRSCD12 HCPSCD01-HCPSCD13 EXPDT101-EXPDT113 EXPDT201-EXPDT213 REC_LVL BETOS01-BETOS13 PRFNPI: RFR_NPI HCFPCL01--HCFPCL13);
+run;
+%mend;
+
+%yrs(yr=1998);
+%yrs(yr=1999);
+%yrs(yr=2000);
+%yrs(yr=2001);
+%yrs(yr=2002);
+%yrs(yr=2003);
+%yrs(yr=2004);
+%yrs(yr=2005);
+%yrs(yr=2006);
+%yrs(yr=2007);
+%yrs(yr=2008);
+%yrs(yr=2009);
+%yrs(yr=2010);
+%yrs(yr=2011);
+%yrs(yr=2012);
+
+*create combined years file;
+*Note this is different from other combined files;
+data medi_wk.&source._1998_2012;
+set medi_wk.&source._1998temp medi_wk.&source._1999temp 
+medi_wk.&source._2000temp medi_wk.&source._2001temp 
+medi_wk.&source._2002temp medi_wk.&source._2003temp 
+medi_wk.&source._2004temp medi_wk.&source._2005temp 
+medi_wk.&source._2006temp medi_wk.&source._2007temp 
+medi_wk.&source._2008temp medi_wk.&source._2009temp 
+medi_wk.&source._2010temp medi_wk.&source._2011temp
+medi_wk.&source._2012temp;
+
+*create clean admit date, discharge date and admit year vars;
+admit_date=mdy(substr(trim(left(FROM_DT)),5,2),substr(trim(left(FROM_DT)),7,2),substr(trim(left(FROM_DT)),1,4));
+disch_date=mdy(substr(trim(left(thru_DT)),5,2),substr(trim(left(thru_DT)),7,2),substr(trim(left(thru_DT)),1,4));
+
+admit_year=year(admit_date);
+
+*format ID variable;
+bid_n=substr(trim(left(BID_HRS_21)),2,9)+0;
+if SGMT_NUM=1;
+run;
+
+proc export data=medi_wk.pb_1998_2012 outfile='E:\data\cms_dua_51675_2014\merged\stata\pb_1998_2012.dta' replace; 
+run;
+
+H="Home Health"
+/************************************************************************
+*************************************************************************
+Home health (hh) 1998-2012 files *************************************************************************
+************************************************************************/
+
+%let source=hh;
+proc sql outobs=10;
+select BID_HRS_21, FROM_DT,thru_DT,pmt_amt from medi_raw.&source._2000;
+quit;
+
+*create combined 1998-2012 data file;
+data medi_wk.&source._1998_2012;
+set medi_raw.&source._1998 medi_raw.&source._1999 medi_raw.&source._2000 medi_raw.&source._2001 medi_raw.&source._2002
+medi_raw.&source._2003 medi_raw.&source._2004 medi_raw.&source._2005 medi_raw.&source._2006 medi_raw.&source._2007 medi_raw.&source._2008  medi_raw.&source._2009 medi_raw.&source._2010
+medi_raw.&source._2011 medi_raw.&source._2012;
+
+*clean admit and discharge date and admit year variables;
+admit_date=mdy(substr(trim(left(FROM_DT)),5,2),substr(trim(left(FROM_DT)),7,2),substr(trim(left(FROM_DT)),1,4));
+disch_date=mdy(substr(trim(left(thru_DT)),5,2),substr(trim(left(thru_DT)),7,2),substr(trim(left(thru_DT)),1,4));
+
+admit_year=year(admit_date);
+
+*format ID variable;
+bid_n=substr(trim(left(BID_HRS_21)),2,9)+0;
+if SGMT_NUM=1;
+run;
+
+proc export data=medi_wk.hh_1998_2012 outfile='E:\data\cms_dua_51675_2014\merged\stata\hh_1998_2012.dta' replace; 
+run;
+
+H="DME"
+/*
+Durable medical equipment (DM) medicare claim records clean up
+*/
+
+%let source=dm;
+proc sql outobs=10;
+select BID_HRS_21, FROM_DT,thru_DT,pmt_amt from medi_raw.&source._2000;
+quit;
+
+*create combined 1998-2012 data file;
+data medi_wk.&source._1998_2012;
+set medi_raw.&source._1998 medi_raw.&source._1999 medi_raw.&source._2000 medi_raw.&source._2001 medi_raw.&source._2002
+ medi_raw.&source._2003 medi_raw.&source._2004 medi_raw.&source._2005 medi_raw.&source._2006    
+ medi_raw.&source._2007 medi_raw.&source._2008 medi_raw.&source._2009 medi_raw.&source._2010
+ medi_raw.&source._2011 medi_raw.&source._2012;
+
+*clean admit date, discharge date and admit year variables;
+admit_date=mdy(substr(trim(left(FROM_DT)),5,2),substr(trim(left(FROM_DT)),7,2),substr(trim(left(FROM_DT)),1,4));
+disch_date=mdy(substr(trim(left(thru_DT)),5,2),substr(trim(left(thru_DT)),7,2),substr(trim(left(thru_DT)),1,4));
+
+admit_year=year(admit_date);
+disch_year=year(disch_date);
+
+*Format ID variable;
+bid_n=substr(trim(left(BID_HRS_21)),2,9)+0;
+if SGMT_NUM=1;
+run;
+
+*Check for and remove duplicates;
+proc sort data=medi_wk.&source._1998_2012 out=temp2  nodupkey;
+by BID_HRS_21 admit_date disch_date pmt_amt;
+run;
+
+proc sql outobs=10;
+select distinct SGMT_CNT,count(*) from medi_wk.&source._1998_2012 group by SGMT_CNT;
+quit;
+
+* Find observations with null for discharge year;
+proc sql outobs=10;
+select BID_HRS_21, admit_date,disch_date  from medi_wk.&source._1998_2012 where 
+disch_year=.;
+quit;
+* Table of discharge year and admit year;
+proc freq;
+table admit_year disch_year;
+run;
+
+proc export data=medi_wk.dm_1998_2012 outfile='E:\data\cms_dua_51675_2014\merged\stata\dm_1998_2012.dta' replace; 
+run;
+
+H="Hospice"
+/* Hospice (HS) medicare claim records clean up*/
+
+%let source=hs;
+proc sql outobs=10;
+select BID_HRS_21, FROM_DT,thru_DT,pmt_amt from medi_raw.&source._2000;
+quit;
+
+*create combined 1998-2012 data file;
+data medi_wk.&source._1998_2012;
+set medi_raw.&source._1998 medi_raw.&source._1999 medi_raw.&source._2000 medi_raw.&source._2001 medi_raw.&source._2002 medi_raw.&source._2003 medi_raw.&source._2004 medi_raw.&source._2005 medi_raw.&source._2006 medi_raw.&source._2007 medi_raw.&source._2008 medi_raw.&source._2009 medi_raw.&source._2010 medi_raw.&source._2011
+medi_raw.&source._2012;
+
+*clean admit date, discharge date and admit year variables;
+admit_date=mdy(substr(trim(left(FROM_DT)),5,2),substr(trim(left(FROM_DT)),7,2),substr(trim(left(FROM_DT)),1,4));
+disch_date=mdy(substr(trim(left(thru_DT)),5,2),substr(trim(left(thru_DT)),7,2),substr(trim(left(thru_DT)),1,4));
+
+admit_year=year(admit_date);
+disch_year=year(disch_date);
+
+
+*Format ID variable;
+bid_n=substr(trim(left(BID_HRS_21)),2,9)+0;
+if SGMT_NUM=1;
+run;
+
+*Check for and remove duplicates;
+proc sort data=medi_wk.&source._1998_2012 out=temp2  nodupkey;
+by BID_HRS_21 admit_date disch_date pmt_amt;
+run;
+
+proc sql outobs=10;
+select distinct SGMT_CNT,count(*) from medi_wk.&source._1998_2012 group by SGMT_CNT;
+quit;
+
+
+* Find observations with null for discharge year;
+proc sql outobs=10;
+select BID_HRS_21, admit_date ,disch_date from medi_wk.&source._1998_2012 where 
+disch_year=.;
+quit;
+* Table of discharge year and admit year;
+proc freq data=medi_wk.&source._1998_2012;
+table admit_year disch_year;
+run;
+
+proc export data=medi_wk.hs_1998_2012 outfile='E:\data\cms_dua_51675_2014\merged\stata\hs_1998_2012.dta' replace; 
+run;
+
+H="***********************************************"
+
+
+H="Medicaid"
+libname raw 'E:\data\CMS_DUA_51675_2014\Received_20180307';
+libname merged 'E:\data\CMS_DUA_51675_2014\Medicaid_merged';
+
+
+/* Macro to pull raw individual years */
+
+%macro import(source=);
+
+%do i = 1999 %to 2012;
+
+data max_&source._&i.;
+set raw.hrs_max_&source._&i.;
+type_of_claim1 = put(type_of_claim, $4.);
+Com_based_LTC_flag1 = put(Com_based_LTC_flag, $4.);
+run;
+
+data max_&source._&i. (drop= type_of_claim Com_based_LTC_flag);
+set max_&source._&i.;
+run;
+
+
+data max_&source._&i.;
+set max_&source._&i. (rename=(type_of_claim1 = type_of_claim Com_based_LTC_flag1 = Com_based_LTC_flag));
+run;
+
+%end;
+
+
+
+%mend import;
+
+
+/* Macro to merge years into single file */
+
+%macro merge(source=);
+
+data merged.hrs_max_&source._99_12;
+set max_&source._1999 max_&source._2000 max_&source._2001 max_&source._2002 max_&source._2003 max_&source._2004
+max_&source._2005 max_&source._2006 max_&source._2007 max_&source._2008 max_&source._2009 max_&source._2010
+max_&source._2011 max_&source._2012;
+run;
+
+%mend merge;
+
+
+%import(source=ip);
+%import(source=ot);
+%import(source=lt);
+%import(source=rx);
+
+%merge(source=ip);
+%merge(source=ot);
+%merge(source=lt);
+%merge(source=rx);
+
+%macro importps(source=);
+
+%do i = 1999 %to 2012;
+
+data max_&source._&i.;
+set raw.hrs_max_&source._&i.;
+Restricted_benefits_mo_01a = strip(put(Restricted_benefits_mo_01, 8.));
+Restricted_benefits_mo_02a = strip(put(Restricted_benefits_mo_02, 8.));
+Restricted_benefits_mo_03a = strip(put(Restricted_benefits_mo_03, 8.));
+Restricted_benefits_mo_04a = strip(put(Restricted_benefits_mo_04, 8.));
+Restricted_benefits_mo_05a = strip(put(Restricted_benefits_mo_05, 8.));
+Restricted_benefits_mo_06a = strip(put(Restricted_benefits_mo_06, 8.));
+Restricted_benefits_mo_07a = strip(put(Restricted_benefits_mo_07, 8.));
+Restricted_benefits_mo_08a = strip(put(Restricted_benefits_mo_08, 8.));
+Restricted_benefits_mo_09a = strip(put(Restricted_benefits_mo_09, 8.));
+Restricted_benefits_mo_10a = strip(put(Restricted_benefits_mo_10, 8.));
+Restricted_benefits_mo_11a = strip(put(Restricted_benefits_mo_11, 8.));
+Restricted_benefits_mo_12a = strip(put(Restricted_benefits_mo_12, 8.));
+Eligible_months1 = strip(put(Eligible_months, 8.));
+Private_insurance_months1 = strip(put(Private_insurance_months, 8.));
+run;
+
+
+data max_&source._&i. (drop= Restricted_benefits_mo_01 Restricted_benefits_mo_02 Restricted_benefits_mo_03 Restricted_benefits_mo_04 Restricted_benefits_mo_05 Restricted_benefits_mo_06
+Restricted_benefits_mo_07 Restricted_benefits_mo_08 Restricted_benefits_mo_09 Restricted_benefits_mo_10 Restricted_benefits_mo_11 Restricted_benefits_mo_12 Eligible_months Private_insurance_months);
+set max_&source._&i.;
+run;
+
+%end;
+
+
+
+%mend importps;
+
+
+%importps(source=ps);
+%merge(source=ps);
+
+
+/* Calculate annual totals */
+
+proc contents data=merged.hrs_max_asf_1999_2012 short; run;
+
+
+
+
+proc export data=merged.hrs_max_asf_1999_2012 outfile="E:\data\CMS_DUA_51675_2014\Medicaid_merged\asf.dta" dbms=stata replace; run;
+
+
+data annual_sum;
+set merged.hrs_max_asf_1999_2012;
+tot_paid_by_mdcd = sum(mdcd_ffs_amt, mdcd_hmo_amt, mdcd_hmo_amt_hcbs, mdcd_php_amt, mdcd_php_amt_hcbs, mdcd_pccm_amt, mdcd_pccm_amt_hcbs, mdcd_ip_amt, mdcd_ip_amt_hcbs, 
+mdcd_mhs_amt, mdcd_mhs_amt_hcbs, mdcd_ipf_amt, mdcd_ipf_amt_hcbs, mdcd_icf_amt, mdcd_icf_amt_hcbs, mdcd_nf_amt, mdcd_nf_amt_hcbs, mdcd_phys_amt, mdcd_phys_amt_hcbs, 
+mdcd_dn_amt, mdcd_dn_amt_hcbs, mdcd_opr_amt, mdcd_opr_amt_hcbs, mdcd_oph_amt, mdcd_oph_amt_hcbs, mdcd_clin_amt, mdcd_clin_amt_hcbs, mdcd_hh_amt, mdcd_hh_amt_hcbs,
+mdcd_lx_amt, mdcd_lx_amt_hcbs, mdcd_rx_amt, mdcd_rx_amt_hcbs, mdcd_os_amt, mdcd_os_amt_hcbs, mdcd_st_amt, mdcd_st_amt_hcbs, mdcd_ab_amt, mdcd_ab_amt_hcbs, mdcd_ts_amt,
+mdcd_ts_amt_hcbs, mdcd_pcs_amt, mdcd_pcs_amt_hcbs, mdcd_tc_amt, mdcd_tc_amt_hcbs, mdcd_rs_amt, mdcd_rs_amt_hcbs, mdcd_sh_amt, mdcd_sh_amt_hcbs, mdcd_hs_amt, mdcd_hs_amt_hcbs, 
+mdcd_nms_amt, mdcd_nms_amt_hcbs, mdcd_nps_amt, mdcd_nps_amt_hcbs, mdcd_pdn_amt, mdcd_pdn_amt_hcbs, mdcd_rnhc_amt, mdcd_rnhc_amt_hcbs, mdcd_dmes_amt, mdcd_dmes_amt_hcbs,
+mdcd_rc_amt, mdcd_rc_amt_hcbs, mdcd_ps_amt, mdcd_ps_amt_hcbs, mdcd_adc_amt, mdcd_adc_amt_hcbs, mdcd_us_amt, mdcd_us_amt_hcbs);
+run;
+
+
+
+
+
+
+proc contents data=merged.Hrs_max_msf_1999_2012 short; run;
+
+
+H="***********************************************"
+
+
+H="MDS"
+/*This will merge the MDS files across years.  The summary files are already multiyear
+
+Final datasets (in SAS and Stata) will be
+-mds_2_99_10
+-mds_3_10_12
+-ltcasf_99_12
+-ltcisf_99_12
+-ltcqsf_99_12
+*/
+
+libname raw 'E:\data\CMS_DUA_51675_2014\Received_20180307';
+libname merged 'E:\data\CMS_DUA_51675_2014\Merged\SAS';
+
+
+data merged.ltcasf_99_12;
+set raw.ltcasf_1999_2012;
+run;
+
+data merged.ltcisf_99_12;
+set raw.ltcisf_1999_2012;
+run;
+
+data merged.ltcqsf_99_12;
+set raw.ltcqsf_1999_2012;
+run;
+
+data merged.mds_2_99_10;
+set raw.mds_2_1999
+	raw.mds_2_2000
+	raw.mds_2_2001
+	raw.mds_2_2002
+	raw.mds_2_2003
+	raw.mds_2_2004
+	raw.mds_2_2005
+	raw.mds_2_2006
+	raw.mds_2_2007
+	raw.mds_2_2008
+	raw.mds_2_2009
+	raw.mds_2_2010;
+run;
+
+data merged.mds_3_10_12;
+set raw.mds_3_2010
+	raw.mds_3_2011
+	raw.mds_3_2012;
+run;
+
+
+/*export all to stata*/
+proc export data=merged.ltcasf_99_12 
+outfile='E:\data\CMS_DUA_51675_2014\Merged\Stata\ltcasf_99_12.dta' replace;
+run;
+
+proc export data=merged.ltcisf_99_12 
+outfile='E:\data\CMS_DUA_51675_2014\Merged\Stata\ltcisf_99_12.dta' replace;
+run;
+
+proc export data=merged.ltcqsf_99_12 
+outfile='E:\data\CMS_DUA_51675_2014\Merged\Stata\ltcqsf_99_12.dta' replace;
+run;
+
+proc export data=merged.mds_2_99_10 
+outfile='E:\data\CMS_DUA_51675_2014\Merged\Stata\mds_2_99_10.dta' replace;
+run;
+
+proc export data=merged.mds_3_10_12
+outfile='E:\data\CMS_DUA_51675_2014\Merged\Stata\mds_3_10_12.dta' replace;
+run;
+

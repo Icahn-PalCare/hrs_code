@@ -93,7 +93,7 @@ is called private_ltc and is not used in this adjustment.
 
 *Determine Date When Medicare Eligible (Age 65)
 
-merge m:1 HHID PN using $loaddir/${tracker_name}, keep(master match) nogen keepusing(BIRTHYR BIRTHMO)
+merge m:1 HHID PN using "$loaddir/${tracker_name}", keep(master match) nogen keepusing(BIRTHYR BIRTHMO)
 
 gen DOB = BIRTHYR + ( (1/12) * (BIRTHMO - 1) ) if BIRTHYR!=0 & BIRTHMO!=0
 gen date_65 = DOB + 65
@@ -194,4 +194,4 @@ egen x = rowtotal( private_ltc hospital_NH_doctor_OOP RX_OOP ) if year==1994 ,m
 replace total_OOP = x if year==1994
 drop x
 
-save $savedir/oopme_final.dta, replace
+save $savedir/oopme_final_2014.dta, replace

@@ -1259,6 +1259,229 @@ save $savedir/exit2012_use.dta, replace
 
 ********************************************************************************
 
+use $savedir/exit2014.dta, clear
+merge 1:1 HHID PN using $savedir/exit2014_months.dta, nogen keep(match)
+
+gen cause_die = YA133M1M
+
+gen mc_cov = YN001
+gen mc_b_cov = YN004
+gen md_cov = YN005
+gen gov_oth_cov = YN007
+
+gen private_medigap_plans = YN023
+
+gen nh_liv = YA028
+gen loc_die = YA124
+
+gen hospital_use = YN099
+//note, broke insurance payment questiYN N102 into a multiple questiYN series, but possible to recreate it
+gen YN102=.
+replace YN102=1 if inlist(YN434_1,1)
+replace YN102=2 if inlist(YN435_1,1)
+replace YN102=3 if inlist(YN435_1,5)
+replace YN102=4 if inlist(YN433_1,5)
+replace YN102=8 if inlist(YN433_1,8,9) | inlist(YN434_1,8,9) | inlist(YN435_1,8,9)
+gen hospital_cov = YN102
+
+gen hospital_nights = YN101
+replace hospital_nights = . if hospital_nights == 998 | hospital_nights == 999
+
+*if died in hospital, calculate time before death
+gen hosp_tbd = YN301
+replace hosp_tbd = . if hosp_tbd == 998 | hosp_tbd == 999
+gen hosp_time_unit = YN302
+replace hosp_tbd = (1/24)   * hosp_tbd if hosp_time_unit == 1
+replace hosp_tbd = 1        * hosp_tbd if hosp_time_unit == 2
+replace hosp_tbd = 7        * hosp_tbd if hosp_time_unit == 3
+replace hosp_tbd = (365/12) * hosp_tbd if hosp_time_unit == 4
+replace hosp_tbd = 365      * hosp_tbd if hosp_time_unit == 5
+replace hosp_tbd = .                   if (hosp_time_unit==8 | hosp_time_unit==9) & hosp_tbd != 0
+replace hosp_tbd = round(hosp_tbd)
+
+replace hospital_nights = hosp_tbd if missing(hospital_nights)
+
+*cap at time elapsed between interviews
+replace hospital_nights = min( hospital_nights , (365/12)*months ) if !missing(hospital_nights)
+
+gen nh_use = YN114
+
+
+//note, broke insurance payment questions into multiple question series, but possible to recreate them
+gen YN118=.
+replace YN118=1 if inlist(YN434_2,1)
+replace YN118=2 if inlist(YN435_2,1)
+replace YN118=3 if inlist(YN435_2,5)
+replace YN118=4 if inlist(YN433_2,5)
+replace YN118=8 if inlist(YN433_2,8,9) | inlist(YN434_2,8,9) | inlist(YN435_2,8,9)
+gen nh_cov = YN118
+
+*IF R ANSWERS IN MONTHS RATHER THAN NIGHTS, ENTER 0 FOR NIGHTS
+*IWER: ENTER 996 FOR CONTINUOUS SINCE ENTERED OR  since [PREV WAVE IW MONTH], [PREV WAVE IW YEAR]/since [PREV WAVE IW YEAR]/in the last two years)
+gen nh_nights = YN116
+replace nh_nights = . if nh_nights == 996 | nh_nights == 998 | nh_nights == 999
+gen nh_months = YN117
+replace nh_months = . if nh_months == 98 | nh_months == 99
+replace nh_nights = round( (365/12) * nh_months ) if missing(nh_nights) | nh_nights==0
+
+*using coverscreen NH entry date, compute time in NH
+*if NH nights missing, R lives in NH, and # stays == 1 | missing | unknown, use this value:
+MAKEDATE nh_enter_date_cs YA065 YA066
+gen nh_time_cs = curr_iw_date - nh_enter_date_cs if YA028==1 | YA124==2
+replace nh_time_cs = . if nh_time_cs < 0
+replace nh_nights = round( 365 * nh_time_cs ) if missing(nh_nights) & (YN115==1 | YN115==. | YN115==98 | YN115==99)
+
+*using NH entry & exit dates (up to 3) in section NH, do similar procedure
+*if exit date missing, and R still lives in NH (exit year == 9995) (2006,2008,2010 exit IWs only), replace exit date with current IW date:
+MAKEDATE nh_enter_date_1 YN123_1 YN124_1
+MAKEDATE nh_exit_date_1  YN125_1 YN126_1
+replace nh_exit_date_1 = curr_iw_date if nh_exit_date_1 == . & YN126_1 == 9995
+gen nh_time_1 = nh_exit_date_1 - nh_enter_date_1
+replace nh_time_1 = .  if nh_time_1 < 0
+
+MAKEDATE nh_enter_date_2 YN123_2 YN124_2
+MAKEDATE nh_exit_date_2  YN125_2 YN126_2
+replace nh_exit_date_2 = curr_iw_date if nh_exit_date_2 == . & YN126_2 == 9995
+gen nh_time_2 = nh_exit_date_2 - nh_enter_date_2
+replace nh_time_2 = .  if nh_time_2 < 0
+
+MAKEDATE nh_enter_date_3 YN123_3 YN124_3
+MAKEDATE nh_exit_date_3  YN125_3 YN126_3
+replace nh_exit_date_3 = curr_iw_date if nh_exit_date_3 == . & YN126_3 == 9995
+gen nh_time_3 = nh_exit_date_3 - nh_enter_date_3
+replace nh_time_3 = .  if nh_time_3 < 0
+
+*sum across stays, replace nights if missing
+egen nh_time_sum = rowtotal( nh_time_1 nh_time_2 nh_time_3 ), m
+replace nh_nights = round( 365 * nh_time_sum ) if missing(nh_nights)
+
+*fill in remaining missing values using coverscreen where possible if R lives in NH:
+replace nh_nights = round( 365 * nh_time_cs ) if missing(nh_nights)
+
+*cap at time elapsed between interviews
+replace nh_nights = min( nh_nights , (365/12)*months ) if !missing(nh_nights)
+
+gen patient_use = YN134
+
+
+//note, broke insurance payment questions into multiple question series, but possible to recreate them
+gen YN135=.
+replace YN135=1 if inlist(YN434_3,1)
+replace YN135=2 if inlist(YN435_3,1)
+replace YN135=3 if inlist(YN435_3,5)
+replace YN135=4 if inlist(YN433_3,5)
+replace YN135=8 if inlist(YN433_3,8,9) | inlist(YN434_3,8,9) | inlist(YN435_3,8,9)
+gen patient_cov = YN135
+
+gen dr_visits = YN147
+replace dr_visits = . if dr_visits == 998 | dr_visits == 999
+
+impute_dr_visits YN148 YN149 YN150 YN151
+replace dr_visits = min( dr_visits , (365/12)*months ) if !missing(dr_visits)
+
+recode dr_visits (1/max=1), gen(doctor_use)			//rrd: correct this to use YN150 instead
+replace doctor_use = 8 if missing(doctor_use) & YN147==998
+replace doctor_use = 9 if missing(doctor_use) & YN147==999
+
+
+
+//note, broke insurance payment questions into multiple question series, but possible to recreate them
+gen YN152=.
+replace YN152=1 if inlist(YN434_4,1)
+replace YN152=2 if inlist(YN435_4,1)
+replace YN152=3 if inlist(YN435_4,5)
+replace YN152=4 if inlist(YN433_4,5)
+replace YN152=8 if inlist(YN433_4,8,9) | inlist(YN434_4,8,9) | inlist(YN435_4,8,9)
+gen doctor_cov = YN152
+
+gen dental_use = YN164
+//note, broke insurance payment questions into multiple question series, but possible to recreate them
+gen YN165=.
+replace YN165=1 if inlist(YN434_5,1)
+replace YN165=2 if inlist(YN435_5,1)
+replace YN165=3 if inlist(YN435_5,5)
+replace YN165=4 if inlist(YN433_5,5)
+replace YN165=8 if inlist(YN433_5,8,9) | inlist(YN434_5,8,9) | inlist(YN435_5,8,9)
+gen dental_cov = YN165
+
+//note--hospice questions are quite different in 2014--hospice night questions must be redone
+gen YN320=YN436
+forvalues i=1/4 {
+	replace YN320=1 if YN439M`i'==4
+}
+
+gen hospice_use = YN320
+
+
+gen YN324=1 if YN328==0
+replace YN324=3 if inrange(YN328,1,99997)
+gen hospice_cov = YN324
+
+
+gen hospice_nights = YN437 if YN320==1
+replace hospice_nights = . if hospice_nights == 996 | hospice_nights == 998 | hospice_nights == 999
+
+gen hospice_months = YN438==1
+replace hospice_months = . if hospice_months == 998 | hospice_months == 999
+replace hospice_nights = round( (365/12) * hospice_months) + hospice_nights ///
+if !missing(hospice_nights) & !missing(hospice_months)
+replace hospice_nights = round( (365/12) * hospice_months ) if missing(hospice_nights)
+
+/*
+gen hospice_tbd_days = YN315
+replace hospice_tbd_days = . if (hospice_tbd_days == 998 | hospice_tbd_days == 999)
+gen hospice_tbd_months = YN316
+replace hospice_tbd_months = . if (hospice_tbd_months == 98 | hospice_tbd_months == 99)
+
+replace hospice_nights = hospice_tbd_days if missing(hospice_nights)
+
+*cap at time elapsed between IWs
+replace hospice_nights = round( (365/12) * hospice_tbd_months ) if missing(hospice_nights)
+*/
+gen rx_use = YN175
+
+
+//note, broke insurance payment questions into multiple question series, but possible to recreate them
+gen YN176=.
+replace YN176=1 if inlist(YN434_6,1)
+replace YN176=2 if inlist(YN435_6,1)
+replace YN176=3 if inlist(YN435_6,5)
+replace YN176=4 if inlist(YN433_6,5)
+replace YN176=8 if inlist(YN433_6,8,9) | inlist(YN434_6,8,9) | inlist(YN435_6,8,9)
+gen rx_cov = YN176
+
+gen home_use = YN189
+
+//note, broke insurance payment questions into multiple question series, but possible to recreate them
+gen YN190=.
+replace YN190=1 if inlist(YN434_7,1)
+replace YN190=2 if inlist(YN435_7,1)
+replace YN190=3 if inlist(YN435_7,5)
+replace YN190=4 if inlist(YN433_7,5)
+replace YN190=8 if inlist(YN433_7,8,9) | inlist(YN434_7,8,9) | inlist(YN435_7,8,9)
+gen home_cov = YN190
+
+gen other_use = YN332
+
+gen home_modif_use = YN267
+
+gen special_use = YN202
+gen special_cov = YN203
+
+keep HHID PN year *_iw_date months *_use *_liv *_die *_cov *_nights *_visits private_medigap_plans ///
+YN102 YN118 YN135 YN152 YN165 YN176 YN190 YN320 YN324
+
+xtile qtile_hospital = hospital_nights, nq(4)
+xtile qtile_nh = nh_nights, nq(4)
+xtile qtile_hospice = hospice_nights, nq(4)
+xtile qtile_doctor = dr_visits, nq(4)
+
+save $savedir/exit2014_use.dta, replace
+
+
+
+********************************************************************************
+
 use $savedir/exit1995_use.dta, clear
 
 append using ///
@@ -1270,7 +1493,8 @@ $savedir/exit2004_use.dta ///
 $savedir/exit2006_use.dta ///
 $savedir/exit2008_use.dta ///
 $savedir/exit2010_use.dta ///
-$savedir/exit2012_use.dta
+$savedir/exit2012_use.dta ///
+$savedir/exit2014_use.dta
 
 sort HHID PN year		
 

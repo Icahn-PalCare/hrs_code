@@ -133,6 +133,18 @@ keep HHID PN months year MC_HMO MC_D long_term_care hospital_OOP NH_OOP doctor_O
 save $savedir/core2012_all.dta, replace
 
 
+********************************************************************************
+
+use $savedir/core2014_oop.dta, clear
+
+foreach v of varlist MC_HMO MC_D long_term_care hospital_OOP NH_OOP doctor_OOP patient_OOP dental_OOP RX_OOP home_OOP special_OOP other_OOP {
+	replace `v' = `v' * cpiBASE / cpi2014
+}
+
+keep HHID PN months year MC_HMO MC_D long_term_care hospital_OOP NH_OOP doctor_OOP patient_OOP dental_OOP RX_OOP home_OOP special_OOP other_OOP
+
+save $savedir/core2014_all.dta, replace
+
 
 ********************************************************************************
 
@@ -148,6 +160,7 @@ append using $savedir/core2006_all.dta
 append using $savedir/core2008_all.dta
 append using $savedir/core2010_all.dta
 append using $savedir/core2012_all.dta
+append using $savedir/core2014_all.dta
 
 //used for 1995-1998
 
@@ -226,6 +239,7 @@ rm $savedir/core2006_all.dta
 rm $savedir/core2008_all.dta
 rm $savedir/core2010_all.dta
 rm $savedir/core2012_all.dta
+rm $savedir/core2014_all.dta
 
 ********************************************************************************
 
@@ -235,6 +249,7 @@ append using $savedir/core2004_oop.dta ///
 				$savedir/core2008_oop.dta ///
 				$savedir/core2010_oop.dta ///
 				$savedir/core2012_oop.dta ///
+				$savedir/core2014_oop.dta ///				
 	, keep(HHID PN year private_medigap_?)
 
 reshape long private_medigap@, i(HHID PN year) j(PLAN "_1" "_2" "_3")		//rrd: ignoring early private medigaps!!!
@@ -242,6 +257,7 @@ reshape long private_medigap@, i(HHID PN year) j(PLAN "_1" "_2" "_3")		//rrd: ig
 drop if private_medigap==.
 
 gen cpi = .
+replace cpi = cpiBASE / cpi2014 if year==2014
 replace cpi = cpiBASE / cpi2012 if year==2012
 replace cpi = cpiBASE / cpi2010 if year==2010
 replace cpi = cpiBASE / cpi2008 if year==2008

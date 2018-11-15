@@ -3336,6 +3336,382 @@ save $savedir/exit2012_oopi2.dta, replace
 
 ********************************************************************************
 
+use $savedir/exit2014_oopi1.dta, clear
+merge 1:1 HHID PN using $savedir/exit2014_use.dta, nogen keepusing(hospital_nights nh_nights dr_visits qtile_* ///
+YN102 YN118 YN135 YN152 YN165 YN176 YN190 YN320 YN324)
+
+
+//note--no lYNger ask whether pay all/some/nYNe, but still ask whether pay any, so can recYNstruct
+gen YN039_1=1 if YN040_1>0 & YN040_1<9997
+replace YN039_1=3 if YN040_1==0
+replace YN039_1=YN040_1-9990 if missing(YN039_1)
+
+gen YN039_2=1 if YN040_2>0 & YN040_2<9997
+replace YN039_2=3 if YN040_2==0
+replace YN039_2=YN040_2-9990 if missing(YN039_2)
+
+gen YN039_3=1 if YN040_3>0 & YN040_3<9997
+replace YN039_3=3 if YN040_3==0
+replace YN039_3=YN040_3-9990 if missing(YN039_3)
+
+
+scalar z = cpi2014 / cpiBASE							  
+
+*if amount missing, expenses=YES:
+qui sum MC_HMO
+replace MC_HMO = r(mean) if (MC_HMO == .) & (YN009 == 1)
+
+*if amount missing, expenses=NO:
+replace MC_HMO = 0 if (MC_HMO == .) & (YN009 == 5)
+
+*if amount missing, expenses=DK/NA/RF:
+qui sum MC_HMO
+replace MC_HMO = r(mean) if (MC_HMO == .) & (YN009 == 8 | YN009 == 9)
+
+*if missing, coverage=YES, PrevDescrPlan=N0:
+qui sum long_term_care
+replace long_term_care = r(mean) if (long_term_care == .) & ///
+							        (YN071 == 1) & (YN072 != 1)
+
+*if missing, coverage=NO OR coverage=YES and PrevDescrPlan==YES:
+replace long_term_care = 0 if (long_term_care == .) & ///
+							  ((YN071 == 5) | (YN071 == 1 & YN072 == 1))
+
+*if missing, coverage=DK/NA/RF:
+qui sum long_term_care
+replace long_term_care = r(mean) if (long_term_care == .) & (YN071 == 8 | YN071 == 9)
+
+*if amount missing, pay ALL ("1") or SOME ("2") of costs:
+qui sum private_medigap_1
+replace private_medigap_1 = r(mean) if (private_medigap_1 == .) & ///
+									   (YN039_1 == 1 | YN039_1 == 2)
+
+*if amount missing, pay NONE ("3") of costs OR # plans < 1:
+replace private_medigap_1 = 0 if (private_medigap_1  == .) & ///
+								 ((YN039_1 == 3) | (YN023 < 1))
+
+*if amount missing, DK/NA/RF whether pay any of the costs:
+qui sum private_medigap_1
+replace private_medigap_1 = r(mean) if (private_medigap_1==.) & ///
+									   (YN039_1 == 8 | YN039_1 == 9)
+
+*if amount missing, pay ALL ("1") or SOME ("2") of costs:
+qui sum private_medigap_2
+replace private_medigap_2 = r(mean) if (private_medigap_2 == .) & ///
+									   (YN039_2 == 1 | YN039_2 == 2)
+
+*if amount missing, pay NONE ("3") of costs OR # plans < 2:
+replace private_medigap_2 = 0 if (private_medigap_2  == .) & ///
+								 ((YN039_2 == 3) | (YN023 < 2))
+
+*if amount missing, DK/NA/RF whether pay any of the costs:
+qui sum private_medigap_2
+replace private_medigap_2 = r(mean) if (private_medigap_2==.) & ///
+									   (YN039_2 == 8 | YN039_2 == 9)
+
+*if amount missing, pay ALL ("1") or SOME ("2") of costs:
+qui sum private_medigap_3
+replace private_medigap_3 = r(mean) if (private_medigap_3 == .) & ///
+									   (YN039_3 == 1 | YN039_3 == 2)
+
+*if amount missing, pay NONE ("3") of costs OR # plans < 3:
+replace private_medigap_3 = 0 if (private_medigap_3  == .) & ///
+								 ((YN039_3 == 3) | (YN023 < 3))
+
+*if amount missing, DK/NA/RF whether pay any of the costs:
+qui sum private_medigap_3
+replace private_medigap_3 = r(mean) if (private_medigap_3==.) & ///
+									   (YN039_3 == 8 | YN039_3 == 9)
+
+egen private_medigap = rowtotal( private_medigap_1 ///
+								 private_medigap_2 ///
+								 private_medigap_3 ) , missing
+
+*if sum is missing, but # plans is known and > 0:
+qui sum private_medigap
+replace private_medigap = r(mean) if (private_medigap == .) & ///
+									 (YN023 > 0) & (YN023 < 98)
+
+*if sum missing, # plans known to be 0:									 
+replace private_medigap = 0 if (private_medigap == .) & (YN023 == 0)
+
+*if sum missing, # plans VNknown:
+qui sum private_medigap
+replace private_medigap = r(mean) if (private_medigap == .) & ///
+									 (YN023 == 98 | YN023 == 99)									   									   									   
+
+*impute with nights spent in hospital where possible if expenses were not fully covered
+est restore hospital
+predict x, xb
+tab x qtile_hospital
+replace hospital_OOP = z * x * hospital_nights if hospital_OOP == . & (YN099==1 | YA124==1) & !(YN102==1 | YN102==6)
+drop x
+
+*if overnight stay==YES, amount missing, and expenses ARE NOT fully covered:
+qui sum hospital_OOP
+replace hospital_OOP = r(mean) if (hospital_OOP==.) & (YN099==1 | YA124==1) & ///
+								  (YN102==2 | YN102==3 | YN102==5)
+
+*if overnight stay==YES, amount missing, and expenses ARE fully covered:
+replace hospital_OOP = 0 if (hospital_OOP==.) & (YN099==1 | YA124==1) & (YN102==1)
+
+*if overnight stay==YES, amount missing, and coverage of expenses is DK/RF/NA, costs
+*are unsettled (==7), or missing (interviewee should have been asked but was not):
+qui sum hospital_OOP
+replace hospital_OOP = r(mean) if (hospital_OOP==.) & (YN099==1 | YA124==1) & ///
+								  (YN102==7 | YN102==8 | YN102==9 | YN102==.)
+
+*if overnight stay==NO and amount missing
+replace hospital_OOP = 0 if (hospital_OOP==.) & (YN099==5 & YA124!=1)
+
+*if overnight stay is DK/NA/RF and amount missing:
+qui sum hospital_OOP
+replace hospital_OOP = r(mean) if (hospital_OOP==.) & ///
+								  (YN099==8 | YN099==9) & (YA124!=1)
+
+*impute with nights spent in NH where possible if expenses were not fully covered
+est restore NH
+predict x, xb
+tab x qtile_nh
+replace NH_OOP = z * x * nh_nights if NH_OOP == . & (YN114 == 1 | YA028 == 1 | YA124 == 2) & !(YN118 == 1 | YN118 == 6)
+drop x
+
+*if amount missing; either stayed overnight in NH (WN114), lived in NH before death
+*(WA028), or died in NH (WA124); insurance coverage known and incomplete:
+qui sum NH_OOP
+replace NH_OOP = r(mean) if (NH_OOP==.) & ///
+							(YN114 == 1 | YA028 == 1 | YA124 == 2) & ///
+							(YN118 == 2 | YN118 == 3 | YN118 == 5) 
+
+*if amount missing and insurance coverage complete:							 
+replace NH_OOP = 0 if (NH_OOP == .) & (YN118 == 1)
+
+*if amount missing; either stayed overnight in NH (WN114), lived in NH before death
+*(WA028), or died in NH (WA124); insurance coverage VNknown, not settled, or
+*not asked (missing) 
+qui sum NH_OOP
+replace NH_OOP = r(mean) if (NH_OOP == .) & ///
+							(YN114 == 1 | YA028 == 1 | YA124 == 2) & ///
+							(YN118 == 7 | YN118 == 8 | YN118 == 9 | YN118 == .)
+					
+*if amount missing and the following are true--did not stay overnight in NH, did not
+*die in NH, did not live in NH before death:
+replace NH_OOP = 0 if (NH_OOP == .) & (YN114==5 & YA028!=1 & YA124!=2)
+
+*if amount missing, did not die in NH, did not live in NH before death, but unsure 
+*whether stayed overnight in NH:
+qui sum NH_OOP
+replace NH_OOP = r(mean)  if (NH_OOP == .) & ///
+							 (YA028!=1 & YA124!=2) & ///
+							 (YN114 == 8 | YN114 == 9)
+
+*if amount missing, expenditures = YES, coverage=INCOMPLETE:
+qui sum patient_OOP
+replace patient_OOP = r(mean) if (patient_OOP == .) & ///
+								 (YN135==2 | YN135==3 | YN135==5)
+
+*if amount missing, expenditures=YES, coverage=COMPLETE:
+replace patient_OOP = 0 if (patient_OOP == .) & (YN135==1 | YN135==6)
+						   
+*if amount missing, expenditures=YES, coverage=DK/NA/RF/unsettled:
+qui sum patient_OOP
+replace patient_OOP = r(mean) if (patient_OOP == .) & ///
+								 (YN135==7 | YN135==8 | YN135==9)
+
+*if amount missing, expenditures=YES, coverage=missing:
+qui sum patient_OOP
+replace patient_OOP = r(mean) if (patient_OOP == .) & ///
+								 (YN134 == 1) & ///
+								 (YN135 == .)
+								 
+*if amount missing, expenditures = NO:						          
+replace patient_OOP = 0 if (patient_OOP == .) & (YN134 == 5)
+
+*if amount missing, expenditures = DK/NA/RF:
+qui sum patient_OOP
+replace patient_OOP = r(mean) if (patient_OOP == .) & (YN134==8 | YN134==9)
+
+*impute using doctor visits if possible where expenses not fully covered
+est restore doctor
+predict x, xb
+tab x qtile_doctor
+replace doctor_OOP = z * x * dr_visits if doctor_OOP==. & (dr_visits > 0 & dr_visits < .) & !(YN152 == 1 | YN152 == 6)
+drop x
+
+*if amount missing, insurance coverage known/incomplete:
+qui sum doctor_OOP
+replace doctor_OOP = r(mean) if (doctor_OOP == .) & ///
+								(YN152 == 2 | YN152 == 3 | YN152 == 5)
+
+*if amount missing, insurance coverage is complete:
+replace doctor_OOP = 0 if (doctor_OOP == .) & (YN152 == 1 | YN152 == 6)
+
+*if amount missing, extent of coverage is DK/NA/RF/unsettled:
+qui sum doctor_OOP
+replace doctor_OOP = r(mean) if (doctor_OOP == .) & ///
+								(YN152 == 7 | YN152 == 8 | YN152 == 9)
+
+*if amount missing, # visits known and > 0, coverage info missing:
+qui sum doctor_OOP
+replace doctor_OOP = r(mean) if (doctor_OOP == .) & ///
+										   (dr_visits > 0 & dr_visits < .) & ///
+		   								   (YN152 == .)
+								
+*if amount missing, # visits == 0:
+replace doctor_OOP = 0 if (doctor_OOP == .) & (dr_visits == 0)
+
+*if amount missing, # visits unknown:
+qui sum doctor_OOP
+replace doctor_OOP = r(mean) if (doctor_OOP == .) & ///
+								(YN147 == 998 | YN147 == 999)
+
+*if amount missing, expenditures = YES, coverage=INCOMPLETE:
+qui sum dental_OOP
+replace dental_OOP = r(mean) if (dental_OOP == .) & ///
+								 (YN165==2 | YN165==3 | YN165==5)
+
+*if amount missing, expenditures=YES, coverage=COMPLETE:
+replace dental_OOP = 0 if (dental_OOP == .) & (YN165==1 | YN165==6)
+						   
+*if amount missing, expenditures=YES, coverage=DK/NA/RF/unsettled:
+qui sum dental_OOP
+replace dental_OOP = r(mean) if (dental_OOP == .) & ///
+								 (YN165==7 | YN165==8 | YN165==9)
+
+*if amount missing, expenditures=YES, coverage=missing:
+qui sum dental_OOP
+replace dental_OOP = r(mean) if (dental_OOP == .) & ///
+								 (YN164 == 1) & ///
+								 (YN165 == .)
+								 
+*if amount missing, expenditures = NO:						          
+replace dental_OOP = 0 if (dental_OOP == .) & (YN164 == 5)
+
+*if amount missing, expenditures = DK/NA/RF:
+qui sum dental_OOP
+replace dental_OOP = r(mean) if (dental_OOP == .) & (YN164==8 | YN164==9)
+
+*if amount missing, either died in hospice or was in hospice since last IW / in last
+*2 years, and insurance coverage is known to be incomplete:
+qui sum hospice_OOP
+replace hospice_OOP = r(mean) if (hospice_OOP == .) & ///
+								 (YA124 == 4 | YN320 == 1) & ///
+								 (YN324 == 2 | YN324 == 3 | YN324 == 5)
+
+*if amount missing and insurance coverage complete (==1) or no charge (==6):
+replace hospice_OOP = 0 if (hospice_OOP == .) & (YN324 == 1 | YN324 == 6)								 
+					
+*if amount missing, either died in hospice or was in hospice since last IW / in last
+*2 years, and extent of insurance coverage VNknown or not asked (missing):							 
+qui sum hospice_OOP
+replace hospice_OOP = r(mean) if (hospice_OOP == .) & ///
+								 (YA124 == 4 | YN320 == 1) & ///
+								 (YN324 == 7 | YN324 == 8 | YN324 == 9 | YN324 == .)
+
+*if amount missing and neither died in hospice or was hospice patient:
+replace hospice_OOP = 0 if (hospice_OOP == .) & (YN320 == 5) & (YA124 != 4)
+
+*if amount missing, did not die in hospice, but unsure if hospice patient:
+qui sum hospice_OOP
+replace hospice_OOP = r(mean) if (hospice_OOP == .) & ///
+								 (YA124 != 4) & (YN320 == 8 | YN320 == 9)
+
+*impute if missing, take drugs regularly, coverage is incomplete:
+qui sum RX_OOP
+replace RX_OOP = r(mean) if (RX_OOP == .) & ///
+							(YN175 == 1) & ///
+							(YN176 == 2 | YN176 == 3 | YN176 == 5)
+
+*set to 0 if missing, coverage is complete (==1) OR no charge (==6):
+replace RX_OOP = 0 if (RX_OOP == .) & (YN176 == 1 | YN176 == 6)
+
+*impute if missing, take drugs regularly, coverage VNknown or not asked:
+qui sum RX_OOP
+replace RX_OOP = r(mean) if (RX_OOP == .) & ///
+							(YN175 == 1) & ///
+							(YN176 == 7 | YN176 == 8 | YN176 == 9 | YN176 == .)
+
+*set to 0 if don't take drugs regularly:							
+replace RX_OOP = 0 if (RX_OOP == .) & (YN175 == 5)
+
+*impute if VNknown whether take drugs regularly:
+qui sum RX_OOP
+replace RX_OOP = r(mean) if (RX_OOP == .) & (YN175 == 8 | YN175 == 9)
+								
+*impute if expenses=YES, coverage=INCOMPLETE:
+qui sum home_OOP
+replace home_OOP = r(mean) if (home_OOP == .) & ///
+							  (YN189 == 1) & ///
+							  (YN190 == 2 | YN190 == 3 | YN190 == 5)
+
+*set to 0 if coverage=COMPLETE (==1) or no charge (==6):
+replace home_OOP = 0 if (home_OOP == .) & (YN190 == 1 | YN190 == 6)
+
+*impute if expenses=YES, coverage=DK/NA/RF/unsettled/missing:
+qui sum home_OOP
+replace home_OOP = r(mean) if (home_OOP == .) & ///
+							  (YN189 == 1) & ///
+							  (YN190 == 7 | YN190 == 8 | YN190 == 9 | YN190 == .)
+
+*set to 0 if expenses=NO:
+replace home_OOP = 0 if (home_OOP == .) & (YN189 == 5)
+
+*impute if expenses=DK/NA/RF:
+qui sum home_OOP
+replace home_OOP = r(mean) if (home_OOP == .) & ///
+							  (YN189 == 8) | (YN189 == 9) 								
+
+*impute where expenses=YES:
+qui sum other_OOP
+replace other_OOP = r(mean) if (other_OOP == .) & (YN332 == 1)
+
+*set to 0 where expenses=NO:							    
+replace other_OOP = 0 if (other_OOP == .) & (YN332 == 5)
+
+*impute where expenses=DK/NA/RF:
+qui sum other_OOP
+replace other_OOP = r(mean) if (other_OOP == .) & (YN332 == 8 | YN332 == 9)
+
+*if amount missing, expenditures = YES:
+qui sum home_modif_OOP
+replace home_modif_OOP = r(mean) if (home_modif_OOP == .) & (YN267 == 1)									
+
+*if amount missing, expenditures = NO:						          
+replace home_modif_OOP = 0 if (home_modif_OOP == .) & (YN267 == 5)
+
+*if amount missing, expenditures = DK/NA/RF:
+qui sum home_modif_OOP
+replace home_modif_OOP = r(mean) if (home_modif_OOP == .) & (YN267 == 8 | YN267 == 9)
+
+*if amount missing, expenses=YES, had to pay=YES:							   
+qui sum special_OOP
+replace special_OOP = r(mean) if (special_OOP == .) & ///
+							  (YN202 == 1) & ///
+							  (YN203 == 1)
+
+*if amount missing, had to pay=NO:							  							 							
+replace special_OOP = 0 if (special_OOP == .) & (YN203 == 5)
+
+*if amount missing, expenses=YES, had to pay=DK/NA/RF/missing:
+qui sum special_OOP
+replace special_OOP = r(mean) if (special_OOP == .) & ///
+							  (YN202 == 1) & ///
+							  (YN203 == 8 | YN203 == 9 | YN203 == .)
+
+*if amount missing, expenses=NO:
+replace special_OOP = 0 if (special_OOP == .) & (YN202 == 5)
+
+*if amount missing, expenses=DK/NA/RF:
+qui sum special_OOP
+replace special_OOP = r(mean) if (special_OOP == .) & ///
+							  (YN202 == 8 | YN202 == 9)
+								
+save $savedir/exit2014_oopi2.dta, replace							  
+
+
+
+********************************************************************************
+
 use $savedir/exit1995_oopi2.dta, clear
 keep HHID PN year MC_HMO private_medigap_* hospital_NH_OOP doctor_OOP hospice_OOP RX_OOP home_special_OOP other_OOP non_med_OOP ///
 	hospital_OOP NH_OOP home_OOP special_OOP
@@ -3382,6 +3758,12 @@ keep HHID PN year MC_HMO private_medigap_* long_term_care hospital_OOP NH_OOP do
 	other_OOP home_modif_OOP
 save $savedir/tmp2012.dta, replace
 
+
+use $savedir/exit2014_oopi2.dta, clear
+keep HHID PN year MC_HMO private_medigap_* long_term_care hospital_OOP NH_OOP doctor_OOP patient_OOP dental_OOP hospice_OOP RX_OOP home_OOP special_OOP ///
+	other_OOP home_modif_OOP
+save $savedir/tmp2014.dta, replace
+
 use $savedir/tmp1995.dta, clear
 append using ///
 $savedir/tmp1996.dta ///
@@ -3392,7 +3774,8 @@ $savedir/tmp2004.dta ///
 $savedir/tmp2006.dta ///
 $savedir/tmp2008.dta ///
 $savedir/tmp2010.dta ///
-$savedir/tmp2012.dta
+$savedir/tmp2012.dta ///
+$savedir/tmp2014.dta
 
 save $savedir/exit_oopi2.dta, replace
 
@@ -3406,3 +3789,4 @@ rm $savedir/tmp2006.dta
 rm $savedir/tmp2008.dta
 rm $savedir/tmp2010.dta
 rm $savedir/tmp2012.dta
+rm $savedir/tmp2014.dta

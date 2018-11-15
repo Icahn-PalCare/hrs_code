@@ -432,6 +432,62 @@ save $savedir/exit2012_oopi1.dta, replace
 
 ********************************************************************************
 
+use $savedir/exit2014_oop.dta, clear
+merge 1:1 HHID PN using $savedir/exit2014_use.dta, nogen keepusing(private_medigap_plans)
+append using $savedir/exit_all.dta, gen(appended)
+
+scalar z = cpi2014/cpiBASE
+
+foreach v of local all {
+	replace `v' = `v' * z
+}
+
+replace YN016 = min( YN016 , 400*z ) if !missing(YN016)
+replace YN042_1 = min( YN042_1 , cond(YN001==1,400*z,2000*z) ) if !missing(YN042_1) //if R covered by Medicare: cap at $400/mo, o/w: cap at $2000/mo
+replace YN042_2 = min( YN042_2 , cond(YN001==1,400*z,2000*z) ) if !missing(YN042_2)
+replace YN042_3 = min( YN042_3 , cond(YN001==1,400*z,2000*z) ) if !missing(YN042_3)
+replace YN081 = min( YN081 , 2000*z ) if !missing(YN081)
+replace YN108 = min( YN108 , 15000*z*months ) if !missing(YN108)
+replace YN121 = min( YN121 , 15000*z*months ) if !missing(YN121)
+replace YN141 = min( YN141 , 15000*z*months ) if !missing(YN141)
+replace YN158 = min( YN158 , 5000*z*months ) if !missing(YN158)
+replace YN170 = min( YN170 , 1000*z*months ) if !missing(YN170)
+replace YN330 = min( YN330 , 5000*z*months ) if !missing(YN330)
+replace YN182 = min( YN182 , 5000*z ) if !missing(YN182)
+replace YN196 = min( YN196 , 15000*z*months ) if !missing(YN196)
+replace YN335 = min( YN335 , 15000*z*months ) if !missing(YN335)
+replace YN270 = min( YN270 , 5000*z*months ) if !missing(YN270)
+replace YN247 = min( YN247 , 15000*z*months ) if !missing(YN247)
+
+repute YN015 YN016 mc_hmo_all MC_HMO
+repute YN080 YN081 ltc_all long_term_care
+repute YN107 YN108 hospital_all hospital_OOP
+repute YN120 YN121 nursing_home_all NH_OOP
+repute YN140 YN141 patient_all patient_OOP
+repute YN157 YN158 doctor_all doctor_OOP
+repute YN169 YN170 dental_all dental_OOP
+repute YN329 YN330 hospice_all hospice_OOP
+repute YN181 YN182 RX_all RX_OOP
+repute YN195 YN196 home_all home_OOP
+repute YN334 YN335 other_all other_OOP
+repute YN269 YN270 home_modif_all home_modif_OOP
+repute YN246 YN247 special_all special_OOP
+
+repute YN041_1 YN042_1 private_medigap_all private_medigap_1 if private_medigap_plans==1
+repute YN041_1 YN042_1 private_medigap_all private_medigap_1 if private_medigap_plans>=2 & private_medigap_plans<98
+repute YN041_2 YN042_2 private_medigap_all private_medigap_2 if private_medigap_plans==1
+repute YN041_2 YN042_2 private_medigap_all private_medigap_2 if private_medigap_plans>=2 & private_medigap_plans<98
+repute YN041_3 YN042_3 private_medigap_all private_medigap_3 if private_medigap_plans==1
+repute YN041_3 YN042_3 private_medigap_all private_medigap_3 if private_medigap_plans>=2 & private_medigap_plans<98
+
+drop if appended==1
+drop appended
+drop *_all
+
+save $savedir/exit2014_oopi1.dta, replace
+
+********************************************************************************
+
 use $savedir/exit1995_oopi1.dta, clear
 keep HHID PN year MC_HMO private_medigap_* hospital_NH_OOP doctor_OOP hospice_OOP RX_OOP home_special_OOP other_OOP non_med_OOP
 save $savedir/tmp1995.dta, replace
@@ -474,6 +530,11 @@ keep HHID PN year MC_HMO private_medigap_* long_term_care hospital_OOP NH_OOP do
 	other_OOP home_modif_OOP
 save $savedir/tmp2012.dta, replace
 
+use $savedir/exit2014_oopi1.dta, clear
+keep HHID PN year MC_HMO private_medigap_* long_term_care hospital_OOP NH_OOP doctor_OOP patient_OOP dental_OOP hospice_OOP RX_OOP home_OOP special_OOP ///
+	other_OOP home_modif_OOP
+save $savedir/tmp2014.dta, replace
+
 use $savedir/tmp1995.dta, clear
 append using ///
 $savedir/tmp1996.dta ///
@@ -484,7 +545,8 @@ $savedir/tmp2004.dta ///
 $savedir/tmp2006.dta ///
 $savedir/tmp2008.dta ///
 $savedir/tmp2010.dta ///
-$savedir/tmp2012.dta 
+$savedir/tmp2012.dta ///
+$savedir/tmp2014.dta 
 
 save $savedir/exit_oopi1.dta, replace
 
@@ -498,3 +560,4 @@ rm $savedir/tmp2006.dta
 rm $savedir/tmp2008.dta
 rm $savedir/tmp2010.dta
 rm $savedir/tmp2012.dta
+rm $savedir/tmp2014.dta

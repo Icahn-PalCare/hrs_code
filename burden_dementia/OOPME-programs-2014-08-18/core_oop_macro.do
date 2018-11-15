@@ -750,73 +750,73 @@ save $savedir/core2000_oop.dta, replace
 
 
 ********************************************************************************
-** Macro loop through years 2002 through 2012, notice occasional differences
+** Macro loop through years 2002 through 2014, notice occasional differences
 **check comments in older versions (add_2012)
 ********************************************************************************
 ********************************************************************************
 ** macro lists
 
 
-global oop_t3_years			2002	2004	2006	2008	2010	2012		//rrd: t3 is last set of related interviews, might change later
-global oop_t3_wave_list		6		7		8		9		10		10			
-global MC_HMO_t3_list		HN014	JN014	KN014	LN014	MN014	NN014						//pay for hmo 
-global MC_HMO_t3m_list		999		999		99		99		999		99					
-global MC_HMO_per_t3_list	HN018	JN018	KN018	LN018	MN018	NN018							//pay hmo freq
-global MC_B_t3_list			54.0	66.6	88.5	96.4	96.4	115.40		//rrd: NOT ONTROLING FOR HOLD HARMLESS, IE IS UPPER BOUND; http://www.ssa.gov/policy/docs/statcomps/supplement/2010/medicare.html#partBtable
-global MC_B_cov_t3_list		HN004	JN004	KN004	LN004	MN004	NN004
-global MD_cov_t3_list		HN005	JN005	KN005	LN005	MN005	NN005
-global VA_cov_t3_list		HN007	JN007	KN007	LN007	MN007	NN007
-global MC_D_t3_list			.na		.na		KN404	LN404	MN404	NN404
-global MC_D_t3m_list		.na		.na		999		999		999		999
-global MC_D2_t3_list		.na		.na		.na		LN424	MN424	.na
-global MC_D2_t3m_list		.na		.na		.na 	999		999		.na
-global priv_mgap_1_t3_list	HN040_1	JN040_1	KN040_1	LN040_1	MN040_1	NN040_1
-global priv_mgap_1_t3m_list	99		999		999		9999	9999	9999
-global priv_mgap_2_t3_list	HN040_2	JN040_2	KN040_2	LN040_2	MN040_2	NN040_2
-global priv_mgap_2_t3m_list	99		999		999		9999	9999	9999
-global priv_mgap_3_t3_list	HN040_3	JN040_3	KN040_3	LN040_3	MN040_3	NN040_3
-global priv_mgap_3_t3m_list	99		999		999		999		9999	9999
-global ltc_t3_list			HN079	JN079	KN079	LN079	MN079	NN079
-global ltc_t3m_list			99999	9999	99999	99999	99999	99999
-global ltc_per_t3_list		HN083	JN083	KN083	LN083	MN083	NN083
-global MC_cov_list			HN001	JN001	KN001	LN001	MN001	NN001	
+global oop_t3_years			2002	2004	2006	2008	2010	2012	2014	//rrd: t3 is last set of related interviews, might change later
+global oop_t3_wave_list		6		7		8		9		10		11		12	
+global MC_HMO_t3_list		HN014	JN014	KN014	LN014	MN014	NN014 	ON014						//pay for hmo 
+global MC_HMO_t3m_list		999		999		99		99		999		99		99			
+global MC_HMO_per_t3_list	HN018	JN018	KN018	LN018	MN018	NN018	ON018						//pay hmo freq
+global MC_B_t3_list			54.0	66.6	88.5	96.4	96.4	115.40	104.90	//rrd: NOT ONTROLING FOR HOLD HARMLESS, IE IS UPPER BOUND; http://www.ssa.gov/policy/docs/statcomps/supplement/2012/medicare.html#partBtable
+global MC_B_cov_t3_list		HN004	JN004	KN004	LN004	MN004	NN004	ON004
+global MD_cov_t3_list		HN005	JN005	KN005	LN005	MN005	NN005	ON005
+global VA_cov_t3_list		HN007	JN007	KN007	LN007	MN007	NN007 	ON007
+global MC_D_t3_list			.na		.na		KN404	LN404	MN404	NN404	ON404
+global MC_D_t3m_list		.na		.na		999		999		999		999		999
+global MC_D2_t3_list		.na		.na		.na		LN424	MN424	NN424	ON424
+global MC_D2_t3m_list		.na		.na		.na 	999		999		999		999
+global priv_mgap_1_t3_list	HN040_1	JN040_1	KN040_1	LN040_1	MN040_1	NN040_1	ON040_1
+global priv_mgap_1_t3m_list	99		999		999		9999	9999	9999	9999
+global priv_mgap_2_t3_list	HN040_2	JN040_2	KN040_2	LN040_2	MN040_2	NN040_2	ON040_2
+global priv_mgap_2_t3m_list	99		999		999		9999	9999	9999	9999
+global priv_mgap_3_t3_list	HN040_3	JN040_3	KN040_3	LN040_3	MN040_3	NN040_3	ON040_3
+global priv_mgap_3_t3m_list	99		999		999		999		9999	9999	9999
+global ltc_t3_list			HN079	JN079	KN079	LN079	MN079	NN079	ON079	
+global ltc_t3m_list			99999	9999	99999	99999	99999	99999	99999
+global ltc_per_t3_list		HN083	JN083	KN083	LN083	MN083	NN083	ON085
+global MC_cov_list			HN001	JN001	KN001	LN001	MN001	NN001	ON001
 
 global t3_OOP_list 			hospital NH patient doctor dental RX home special
-global hospital_OOP_t3_list	HN106	JN106	KN106	LN106	MN106	NN106
-global hospital_OOP_t3m_list 9999	999999	999999	999999	999999	999999
-global NH_OOP_t3_list		HN119	JN119	KN119	LN119	MN119	NN119
-global NH_OOP_t3m_list		99999	99999   999999	999999	999999	999999
-global patient_OOP_t3_list	HN139	JN139   KN139	LN139	MN139	NN139
-global patient_OOP_t3m_list	9999	99999   999999	999999	999999	999999
-global doctor_OOP_t3_list	HN156	JN156   KN156	LN156	MN156	NN156	
-global doctor_OOP_t3m_list	99999	99999   999999	999999	999999	999999
-global dental_OOP_t3_list	HN168	JN168   KN168	LN168	MN168	NN168
-global dental_OOP_t3m_list	9999	9999    999999	999999	999999 	999999
-global RX_OOP_t3_list		HN180	JN180   KN180	LN180	MN180	NN180		
-global RX_OOP_t3m_list		9999	9999    9999	9999	9999	9999
-global home_OOP_t3_list		HN194	JN194   KN194	LN194	MN194	NN194		
-global home_OOP_t3m_list	9999	99999   99999	99999	99999	99999
-global special_OOP_t3_list	HN239	JN239   KN239	LN239	MN239	NN239
-global special_OOP_t3m_list	9999	9999    999999	999999	999999	999999
+global hospital_OOP_t3_list	HN106	JN106	KN106	LN106	MN106	NN106	ON106
+global hospital_OOP_t3m_list 9999	999999	999999	999999	999999	999999 	999999
+global NH_OOP_t3_list		HN119	JN119	KN119	LN119	MN119	NN119	ON119
+global NH_OOP_t3m_list		99999	99999   999999	999999	999999	999999	999999
+global patient_OOP_t3_list	HN139	JN139   KN139	LN139	MN139	NN139	ON139
+global patient_OOP_t3m_list	9999	99999   999999	999999	999999	999999	999999
+global doctor_OOP_t3_list	HN156	JN156   KN156	LN156	MN156	NN156	ON156
+global doctor_OOP_t3m_list	99999	99999   999999	999999	999999	999999	999999
+global dental_OOP_t3_list	HN168	JN168   KN168	LN168	MN168	NN168	ON168
+global dental_OOP_t3m_list	9999	9999    999999	999999	999999 	999999	999999
+global RX_OOP_t3_list		HN180	JN180   KN180	LN180	MN180	NN180	ON180	
+global RX_OOP_t3m_list		9999	9999    9999	9999	9999	9999	9999
+global home_OOP_t3_list		HN194	JN194   KN194	LN194	MN194	NN194	ON194	
+global home_OOP_t3m_list	9999	99999   99999	99999	99999	99999	99999
+global special_OOP_t3_list	HN239	JN239   KN239	LN239	MN239	NN239	ON239
+global special_OOP_t3m_list	9999	9999    999999	999999	999999	999999	999999
 
-global other_OOP_t3_list	.na		.na		.na		.na		MN333	NN333
-global other_OOP_t3m_list	.na		.na		.na		.na		99999	99999
+global other_OOP_t3_list	.na		.na		.na		.na		MN333	NN333	ON333
+global other_OOP_t3m_list	.na		.na		.na		.na		99999	99999	99999
 
-global MC_B_adj1_list		.na		.na		.na		0		0		0
-global MC_B_adj1_slvl_list	.na		.na		.na		82000	85000	85000
-global MC_B_adj1_mlvl_list	.na		.na		.na		164000	170000	170000
-global MC_B_adj2_list		.na		.na		.na		25.80	38.50	46.10
-global MC_B_adj2_slvl_list	.na		.na		.na		102000	107000	107000
-global MC_B_adj2_mlvl_list	.na		.na		.na		204000	214000	214000
-global MC_B_adj3_list		.na		.na		.na		64.50	96.30	115.30
-global MC_B_adj3_slvl_list	.na		.na		.na		153000	160000	160000
-global MC_B_adj3_mlvl_list	.na		.na		.na		306000	320000	320000
-global MC_B_adj4_list		.na		.na		.na		103.30	154.10	184.50 
-global MC_B_adj4_slvl_list	.na		.na		.na		205000	213000	214000
-global MC_B_adj4_mlvl_list	.na		.na		.na		401000	426000	428000
-global MC_B_adj5_list		.na		.na		.na		142.00	211.90	253.70 
-global MC_B_adj5_slvl_list	.na		.na		.na		.na		.na		.na		
-global MC_B_adj5_mlvl_list	.na		.na		.na		.na		.na		.na		
+global MC_B_adj1_list		.na		.na		.na		0		0		0		0				///frozen 2011-2019
+global MC_B_adj1_slvl_list	.na		.na		.na		82000	85000	85000	85000
+global MC_B_adj1_mlvl_list	.na		.na		.na		164000	170000	170000	170000
+global MC_B_adj2_list		.na		.na		.na		25.80	38.50	46.10	46.10	
+global MC_B_adj2_slvl_list	.na		.na		.na		102000	107000	107000	107000
+global MC_B_adj2_mlvl_list	.na		.na		.na		204000	214000	214000	214000	
+global MC_B_adj3_list		.na		.na		.na		64.50	96.30	115.30	115.30
+global MC_B_adj3_slvl_list	.na		.na		.na		153000	160000	160000	160000
+global MC_B_adj3_mlvl_list	.na		.na		.na		306000	320000	320000	320000
+global MC_B_adj4_list		.na		.na		.na		103.30	154.10	184.50	184.50 
+global MC_B_adj4_slvl_list	.na		.na		.na		205000	213000	214000	214000
+global MC_B_adj4_mlvl_list	.na		.na		.na		401000	426000	428000	428000
+global MC_B_adj5_list		.na		.na		.na		142.00	211.90	253.70	253.70 
+global MC_B_adj5_slvl_list	.na		.na		.na		.na		.na		.na		.na
+global MC_B_adj5_mlvl_list	.na		.na		.na		.na		.na		.na		.na
 
 
 local counter=0
@@ -1032,6 +1032,10 @@ use $savedir/core2012_oop.dta, clear
 keep HHID PN year MC_HMO MC_D private_medigap_* long_term_care RX_OOP hospital_OOP NH_OOP doctor_OOP patient_OOP dental_OOP home_OOP special_OOP other_OOP
 save $savedir/tmp2012.dta, replace
 
+use $savedir/core2014_oop.dta, clear
+keep HHID PN year MC_HMO MC_D private_medigap_* long_term_care RX_OOP hospital_OOP NH_OOP doctor_OOP patient_OOP dental_OOP home_OOP special_OOP other_OOP
+save $savedir/tmp2014.dta, replace
+
 use $savedir/tmp1992.dta, clear
 append using ///
 $savedir/tmp1993.dta ///
@@ -1045,7 +1049,8 @@ $savedir/tmp2004.dta ///
 $savedir/tmp2006.dta ///
 $savedir/tmp2008.dta ///
 $savedir/tmp2010.dta ///
-$savedir/tmp2012.dta
+$savedir/tmp2012.dta ///
+$savedir/tmp2014.dta
 
 save $savedir/core_oop.dta, replace
 
@@ -1062,3 +1067,4 @@ rm $savedir/tmp2006.dta
 rm $savedir/tmp2008.dta
 rm $savedir/tmp2010.dta
 rm $savedir/tmp2012.dta
+rm $savedir/tmp2014.dta

@@ -857,7 +857,7 @@ use "E:\data\solo_spouses\int_data\r_s_core_x_e.dta", clear
 
 merge 1:1 r_hhidpn_n1 r_core_year_n1 using "E:\data\spouse 2.0\int_data\helperfile.dta", keepus(n_hp n_s)
 
-H="Regression"
+H="Final Dataset"
 use "E:\data\solo_spouses\int_data\r_s_core_x_e.dta", clear 
 
 gen spouse_hlp = 0 if n_s==0 & s_hhidpn_n1!=. // helper, no spouse
@@ -868,8 +868,6 @@ la define spouselbl 0"helper, no spouse"1"Spouse solo helper"2"spouse non-solo"
 la values spouse_hlp spouselbl
 
 keep if s_hhidpn_n1!=.
-
-
 
 
 gen r_age_death = (r_death_date_e - r_birth_date_e)/365.25
@@ -911,6 +909,170 @@ gen solo_hlp = 0
 replace solo_hlp = 1 if spouse_hlp==1
 label var solo_hlp "Spouse is solo helper"
 
+
+save "E:\data\solo_spouses\int_data\r_exit_s_core.dta", replace
+
+
+/* merge with cause of death and final illness */
+
+use "E:\data\hrs_public_2014\exit\causedeath.dta", clear
+
+gen causedeath_v1 = .
+gen causedeath_v2 = .
+
+foreach x of varlist sa133m1m ta133m1m ua133m1m va133m1m wa133m1m xa133m1m {
+
+replace causedeath_v1 = 1 if `x'>=101 & `x'<=103 // Cancer
+replace causedeath_v1 = 2 if `x'>=121 & `x'<=129 // Heart
+replace causedeath_v1 = 3 if `x'>=181 & `x'<=189 // Psychological
+
+}
+
+
+
+foreach x of varlist sa133m2m ta133m2m ua133m2m va133m2m wa133m2m xa133m2m {
+
+replace causedeath_v2 = 1 if `x'>=101 & `x'<=103 // Cancer
+replace causedeath_v2 = 2 if `x'>=121 & `x'<=129 // Heart
+replace causedeath_v2 = 3 if `x'>=181 & `x'<=189 // Psychological
+
+}
+
+replace causedeath_v1 = 4 if causedeath_v1==.
+replace causedeath_v2 = 4 if causedeath_v2==.
+
+la define causelbl 1"Cancer"2"Heart"3"Psych/Dem"4"Other"
+
+la values causedeath_v1 causelbl
+la values causedeath_v2 causelbl
+
+egen r_id = concat(hhid pn)
+destring r_id, replace
+
+keep r_id causedeath_v1 causedeath_v2
+tempfile death
+save "`death'"
+
+use "E:\data\solo_spouses\int_data\r_exit_s_core.dta", clear
+
+cap drop _m
+merge m:1 r_id using "`death'" 
+drop if _m==2
+cap drop _m
+save "E:\data\solo_spouses\final_data\r_exit_s_core.dta", replace
+
+/* Get pdem for r n1 */
+
+use "E:\data\hrs_public_2012\dementia\pdem_withvarnames_ebl.dta", clear
+
+destring id, gen(r_id)
+rename core_year r_core_year_n1
+gen r_pdem_gt50=pdem>=.5 if !missing(pdem)
+
+tempfile dem
+save `dem'
+
+use "E:\data\solo_spouses\final_data\r_exit_s_core.dta", clear
+merge 1:1 r_id r_core_year_n1 using "`dem'", keepus(r_pdem_gt50)
+drop if _m==2
+cap drop _m
+
+gen r_cod = . // respondent cause of death
+replace r_cod = 1 if r_pdem_gt50==1 //& ind_n1_ivw==1 //dem
+replace r_cod = 2 if causedeath_v1==1 & r_cod==. //& ind_n1_ivw==1 // cancer
+replace r_cod = 3 if causedeath_v1==2 & r_cod==. //& ind_n1_ivw==1 // heart
+replace r_cod = 4 if r_cod==. //& ind_n1_ivw==1 // other
+
+la define codlbl 1"Dementia"2"Cancer"3"Heart Disease"4"Other"
+la values r_cod codlbl
+
+gen r_cod_dem = 0
+replace r_cod_dem = 1 if r_cod==1
+
+label var r_cod_dem "R cause of death Dementia"
+
+gen r_cod_cancer = 0
+replace r_cod_cancer = 1 if r_cod==2
+label var r_cod_cancer "R cause of death Cancer"
+
+gen r_cod_heart = 0
+replace r_cod_heart = 1 if r_cod==3
+label var r_cod_heart "R cause of death Heart"
+
+gen r_cod_other = 0
+replace r_cod_other = 1 if r_cod==4
+label var r_cod_other "R cause of death Other"
+
+save "E:\data\solo_spouses\final_data\r_exit_s_core.dta", replace
+
+
+replace spouse_hlp = 0 if spouse_hlp==.
+
+gen spouse2 = 0 if spouse_hlp==1
+replace spouse2 = 1 if spouse_hlp==2
+
+keep if s_hhidpn_n1!=. & s_c_ivw_date_n1!=. //& r_nhres_n1==0
+replace spouse_hlp = 0 if spouse_hlp==.
+
+cap drop _m
+merge 1:1 r_hhidpn_n1 r_core_year_n1 using "E:\data\solo_spouses\int_data\core_child.dta", keepus(child_10)
+drop if _m==2
+
+replace child_10 = 0 if child_10==.
+
+gen r_anychild_n1 = 0
+replace r_anychild_n1 = 1 if child_10==1 | r_reschil_d_n1
+
+
+gen r_time_death_n1 = (r_death_date_e - r_c_ivw_date_n1)/30.4
+label var r_time_death_n1 "Months between Death and N1, R"
+
+gen s_time_death_n1 = (r_death_date_e - s_c_ivw_date_n1)/30.4
+label var s_time_death_n1 "Months between Death and N1, Spouse"
+
+gen death_yr = year(r_death_date_e)
+
+gen r_loc_nh_x = 0
+replace r_loc_nh_x = 1 if r_location_x==2
+
+gen r_loc_home_x = 0
+replace r_loc_home_x = 1 if r_location_x==3
+
+gen r_loc_hospice_x = 0
+replace r_loc_hospice_x = 1 if r_location_x==4
+
+gen r_loc_assist_x = 0
+replace r_loc_assist_x = 1 if  r_location_x==5
+
+gen r_loc_other_x = 0
+replace r_loc_other_x = 1 if r_location_x==6
+
+
+
+*preserve
+*keep if r_nhres_x==0
+gen female = 0 if s_female_n1!=. | s_female_n2!=. | s_female_x!=.
+replace female = 1 if s_female_n1==1 | s_female_n2==1 | s_female_x==1
+keep if female==0
+
+label var r_loc_hosp_x "Respondent Died in Hospital"
+label var s_cesd_tot_p1 "Total CESD Count at P1"
+label var s_cesd_tot_ge3_p1 "CESD Count 3+ at P1" 
+label var r_nhres_x "Nursing Home Resident at Exit"
+label var r_iadl_ind_x "Number of R ADLs, Exit"
+label var r_adl_index_core_n1 "Number of R ADLs, Core"
+label var child_10 "Non-Resident Children living within 10 miles, R N1"
+label var r_reschil_d_n1 "Living with Children, R N1"
+label var r_anychild_n1 "Children within 10 miles Resident or non-Resident, R N1"
+label var r_loc_nh_x "Respondent Died in Nursing Home"
+label var r_loc_home_x "Respondent Died at Home"
+label var r_loc_hospice_x "Respondent Died at Hospice"
+label var r_loc_assist_x "Respondent Died in Assisted Living"
+label var r_loc_other_x "Respondent Died in Other Location"
+
+save "E:\data\solo_spouses\final_data\r_exit_s_core.dta", replace
+
+H="Regression"
 
 local logpath "E:\projects\solo_spouses\archive_logs"
 cap log close
@@ -992,6 +1154,53 @@ la values spouse_hlp spouselbl
 keep if s_hhidpn_n1!=.
 
 
+/* Decedent Characterisitcs 
+
+*get death year from exit to calculate decedent age
+
+cap drop _m
+
+merge 1:1 r_hhidpn_n1 r_bid_hrs using "E:\data\hrs_cleaned\death_date_2012.dta"
+
+drop if _m==2
+drop _m
+
+merge 1:1 r_hhidpn_n1 using "E:\data\YN295\int_data\death_2014.dta" 
+
+append using appendlater.dta
+
+save , replace
+
+list of vars for table 1:
+
+* respondent 
+
+age_death 
+
+r_srh_pf_n1 r_nhres_n1 r_dexp_x r_location_x r_adl_dependence_core_n1
+r_demalz_core_n1 r_female_n1 r_white_e r_networth_adj2012_n1
+
+r_comor_in_hrs_n1
+
+
+* spouse
+
+s_age_death s_age_ivw_n1 
+s_srh_pf_n1 s_female_n1 s_cesd_tot_n1 s_cesd_tot_ge3_n1
+s_networth_adj2012_n1
+
+s_comor_in_hrs_n1 s_time_exit_n1
+
+local r_vars1 r_age_death r_networth_adj2012_n1 r_comor_in_hrs_n1
+local r_vars2 r_srh_pf_n1 r_nhres_n1 r_dexp_x r_location_x r_adl_dependence_core_n1 //
+r_demalz_core_n1 r_female_n1 r_white_e
+
+local s_vars1 s_age_death s_age_ivw_n1 s_comor_in_hrs_n1 s_time_exit_n1 s_networth_adj2012_n1 s_cesd_tot_n1
+local s_vars2 s_cesd_tot_ge3_n1 s_srh_pf_n1 s_female_n1
+*/
+
+
+
 
 
 gen r_age_death = (r_death_date_e - r_birth_date_e)/365.25
@@ -1033,6 +1242,18 @@ replace spouse_hlp = 0 if spouse_hlp==.
 gen spouse2 = 0 if spouse_hlp==1
 replace spouse2 = 1 if spouse_hlp==2
 
+keep if s_hhidpn_n1!=. & s_c_ivw_date_n1!=. //& r_nhres_n1==0
+replace spouse_hlp = 0 if spouse_hlp==.
+
+cap drop _m
+merge 1:1 r_hhidpn_n1 r_core_year_n1 using "E:\data\solo_spouses\int_data\core_child.dta", keepus(child_10)
+drop if _m==2
+
+replace child_10 = 0 if child_10==.
+
+gen r_anychild_n1 = 0
+replace r_anychild_n1 = 1 if child_10==1 | r_reschil_d_n1
+
 
 gen r_time_death_n1 = (r_death_date_e - r_c_ivw_date_n1)/30.4
 label var r_time_death_n1 "Months between Death and N1, R"
@@ -1040,20 +1261,50 @@ label var r_time_death_n1 "Months between Death and N1, R"
 gen s_time_death_n1 = (r_death_date_e - s_c_ivw_date_n1)/30.4
 label var s_time_death_n1 "Months between Death and N1, Spouse"
 
+gen death_yr = year(r_death_date_e)
+
+gen r_loc_nh_x = 0
+replace r_loc_nh_x = 1 if r_location_x==2
+
+gen r_loc_home_x = 0
+replace r_loc_home_x = 1 if r_location_x==3
+
+gen r_loc_hospice_x = 0
+replace r_loc_hospice_x = 1 if r_location_x==4
+
+gen r_loc_assist_x = 0
+replace r_loc_assist_x = 1 if  r_location_x==5
+
+gen r_loc_other_x = 0
+replace r_loc_other_x = 1 if r_location_x==6
 
 
 
 *preserve
 *keep if r_nhres_x==0
+gen female = 0 if s_female_n1!=. | s_female_n2!=. | s_female_x!=.
+replace female = 1 if s_female_n1==1 | s_female_n2==1 | s_female_x==1
+keep if female==0
 
 label var r_loc_hosp_x "Respondent Died in Hospital"
 label var s_cesd_tot_p1 "Total CESD Count at P1"
 label var s_cesd_tot_ge3_p1 "CESD Count 3+ at P1" 
+label var r_nhres_x "Nursing Home Resident at Exit"
+label var r_iadl_ind_x "Number of R ADLs, Exit"
+label var r_adl_index_core_n1 "Number of R ADLs, Core"
+label var child_10 "Non-Resident Children living within 10 miles, R N1"
+label var r_reschil_d_n1 "Living with Children, R N1"
+label var r_anychild_n1 "Children within 10 miles Resident or non-Resident, R N1"
+label var r_loc_nh_x "Respondent Died in Nursing Home"
+label var r_loc_home_x "Respondent Died at Home"
+label var r_loc_hospice_x "Respondent Died at Hospice"
+label var r_loc_assist_x "Respondent Died in Assisted Living"
+label var r_loc_other_x "Respondent Died in Other Location"
 
 /********************************/
 
 local r_vars1 r_age_death r_networth_adj2012_n1 r_comor_in_hrs_n1
-local r_vars2 r_srh_pf_n1 r_nhres_n1 r_dexp_x r_loc_hosp_x r_adl_dependence_core_n1 r_demalz_core_n1 r_female_n1 r_white_e
+local r_vars2 r_srh_pf_n1 r_nhres_n1 r_dexp_x r_hospice_x r_loc_hosp_x r_loc_nh_x r_loc_home_x r_loc_hospice_x r_loc_assist_x r_loc_other_x r_adl_dependence_core_n1 r_demalz_core_n1 r_female_n1 r_white_e child_10 r_reschil_d_n1 r_anychild_n1
 
 local s_vars1 s_age_death s_age_ivw_n1 s_comor_in_hrs_n1 s_time_exit_n1 s_time_death_n1 s_networth_adj2012_n1 s_cesd_tot_n1 s_cesd_tot_p1
 local s_vars2 s_cesd_tot_ge3_n1 s_cesd_tot_ge3_p1 s_srh_pf_n1 s_female_n1
@@ -1155,10 +1406,17 @@ varlabels title("Summary Statistics: HRS couples with a Deceased Spouse as of Ex
 note("Sig test is Solo Spouse vs Non-Solo Spouse: *p<0.05, **p<0.01")
 */
 
+frmttable using "E:\projects\solo_spouses\archive_logs\table1_male.doc", replace statmat(tab1) ///
+varlabels title("Summary Statistics: HRS couples with a Deceased Spouse as of Exit 2014") ctitles("Variables" "Non-Helping Spouse" "Spouse Helper, Solo" "Spouse Helper, Non-Solo") sdec(2) annotate(stars) asymbol(*,**) ///
+note("Sig test is Solo Spouse vs Non-Solo Spouse: *p<0.05, **p<0.01")
 
+
+
+/*
 frmttable using "E:\projects\solo_spouses\archive_logs\table1_nonnursing.doc", replace statmat(tab1) ///
 varlabels title("Summary Statistics: HRS couples with a Deceased Spouse as of Exit 2014") ctitles("Variables" "Non-Helping Spouse" "Spouse Helper, Solo" "Spouse Helper, Non-Solo") sdec(2) annotate(stars) asymbol(*,**) ///
 note("Sig test is Solo Spouse vs Non-Solo Spouse: *p<0.05, **p<0.01")
+*/
 
 
 H="********************"

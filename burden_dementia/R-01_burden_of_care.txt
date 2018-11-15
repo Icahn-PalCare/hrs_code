@@ -3297,3 +3297,267 @@ mat list sum
 
 frmttable using "E:\data\burden_dementia\logs\cost_hours.doc", statmat(sum) replace ///
 title(Cost and Hours by Year from Death) sdec(2) note("Each column is a year from death")
+
+
+H="xxxxxpractice snf medpar contact days hrsxxxx"
+/*Finding Nursing home days*/
+
+
+use "E:\data\CMS_DUA_51675_2014\Merged\Stata\mp_1998_2012.dta", clear
+keep bid_hrs_21 sslssnf *date
+
+
+
+keep if sslssnf=="N"
+gen duration=disch_date - admit_date +1
+expand duration
+bysort bid_hrs_21 admit_date: gen date=admit_date +_n-1
+format date %td
+
+gen medpar_day=1
+
+
+merge m:1 bid_hrs_21 using "E:\data\cms_DUA_24548_2012\cmsxref2012.dta", nogen
+tempfile a
+duplicates tag hhid pn date, gen(tag)
+
+duplicates drop hhid pn date, force
+save "`a'"
+
+use "E:\data\CMS_DUA_51675_2014\Medicaid_merged\hrs_max_lt_99_12.dta", clear
+keep nursing_facility_days beginning_date_of_service ending_date_of_service ///
+bid_hrs_23 
+
+capture drop if nursing_facility_days<=0
+
+tostring beginning_date_of_service, replace
+tostring ending_date_of_service, replace
+gen beg_date=date(beginning_date_of_service,"YMD")
+gen end_date=date(ending_date_of_service,"YMD")
+format beg_date %d
+format end_date %d
+
+duplicates drop bid_hrs_23 beg_date end_date, force
+sort bid_hrs_23 beg_date end_date
+by bid_hrs_23 beg_date: gen a=1 if beg_date==beg_date[_n+1]
+drop if a==1
+
+gen duration=end_date - beg_date +1
+sort bid_hrs_23 beg_date
+expand duration
+sort bid_hrs_23 beg_date
+bysort bid_hrs_23 beg_date: gen date=beg_date +_n-1
+format date %td
+duplicates tag bid_hrs_23 date, gen(tag)
+sort bid_hrs_23 date beg_date end_date
+duplicates drop bid_hrs_23 date, force
+
+gen ltc_day=1
+
+merge m:1 bid_hrs_23 using "E:\data\CMS_DUA_51675_2014\Medicaid_merged\MedicaidXref2012_old.dta", nogen 
+duplicates report hhid pn date
+
+//duplicates tag hhid pn date, gen(tag)
+
+
+merge 1:1 hhid pn date using "`a'", force
+capture drop day
+egen day= rowtotal(medpar_day ltc_day)
+
+gen both=1 if day==2
+replace day=1 if day==2
+
+saveold "E:\data\test\mp_ltc_contact_days.dta", version(12)
+
+
+/*SAS SECTION
+
+libname mpltc 'E:\data\test\';
+
+proc import out=work.day
+		datafile  = "E:\data\test\mp_ltc_contact_days.dta" replace;
+run;
+
+
+proc import out=work.hrs
+datafile='E:\data\test\oopme_final_xref_core_2014.dta'
+dbms=DTA replace;
+run;
+
+
+proc sort data=hrs out=hrs nodupkey;
+by hhidpn c_ivw_date;
+run;
+
+data hrs1;
+set hrs;
+by hhidpn;
+c_ivw_date_pre=lag(c_ivw_date);
+if first.hhidpn then do;
+	c_ivw_date_pre=c_ivw_date-731;
+end;
+format c_ivw_date_pre yymmddn8.;
+bet_days=c_ivw_date-c_ivw_date_pre;
+run;
+
+data hrs1;
+set hrs1;
+keep c_ivw_date c_ivw_date_pre nh_nights bet_days hhid hhidpn pn c_ivw_year;
+run;
+
+proc sql;
+create table hrs_day as select * from
+day a inner join 
+hrs1 b
+on a.hhidpn=b.hhidpn and b.c_ivw_date>=a.date>b.c_ivw_date_pre;
+run;
+
+proc export data=hrs_day outfile="E:\data\test\hrs_day.dta" replace; run;
+
+*/
+
+
+
+
+
+////////////////HRS
+ 
+use "E:\data\test\hrs_day.dta", clear
+
+gen too_big=1 if nh_nights>bet_days & nh_nights!=.
+
+replace nh_nights=bet_days if too_big==1
+
+bys hhidpn c_ivw_year: egen mm_days=total(day)
+bys hhidpn c_ivw_year: egen medpar_tot=total(medpar_day)
+bys hhidpn c_ivw_year: egen ltc_tot=total(ltc_day)
+
+bys hhidpn c_ivw_year: keep if _n==1
+
+
+capture drop diff
+gen diff=nh_nights-mm_days
+
+sum diff,d
+
+
+
+
+
+
+H="xxxattempt to bring days into R01xxx"
+/*First, get index dates (death or ivw and previous ivw or 5 year cutoff*/
+
+use id index_date cont_ffs_n bid using "E:\data\burden_dementia\int_data\decedent_dataset.dta", clear
+merge 1:1 id using "E:\data\CMS_DUA_51675_2014\Medicaid_merged\MedicaidXref2012_old.dta", nogen ///
+keepusing(bid_hrs_23)
+gen ffs_yrs=floor(cont_ffs_n_mos/12)
+keep if ffs_y>=5 & !missing(ffs_y)
+tempfile index
+save `index'
+
+
+use "E:\data\hrs_cleaned\exit_02_to_14_dt.dta" if !missing(e_ivw_date)
+
+merge 1:1 id using `index', nogen keep(match)
+//set time=0 so it can be appended to the core
+gen t2=0
+drop if e_ivw_date<index_date
+gen exit=1
+rename e_ivw_date ivw_date
+rename exit_year year
+keep id index_date year exit ivw_date medigap medicaid nhres bid*
+tempfile exit
+save `exit'
+
+
+use "E:\data\burden_dementia\oopdata\oopme_final_2014.dta", clear
+rename *, l
+gen id=hhid+pn
+keep id year nh_nights nh_oop
+
+tempfile oop
+save `oop'
+
+
+use `index', clear
+merge 1:m id using "E:\data\hrs_cleaned\core_00_to_14.dta", nogen ///
+keep(match) keepusing(c_ivw_date core_year medigap champus medicaid)
+rename core_year year
+rename c_ivw_date ivw_date
+tempfile core
+save `core' 
+
+use `exit', clear
+append using `core'
+sort id year
+by id: gen ivw_date_n1=ivw_date[_n-1]
+replace ivw_date=index_date if exit==1
+gen timetodeath=index_date-ivw_date
+by id: egen mintime=min(timeto)
+drop if mintime<0
+keep if timeto<=5*365.25
+keep id bid* ivw_date ivw_date_n1 index_date timeto year
+merge 1:1 id year using `oop', gen(oopm) keep(match master) keepusing(nh_nights)
+/*drop one who died on previous ivw date*/
+sort id ivw_date 
+duplicates drop id ivw_date, force
+tempfile dates
+save `dates'
+
+
+use "E:\data\CMS_DUA_51675_2014\Merged\Stata\mp_1998_2012.dta" if ssls=="N", clear
+keep bid_hrs_21 admit_date disch_date
+duplicates drop
+tempfile snf
+save `snf'
+
+use "E:\data\CMS_DUA_51675_2014\Medicaid_merged\hrs_max_lt_99_12.dta", clear
+keep nursing_facility_days beginning_date_of_service ending_date_of_service ///
+bid_hrs_23 
+
+drop if nursing_facility_days<=0
+tostring *date*, replace
+gen admit_date=date(beg,"YMD")
+gen disch_date=date(end,"YMD")
+
+keep admit disch bid
+tempfile ltc
+save `ltc'
+
+/*now get individual days*/
+
+local i=1
+foreach type in snf ltc {
+	use `dates', clear
+	joinby bid_hrs_2`i' using ``type''
+	replace ivw_date_n1=index_date-floor(5*365.25) ///
+	 if ivw_date_n1<index_date-floor(5*365.25) | missing(ivw_date_n1)
+	keep if inrange(admit_date,ivw_date_n1+1,ivw_date) | ///
+	inrange(disch_date,ivw_date_n1,ivw_date) | (admit_date<=ivw_date_n1 & disch_date>ivw_date)
+	replace admit_date=ivw_date_n1+1 if admit_date<=ivw_date_n1
+	replace disch_date=ivw_date if disch_date>ivw_date
+	gen duration=disch_date - admit_date +1
+	expand duration
+	sort bid_hrs_2`i' admit_date disch_date
+	by bid_hrs_2`i' admit_date: gen n=_n
+	gen date=admit_date +(n-1)
+	format date %td
+	gen `type'_day=1
+	keep id ivw_date date `type'_day
+	duplicates drop
+	tempfile `type'days
+	save ``type'days'
+	local i=3
+}
+
+use `snfdays', clear
+append using `ltcdays'
+merge m:1 id ivw_date using `dates'
+replace snf_day=0 if missing(snf_day)
+replace ltc_day=0 if missing(ltc_day)
+by id ivw_date date, sort: egen ind_snf_day=max(snf_day)
+by id ivw_date date: egen ind_ltc_day=max(ltc_day)
+drop snf_day ltc_day
+duplicates drop
+

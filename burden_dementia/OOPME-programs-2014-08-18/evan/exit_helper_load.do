@@ -143,10 +143,22 @@ use  "$loaddir/X12G_HP.dta" , clear
 by HHID PN, sort: gen numhelpers = _N
 helper XG078 XG079
 replace helper_OOP = helper_OOP * (cpiBASE / cpi2012)
+save "$savedir/helper_exit_2012.dta" , replace
+
+
+/* *********************************************************************** */
+* 2014
+
+use  "$loaddir/X14G_HP.dta" , clear
+by HHID PN, sort: gen numhelpers = _N
+helper YG078 YG079
+replace helper_OOP = helper_OOP * (cpiBASE / cpi2014)
+save "$savedir/helper_exit_2014.dta" , replace
 
 
 /* *********************************************************************** */
 
+append using "$savedir/helper_exit_2012.dta"
 append using "$savedir/helper_exit_2010.dta"
 append using "$savedir/helper_exit_2008.dta"
 append using "$savedir/helper_exit_2006.dta"
@@ -170,6 +182,8 @@ save "$savedir/helper_exit_all.dta" , replace
 
 clear
 
+rm "$savedir/helper_exit_2014.dta"
+rm "$savedir/helper_exit_2012.dta"
 rm "$savedir/helper_exit_2010.dta"
 rm "$savedir/helper_exit_2008.dta"
 rm "$savedir/helper_exit_2006.dta"

@@ -1416,6 +1416,160 @@ save $savedir/core2012_oop.dta, replace
 
 ********************************************************************************
 
+use $savedir/core2014.dta, clear
+merge 1:1 HHID PN using $savedir/core2014_months.dta, nogen keep(match)
+
+*gen MC_HMO_1 = ON266		//in 2014 this doesnt exist, revert to 2008 formatt on this
+*replace MC_HMO_1 = . if (MC_HMO_1 == 9998 | MC_HMO_1 == 9999)
+
+gen MC_HMO = ON014
+replace_mi MC_HMO 998 999
+
+replace MC_HMO = 1      * MC_HMO if ON018 == 1
+replace MC_HMO = (1/3)  * MC_HMO if ON018 == 2
+replace MC_HMO = (1/6)  * MC_HMO if ON018 == 3
+replace MC_HMO = (1/12) * MC_HMO if ON018 == 4
+replace MC_HMO = . 				 if (ON018 == 7 | ON018 == 8 | ON018 == 9) & (MC_HMO!=0)
+
+*egen MC_HMO = rowtotal( MC_HMO_1 MC_HMO_2 ),m
+*drop MC_HMO_1 MC_HMO_2
+
+//rrd: as before, using prior wave of rules/prems (2011)
+//rrd: http://www.ssa.gov/policy/docs/statcomps/supplement/2010/medicare.html#partBtable
+//rrd: OOT ONTROLING FOR HOLD HARMLESS, IE IS UPPER BOUND
+gen MC_B = 115.40 if (ON004 == 1 & ON005 != 1 & ON007 != 1)  //rrd: recall only if not covered by other govt
+
+*Income Adjustments for 2008-2010
+//rrd: update to 2014
+*Using RAND HRS ver. L income (hXitot) & marital status (rXmstat), calculate adjustments:
+*NOTE: Wave 10 income data is for 2009, so we use 2009 income cutoffs from SSA.
+
+*Sources:
+*http://www.ssa.gov/policy/docs/statcomps/supplement/2011/2b-2c.html#table2.c1
+*http://www.ssa.gov/policy/docs/statcomps/supplement/2009/medicare.html#partBtable
+
+gen MC_B_adjustment = .
+
+*Single
+replace MC_B_adjustment = 0      if r10mstat!=1 & r10mstat!=2 & h10itot<=85000						//rrd: correct these to 12 when RANDHRS updated
+replace MC_B_adjustment = 46.10  if r10mstat!=1 & r10mstat!=2 & h10itot>85000  & h10itot<=107000
+replace MC_B_adjustment = 115.30 if r10mstat!=1 & r10mstat!=2 & h10itot>107000 & h10itot<=160000
+replace MC_B_adjustment = 184.50 if r10mstat!=1 & r10mstat!=2 & h10itot>160000 & h10itot<=214000
+replace MC_B_adjustment = 253.70 if r10mstat!=1 & r10mstat!=2 & h10itot>214000 & h10itot<.
+
+*Married, filing jointly (we assume all married respondents file jointly)
+replace MC_B_adjustment = 0      if (r10mstat==1 | r10mstat==2) & h10itot<=170000
+replace MC_B_adjustment = 46.10  if (r10mstat==1 | r10mstat==2) & h10itot>170000 & h10itot<=214000
+replace MC_B_adjustment = 115.30 if (r10mstat==1 | r10mstat==2) & h10itot>214000 & h10itot<=320000
+replace MC_B_adjustment = 184.50 if (r10mstat==1 | r10mstat==2) & h10itot>320000 & h10itot<=428000
+replace MC_B_adjustment = 253.70 if (r10mstat==1 | r10mstat==2) & h10itot>428000 & h10itot<.
+
+replace MC_B = MC_B + MC_B_adjustment if !missing(MC_B,MC_B_adjustment)
+
+tab MC_B
+
+//rrd: following doesnt exist in 2014, see 2006
+/*gen MC_D_1 = ON424		//monthly ss deduction  
+replace MC_D_1 = . if (MC_D_1 == 9998 | MC_D_1 == 9999)
+replace MC_D_1 = 0 if MC_D_1 == 9996	//Not Ascertained; Amount included in O014 or O040
+
+gen MC_D_2 = ON404		//monthly direct payment
+replace MC_D_2 = . if (MC_D_2 == 9998 | MC_D_2 == 9999)
+replace MC_D_2 = 0 if MC_D_2 == 9996	//Not Ascertained; Amount included in O014 or O040
+
+egen MC_D = rowtotal( MC_D_1 MC_D_2 ), missing
+drop MC_D_1 MC_D_2
+*/
+gen MC_D = ON404
+replace MC_D=9999 if MC_D==9996
+replace_mi MC_D 9998 9999
+
+gen private_medigap_1 = ON040_1
+replace_mi private_medigap_1  9998 9999
+
+gen private_medigap_2 = ON040_2
+replace_mi private_medigap_2  9998 9999
+
+gen private_medigap_3 = ON040_3
+replace_mi private_medigap_3  9998 9999
+
+gen long_term_care = ON079 if ON079!=999995
+replace_mi long_term_care 999998 999999
+
+replace long_term_care = 1                 * long_term_care if (ON083 == 1)
+replace long_term_care = (1/3)             * long_term_care if (ON083 == 2)
+*replace long_term_care = 4                 * long_term_care if (ON083 == 3)
+replace long_term_care = (1/12)            * long_term_care if (ON083 == 4)
+*replace long_term_care = ((1/20) * (1/12)) * long_term_care if (ON083 == 6)
+replace long_term_care = . if (ON083 == 7 | ON083 == 8 | ON083 == 9) & (long_term_care!=0)
+
+gen hospital_OOP = ON106
+replace_mi hospital_OOP 9999998 9999999
+
+
+
+//note, broke insurance payment question N102 into a multiple question series, but possible to recreate it
+gen ON102=.
+replace ON102=1 if inlist(ON434_1,1)
+replace ON102=2 if inlist(ON435_1,1)
+replace ON102=3 if inlist(ON435_1,5)
+replace ON102=4 if inlist(ON433_1,5)
+replace ON102=8 if inlist(ON433_1,8,9) | inlist(ON434_1,8,9) | inlist(ON435_1,8,9)
+
+
+
+gen NH_OOP = ON119
+replace_mi NH_OOP 9999998 9999999
+
+gen patient_OOP = ON139
+replace_mi patient_OOP 99998 99999
+
+gen doctor_OOP = ON156
+replace_mi doctor_OOP 99998 99999
+
+gen dental_OOP = ON168
+replace_mi dental_OOP 99998 99999
+
+gen RX_OOP = ON180
+replace_mi RX_OOP 99998 99999
+
+gen home_OOP = ON194
+replace_mi home_OOP 999998 999999
+
+gen special_OOP = ON239
+replace_mi special_OOP 99998 99999
+
+gen other_OOP = ON333
+replace_mi other_OOP 999998 999999
+
+*summarize
+*fsum MC_HMO MC_D private_medigap_* long_term_care *_OOP, s(n miss min max mean se p5 p25 p50 p75 p95) f(%9.0f)
+*sum MC_HMO MC_D private_medigap_* long_term_care *_OOP
+*caps
+
+scalar z = cpi2014/cpiBASE
+
+upp_cap MC_HMO ${MC_HMO_cap}*z 
+upp_cap MC_D ${MC_D_cap}*z 
+forvalues pm=1/3{
+	upp_cap private_medigap_`pm' cond(ON001==1,${private_medigap_wMC_cap}*z,${private_medigap_nMC_cap}*z)
+}
+upp_cap long_term_care ${long_term_care_cap}*z 
+upp_cap hospital_OOP ${hospital_OOP_cap}*z*months 
+upp_cap NH_OOP ${NH_OOP_cap}*z*months 
+upp_cap patient_OOP ${patient_OOP_cap}*z*months 
+upp_cap doctor_OOP ${doctor_OOP_cap}*z*months 
+upp_cap dental_OOP ${dental_OOP_cap}*z*months 
+upp_cap RX_OOP ${RX_OOP_cap}*z 
+upp_cap home_OOP ${home_OOP_cap}*z*months  
+upp_cap special_OOP ${special_OOP_cap}*z*months  
+upp_cap other_OOP ${other_OOP_cap}*z*months 
+
+save $savedir/core2014_oop.dta, replace
+
+
+********************************************************************************
+
 use $savedir/core1992_oop.dta, clear
 keep HHID PN year private_ltc
 save $savedir/tmp1992.dta, replace
@@ -1468,6 +1622,10 @@ use $savedir/core2012_oop.dta, clear
 keep HHID PN year MC_HMO MC_D private_medigap_* long_term_care RX_OOP hospital_OOP NH_OOP doctor_OOP patient_OOP dental_OOP home_OOP special_OOP other_OOP
 save $savedir/tmp2012.dta, replace
 
+use $savedir/core2014_oop.dta, clear
+keep HHID PN year MC_HMO MC_D private_medigap_* long_term_care RX_OOP hospital_OOP NH_OOP doctor_OOP patient_OOP dental_OOP home_OOP special_OOP other_OOP
+save $savedir/tmp2014.dta, replace
+
 use $savedir/tmp1992.dta, clear
 append using ///
 $savedir/tmp1993.dta ///
@@ -1481,7 +1639,8 @@ $savedir/tmp2004.dta ///
 $savedir/tmp2006.dta ///
 $savedir/tmp2008.dta ///
 $savedir/tmp2010.dta ///
-$savedir/tmp2012.dta
+$savedir/tmp2012.dta ///
+$savedir/tmp2014.dta
 
 save $savedir/core_oop.dta, replace
 
@@ -1498,3 +1657,4 @@ rm $savedir/tmp2006.dta
 rm $savedir/tmp2008.dta
 rm $savedir/tmp2010.dta
 rm $savedir/tmp2012.dta
+rm $savedir/tmp2014.dta

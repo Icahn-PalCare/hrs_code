@@ -193,6 +193,19 @@ save "$savedir/helper_core_2012.dta" , replace
 
 /* *********************************************************************** */
 
+/* *********************************************************************** */
+* 2014
+
+use  "$loaddir/H14G_HP.dta" , clear
+by HHID PN, sort: gen numhelpers = _N
+helper OG078 OG079
+replace helper_OOP = helper_OOP * (cpiBASE / cpi2014)
+save "$savedir/helper_core_2014.dta" , replace
+
+
+/* *********************************************************************** */
+
+append using "$savedir/helper_core_2012.dta"
 append using "$savedir/helper_core_2010.dta"
 append using "$savedir/helper_core_2008.dta"
 append using "$savedir/helper_core_2006.dta"
@@ -215,6 +228,7 @@ save "$savedir/helper_core_all.dta" , replace
 
 /* *********************************************************************** */
 
+rm "$savedir/helper_core_2014.dta"
 rm "$savedir/helper_core_2012.dta"
 rm "$savedir/helper_core_2010.dta"
 rm "$savedir/helper_core_2008.dta"

@@ -5,34 +5,43 @@ Next Steps:
 ***************************************************************************/
 
 
+
 clear *
 macro drop _all
 program drop _all
 set more off
 timer clear
-version 12
+*version 12
 
 global creation_version "20140806_macrotized"
 global ver_description 	"Added Macro loops (see word doc 'README 07-17-2014 notes)' in program dir"	//max 80 chars
 
 ** Steps 
-local do_load	0		
+local do_load	1		
 local do_core	1
 local do_exit	1		
 local do_final	1
 
 ** Options 
-global rand_version 	m
-global tracker_name		TRK2012TR_R
+global rand_version 	o
+global tracker_name		trk2014tr_r
 
 ** define directories 
 *global thisdir "//tsclient\F\RA-Kathleen\OOPME\OOPME_pgms\Updated_structure_20140716"
-global thisdir "//tsclient\F\RA-Kathleen\OOPME\OOPME_pgms/${creation_version}"
-global loaddir "//tsclient\F\RA-Kathleen\OOPME\HRS_Data\Raw\Stata_20140707\data"
-global randdir "//tsclient\F\RA-Kathleen\OOPME\HRS_Data\RAND"
-global savedir "//tsclient\F\RA-Kathleen\OOPME\OOPME_Data/${creation_version}"
-global logsdir "//tsclient\F\RA-Kathleen\OOPME\OOPME_pgms\Logs"
+global thisdir "E:\hrs_code\burden_dementia\OOPME-programs-2014-08-18"
+global loaddir "E:\data\burden_dementia\oopdata\raw hrs"
+global randdir "E:\data\hrs_public_2014\rand2014\main"
+global savedir "E:\data\burden_dementia\oopdata"
+global logsdir "E:\data\burden_dementia\oopdata"
 
+/*update 12/01/17--need to rename all variables to caps lock*/
+cd "${loaddir}"
+local files : dir . files "*.dta"
+foreach file in `files' {
+cap use `file', clear
+cap rename *, u
+cap save `file', replace
+}
 
 cap log close
 log using "${logsdir}/log_${creation_version}", replace
@@ -58,7 +67,7 @@ timer on 1
 	if `do_core'==1 {
 		timer on 3
 		
-			do core_oop					//rename spending vars, ins prems and oop, save as _oop (in nom dollars!)
+		do core_oop					//rename spending vars, ins prems and oop, save as _oop (in nom dollars!)
 			do core_utilization			//rename utilization vars (num vists, num plans), save as _use (needs ins coverage) 
 			do core_all					//adjust inflation, aggregate some groups, rename oop as _all, caps (redundant from _oop!), makes private ins vars long and appends (correct this!)
 			do core_helper_load			//get num helpers, total cost for helpers (monthly, inf adjusted to base dollars)

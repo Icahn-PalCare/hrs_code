@@ -77,6 +77,12 @@ merge 1:1 HHID PN using $savedir/helper_core_2012_imputed, nogen keepusing(numhe
 keep HHID PN year *_iw_date months *_use *_cov *_liv *_nights *_visits private_medigap* *_OOP numhelpers numpaidhelpers helper_OOP long_term_care MC_*
 save $savedir/core2012_merge.dta, replace
 
+use $savedir/core2014_oopi2.dta, clear
+merge 1:1 HHID PN using $savedir/core2014_use.dta, nogen
+merge 1:1 HHID PN using $savedir/helper_core_2014_imputed, nogen keepusing(numhelpers numpaidhelpers helper_OOP)
+keep HHID PN year *_iw_date months *_use *_cov *_liv *_nights *_visits private_medigap* *_OOP numhelpers numpaidhelpers helper_OOP long_term_care MC_*
+save $savedir/core2014_merge.dta, replace
+
 use $savedir/core1992_merge.dta, clear
 append using ///
 $savedir/core1993_merge.dta ///
@@ -90,7 +96,8 @@ $savedir/core2004_merge.dta ///
 $savedir/core2006_merge.dta ///
 $savedir/core2008_merge.dta ///
 $savedir/core2010_merge.dta ///
-$savedir/core2012_merge.dta
+$savedir/core2012_merge.dta ///
+$savedir/core2014_merge.dta
 
 sort HHID PN year
 
@@ -100,6 +107,7 @@ scalar drop _all
 do load_cpi
 
 gen cpi = .
+replace cpi = cpiBASE / cpi2014 if year==2014
 replace cpi = cpiBASE / cpi2012 if year==2012
 replace cpi = cpiBASE / cpi2010 if year==2010
 replace cpi = cpiBASE / cpi2008 if year==2008
@@ -152,3 +160,4 @@ rm $savedir/core2006_merge.dta
 rm $savedir/core2008_merge.dta
 rm $savedir/core2010_merge.dta
 rm $savedir/core2012_merge.dta
+rm $savedir/core2014_merge.dta

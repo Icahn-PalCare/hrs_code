@@ -1178,6 +1178,176 @@ xtile qtile_doctor = dr_visits, nq(4)
 
 save $savedir/core2012_use.dta, replace
 
+********************************************************************************
+
+use $savedir/core2014.dta, clear
+merge 1:1 HHID PN using $savedir/core2014_months.dta, nogen keep(match)
+
+gen mc_cov = ON001
+gen mc_b_cov = ON004
+gen md_cov = ON005
+gen gov_oth_cov = ON007		//rrd: specifically mil
+
+gen private_medigap_plans = ON023		//rrd: private or medigap
+
+gen hospital_use = ON099
+
+
+
+//note, broke insurance payment question N102 into a multiple question series, but possible to recreate it
+gen ON102=.
+replace ON102=1 if inlist(ON434_1,1)
+replace ON102=2 if inlist(ON435_1,1)
+replace ON102=3 if inlist(ON435_1,5)
+replace ON102=4 if inlist(ON433_1,5)
+replace ON102=8 if inlist(ON433_1,8,9) | inlist(ON434_1,8,9) | inlist(ON435_1,8,9)
+gen hospital_cov = ON102
+
+*impute using number of nights spent in hospital:
+gen hospital_nights = ON101
+replace hospital_nights = . if hospital_nights == 998 | hospital_nights == 999
+replace hospital_nights = min( hospital_nights , (365/12)*months ) if !missing(hospital_nights)
+
+gen nh_use = ON114
+gen nh_liv = OA028
+
+
+
+//note, broke insurance payment questions into multiple question series, but possible to recreate them
+gen ON118=.
+replace ON118=1 if inlist(ON434_2,1)
+replace ON118=2 if inlist(ON435_2,1)
+replace ON118=3 if inlist(ON435_2,5)
+replace ON118=4 if inlist(ON433_2,5)
+replace ON118=8 if inlist(ON433_2,8,9) | inlist(ON434_2,8,9) | inlist(ON435_2,8,9)
+gen nh_cov = ON118
+
+*nights spent in nursing home
+*IF R ANSWERS IN MONTHS RATHER THAN OIGHTS, ENTER 0 FOR OIGHTS
+gen nh_nights = ON116
+replace nh_nights = . if nh_nights == 996 | nh_nights == 998 | nh_nights == 999
+gen nh_months = ON117
+replace nh_months = . if nh_months == 98 | nh_months == 99
+replace nh_nights = round( (365/12) * nh_months ) if missing(nh_nights) | nh_nights==0		//rrd: might not want to replace 0 with mi
+
+*using coverscreen OH entry date, compute time in OH
+*if OH nights missing, R lives in OH, and # stays == 1 | missing | unknown, use this value:
+MAKEDATE nh_enter_date_cs OA065 OA066
+gen nh_time_cs = curr_iw_date - nh_enter_date_cs if OA028==1		//rrd: time inconsistency, in this case each month is 365/12 days
+replace nh_time_cs = . if nh_time_cs < 0
+replace nh_nights = round( 365 * nh_time_cs ) if missing(nh_nights) & (ON115==1 | ON115==. | ON115==98 | ON115==99)
+
+*using OH entry & exit dates (up to 3) in section OH, do similar procedure
+*if exit date missing, R lives in OH, and stay is most recent stay, replace exit date with current IW date:
+MAKEDATE nh_enter_date_1 ON123_1 ON124_1
+MAKEDATE nh_exit_date_1  ON125_1 ON126_1
+replace nh_exit_date_1 = curr_iw_date if nh_exit_date_1 == . & OA028==1 & ON115==1
+gen nh_time_1 = nh_exit_date_1 - nh_enter_date_1
+replace nh_time_1 = .  if nh_time_1 < 0
+
+MAKEDATE nh_enter_date_2 ON123_2 ON124_2
+MAKEDATE nh_exit_date_2  ON125_2 ON126_2
+replace nh_exit_date_2 = curr_iw_date if nh_exit_date_2 == . & OA028==1 & ON115==2
+gen nh_time_2 = nh_exit_date_2 - nh_enter_date_2
+replace nh_time_2 = .  if nh_time_2 < 0
+
+MAKEDATE nh_enter_date_3 ON123_3 ON124_3
+MAKEDATE nh_exit_date_3  ON125_3 ON126_3
+replace nh_exit_date_3 = curr_iw_date if nh_exit_date_3 == . & OA028==1 & ON115>=3 & ON115<98
+gen nh_time_3 = nh_exit_date_3 - nh_enter_date_3
+replace nh_time_3 = .  if nh_time_3 < 0
+
+*sum across stays, replace nights if missing
+egen nh_time_sum = rowtotal( nh_time_1 nh_time_2 nh_time_3 ), m
+replace nh_nights = round( 365 * nh_time_sum ) if missing(nh_nights)
+
+*fill in remaining missing values using coverscreen where possible if R lives in OH:
+replace nh_nights = round( 365 * nh_time_cs ) if missing(nh_nights)
+
+*cap at time elapsed between interviews
+replace nh_nights = min( nh_nights , (365/12)*months ) if !missing(nh_nights)		//rrd: does this need to be rounded?
+
+gen patient_use = ON134
+
+//note, broke insurance payment questions into multiple question series, but possible to recreate them
+gen ON135=.
+replace ON135=1 if inlist(ON434_3,1)
+replace ON135=2 if inlist(ON435_3,1)
+replace ON135=3 if inlist(ON435_3,5)
+replace ON135=4 if inlist(ON433_3,5)
+replace ON135=8 if inlist(ON433_3,8,9) | inlist(ON434_3,8,9) | inlist(ON435_3,8,9)
+gen patient_cov = ON135
+
+*impute using number of doctor visits, first impute missing doctor visits:
+gen dr_visits = ON147
+replace dr_visits = . if dr_visits == 998 | dr_visits == 999
+
+impute_dr_visits ON148 ON149 ON150 ON151
+replace dr_visits = min( dr_visits , (365/12)*months ) if !missing(dr_visits)
+
+recode dr_visits (1/max=1), gen(doctor_use)
+replace doctor_use = 8 if missing(doctor_use) & ON147==998
+replace doctor_use = 9 if missing(doctor_use) & ON147==999
+
+
+//note, broke insurance payment questions into multiple question series, but possible to recreate them
+gen ON152=.
+replace ON152=1 if inlist(ON434_4,1)
+replace ON152=2 if inlist(ON435_4,1)
+replace ON152=3 if inlist(ON435_4,5)
+replace ON152=4 if inlist(ON433_4,5)
+replace ON152=8 if inlist(ON433_4,8,9) | inlist(ON434_4,8,9) | inlist(ON435_4,8,9)
+gen doctor_cov = ON152
+
+gen dental_use = ON164
+
+//note, broke insurance payment questions into multiple question series, but possible to recreate them
+gen ON165=.
+replace ON165=1 if inlist(ON434_5,1)
+replace ON165=2 if inlist(ON435_5,1)
+replace ON165=3 if inlist(ON435_5,5)
+replace ON165=4 if inlist(ON433_5,5)
+replace ON165=8 if inlist(ON433_5,8,9) | inlist(ON434_5,8,9) | inlist(ON435_5,8,9)
+gen dental_cov = ON165
+
+gen rx_use = ON175
+
+//note, broke insurance payment questions into multiple question series, but possible to recreate them
+gen ON176=.
+replace ON176=1 if inlist(ON434_6,1)
+replace ON176=2 if inlist(ON435_6,1)
+replace ON176=3 if inlist(ON435_6,5)
+replace ON176=4 if inlist(ON433_6,5)
+replace ON176=8 if inlist(ON433_6,8,9) | inlist(ON434_6,8,9) | inlist(ON435_6,8,9)
+gen rx_cov = ON176
+
+gen home_use = ON189
+
+//note, broke insurance payment questions into multiple question series, but possible to recreate them
+gen ON190=.
+replace ON190=1 if inlist(ON434_7,1)
+replace ON190=2 if inlist(ON435_7,1)
+replace ON190=3 if inlist(ON435_7,5)
+replace ON190=4 if inlist(ON433_7,5)
+replace ON190=8 if inlist(ON433_7,8,9) | inlist(ON434_7,8,9) | inlist(ON435_7,8,9)
+gen home_cov = ON190
+
+gen special_use = ON202
+gen special_cov = ON203
+
+gen other_use = ON332
+
+
+
+keep HHID PN year *_iw_date months *_use *_liv *_cov *_nights *_visits private_medigap_plans ///
+ON102 ON118 ON135 ON152 ON165 ON176 ON190
+
+xtile qtile_hospital = hospital_nights, nq(4)
+xtile qtile_nh = nh_nights, nq(4)
+xtile qtile_doctor = dr_visits, nq(4)
+
+save $savedir/core2014_use.dta, replace
+
 
 ********************************************************************************
 
@@ -1195,7 +1365,8 @@ $savedir/core2004_use.dta ///
 $savedir/core2006_use.dta ///
 $savedir/core2008_use.dta ///
 $savedir/core2010_use.dta ///
-$savedir/core2012_use.dta
+$savedir/core2012_use.dta ///
+$savedir/core2014_use.dta
 
 sort HHID PN year		
 

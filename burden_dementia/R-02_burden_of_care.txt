@@ -3364,6 +3364,12 @@ keep if ffs_5==1
 	
 keep if impute==1
 drop tot_paid*p*
+
+foreach x of varlist tot* oop* informal* {
+	replace `x'=0 if missing(`x')
+}
+
+
 	forvalues i=12(12)60 {
 		rename tot_paid_by_mc_`i'm tot_paid_by_mc`=`i'/12'
 		rename tot_paid_maid_n`=`i'/12' tot_paid_by_mcaid`=`i'/12'
@@ -3478,6 +3484,24 @@ graph save cum_all_spending_over_time.gph, replace
 graph export cum_all_spending_over_time.pdf, replace
 
 
+twoway (connected cum_by_mc year if dem_cohort==1) (connected cum_by_mca year if dem_cohort==1) (connected cum_oop year if dem_cohort==1) ///
+(connected cum_inf year if dem_cohort==1), title("Dementia") ///
+legend(label(1 "Medicare") label(2 "Medicaid") label(3 "OOP") label(4 "Informal")) ///
+saving(cum_spending_diff_dem, replace) xlabel(1 "4-5" 2 "3-4" 3 "2-3" 4 "1-2" 5 "0-1") 
+
+
+twoway (connected cum_by_mc year if dem_cohort==0) (connected cum_by_mca year if dem_cohort==0) (connected cum_oop year if dem_cohort==0) ///
+(connected cum_inf year if dem_cohort==0), title("No Dementia") ///
+legend(label(1 "Medicare") label(2 "Medicaid") label(3 "OOP") label(4 "Informal")) ///
+saving(cum_spending_diff_no_dem, replace) xlabel(1 "4-5" 2 "3-4" 3 "2-3" 4 "1-2" 5 "0-1") 
+
+graph combine cum_spending_diff_dem.gph cum_spending_diff_no_dem.gph, ycommon
+
+graph combine annu_mc_spending_over_time.gph cum_mc_spending_over_time.gph, ycommon
+graph combine annu_mcaid_spending_over_time.gph cum_mcaid_spending_over_time.gph, ycommon
+graph combine annu_oop_spending_over_time.gph cum_oop_spending_over_time.gph, ycommon
+graph combine annu_informal_spending_over_time.gph cum_informal_spending_over_time.gph, ycommon
+graph combine annu_all_spending_over_time.gph cum_all_spending_over_time.gph, ycommon
 
 
 H="experimental changes to informal calculations"
@@ -4382,67 +4406,1554 @@ H="died before N1, had a proxy N1"
 id = 086883040, died 04/12, had core 11/12
 id = 202343020, died 12/10, had core 02/11
 
-H="interview spacing"
+H="Experimental - Sample derivation"
+clear all
+capture log close
+
+local datapath "E:\data\burden_dementia\int_data"
+local logpath "E:\data\burden_dementia\logs"
+local ooppath "E:\data\burden_dementia\oopdata"
+
+/****************** START WITH EXIT **********************/
+
+use "E:\data\hrs_cleaned\exit_02_to_14_dt.dta", clear
+
+foreach x of varlist * {
+
+rename `x' `x'_exit
+}
+
+rename id_exit id
+
+gen nflag = 0
+cap drop _m
+tempfile exit
+gen year = exit_year_exit
+save `exit' // all exit interviews 2002-14
+
+/**************** MERGE TRACKER WITH DECEDENT DATASET ***********/
+
+use "E:\data\hrs_cleaned\restr_tracker_v2014.dta", clear
+drop id
+gen id=hhid+pn
+drop if id==""
+keep id race hisp_eth birthmo birthday birthyr birth_date gender degree
+tempfile track
+save `track' // all restricted tracker
+
+cd `datapath'
+
+use decedent_dataset.dta if inrange(index_year,2004,2012), clear
+drop year
+cap drop _m
+format %td index_date
+merge m:1 id using "`track'"
+keep if _m==3
+
+replace birth_date=mdy(6,birthd,birthy) if missing(birth_date)
+cap drop death_date
+gen death_date = index_date
+gen age_at_death=floor((death_date-birth_date)/365.25)
+
+cap drop _m
+
+levelsof id if age_at_death<70, local(agedrop)
+
+drop if age_at_death<70 /////////////// drop people <70 at death
+
+merge 1:1 id using "`exit'"
+
+levelsof id if _m==1, local(exitdrop) 
+keep if _m==3 /////////// drop people with no exit
+
+cap drop _m
+
+tempfile r01
+save `r01'
+
+keep id index_date index_year
+tempfile id 
+save `id' //decedents with exit 
+
+/*************** MERGE WITH CORE INTERVIEW **************/
+
+use "E:\data\hrs_cleaned\core_00_to_12.dta", clear
+
+merge m:1 id using "`id'", keepus(index_date index_year)
+levelsof id if _m==2, local(nocoredrop)
+keep if _m==3 ///////////// dropping people with no core 00-12
+
+cap drop _m
+
+gsort id -core_year
+
+by id: gen obs=_n
+
+keep if obs<=4 // keeping last 4 core interviews
+
+gen ivw_date = c_ivw_date
+
+by id: gen next_ivw_date_old = ivw_date[_n+1] // date prev ivw chronologically
+
+by id: gen next_ivw_year = core_year[_n+1]
+
+gen earliest = 0
+replace earliest = 1 if next_ivw_year==.
+label var earliest "flag for earliest observable core"
+
+by id: gen diff = core_year - core_year[_n-1] // -4 or higher denotes a gap year
+
+bysort id: egen gap = min(diff)
+
+replace gap = abs(gap) // max number of years between consecutive core
+label var gap "max # of yrs between consecutive core ivw"
+tab gap
+preserve
+keep if gap>4
+keep id
+duplicates drop 
+levelsof id, local(misscore)
+tempfile droplist
+save `droplist' ///////// people with more than 4 years between cores
+
+restore
+
+drop obs gap diff
+gen year = core_year
+
+cap drop _m
+
+/* merge with dementia dataset */
+
+merge 1:1 id core_year using "E:\data\hrs_public_2012\dementia\pdem_withvarnames_ebl.dta", keepus(pdem)
+drop if _m==2
+
+gen dementia = 0
+replace dementia = 1 if pdem>=.5 & pdem!=.
+cap drop _m
+
+tempfile core
+save `core'
+
+use "`r01'", clear
+append using "`core'" // appending to exit/tracker 
+
+merge m:1 id using "`droplist'" //dropping people with >4 years between core
+
+codebook id if _m==3
+drop if _m==3
+cap drop _m
+
+codebook id
+
+gsort id -year
+
+by id: gen obs=_n
+
+foreach x of local nocoredrop {
+
+drop if obs==1 & id=="`x'" // dropping exit ivw for people with no core ever (2000-12)
+
+}
+
+gen nflag_ivw = obs - 1
+label var nflag_ivw "Interview type, 0 = exit, 1 = N1, etc."
+
+gen dem_cohort = 0
+
+levelsof id if dementia==1 & nflag_ivw==1, local(demlist)
+
+foreach x of local demlist {
+
+replace dem_cohort = 1 if id=="`x'"
+
+}
+
+
+gen core_5yr = index_year - core_year if obs==2 
+preserve 
+
+keep if core_5yr>4 & obs==2
+keep id
+levelsof id, local(core4yr) 
+tempfile core_2_far 
+save `core_2_far' /////////////// no core ivw within 4yrs of death
+
+restore
+
+merge m:1 id using "`core_2_far'"
+codebook id if _m==3
+drop if _m==3 // dropping ppl with no core_ivw within 4 yrs
+cap drop _m
+
+gsort id -year
+
+
+by id: gen diff = year - year[_n-1] // -4 or higher denotes a gap year
+
+
+replace diff = -4 if diff<=-4 & obs==2 // for exit interviews more than 4 years away
+
+expand 2 if diff<=-4, gen(imputed) 
+
+replace year = year + 2 if imputed==1 // imputed core interview
+
+drop if year > index_year & imputed==1 // dropping imputed cores after death
+drop if (index_year - c_ivw_year)<=2 & imputed==1 // dropping imputed cores if person died inbetween core and exit
+
+*keep if (index_year - c_ivw_year)==2 & imputed==1
+
+levelsof id if imputed==1, local(impu)
+
+cap drop nflag
+
+gsort id -year
+by id: gen nflag = _n
+replace nflag = nflag - 1
+
+drop if nflag>4
+
+cd "E:\data\burden_dementia\int_data"
+save R01_int.dta, replace
+
+use R01_int.dta, clear
+
+keep if nflag_ivw==0
+keep id index_date index_year exit_year_exit year
+tempfile index
+save `index'
+
+/*
+drop nflag obs
+
+gsort id -year
+by id: gen nflag==_n-1
+*/
+
+/**************** GET OOP DATA ********************/
+
+local ooppath "E:\data\burden_dementia\oopdata"
+
+use `ooppath'\oopme_final_2014.dta, clear
+rename *, l
+gen id=hhid+pn
+
+merge m:1 id using "`index'", keepus(index_year index_date)
+keep if _m==3 // only keep oop data for people in cohort
+
+tab year if total_oop==.
+drop if total_oop==.
+preserve
+*keep if iwtype==0 // keep non-imputed non-exit ivw
+tempfile oop_mer
+save `oop_mer' // original dataset, not imputed
+restore 
+
+
+gsort id -year
+
+by id: gen obs=_n
+
+keep if obs<=6
+
+by id: gen diff = year - year[_n-1] // -4 or higher denotes a gap year
+
+
+replace diff = -4 if diff<=-4 & obs==2 // recoding people with >4 gap between exit and N1 to be 4yrs
+
+
+/*
+bysort id: egen gap = min(diff)
+keep if gap==-4 /* only keep people without consecutive missing interviews */
+*/
+
+
+expand 2 if diff==-4, gen(ooptag) //created imputed interview
+
+replace year = year + 2 if ooptag==1
+
+gsort id -year
+
+cap drop obs
+by id: gen obs=_n
+
+by id: gen total_imp_a = total_oop[_n+1] if ooptag==1
+by id: gen total_imp_b = (total_oop[_n+1] + total_oop[_n-1])/2 if ooptag==1
+
+label var ooptag "imputed oop"
+
+keep if ooptag==1
+
+tempfile imputed
+save `imputed'
+
+
+use "`oop_mer'", clear
+
+append using "`imputed'"
+cap drop _m 
+preserve
+drop if iwtype==1
+
+tempfile oop
+save `oop'
+restore 
+
+keep if iwtype==1
+
+gen nflag = 0
+
+foreach x of varlist total* {
+
+rename `x' `x'_exit
+}
+rename year exit_year_exit
+
+tempfile oop_exit
+save `oop_exit'
+
+use R01_int.dta, clear
+cap drop _m
+merge 1:1 id year using "`oop'", keepus(total* ooptag)
+*merge 1:1 id year using "`oop'", keepus(total* ooptag)
+drop if _m==2
+cap drop _m
+
+merge 1:1 id nflag using "`oop_exit'", keepus(total* ooptag)
+
+drop if _m==2
+cap drop _m
+
+save R01_int.dta, replace
+
+
+use R01_int.dta, clear
+
+keep if nflag_ivw==0
+keep id index_date index_year exit_year_exit year
+tempfile index
+save `index'
+
+
+
+/************ Get Helper data ***********/
+
+use "E:\data\hrs_oop_2010\received_data\2012\helper_hours_2012.dta", clear
+gen id=hhid+pn 
+*rename year core_year
+//cap number of hours at 720 (24 hrs for 30 days) for spouses and other informal
+foreach x in s u {
+replace hlphrs_`x'=720 if hlphrs_`x'>720
+replace hlphrs_`x' = 0 if hlphrs_`x'==.
+}
+replace hlphrs_i=hlphrs_s+hlphrs_u
+replace hlphrs_i= 720 if hlphrs_i>=720
+
+merge m:1 id using "`index'", keepus(index_year index_date)
+keep if _m==3 // only keep helper data for people in cohort
+drop _m
+
+tempfile hlp_mer
+
+save `hlp_mer'
+
+merge 1:1 id year using "`index'", keepus(id exit_year_exit year)
+
+replace inx = 1 if _m==2
+replace hlphrs_i = 0 if _m==2
+
+
+
+gsort id -year
+
+by id: gen obs=_n
+
+tab inx if obs==2
+
+by id: gen diff = year - year[_n-1] // -4 or higher denotes a gap year
+
+replace diff = -4 if diff<=-4 & obs==2 // replacing obs where gap between exit and N1 was >4yrs, since we already kept people who had core in last years of life
+
+expand 2 if diff==-4, gen(hlptag)
+
+
+
+replace year = year + 2 if hlptag==1
+
+replace hlptag=1 if _m==2
+
+cap drop obs
+
+gsort id -year
+
+by id: gen obs=_n
+
+by id: gen hlphrs_i_a = hlphrs_i[_n+1] if hlptag==1
+by id: gen hlphrs_i_b = (hlphrs_i[_n+1] + hlphrs_i[_n-1])/2 if hlptag==1 // if there is no _n+1 then this returns missing
+
+
+label var hlptag "imputed hlp hrs"
+
+gen hlp_exit = 1 if hlptag==1 & _m==2
+label var hlp_exit "hlp exit imputed"
+replace hlptag = 0 if _m==2
+preserve
+keep if hlptag==1 
+
+tempfile hlp
+save `hlp'
+
+
+use "`hlp_mer'", clear
+
+append using "`hlp'"
+cap drop _m
+
+drop if inx==1
+
+
+tempfile help
+save `help'
+restore 
+
+keep if inx==1
+
+gen nflag = 0
+
+foreach x of varlist hlphrs_i* {
+
+rename `x' `x'_exit
+}
+
+tempfile hlp_exit 
+save `hlp_exit'
+
+
+use R01_int.dta, clear
+cap drop _m
+merge 1:1 id year using "`help'", keepus(hlphrs_i* hlptag hlp_exit)
+*merge 1:1 id year using "`help'", keepus(hlphrs_i* hlptag)
+drop if _m==2
+
+cap drop _m
+
+merge 1:1 id nflag using "`hlp_exit'", keepus(hlphrs_i* hlptag hlp_exit) update
+
+drop if _m==2
+cap drop _m
+
+foreach x of varlist hlphrs_i* {
+
+replace `x' = 0 if (hlptag==1 & imputed==0)
+replace `x' = 0 if `x'==.
+}
+
+gen year_n0 = year
+replace year_n0 = index_year if nflag==0
+gen year_n1 = year_n0 - 1
+label var year_n1 "calendar year prior to ivw date"
+gen year_n2 = year_n0 - 2
+label var year_n2 "calendar year 2 yrs prior to ivw date"
+
+
+save R01_int.dta, replace
+
+
+use R01_int.dta, clear
+keep id
+
+duplicates drop id, force
+tempfile id
+save `id'
+
+/************** Get State information *************/
+
+use "E:\data\hrs_cleaned\restr_tracker_v2014.dta", clear
+drop id
+gen id=hhid+pn
+
+merge 1:1 id using "`id'"
+keep if _m==3
+
+keep hhid pn stateusps* zipcode*
+
+foreach x of varlist stateusps* {
+
+replace `x' = "" if `x'=="ZZ"
+
+}
+
+gen stateusps97=""
+gen stateusps99=""
+
+forvalues i= 1(2)13{
+gen stateusps`i'=""
+gen zipcode`i' = ""
+}
+
+forvalues i=0(2)8{
+rename stateusps0`i' stateusps`i'
+rename zipcode0`i' zipcode`i'
+}
+reshape long stateusps zipcode, i(hhid pn) j(year)
+
+forvalues i=0/99{
+qui replace year=200`i' if year==`i' & year<=9
+qui replace year=20`i' if year==`i' & inrange(year, 10,14)
+qui replace year=19`i' if year==`i' & year>=90
+}
+
+gen id= hhid+pn
+sort id year
+drop if id==""
+by id: carryforward stateusps, replace
+
+gsort id -year
+by id: carryforward stateusps, replace
+
+/*
+expand 2 if year==2012, gen(dupkey)
+
+replace year = 2014 if dupkey==1
+
+
+expand 2 if year==2014, gen(dup2)
+replace year= 2013 if dup2==1
+*/
+
+tempfile state
+save "`state'"
+
+rename year year_n1
+rename stateusps stateusps_n1
+tempfile state_n1
+save `state_n1'
+
+rename year_n1 year_n2
+rename stateusps_n1 stateusps_n2 
+tempfile state_n2
+save `state_n2'
+
+use R01_int.dta, clear
+merge 1:1 id year using "`state'"
+keep if _m==3
+cap drop _m
+merge m:1 id year_n1 using "`state_n1'"
+keep if _m==3
+cap drop _m
+merge m:1 id year_n2 using "`state_n2'"
+keep if _m==3
+cap drop _m
+
+
+save R01_int.dta, replace
+
+//merging with the Genworth/Metlife hourly home health aide cost. 
+import excel "E:\data\burden_dementia\ref_data\Cost Care Survey (Genworth-Metlife)\HHA_hourly_genworth.xlsx", sheet("Sheet1") firstrow clear
+
+rename A year
+rename B stateusps
+rename HomeHealthAideServicesHourly state_hha
+rename MedianHourlyRate hr_rate
+
+drop if year==.
+destring hr_rate, replace
+
+expand 2 if year==1998, gen(duptag)
+
+replace year = year - 1 if duptag==1
+cap drop duptag
+
+expand 2 if year==1997, gen(duptag)
+
+replace year = year - 1 if duptag==1
+drop duptag
+
+rename year year_n0
+
+tempfile rate
+save "`rate'"
+
+rename year_n0 year_n1
+rename stateusps stateusps_n1
+rename state_hha state_hha_n1
+rename hr_rate hr_rate_n1
+
+tempfile rate_n1
+save "`rate_n1'"
+
+rename year_n1 year_n2
+rename stateusps_n1 stateusps_n2
+rename state_hha_n1 state_hha_n2
+rename hr_rate_n1 hr_rate_n2
+
+tempfile rate_n2
+save "`rate_n2'"
+
+use R01_int.dta, clear
+cap drop _m
+merge m:1 year_n0 stateusps using "`rate'"
+keep if _m==3
+cap drop _m
+merge m:1 year_n1 stateusps_n1 using "`rate_n1'"
+keep if _m==3
+cap drop _m
+merge m:1 year_n2 stateusps_n2 using "`rate_n2'"
+keep if _m==3
+cap drop _m
+
+save R01_int1.dta, replace
+
+/**************** calculations *********************/
+
+use R01_int1.dta, clear
+
+gen core_b4_death = 0
+replace core_b4_death = 1 if nflag==1
+
+gsort id nflag
+replace ivw_date = index_date if nflag==0
+
+
+by id: gen old_ivw_date = ivw_date[_n-1]  //if imputed==1 // get dates before imputed ivw
+
+gen new_ivw_days = old_ivw_date - c_ivw_date
+replace new_ivw_days = new_ivw_days/2
+replace new_ivw_days = 730 if imputed==1 & new_ivw_days>730 & nflag==1 ////// capping interview gap to 2yrs.. possible gap in coverage?
+
+replace new_ivw_days = ceil(new_ivw_days)
+replace ivw_date = c_ivw_date + new_ivw_days if imputed==1 //c_ivw is date for core prior to gap
+
+format %td ivw_date next_ivw_date old_ivw_date
+
+*cap drop next_ivw_date
+
+/* calculating time in between ivw */
+by id: gen next_ivw_date = ivw_date[_n+1] // bringing forward date from prior core away from death
+
+format %td ivw_date next_ivw_date old_ivw_date 
+
+gen ivw_time = ivw_date - next_ivw_date
+replace ivw_time = ivw_date - c_ivw_date if imputed==1
+replace ivw_time = ivw_date - next_ivw_date_old if ivw_time==. & nflag>=2
+
+replace ivw_time = ivw_time * 0.03
+replace ivw_time = ceil(ivw_time) // leave as decimal?
+replace ivw_time = . if nflag==0
+
+
+gen death_2_n1 = index_date - ivw_date if core_b4_death==1
+replace death_2_n1 = death_2_n1 * 0.033
+replace death_2_n1 = ceil(death_2_n1)
+replace death_2_n1 = 24 if death_2_n1>=24 & death_2_n1!=. // capping contribution of exit to 2 years
+replace death_2_n1 = 1 if death_2_n1<=0
+
+
+gen death_2_n2 = death_2_n1 + ivw_time if nflag==1
+
+
+
+gen death_cat = .
+replace death_cat = 1 if death_2_n1<12
+replace death_cat = 2 if death_2_n1==12
+replace death_cat = 3 if death_2_n1>12 & death_2_n1!=.
+
+gsort id -core_b4_death
+
+by id: carryforward death_cat death_2_n1 death_2_n2, replace
+gen death_2_n3 = death_2_n2 + ivw_time if nflag==2
+
+gsort id nflag
+by id: carryforward death_2_n3, replace
+
+gsort id -nflag
+by id: carryforward death_2_n3, replace
+
+
+
+gen death_2_n4 = death_2_n3 + ivw_time if nflag==3
+replace death_2_n4 = death_2_n3 if death_2_n4==.
+replace death_2_n4 = death_2_n2 if death_2_n4==.
+*by id: carryforward death_2_n4, replace
+
+gen hrs_60m = .
+replace hrs_60m = 1 if death_2_n4>=60
+
+
+
+
+gsort id -hrs_60m
+
+by id: carryforward hrs_60m, replace
+
+levelsof id if hrs_60m==., local(non3)
+drop if hrs_60m==. /////////// dropping people with <60m of HRS data
+
+replace death_2_n4 = . if nflag!=4
+
+gsort id -nflag
+
+by id: carryforward death_2_n3 death_2_n4, replace
+
+gsort id nflag
+by id: carryforward death_2_n4, replace
+
+replace death_2_n4 = death_2_n3 if death_2_n4==.
+
+
+
+
+tab ivw_time
+label var ivw_time "interview weight" 
+
+cap drop mar_n0 mar_n1 mar_n2
+cap drop mar
+
+gen mar_n0 = . //months at risk
+gen mar_n1 = .
+gen mar_n2 = .
+
+replace mar_n0 = index_month if nflag==0
+*replace mar_n0 = death_2_n1 if death_2_n1<12 & nflag==0
+replace mar_n0 = death_2_n1 if (death_2_n1-mar_n0 < 0) & nflag==0
+
+replace mar_n1 = death_2_n1 - mar_n0 if nflag==0
+replace mar_n1 = 0 if mar_n1<0 & nflag==0
+replace mar_n1 = 12 if (mar_n1>12 & mar_n1!=.) & nflag==0
+
+
+replace mar_n2 = death_2_n1 - mar_n0 -mar_n1 if nflag==0
+replace mar_n2 = 0 if mar_n2<0
+*replace mar_n2 = 12 if (mar_n2>12 & mar_n2!=.) & nflag==0
+
+
+replace mar_n0 = c_ivw_month if nflag>0
+
+replace mar_n1 = ivw_time - c_ivw_month if nflag>0
+replace mar_n1 = 0 if mar_n1<0 & nflag>0
+replace mar_n1 = 12 if (mar_n1>12 & mar_n1!=.) & nflag>0
+
+replace mar_n2 = ivw_time - 12 - c_ivw_month if nflag>0
+replace mar_n2 = 0 if mar_n2<0 & nflag>0
+*replace mar_n2 = 12 if (mar_n2>12 & mar_n2!=.) & nflag>0
+
+gen mar = mar_n0+mar_n1+mar_n2
+corr mar death_2_n1 if nflag==0
+corr mar ivw_time if nflag>0 // checks to see if months at risk (mar) = months between ivw
+
+gsort id +nflag
+
+gen hlphrs_0 = hlphrs_i
+replace hlphrs_0 = hlphrs_i_exit if nflag==0
+
+gen hlphrs_a = hlphrs_i
+replace hlphrs_a = hlphrs_i_a if imputed==1
+replace hlphrs_a = hlphrs_i_exit if nflag==0
+
+gen hlphrs_b = hlphrs_i
+replace hlphrs_b = hlphrs_i_b if imputed==1
+replace hlphrs_b = hlphrs_i_exit if nflag==0 
+
+
+
+foreach x of varlist hlphrs_0 hlphrs_a hlphrs_b {
+
+by id: gen `x'_n = `x'[_n+1]
+
+replace `x'_n = 0 if `x'_n==. // stop gap, remove later 
+
+} 
+
+
+//start with nflag = 0
+
+gen hlphrs_0_av = .
+replace hlphrs_0_av = death_2_n1*hlphrs_0 if death_2_n1<=4 & nflag==0
+replace hlphrs_0_av = (4*hlphrs_0) + (death_2_n1-4)*((hlphrs_0+hlphrs_0_n)/2) if death_2_n1>4 & nflag==0
+replace hlphrs_0_av = (4*hlphrs_0) + (ivw_time-4)*((hlphrs_0+hlphrs_0_n)/2) if nflag>0 & hlphrs_0_n>0
+replace hlphrs_0_av = (4*hlphrs_0) if nflag>0 & hlphrs_0_n==0
+
+
+gen hlphrs_a_av = .
+replace hlphrs_a_av = death_2_n1*hlphrs_a if death_2_n1<=4 & nflag==0
+replace hlphrs_a_av = (4*hlphrs_a) + (death_2_n1-4)*((hlphrs_a+hlphrs_a_n)/2) if death_2_n1>4 & nflag==0
+replace hlphrs_a_av = (4*hlphrs_a) + (ivw_time-4)*((hlphrs_a+hlphrs_a_n)/2) if nflag>0 & hlphrs_a_n>0
+replace hlphrs_a_av = (4*hlphrs_a) if nflag>0 & hlphrs_a_n==0
+
+
+gen hlphrs_b_av = .
+replace hlphrs_b_av = death_2_n1*hlphrs_b if death_2_n1<=4 & nflag==0
+replace hlphrs_b_av = (4*hlphrs_b) + (death_2_n1-4)*((hlphrs_b+hlphrs_b_n)/2) if death_2_n1>4 & nflag==0
+replace hlphrs_b_av = (4*hlphrs_b) + (ivw_time-4)*((hlphrs_b+hlphrs_b_n)/2) if nflag>0 & hlphrs_b_n>0
+replace hlphrs_b_av = (4*hlphrs_b) if nflag>0 & hlphrs_b_n==0
+
+
+
+
+
+
+foreach x of varlist *_av {
+
+replace `x' = `x'/death_2_n1 if nflag==0
+replace `x' = `x'/ivw_time if nflag>0
+replace `x' = (`x'*mar_n0*hr_rate) +  (`x'*mar_n1*hr_rate_n1) + (`x'*mar_n2*hr_rate_n2)
+
+}
+
+replace hlphrs_i = hlphrs_0_av if nflag>0
+replace hlphrs_i_exit = hlphrs_0_av if nflag==0
+
+replace hlphrs_i_a = hlphrs_a_av if nflag>0
+replace hlphrs_i_a_exit = hlphrs_a_av if nflag==0
+
+replace hlphrs_i_b = hlphrs_b_av if nflag>0
+replace hlphrs_i_b_exit = hlphrs_b_av if nflag==0
+
+
+
+
+
+gen has_imputed = 0
+foreach x of local impu {
+
+replace has_imputed=1 if id=="`x'"
+
+}
+
+
+
+save R01_int.dta, replace
+
+/* Sample Derivation */
+
+use decedent_dataset.dta if inrange(index_year,2004,2012), clear
+
+gen age_lt_70 = 0
+label var age_lt_70 "Dropped because age at death <70"
+foreach x of local agedrop {
+
+replace age_lt_70 = 1 if id=="`x'"
+
+}
+
+gen exdrop = 0
+label var exdrop "Dropped because no Exit Ivw 2002-2014"
+foreach x of local exitdrop {
+replace exdrop = 1 if id=="`x'"
+}
+
+gen nocore = 0
+label var nocore "Dropped because no Core Ivw 2000-2012"
+foreach x of local nocoredrop {
+
+replace nocore = 1 if id=="`x'"
+}
+
+gen misscore = 0
+label var misscore "Dropped because missing consecutive cores"
+foreach x of local misscore {
+
+replace misscore = 1 if id=="`x'"
+}
+
+gen core4yr = 0
+label var core4yr "Dropped because no Core within last 4 years of life"
+foreach x of local core4yr {
+replace core4yr = 1 if id=="`x'"
+}
+
+gen impu = 0
+label var impu "Had a core imputed"
+foreach x of local impu {
+replace impu = 1 if id=="`x'"
+}
+
+gen non3 = 0
+label var non3 "Dropped because <60m of HRS data available between death and furthest core"
+foreach x of local non3 {
+
+replace non3 = 1 if id=="`x'"
+
+}
+
+local deri age_lt_70 exdrop nocore misscore core4yr non3 
+
+gen final = 1
+label var final "Final Sample Size, includes decedents w/imputed core"
+
+foreach x of local deri {
+
+replace final = 0 if `x'==1
+
+}
+
+gen final_noimp = 0
+replace final_noimp = 1 if final==1 & impu==0
+label var final_noimp "Final Sample Size, excludes decedents with imputed core"
+
+gen all = 1
+label var all "All HRS respondents Deceased 2004-2012"
+
+local full all age_lt_70 exdrop nocore misscore core4yr non3 final final_noimp
+
+local rd: word count `full'
+
+mat tab1 = J(`rd',1,.)
+
+local r = 1
+
+foreach x of local full {
+
+sum `x'
+mat tab1[`r',1] = r(sum)
+local ++r
+}
+
+mat rownames tab1 = `full'
+
+
+frmttable using "E:\projects\burden_dementia\archive logs\Sample_Derivation.doc", replace statmat(tab1) ///
+varlabels title("Sample Derivation for R01 (Deceased 2004-2012, Age 70+)") ctitles("Reason for Exclusion" "N" ) sdec(0) ///
+annotate(stars) asymbol(*,**)note("Death Date was determined by NDI, Medicare MBSF or HRS Exit in that order. //If NDI death date was after HRS Exit Interview and respondent had no subsequent data, then HRS death date was used.")
+
+
+H="Experimental - R01 final"
+
+/********* Constructing Final Dataset *********/
+
+use "E:\data\burden_dementia\int_data\R01_int.dta", clear
+
+
+forvalues j = 1/3 {
+
+preserve
+
+if `j'==1 local y "0"
+if `j'==2 local y "a"
+if `j'==3 local y "b"
+
+drop if has_imputed==1 & `j'==1 // 
+
+
+// replace total_oop_exit = total_imp_a_exit if `j'==2 no imputed exits
+replace total_oop = total_imp_a if `j'==2 & imputed==1
+replace hlphrs_i_exit = hlphrs_i_a_exit if `j'==2 & hlp_exit==1
+replace hlphrs_i = hlphrs_i_a if `j'==2 & imputed==1
+
+
+// replace total_oop_exit = total_imp_b_exit if `j'==3
+replace total_oop = total_imp_b if `j'==3 & imputed==1
+replace hlphrs_i_exit = hlphrs_i_b_exit if `j'==3 & hlp_exit==1
+replace hlphrs_i = hlphrs_i_b if `j'==3 & imputed==1
+
+
+replace ivw_time = 1 if ivw_time==. // cannot divide by 0
+
+keep id death_cat nflag total_* hlphrs_i* death_2_n1 death_2_n2 death_2_n3 death_2_n4 year ivw_time
+ 
+reshape wide total_* hlphrs_i* year ivw_time, i(id) j(nflag)
+
+foreach x of varlist total_oop* hlphrs_i* {
+
+replace `x' = 0 if `x'==.
+
+}
+
+
+forvalues i = 1/5 {
+
+gen oop_n`i' = .
+gen informal_n`i' = .
+cap replace ivw_time`i' = 1 if ivw_time`i'==.
+}
+
+
 /* OOP Yr 1*/
 
-local a = death_2_n1
-replace `a' = 12 if `a'>12 & `a'!=.
+cap drop a1
+cap drop b1
+cap drop c1
 
-local b = 12 - `a'
+gen a1 = death_2_n1
+replace a1 = 12 if a1>12 & a1!=.
 
-replace oop_n1 = (`a'*(total_oop_exit0/death_2_n1)) + (`b'*(total_oop1/ivw_time1)) 
+gen b1 = 12 - a1
+
+cap drop testval
+gen testval = a1 + b1
+tab testval
+
+
+replace oop_n1 = (a1*(total_oop_exit0/death_2_n1)) + (b1*(total_oop1/ivw_time1)) 
 
 /* OOP Yr 2*/
 
-local a = death_2_n1 - 12
-replace `a' = 0 if `a'<0
-local b = death_2_n2 - `a'
-replace `b' = 12 if `b'>12 & `b'!=.
-local c = `b' - 12
+cap drop a2
+cap drop b2
+cap drop c2
+
+gen a2 = death_2_n1 - a1
+gen b2 = 12 - a2 // subtracting the people who has a<12 in n1
+replace b2 = 12 if b2>12 & b2!=.
+
+cap drop testval
+gen testval = a2 + b2
+tab testval
 
 
-replace oop_n2 = ((`a')/death_2_n1)*total_oop_exit0 + ((`b')*(total_oop1/ivw_time1)) + ((`c')*(total_oop2/ivw_time2))
+replace oop_n2 = ((a2)/death_2_n1)*total_oop_exit0 + ((b2)*(total_oop1/ivw_time1)) //+ ((c2)*(total_oop2/ivw_time2))
 
 
 /* OOP Yr 3*/
+cap drop a3
+cap drop b3 
+cap drop c3
 
-local a = death_2_n2 - death_2_n1 - 12
-replace `a' = 0 if `a'<0
-replace `a' = 12 if `a'>12 & `a'!=.
-local b = death_2_n2 - `a'
-replace `b' = 12 if `b'>12 & `b'!=.
-replace `b' = 0 if `b' < 0
-local c = `b' - 12
-replace `c' = 0 if `b'==0
+gen a3 = death_2_n2 - b2 - b1
+replace a3 = 0 if a3<0
+*replace a3 = 12 if a3>12 & a3!=.
+gen b3 = death_2_n3 - a
+replace b = 12 if b>12 & b!=.
+replace b = 0 if b < 0
+gen c = b - 12
+replace c = 0 if b==0
+
+cap drop testval
+gen testval = a + b + c
+tab testval
 
 
-replace oop_n3 = ((`a'))*(total_oop1/ivw_time1)) + ((`b')*(total_oop2/ivw_time2)) + ((`c')*(total_oop3/ivw_time3))
+replace oop_n3 = ((a3)*(total_oop1/ivw_time1)) + ((b3)*(total_oop2/ivw_time2)) + ((c3)*(total_oop3/ivw_time3))
 
 
 /* OOP Yr 4*/
+cap drop a
+cap drop b 
+cap drop c
 
-local a = death_2_n3 - death_2_n2 - death_2_n1 - 12
-replace `a' = 0 if `a'<0
-replace `a' = 12 if `a'>12 & `a'!=.
-local b = death_2_n4 - `a'
-replace `b' = 12 if `b'>12 & `b'!=.
-replace `b' = 0 if `b' < 0
-local c = `b' - 12
-replace `c' = 0 if `b'==0
+gen a = death_2_n3 - death_2_n2 - death_2_n1 - 12
+replace a = 0 if a<0
+replace a = 12 if a>12 & a!=.
+gen b = death_2_n4 - a
+replace b = 12 if b>12 & b!=.
+replace b = 0 if b < 0
+gen c = b - 12
+replace c = 0 if b==0
 
-replace oop_n4 = ((`a')*(total_oop2/ivw_time2)) + ((`b')*(total_oop3/ivw_time3)) + ((`c')*(total_oop4/ivw_time4))
+cap drop testval
+gen testval = a + b + c
+tab testval
+
+
+replace oop_n4 = ((a)*(total_oop2/ivw_time2)) + ((b)*(total_oop3/ivw_time3)) + ((c)*(total_oop4/ivw_time4))
 
 
 /* OOP Yr 5*/
+cap drop a
+cap drop b 
+cap drop c
 
-local a = death_2_n4 - death_2_n3 - death_2_n2 - death_2_n1 - 12
-replace `a' = 0 if `a'<0
-replace `a' = 12 if `a'>12
-local b = 12 - `a'
-replace `b' = 12 if `b'>12 & `b'!=.
-replace `b' = 0 if `b' < 0
-local c = `b' - 12
-replace `c' = 0 if `b'==0
+gen a = death_2_n4 - death_2_n3 - death_2_n2 - death_2_n1 - 12
+replace a = 0 if a<0
+replace a = 12 if a>12
+gen b = 12 - a
+replace b = 12 if b>12 & b!=.
+replace b = 0 if b < 0
+gen c = b - 12
+replace c = 0 if b==0
 
-replace oop_n5 = ((`a')*(total_oop3/ivw_time3)) + ((`b')*(total_oop4/ivw_time4))
+cap drop testval
+gen testval = a + b + c
+tab testval
 
+
+
+replace oop_n5 = ((a)*(total_oop3/ivw_time3)) + ((b)*(total_oop4/ivw_time4))
+
+
+
+forvalues i=1/5 {
+
+sum oop_n`i', d
+
+}
+
+/* informal Yr 1*/
+cap drop a
+cap drop b 
+cap drop c
+
+gen a = death_2_n1
+replace a = 12 if a>12 & a!=.
+
+gen b = 12 - a
+
+replace informal_n1 = (a*(hlphrs_i_exit0/death_2_n1)) + (b*(hlphrs_i1/ivw_time1)) 
+
+/* informal Yr 2*/
+cap drop a
+cap drop b 
+cap drop c
+
+gen a = death_2_n1 - 12
+replace a = 0 if a<0
+gen b = death_2_n2 - a
+replace b = 12 if b>12 & b!=.
+gen c = b - 12
+
+
+replace informal_n2 = ((a)/death_2_n1)*hlphrs_i_exit0 + ((b)*(hlphrs_i1/ivw_time1)) + ((c)*(hlphrs_i2/ivw_time2))
+
+
+/* informal Yr 3*/
+cap drop a
+cap drop b 
+cap drop c
+
+gen a = death_2_n2 - death_2_n1 - 12
+replace a = 0 if a<0
+replace a = 12 if a>12 & a!=.
+gen b = death_2_n2 - a
+replace b = 12 if b>12 & b!=.
+replace b = 0 if b < 0
+gen c = b - 12
+replace c = 0 if b==0
+
+
+replace informal_n3 = ((a)*(hlphrs_i1/ivw_time1)) + ((b)*(hlphrs_i2/ivw_time2)) + ((c)*(hlphrs_i3/ivw_time3))
+
+
+/* informal Yr 4*/
+cap drop a
+cap drop b 
+cap drop c
+
+gen a = death_2_n3 - death_2_n2 - death_2_n1 - 12
+replace a = 0 if a<0
+replace a = 12 if a>12 & a!=.
+gen b = death_2_n4 - a
+replace b = 12 if b>12 & b!=.
+replace b = 0 if b < 0
+gen c = b - 12
+replace c = 0 if b==0
+
+replace informal_n4 = ((a)*(hlphrs_i2/ivw_time2)) + ((b)*(hlphrs_i3/ivw_time3)) + ((c)*(hlphrs_i4/ivw_time4))
+
+
+/* informal Yr 5*/
+cap drop a
+cap drop b 
+cap drop c
+
+gen a = death_2_n4 - death_2_n3 - death_2_n2 - death_2_n1 - 12
+replace a = 0 if a<0
+replace a = 12 if a>12
+gen b = 12 - a
+replace b = 12 if b>12 & b!=.
+replace b = 0 if b < 0
+gen c = b - 12
+replace c = 0 if b==0
+
+replace informal_n5 = ((a)*(hlphrs_i3/ivw_time3)) + ((b)*(hlphrs_i4/ivw_time4))
+
+
+forvalues i=1/5 {
+
+replace informal_n`i'= (informal_n`i')*1.05
+sum informal_n`i', d
+
+}
+
+gen impute = `j'
+save "E:\data\burden_dementia\int_data\oop_impute_`y'.dta", replace
+restore
+
+}
+
+
+
+
+keep if nflag==0
+expand 3
+
+bysort id: gen impute = _n
+cap drop _m
+merge 1:1 id impute using "E:\data\burden_dementia\int_data\oop_impute_0.dta", keepus(oop_n* informal_n*)
+replace impute = . if impute==1 & _m==1
+cap drop _m
+merge 1:1 id impute using "E:\data\burden_dementia\int_data\oop_impute_a.dta", keepus(oop_n* informal_n*) update
+cap drop _m
+merge 1:1 id impute using "E:\data\burden_dementia\int_data\oop_impute_b.dta", keepus(oop_n* informal_n*) update
+cap drop _m
+
+
+merge m:1 id using "E:\data\burden_dementia\int_data\tot_paid_maid.dta", keepus(tot_paid_maid_*)
+drop if _m==2
+
+cd "E:\data\burden_dementia\final_data\"
+
+save "E:\data\burden_dementia\final_data\R01_final.dta", replace
+
+gen ffs_5yr = 0
+replace ffs_5yr = 1 if cont_ffs_n_mos>=60 & cont_ffs_n_mos!=.
+
+gen ffs_4yr = 0
+replace ffs_4yr = 1 if cont_ffs_n_mos>=48 & cont_ffs_n_mos!=.
+
+gen ffs_3yr = 0
+replace ffs_3yr = 1 if cont_ffs_n_mos>=36 & cont_ffs_n_mos!=.
+
+gen ffs_2yr = 0
+replace ffs_2yr = 1 if cont_ffs_n_mos>=24 & cont_ffs_n_mos!=.
+
+gen ffs_1yr = 0
+replace ffs_1yr = 1 if cont_ffs_n_mos>=12 & cont_ffs_n_mos!=.
+
+
+save R01_final.dta, replace
+
+gen white = 0
+replace white = 1 if race==1 & hisp_eth==0
+
+gen black = 0
+replace black = 1 if race==2 & hisp_eth==0
+
+gen other = 0 
+replace other = 1 if white==0 & black==0 & hisp_eth==0
+
+label var white "Non-Hispanic White"
+label var black "Non-Hispanic Black"
+label var other "Non-Hispanic Other"
+
+label var tot_paid_maid_n1 "Total Medicaid Spending N1"
+label var tot_paid_maid_n2 "Total Medicaid Spending N2"
+label var tot_paid_maid_n3 "Total Medicaid Spending N3"
+label var tot_paid_maid_n4 "Total Medicaid Spending N4"
+label var tot_paid_maid_n5 "Total Medicaid Spending N5"
+
+gen tot_paid_maid_5yr = tot_paid_maid_n1 + tot_paid_maid_n2 + tot_paid_maid_n3 + tot_paid_maid_n4 + tot_paid_maid_n5
+gen tot_paid_mc_5yr = tot_paid_by_mc_12m + tot_paid_by_mc_24m + tot_paid_by_mc_36m + tot_paid_by_mc_48m + tot_paid_by_mc_60m
+gen oop_5yr = oop_n1 + oop_n2 + oop_n3 + oop_n4 + oop_n5
+gen informal_5yr = informal_n1 + informal_n2 + informal_n3 + informal_n4 + informal_n5
+
+gen tot_paid_maid_4yr = tot_paid_maid_n1 + tot_paid_maid_n2 + tot_paid_maid_n3 + tot_paid_maid_n4
+gen tot_paid_mc_4yr = tot_paid_by_mc_12m + tot_paid_by_mc_24m + tot_paid_by_mc_36m + tot_paid_by_mc_48m
+gen oop_4yr = oop_n1 + oop_n2 + oop_n3 + oop_n4
+gen informal_4yr = informal_n1 + informal_n2 + informal_n3 + informal_n4
+
+gen tot_paid_maid_3yr = tot_paid_maid_n1 + tot_paid_maid_n2 + tot_paid_maid_n3
+gen tot_paid_mc_3yr = tot_paid_by_mc_12m + tot_paid_by_mc_24m + tot_paid_by_mc_36m
+gen oop_3yr = oop_n1 + oop_n2 + oop_n3
+gen informal_3yr = informal_n1 + informal_n2 + informal_n3
+
+gen tot_paid_maid_2yr = tot_paid_maid_n1 + tot_paid_maid_n2
+gen tot_paid_mc_2yr = tot_paid_by_mc_12m + tot_paid_by_mc_24m
+gen oop_2yr = oop_n1 + oop_n2 
+gen informal_2yr = informal_n1 + informal_n2
+
+
+
+
+label var tot_paid_maid_5yr "Total 5yr Medicaid Spending"
+label var tot_paid_mc_5yr "Total 5yr Medicare Spending"
+label var oop_5yr "Total 5yr OOP Spending"
+label var informal_5yr "Total 5yr Informal Cost"
+
+label var tot_paid_maid_4yr "Aggregate 4yr Medicaid Spending"
+label var tot_paid_mc_4yr "Aggregate 4yr Medicare Spending"
+label var oop_4yr "Aggregate 4yr OOP Spending"
+label var informal_4yr "Aggregate 4yr Informal Cost"
+
+label var tot_paid_maid_3yr "Aggregate 3yr Medicaid Spending"
+label var tot_paid_mc_3yr "Aggregate 3yr Medicare Spending"
+label var oop_3yr "Aggregate 3yr OOP Spending"
+label var informal_3yr "Aggregate 3yr Informal Cost"
+
+label var tot_paid_maid_2yr "Aggregate 2yr Medicaid Spending"
+label var tot_paid_mc_2yr "Aggregate 2yr Medicare Spending"
+label var oop_2yr "Aggregate 2yr OOP Spending"
+label var informal_2yr "Aggregate 2yr Informal Cost"
+
+save R01_final.dta, replace
+
+local ivars female white black other hospice_exit nhres_exit married_exit reschil_d_exit resspouse_exit livealone_exit adl_independent_exit adl_severe_exit medicare_exit medicareb_exit medicaid_exit champus_exit ffs_5yr ffs_4yr ffs_3yr ffs_2yr ffs_1yr
+
+local medcost age_at_death tot_paid_maid_n1 tot_paid_maid_n2 tot_paid_maid_n3 tot_paid_maid_n4 tot_paid_maid_n5 tot_paid_by_mc_12m tot_paid_by_mc_24m tot_paid_by_mc_36m tot_paid_by_mc_48m tot_paid_by_mc_60m oop_n1 oop_n2 oop_n3 oop_n4 oop_n5 ///
+informal_n1 informal_n2 informal_n3 informal_n4 informal_n5 tot_paid_maid_5yr tot_paid_mc_5yr oop_5yr informal_5yr tot_paid_maid_4yr tot_paid_mc_4yr oop_4yr informal_4yr tot_paid_maid_3yr tot_paid_mc_3yr oop_3yr informal_3yr tot_paid_maid_2yr tot_paid_mc_2yr oop_2yr informal_2yr
+
+
+local rd: word count `ivars' `medcost' 1
+
+mat tab1=J(`rd', 9,.)
+mat stars=J(`rd',9,0)
+local r = 1
+
+foreach x of local ivars {
+
+sum `x' if impute==1
+
+mat tab1[`r',1] = r(mean)*100
+
+sum `x' if impute==1 & dem_cohort==1
+mat tab1[`r',2] = r(mean)*100
+
+sum `x' if impute==1 & dem_cohort==0
+mat tab1[`r',3] = r(mean)*100
+
+tab `x' dem_cohort if impute==1, chi2
+mat stars[`r',2] = (r(p)<.01) + (r(p)<0.05)
+
+
+sum `x' if impute==2
+
+mat tab1[`r',4] = r(mean)*100
+
+sum `x' if impute==2 & dem_cohort==1
+mat tab1[`r',5] = r(mean)*100
+
+sum `x' if impute==2 & dem_cohort==0
+mat tab1[`r',6] = r(mean)*100
+
+tab `x' dem_cohort if impute==2, chi2
+mat stars[`r',5] = (r(p)<.01) + (r(p)<0.05)
+
+
+sum `x' if impute==3
+
+mat tab1[`r',7] = r(mean)*100
+
+sum `x' if impute==3 & dem_cohort==1
+mat tab1[`r',8] = r(mean)*100
+
+sum `x' if impute==3 & dem_cohort==0
+mat tab1[`r',9] = r(mean)*100
+
+tab `x' dem_cohort if impute==3, chi2
+mat stars[`r',8] = (r(p)<.01) + (r(p)<0.05)
+
+
+local ++r
+}
+
+foreach x of local medcost {
+
+sum `x' if impute==1 
+
+mat tab1[`r',1] = r(mean)
+
+sum `x' if impute==1 & dem_cohort==1
+mat tab1[`r',2] = r(mean)
+
+sum `x' if impute==1 & dem_cohort==0
+mat tab1[`r',3] = r(mean) 
+
+ttest `x' if impute==1, by(dem_cohort)
+mat stars[`r',2] = (r(p)<.01) + (r(p)<.05)
+
+
+sum `x' if impute==2
+
+mat tab1[`r',4] = r(mean)
+
+sum `x' if impute==2 & dem_cohort==1
+mat tab1[`r',5] = r(mean)
+
+sum `x' if impute==2 & dem_cohort==0
+mat tab1[`r',6] = r(mean) 
+
+ttest `x' if impute==2, by(dem_cohort)
+mat stars[`r',5] = (r(p)<.01) + (r(p)<.05)
+
+
+sum `x' if impute==3
+
+mat tab1[`r',7] = r(mean)
+
+sum `x' if impute==3 & dem_cohort==1
+mat tab1[`r',8] = r(mean)
+
+sum `x' if impute==3 & dem_cohort==0
+mat tab1[`r',9] = r(mean) 
+
+ttest `x' if impute==3, by(dem_cohort)
+mat stars[`r',8] = (r(p)<.01) + (r(p)<.05)
+
+
+local ++r
+}
+
+
+sum nflag_ivw if impute==1
+mat tab1[`r',1] = r(N)
+
+sum nflag_ivw if impute==1 & dem_cohort==1
+mat tab1[`r',2] = r(N)
+
+sum nflag_ivw if impute==1 & dem_cohort==0
+mat tab1[`r',3] = r(N)
+
+sum nflag_ivw if impute==2
+mat tab1[`r',4] = r(N)
+
+sum nflag_ivw if impute==2 & dem_cohort==1
+mat tab1[`r',5] = r(N)
+
+sum nflag_ivw if impute==2 & dem_cohort==0
+mat tab1[`r',6] = r(N)
+
+sum nflag_ivw if impute==3
+mat tab1[`r',7] = r(N)
+
+sum nflag_ivw if impute==3 & dem_cohort==1
+mat tab1[`r',8] = r(N)
+
+sum nflag_ivw if impute==3 & dem_cohort==0
+mat tab1[`r',9] = r(N)
+
+
+
+mat rownames tab1 = `ivars' `medcost' N
+
+frmttable using "E:\projects\burden_dementia\archive logs\R01_imputed.doc", replace statmat(tab1) ///
+varlabels title("Summary Statistics For R01 Sample (Deceased 2004-2012, Age 70+)") ctitles("", "", "No Imputation", "", "", "Imputed - Method A", "", "", "Imputed - Method B", "" \"Variables", "All","Dementia","No Dementia", "All","Dementia","No Dementia", "All","Dementia","No Dementia"  ) sdec(2) ///
+vlines(01001001001) annotate(stars) asymbol(*,**)note("All costs have been inflation adjusted to 2014 dollars. <0.05*, p<0.01**")
+
+/* FFS Only */
+
+preserve
+keep if ffs_5yr==1
+
+
+mat tab1=J(`rd', 9,.)
+mat stars=J(`rd',9,0)
+local r = 1
+
+foreach x of local ivars {
+
+sum `x' if impute==1
+
+mat tab1[`r',1] = r(mean)*100
+
+sum `x' if impute==1 & dem_cohort==1
+mat tab1[`r',2] = r(mean)*100
+
+sum `x' if impute==1 & dem_cohort==0
+mat tab1[`r',3] = r(mean)*100
+
+tab `x' dem_cohort if impute==1, chi2
+mat stars[`r',2] = (r(p)<.01) + (r(p)<0.05)
+
+
+sum `x' if impute==2
+
+mat tab1[`r',4] = r(mean)*100
+
+sum `x' if impute==2 & dem_cohort==1
+mat tab1[`r',5] = r(mean)*100
+
+sum `x' if impute==2 & dem_cohort==0
+mat tab1[`r',6] = r(mean)*100
+
+tab `x' dem_cohort if impute==2, chi2
+mat stars[`r',5] = (r(p)<.01) + (r(p)<0.05)
+
+
+sum `x' if impute==3
+
+mat tab1[`r',7] = r(mean)*100
+
+sum `x' if impute==3 & dem_cohort==1
+mat tab1[`r',8] = r(mean)*100
+
+sum `x' if impute==3 & dem_cohort==0
+mat tab1[`r',9] = r(mean)*100
+
+tab `x' dem_cohort if impute==3, chi2
+mat stars[`r',8] = (r(p)<.01) + (r(p)<0.05)
+
+
+local ++r
+}
+
+foreach x of local medcost {
+
+sum `x' if impute==1 
+
+mat tab1[`r',1] = r(mean)
+
+sum `x' if impute==1 & dem_cohort==1
+mat tab1[`r',2] = r(mean)
+
+sum `x' if impute==1 & dem_cohort==0
+mat tab1[`r',3] = r(mean) 
+
+ttest `x' if impute==1, by(dem_cohort)
+mat stars[`r',2] = (r(p)<.01) + (r(p)<.05)
+
+
+sum `x' if impute==2
+
+mat tab1[`r',4] = r(mean)
+
+sum `x' if impute==2 & dem_cohort==1
+mat tab1[`r',5] = r(mean)
+
+sum `x' if impute==2 & dem_cohort==0
+mat tab1[`r',6] = r(mean) 
+
+ttest `x' if impute==2, by(dem_cohort)
+mat stars[`r',5] = (r(p)<.01) + (r(p)<.05)
+
+
+sum `x' if impute==3
+
+mat tab1[`r',7] = r(mean)
+
+sum `x' if impute==3 & dem_cohort==1
+mat tab1[`r',8] = r(mean)
+
+sum `x' if impute==3 & dem_cohort==0
+mat tab1[`r',9] = r(mean) 
+
+ttest `x' if impute==3, by(dem_cohort)
+mat stars[`r',8] = (r(p)<.01) + (r(p)<.05)
+
+
+local ++r
+}
+
+
+sum nflag_ivw if impute==1
+mat tab1[`r',1] = r(N)
+
+sum nflag_ivw if impute==1 & dem_cohort==1
+mat tab1[`r',2] = r(N)
+
+sum nflag_ivw if impute==1 & dem_cohort==0
+mat tab1[`r',3] = r(N)
+
+sum nflag_ivw if impute==2
+mat tab1[`r',4] = r(N)
+
+sum nflag_ivw if impute==2 & dem_cohort==1
+mat tab1[`r',5] = r(N)
+
+sum nflag_ivw if impute==2 & dem_cohort==0
+mat tab1[`r',6] = r(N)
+
+sum nflag_ivw if impute==3
+mat tab1[`r',7] = r(N)
+
+sum nflag_ivw if impute==3 & dem_cohort==1
+mat tab1[`r',8] = r(N)
+
+sum nflag_ivw if impute==3 & dem_cohort==0
+mat tab1[`r',9] = r(N)
+
+
+
+mat rownames tab1 = `ivars' `medcost' N
+
+frmttable using "E:\projects\burden_dementia\archive logs\R01_imputed.doc", addtable statmat(tab1) ///
+varlabels title("Summary Statistics For R01 Sample (Deceased 2004-2012, Age 70+, Continuous FFS 60 months prior)") ctitles("", "", "No Imputation", "", "", "Imputed - Method A", "", "", "Imputed - Method B", "" \"Variables", "All","Dementia","No Dementia", "All","Dementia","No Dementia", "All","Dementia","No Dementia" ) sdec(2) ///
+vlines(01001001001) annotate(stars) asymbol(*,**)note("All costs have been inflation adjusted to 2014 dollars. p<0.05*, p<0.01** No imputation = anyone with gap ivw dropped. Method A = Carry forward prev ivw. Method B = Average prev and later ivw.")

@@ -9,7 +9,7 @@ H="***********************************************"
 
 
 H="Medicare Processing"
-/*Processes Medicare claims received in March 2018
+/*Processes Medicare claims received in March & October 2018
 
 Creates combined year files for 1998-2012 claims for use in other projects
 
@@ -18,15 +18,16 @@ Code based on that in the oop_mc_outline.otl file
 Combined 1998-2012 files are saved here:
 E:\data\CMS_DUA_51675_2014\Merged
 
+
+note--10/30/18--updated to include Medicare claims through 2015 received today 
+	--12/3/18--updated with new xwalk
 */
 
-libname medi_raw 'E:\data\cms_DUA_51675_2014\Received_20180307';
+libname medi_raw 'E:\data\cms_DUA_51675_2014\Received_20181030';
 
 libname medi_wk 'E:\data\CMS_DUA_51675_2014\Merged\SAS';
 
-/*10/11/18--because we have the same BID_HRS_21, we can reuse the crosswalk*/
-
-libname xw2008 'E:\data\hrs_restricted_2010\20131104_received\Medicare\Xref2008\distro';
+libname mcarexw 'E:\data\CMS_DUA_51675_2014\Medicare Xref2015\CMSxref20151\sas';
 
 
 H="Denominator"
@@ -68,6 +69,17 @@ run;
 proc export data=medi_wk.dn_1998_2012 outfile='E:\data\cms_dua_51675_2014\merged\stata\dn_1998_2012.dta' replace; 
 run;
 
+H="MBSF"
+
+
+proc export data=medi_raw.basf_1998_2015 outfile='E:\data\cms_dua_51675_2014\merged\stata\basf_1998_2015.dta' replace; 
+run;
+
+proc export data=medi_raw.bqsf_1998_2015 outfile='E:\data\cms_dua_51675_2014\merged\stata\bqsf_1998_2015.dta' replace; 
+run;
+
+
+
 H="Medpar"
 /************************************************************************
 *************************************************************************
@@ -77,14 +89,14 @@ Medpar 1998-2012 - processing steps
 %let source=mp;
 */prints first 10 rows of mp_2000 file, just select variables listed below;
 proc sql outobs=10;
-select BID_HRS_21, ADMSNDT,DSCHRGDT,loscnt from medi_raw.&source._1998;
+select BID_HRS_22, ADMSNDT,DSCHRGDT,loscnt from medi_raw.&source._1998;
 quit;
 
 *creates merged medpar file 1998-2012 years;
-data medi_wk.&source._1998_2012;
+data medi_wk.&source._1998_2015;
 set medi_raw.&source._1998 medi_raw.&source._1999 medi_raw.&source._2000 medi_raw.&source._2001 medi_raw.&source._2002 medi_raw.&source._2003 medi_raw.&source._2004 medi_raw.&source._2005 medi_raw.&source._2006 medi_raw.&source._2007 medi_raw.&source._2008
 medi_raw.&source._2009 medi_raw.&source._2010 medi_raw.&source._2011
-medi_raw.&source._2012;
+medi_raw.&source._2012 medi_raw.&source._2013 medi_raw.&source._2014 medi_raw.&source._2015;
 *formats dates for admission and discharge;
 admit_date=datejul(ADMSNDT);
 if substr(trim(left(DSCHRGDT)),1,1) in ("1","2") then do;
@@ -96,7 +108,7 @@ admit_year=year(admit_date);
 *calculate discharge date if null from admit date and los;
 if disch_date=. then disch_date=admit_date+loscnt;
 *format ID in this medpar file to match xwalk file;
-bid_n=substr(trim(left(BID_HRS_21)),2,9)+0;
+bid_n=substr(trim(left(BID_HRS_22)),2,9)+0;
 disch_year=year(disch_date);
 
 format admit_date date9.;
@@ -104,7 +116,7 @@ format disch_date date9.;
 run;
 
 *Check for and remove dupicates;
-proc sort data=medi_wk.&source._1998_2012 out=temp2  nodupkey;
+proc sort data=medi_wk.&source._1998_2015 out=temp2  nodupkey;
 by BID_n admit_date disch_date pmt_amt;
 run;
 
@@ -114,11 +126,11 @@ They have different payment amounts though b/c of previous step*/
 proc sql;
 create table bid as
 select BID_n,admit_date, disch_date,count(*)
-from medi_wk.&source._1998_2012 group by
+from medi_wk.&source._1998_2015 group by
 BID_n,admit_date, disch_date having count(*)>1;
 
 *prints list of observations where match on id, admit date and disch date;
-select BID_n,admit_date, disch_date from medi_wk.&source._1998_2012
+select BID_n,admit_date, disch_date from medi_wk.&source._1998_2015
 where bid_n in (select bid_n from bid)
 ;
 quit;
@@ -132,15 +144,15 @@ loscnt;
 
 *identify observatons where discharge year is null - no observations identified;
 proc sql outobs=10;
-select BID_HRS_21, ADMSNDT,DSCHRGDT,loscnt from medi_wk.&source._1998_2012 where 
+select BID_HRS_22, ADMSNDT,DSCHRGDT,loscnt from medi_wk.&source._1998_2015 where 
 disch_year=.;
 quit;
 *frequency table of admit and disch year vars;
-proc freq data=medi_wk.&source._1998_2012;
+proc freq data=medi_wk.&source._1998_2015;
 table admit_year disch_year;
 run;
 
-proc export data=medi_wk.mp_1998_2012 outfile='E:\data\cms_dua_51675_2014\merged\stata\mp_1998_2012.dta' replace; 
+proc export data=medi_wk.mp_1998_2015 outfile='E:\data\cms_dua_51675_2014\merged\stata\mp_1998_2015.dta' replace; 
 run;
 
 H="Inpatient"
@@ -153,18 +165,18 @@ Inpatient 1998-2012 files ******************************************************
 *print first 10 observations from ip 2000 file;
 %let source=ip;
 proc sql outobs=10;
-select BID_HRS_21, FROM_DT,thru_DT,pmt_amt,PRCDRDT01,PRCDRDT02 from medi_raw.&source._2000;
+select BID_HRS_22, FROM_DT,thru_DT,pmt_amt,PRCDRDT01,PRCDRDT02 from medi_raw.&source._2000;
 quit;
 
 proc sql outobs=10;
-select BID_HRS_21, FROM_DT,thru_DT,pmt_amt,PRCDRDT01,PRCDRDT02 from medi_raw.&source._2012;
+select BID_HRS_22, FROM_DT,thru_DT,pmt_amt,PRCDRDT01,PRCDRDT02 from medi_raw.&source._2012;
 quit;
 
-*create ip merged file of 1998-2012 years;
-data medi_wk.&source._1998_2012;
+*create ip merged file of 1998-2015 years;
+data medi_wk.&source._1998_2015;
 set medi_raw.&source._1998 medi_raw.&source._1999 medi_raw.&source._2000 medi_raw.&source._2001 medi_raw.&source._2002
  medi_raw.&source._2003 medi_raw.&source._2004 medi_raw.&source._2005 medi_raw.&source._2006 medi_raw.&source._2007 medi_raw.&source._2008 medi_raw.&source._2009 medi_raw.&source._2010 medi_raw.&source._2011
-medi_raw.&source._2012;
+medi_raw.&source._2012 medi_raw.&source._2013 medi_raw.&source._2014 medi_raw.&source._2015 ;
 *create clean admit and discharge date variables;
 admit_date=mdy(substr(trim(left(FROM_DT)),5,2),substr(trim(left(FROM_DT)),7,2),substr(trim(left(FROM_DT)),1,4));
 disch_date=mdy(substr(trim(left(thru_DT)),5,2),substr(trim(left(thru_DT)),7,2),substr(trim(left(thru_DT)),1,4));
@@ -172,7 +184,7 @@ disch_date=mdy(substr(trim(left(thru_DT)),5,2),substr(trim(left(thru_DT)),7,2),s
 admit_year=year(admit_date);
 
 *format ID number;
-bid_n=substr(trim(left(BID_HRS_21)),2,9)+0;
+bid_n=substr(trim(left(BID_HRS_22)),2,9)+0;
 if SGMT_NUM=1;
 run;
 
@@ -183,8 +195,8 @@ checks of the code, do not need to run them when doing final analysis
 /**************************************************************/
 
 *Check for and remove dupicates;
-proc sort data=medi_wk.&source._1998_2012 out=temp2  nodupkey;
-by BID_HRS_21 admit_date disch_date pmt_amt;
+proc sort data=medi_wk.&source._1998_2015 out=temp2  nodupkey;
+by BID_HRS_22 admit_date disch_date pmt_amt;
 run;
 
 /*create table bid of just observations that had multiple observations
@@ -193,19 +205,19 @@ They have different payment amounts though b/c of previous step*/
 proc sql;
 create table bid as
 select bid_n,admit_date, disch_date,count(*)
-from medi_wk.&source._1998_2012 group by
+from medi_wk.&source._1998_2015 group by
 BID_n,admit_date, disch_date having count(*)>1;
 
 quit;
 
 proc sql;
 create table temp3 as
-select * from medi_wk.&source._1998_2012
+select * from medi_wk.&source._1998_2015
 where bid_n in (select bid_n from bid) group by bid_n,admit_date having count(*)>1 order by BID_n,admit_date, disch_date;
 
 quit;
 
-proc export data=medi_wk.ip_1998_2012 outfile='E:\data\cms_dua_51675_2014\merged\stata\ip_1998_2012.dta' replace; 
+proc export data=medi_wk.ip_1998_2015 outfile='E:\data\cms_dua_51675_2014\merged\stata\ip_1998_2015.dta' replace; 
 run;
 
 H="SNF"
@@ -217,18 +229,18 @@ SNF 1998-2012 files ************************************************************
 *print first 10 observations from snf 2000 file;
 %let source=sn;
 proc sql outobs=10;
-select BID_HRS_21, FROM_DT,thru_DT,pmt_amt from medi_raw.&source._2000;
+select BID_HRS_22, FROM_DT,thru_DT,pmt_amt from medi_raw.&source._2000;
 quit;
 
 proc sql outobs=10;
-select BID_HRS_21, FROM_DT,thru_DT,pmt_amt from medi_raw.&source._2012;
+select BID_HRS_22, FROM_DT,thru_DT,pmt_amt from medi_raw.&source._2012;
 quit;
 
 *create snf merged file of 1998-2012 years;
-data medi_wk.&source._1998_2012;
+data medi_wk.&source._1998_2015;
 set medi_raw.&source._1998 medi_raw.&source._1999 medi_raw.&source._2000 medi_raw.&source._2001 medi_raw.&source._2002
  medi_raw.&source._2003 medi_raw.&source._2004 medi_raw.&source._2005 medi_raw.&source._2006 medi_raw.&source._2007 medi_raw.&source._2008 medi_raw.&source._2009  medi_raw.&source._2010 medi_raw.&source._2011
-medi_raw.&source._2012;
+medi_raw.&source._2012 medi_raw.&source._2013 medi_raw.&source._2014 medi_raw.&source._2015;
 *create clean admit and discharge date variables;
 admit_date=mdy(substr(trim(left(FROM_DT)),5,2),substr(trim(left(FROM_DT)),7,2),substr(trim(left(FROM_DT)),1,4));
 disch_date=mdy(substr(trim(left(thru_DT)),5,2),substr(trim(left(thru_DT)),7,2),substr(trim(left(thru_DT)),1,4));
@@ -236,7 +248,7 @@ disch_date=mdy(substr(trim(left(thru_DT)),5,2),substr(trim(left(thru_DT)),7,2),s
 admit_year=year(admit_date);
 
 *format ID number;
-bid_n=substr(trim(left(BID_HRS_21)),2,9)+0;
+bid_n=substr(trim(left(BID_HRS_22)),2,9)+0;
 if SGMT_NUM=1;
 run;
 
@@ -247,8 +259,8 @@ checks of the code, do not need to run them when doing final analysis
 /**************************************************************/
 
 *Check for and remove dupicates;
-proc sort data=medi_wk.&source._1998_2012 out=temp2  nodupkey;
-by BID_HRS_21 admit_date disch_date pmt_amt;
+proc sort data=medi_wk.&source._1998_2015 out=temp2  nodupkey;
+by BID_HRS_22 admit_date disch_date pmt_amt;
 run;
 
 /*create table bid of just observations that had multiple observations
@@ -257,19 +269,19 @@ They have different payment amounts though b/c of previous step*/
 proc sql;
 create table bid as
 select bid_n,admit_date, disch_date,count(*)
-from medi_wk.&source._1998_2012 group by
+from medi_wk.&source._1998_2015 group by
 BID_n,admit_date, disch_date having count(*)>1;
 
 quit;
 
 proc sql;
 create table temp3 as
-select * from medi_wk.&source._1998_2012
+select * from medi_wk.&source._1998_2015
 where bid_n in (select bid_n from bid) group by bid_n,admit_date having count(*)>1 order by BID_n,admit_date, disch_date;
 
 quit;
 
-proc export data=medi_wk.sn_1998_2012 outfile='E:\data\cms_dua_51675_2014\merged\stata\snf_1998_2012.dta' replace; 
+proc export data=medi_wk.sn_1998_2015 outfile='E:\data\cms_dua_51675_2014\merged\stata\snf_1998_2015.dta' replace; 
 run;
 
 H="Outpatient"
@@ -281,14 +293,14 @@ Outpatient 1998-2012 files *****************************************************
 *print first 10 observations from op 2000 file;
 %let source=op;
 proc sql outobs=10;
-select BID_HRS_21, FROM_DT,thru_DT,pmt_amt from medi_raw.&source._2000;
+select BID_HRS_22, FROM_DT,thru_DT,pmt_amt from medi_raw.&source._2000;
 quit;
 
 *create op merged file of 1998-2012 years;
-data medi_wk.&source._1998_2012;
+data medi_wk.&source._1998_2015;
 set medi_raw.&source._1998 medi_raw.&source._1999 medi_raw.&source._2000 medi_raw.&source._2001 medi_raw.&source._2002
  medi_raw.&source._2003 medi_raw.&source._2004 medi_raw.&source._2005 medi_raw.&source._2006 medi_raw.&source._2007 medi_raw.&source._2008 medi_raw.&source._2009 medi_raw.&source._2010 medi_raw.&source._2011
-medi_raw.&source._2012;
+medi_raw.&source._2012 medi_raw.&source._2013 medi_raw.&source._2014 medi_raw.&source._2015 ;
 *create clean admit and discharge date variables;
 admit_date=mdy(substr(trim(left(FROM_DT)),5,2),substr(trim(left(FROM_DT)),7,2),substr(trim(left(FROM_DT)),1,4));
 disch_date=mdy(substr(trim(left(thru_DT)),5,2),substr(trim(left(thru_DT)),7,2),substr(trim(left(thru_DT)),1,4));
@@ -296,7 +308,7 @@ disch_date=mdy(substr(trim(left(thru_DT)),5,2),substr(trim(left(thru_DT)),7,2),s
 admit_year=year(admit_date);
 
 *format ID number;
-bid_n=substr(trim(left(BID_HRS_21)),2,9)+0;
+bid_n=substr(trim(left(BID_HRS_22)),2,9)+0;
 if SGMT_NUM=1;
 run;
 
@@ -309,8 +321,8 @@ sort and temp dataset steps*/
 /**************************************************************/
 
 *Check for and remove dupicates;
-proc sort data=medi_wk.&source._1998_2012 out=temp2  nodupkey;
-by BID_HRS_21 admit_date disch_date pmt_amt;
+proc sort data=medi_wk.&source._1998_2015 out=temp2  nodupkey;
+by BID_HRS_22 admit_date disch_date pmt_amt;
 run;
 
 /*create table bid of just observations that had multiple observations
@@ -319,19 +331,19 @@ They have different payment amounts though b/c of previous step*/
 proc sql;
 create table bid as
 select bid_n,admit_date, disch_date,count(*)
-from medi_wk.&source._1998_2012 group by
+from medi_wk.&source._1998_2015 group by
 BID_n,admit_date, disch_date having count(*)>1;
 
 quit;
 
 proc sql;
 create table temp3 as
-select * from medi_wk.&source._1998_2012
+select * from medi_wk.&source._1998_2015
 where bid_n in (select bid_n from bid) group by bid_n,admit_date having count(*)>1 order by BID_n,admit_date, disch_date;
 
 quit;
 
-proc export data=medi_wk.op_1998_2012 outfile='E:\data\cms_dua_51675_2014\merged\stata\op_1998_2012.dta' replace; 
+proc export data=medi_wk.op_1998_2015 outfile='E:\data\cms_dua_51675_2014\merged\stata\op_1998_2015.dta' replace; 
 run;
 
 H="Carrier"
@@ -349,14 +361,14 @@ This is different from the other merged claims datasets created here
 
 %let source=pb;
 proc sql outobs=10;
-select BID_HRS_21, FROM_DT,thru_DT,pmt_amt from medi_raw.&source._2000;
+select BID_HRS_22, FROM_DT,thru_DT,pmt_amt from medi_raw.&source._2000;
 quit;
 
 
 *create individual years files with just variables that are needed;
 %macro yrs(yr=);
 data medi_wk.&source._&yr.temp;
-set medi_raw.&source._&yr (keep=BID_HRS_21 FROM_DT thru_DT pmt_amt SGMT_NUM PDGNS_CD PDVRSNCD DGNSCD01-DGNSCD12 
+set medi_raw.&source._&yr (keep=BID_HRS_22 FROM_DT thru_DT pmt_amt SGMT_NUM PDGNS_CD PDVRSNCD DGNSCD01-DGNSCD12 
 DVRSCD01-DVRSCD12 HCPSCD01-HCPSCD13 EXPDT101-EXPDT113 EXPDT201-EXPDT213 REC_LVL BETOS01-BETOS13 PRFNPI: RFR_NPI HCFPCL01--HCFPCL13);
 run;
 %mend;
@@ -376,10 +388,14 @@ run;
 %yrs(yr=2010);
 %yrs(yr=2011);
 %yrs(yr=2012);
+%yrs(yr=2013);
+%yrs(yr=2014);
+%yrs(yr=2015);
+
 
 *create combined years file;
 *Note this is different from other combined files;
-data medi_wk.&source._1998_2012;
+data medi_wk.&source._1998_2015;
 set medi_wk.&source._1998temp medi_wk.&source._1999temp 
 medi_wk.&source._2000temp medi_wk.&source._2001temp 
 medi_wk.&source._2002temp medi_wk.&source._2003temp 
@@ -387,7 +403,8 @@ medi_wk.&source._2004temp medi_wk.&source._2005temp
 medi_wk.&source._2006temp medi_wk.&source._2007temp 
 medi_wk.&source._2008temp medi_wk.&source._2009temp 
 medi_wk.&source._2010temp medi_wk.&source._2011temp
-medi_wk.&source._2012temp;
+medi_wk.&source._2012temp medi_wk.&source._2013temp 
+medi_wk.&source._2014temp medi_wk.&source._2015temp;
 
 *create clean admit date, discharge date and admit year vars;
 admit_date=mdy(substr(trim(left(FROM_DT)),5,2),substr(trim(left(FROM_DT)),7,2),substr(trim(left(FROM_DT)),1,4));
@@ -396,11 +413,11 @@ disch_date=mdy(substr(trim(left(thru_DT)),5,2),substr(trim(left(thru_DT)),7,2),s
 admit_year=year(admit_date);
 
 *format ID variable;
-bid_n=substr(trim(left(BID_HRS_21)),2,9)+0;
+bid_n=substr(trim(left(BID_HRS_22)),2,9)+0;
 if SGMT_NUM=1;
 run;
 
-proc export data=medi_wk.pb_1998_2012 outfile='E:\data\cms_dua_51675_2014\merged\stata\pb_1998_2012.dta' replace; 
+proc export data=medi_wk.pb_1998_2015 outfile='E:\data\cms_dua_51675_2014\merged\stata\pb_1998_2015.dta' replace; 
 run;
 
 H="Home Health"
@@ -411,14 +428,16 @@ Home health (hh) 1998-2012 files ***********************************************
 
 %let source=hh;
 proc sql outobs=10;
-select BID_HRS_21, FROM_DT,thru_DT,pmt_amt from medi_raw.&source._2000;
+select BID_HRS_22, FROM_DT,thru_DT,pmt_amt from medi_raw.&source._2000;
 quit;
 
 *create combined 1998-2012 data file;
-data medi_wk.&source._1998_2012;
+data medi_wk.&source._1998_2015;
 set medi_raw.&source._1998 medi_raw.&source._1999 medi_raw.&source._2000 medi_raw.&source._2001 medi_raw.&source._2002
 medi_raw.&source._2003 medi_raw.&source._2004 medi_raw.&source._2005 medi_raw.&source._2006 medi_raw.&source._2007 medi_raw.&source._2008  medi_raw.&source._2009 medi_raw.&source._2010
-medi_raw.&source._2011 medi_raw.&source._2012;
+medi_raw.&source._2011 
+medi_raw.&source._2012 medi_raw.&source._2013 medi_raw.&source._2014 medi_raw.&source._2015 ;
+;
 
 *clean admit and discharge date and admit year variables;
 admit_date=mdy(substr(trim(left(FROM_DT)),5,2),substr(trim(left(FROM_DT)),7,2),substr(trim(left(FROM_DT)),1,4));
@@ -427,11 +446,11 @@ disch_date=mdy(substr(trim(left(thru_DT)),5,2),substr(trim(left(thru_DT)),7,2),s
 admit_year=year(admit_date);
 
 *format ID variable;
-bid_n=substr(trim(left(BID_HRS_21)),2,9)+0;
+bid_n=substr(trim(left(BID_HRS_22)),2,9)+0;
 if SGMT_NUM=1;
 run;
 
-proc export data=medi_wk.hh_1998_2012 outfile='E:\data\cms_dua_51675_2014\merged\stata\hh_1998_2012.dta' replace; 
+proc export data=medi_wk.hh_1998_2015 outfile='E:\data\cms_dua_51675_2014\merged\stata\hh_1998_2015.dta' replace; 
 run;
 
 H="DME"
@@ -441,15 +460,17 @@ Durable medical equipment (DM) medicare claim records clean up
 
 %let source=dm;
 proc sql outobs=10;
-select BID_HRS_21, FROM_DT,thru_DT,pmt_amt from medi_raw.&source._2000;
+select BID_HRS_22, FROM_DT,thru_DT,pmt_amt from medi_raw.&source._2000;
 quit;
 
 *create combined 1998-2012 data file;
-data medi_wk.&source._1998_2012;
+data medi_wk.&source._1998_2015;
 set medi_raw.&source._1998 medi_raw.&source._1999 medi_raw.&source._2000 medi_raw.&source._2001 medi_raw.&source._2002
  medi_raw.&source._2003 medi_raw.&source._2004 medi_raw.&source._2005 medi_raw.&source._2006    
  medi_raw.&source._2007 medi_raw.&source._2008 medi_raw.&source._2009 medi_raw.&source._2010
- medi_raw.&source._2011 medi_raw.&source._2012;
+ medi_raw.&source._2011
+medi_raw.&source._2012 medi_raw.&source._2013 medi_raw.&source._2014 medi_raw.&source._2015 ;
+;
 
 *clean admit date, discharge date and admit year variables;
 admit_date=mdy(substr(trim(left(FROM_DT)),5,2),substr(trim(left(FROM_DT)),7,2),substr(trim(left(FROM_DT)),1,4));
@@ -459,22 +480,22 @@ admit_year=year(admit_date);
 disch_year=year(disch_date);
 
 *Format ID variable;
-bid_n=substr(trim(left(BID_HRS_21)),2,9)+0;
+bid_n=substr(trim(left(BID_HRS_22)),2,9)+0;
 if SGMT_NUM=1;
 run;
 
 *Check for and remove duplicates;
-proc sort data=medi_wk.&source._1998_2012 out=temp2  nodupkey;
-by BID_HRS_21 admit_date disch_date pmt_amt;
+proc sort data=medi_wk.&source._1998_2015 out=temp2  nodupkey;
+by BID_HRS_22 admit_date disch_date pmt_amt;
 run;
 
 proc sql outobs=10;
-select distinct SGMT_CNT,count(*) from medi_wk.&source._1998_2012 group by SGMT_CNT;
+select distinct SGMT_CNT,count(*) from medi_wk.&source._1998_2015 group by SGMT_CNT;
 quit;
 
 * Find observations with null for discharge year;
 proc sql outobs=10;
-select BID_HRS_21, admit_date,disch_date  from medi_wk.&source._1998_2012 where 
+select BID_HRS_22, admit_date,disch_date  from medi_wk.&source._1998_2015 where 
 disch_year=.;
 quit;
 * Table of discharge year and admit year;
@@ -482,7 +503,7 @@ proc freq;
 table admit_year disch_year;
 run;
 
-proc export data=medi_wk.dm_1998_2012 outfile='E:\data\cms_dua_51675_2014\merged\stata\dm_1998_2012.dta' replace; 
+proc export data=medi_wk.dm_1998_2015 outfile='E:\data\cms_dua_51675_2014\merged\stata\dm_1998_2015.dta' replace; 
 run;
 
 H="Hospice"
@@ -490,13 +511,14 @@ H="Hospice"
 
 %let source=hs;
 proc sql outobs=10;
-select BID_HRS_21, FROM_DT,thru_DT,pmt_amt from medi_raw.&source._2000;
+select BID_HRS_22, FROM_DT,thru_DT,pmt_amt from medi_raw.&source._2000;
 quit;
 
 *create combined 1998-2012 data file;
-data medi_wk.&source._1998_2012;
+data medi_wk.&source._1998_2015;
 set medi_raw.&source._1998 medi_raw.&source._1999 medi_raw.&source._2000 medi_raw.&source._2001 medi_raw.&source._2002 medi_raw.&source._2003 medi_raw.&source._2004 medi_raw.&source._2005 medi_raw.&source._2006 medi_raw.&source._2007 medi_raw.&source._2008 medi_raw.&source._2009 medi_raw.&source._2010 medi_raw.&source._2011
-medi_raw.&source._2012;
+medi_raw.&source._2012 medi_raw.&source._2013 medi_raw.&source._2014 medi_raw.&source._2015 ;
+
 
 *clean admit date, discharge date and admit year variables;
 admit_date=mdy(substr(trim(left(FROM_DT)),5,2),substr(trim(left(FROM_DT)),7,2),substr(trim(left(FROM_DT)),1,4));
@@ -507,31 +529,31 @@ disch_year=year(disch_date);
 
 
 *Format ID variable;
-bid_n=substr(trim(left(BID_HRS_21)),2,9)+0;
+bid_n=substr(trim(left(BID_HRS_22)),2,9)+0;
 if SGMT_NUM=1;
 run;
 
 *Check for and remove duplicates;
-proc sort data=medi_wk.&source._1998_2012 out=temp2  nodupkey;
-by BID_HRS_21 admit_date disch_date pmt_amt;
+proc sort data=medi_wk.&source._1998_2015 out=temp2  nodupkey;
+by BID_HRS_22 admit_date disch_date pmt_amt;
 run;
 
 proc sql outobs=10;
-select distinct SGMT_CNT,count(*) from medi_wk.&source._1998_2012 group by SGMT_CNT;
+select distinct SGMT_CNT,count(*) from medi_wk.&source._1998_2015 group by SGMT_CNT;
 quit;
 
 
 * Find observations with null for discharge year;
 proc sql outobs=10;
-select BID_HRS_21, admit_date ,disch_date from medi_wk.&source._1998_2012 where 
+select BID_HRS_22, admit_date ,disch_date from medi_wk.&source._1998_2015 where 
 disch_year=.;
 quit;
 * Table of discharge year and admit year;
-proc freq data=medi_wk.&source._1998_2012;
+proc freq data=medi_wk.&source._1998_2015;
 table admit_year disch_year;
 run;
 
-proc export data=medi_wk.hs_1998_2012 outfile='E:\data\cms_dua_51675_2014\merged\stata\hs_1998_2012.dta' replace; 
+proc export data=medi_wk.hs_1998_2015 outfile='E:\data\cms_dua_51675_2014\merged\stata\hs_1998_2015.dta' replace; 
 run;
 
 H="***********************************************"

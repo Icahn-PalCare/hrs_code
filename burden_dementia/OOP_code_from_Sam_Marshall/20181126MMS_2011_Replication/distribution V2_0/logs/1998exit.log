@@ -1,0 +1,2435 @@
+-----------------------------------------------------------------
+      name:  <unnamed>
+       log:  C:/Users/sm2856/Dropbox/MMS_2011_Replication/distrib
+> ution V2_0/logs/1998exit.log
+  log type:  text
+ opened on:  21 Sep 2018, 16:00:32
+
+. /**************************************************************
+> ***
+> PROJECT:                MMS OOP Spending Replication Files
+>                                 
+> TITLE:                  98exit.do
+>                         
+> AUTHOR:                 Sam Marshall
+> 
+> DATE CREATED:   31 May 2018
+> 
+> LAST EDITED:    23rd July 2018
+> 
+> DESCRIPTION:    Impute the 1998 exit medical expenditures
+> 
+> 
+> ORGANIZATION:   Section 1: Set Up
+>                                 Section 2: Insurance Costs
+>                                 Section 3: Medical Expenditures
+>                                 
+> INPUTS:                 1998exit.dta
+>                                 
+> OUTPUTS:                1998exit.log X1998OOP.dta
+>                                 
+> NOTE:                   
+> ***************************************************************
+> ***/
+. 
+. /**************************************************************
+> **
+>         SECTION 1: Set Up
+> ***************************************************************
+> */
+. 
+. use "${buildoutput}/1998exit.dta", clear
+
+. 
+. do "${deps}/MMS2011_repute.do"  // source repute function
+
+. * MMS (2011) repute function. Paper version
+. 
+. capture program drop repute
+
+. 
+. /* ************************************************************
+> *********** */
+. program repute, rclass
+  1. args low upp all main
+  2. tempvar imputed
+  3. quietly gen `imputed' = .
+  4. forvalues i = 1/100 {
+  5. sort `low' `upp'
+  6. quietly gen tz = `all' if `all'>=`low'[`i'] & `all' <= `upp'
+> [`i']
+  7. quietly sum tz if `low'[`i'] !=.
+  8. quietly replace `imputed' = r(mean) if _n == `i' & `low'[`i'
+> ] !=.
+  9. quietly replace `imputed' = `low' if ((_n == `i') & (`low' =
+> = `upp') & `low'[`i'] !=.)
+ 10. capture drop tz 
+ 11. }
+ 12. replace `main' = `imputed' if `main' == .
+ 13. end
+
+. /* ************************************************************
+> *********** */
+. 
+end of do-file
+
+. 
+. /**************************************************************
+> **
+>         SECTION 1.1: Make weights
+> ***************************************************************
+> */
+. 
+. *community weights from previous waves
+. gen weight98 = DWGTR
+(6,640 missing values generated)
+
+. replace weight98 = EWGTR if DWGTR == 0
+(8,515 real changes made)
+
+. 
+. * adds in the early AHEAD people;
+. replace weight98 = BWGTR if weight98 == 0
+(1,471 real changes made)
+
+. 
+. * ADDs in the early HRS people;
+. replace weight98 = CWGTR if weight98 == 0
+(801 real changes made)
+
+. replace weight98 = AWGTR if weight98 == 0
+(664 real changes made)
+
+. 
+. /**************************************************************
+> **
+>         SECTION 1.2: Calculate months since previous interview
+> ***************************************************************
+> */
+. 
+. gen death_month = Q488
+(36,275 missing values generated)
+
+. replace death_month = . if (death_month == 98 | death_month == 
+> 99)
+(3 real changes made, 3 to missing)
+
+. gen death_year = Q490
+(36,275 missing values generated)
+
+. replace death_year = . if (death_year == 9998 |death_year == 99
+> 99)
+(3 real changes made, 3 to missing)
+
+. 
+. *Prev interview could be in 96 or 95 wave
+. gen prev_interview_date = EIWYEAR + ((EIWMONTH - 1)/12)
+(26,331 missing values generated)
+
+. replace prev_interview_date = (DIWYEAR + ((DIWMONTH - 1)/12)) i
+> f prev_interview_date == .
+(7,802 real changes made)
+
+. 
+. gen curr_interview_date = death_year + (death_month/12)
+(36,280 missing values generated)
+
+. 
+. * current interview date is really the date of death
+. gen time = (curr_interview_date - prev_interview_date)
+(36,405 missing values generated)
+
+. replace time = 2 if (curr_interview_date != . & prev_interview_
+> date == .)
+(125 real changes made)
+
+. 
+. * assign 1.2 to ppl with missing or negative dates (1.2 is mean
+>  time b/w intrvw)
+. replace time = 1/12 if (curr_interview_date == prev_interview_d
+> ate)
+(18,406 real changes made)
+
+. replace time = 1.2 if (curr_interview_date != . & prev_intervie
+> w_date == .)
+(125 real changes made)
+
+. replace time = 1.2 if (time < 0)
+(15 real changes made)
+
+. replace time = 1.2 if (curr_interview_date == . & prev_intervie
+> w_date != .)
+(17,876 real changes made)
+
+. 
+. gen months = round(12 * time)
+
+. * ppl who skipped an interview get cut off at 3 years
+. replace months = 36 if (months > 36 & months != .)
+(0 real changes made)
+
+. 
+. gen year = (1/ time)
+
+. 
+. /**************************************************************
+> **
+>         SECTION 1.3: Create expenditure caps
+> ***************************************************************
+> */
+. * Expenditures are capped based on the number of months since t
+> he previous
+. * interview. The relevant limits need to be made into nominal a
+> mounts as well.
+. gen cap15k = 12414 * months
+
+. gen cap30k = 24828 * months
+
+. gen cap5k  = 4138  * months
+
+. 
+. /**************************************************************
+> **
+>         SECTION 1.3: Make max expenditures into 1998 dollars
+> ***************************************************************
+> */
+. global all "mc_hmo_all ltc_all doctor_all hospice_all RX_all ho
+> me_all other_all nmed_all hospital_NH_all"
+
+. 
+. foreach y of global all {
+  2. replace `y' = (`y' * ${nom98})
+  3. }
+(258 real changes made)
+(188 real changes made)
+(1,027 real changes made)
+(43 real changes made)
+(2,507 real changes made)
+(215 real changes made)
+(675 real changes made)
+(573 real changes made)
+(453 real changes made)
+
+. 
+. /**************************************************************
+> **
+>         SECTION 1.4: Cap helper_OOP variable
+> ***************************************************************
+> */
+. * helper_OOP is in terms of 4 months, if the person lived for l
+> ess than four 
+. * months since the previous interview, assign them N months * m
+> onthly cost
+. replace helper_OOP = min(helper_OOP, months*helper_OOP/4)
+(18 real changes made)
+
+. 
+. *cap at 15k per month in the same way, using the 4 month convsi
+> on cond on survival
+. replace helper_OOP = cap15k if (helper_OOP > cap15k & helper_OO
+> P != .)
+(1 real change made)
+
+. replace helper_OOP = 12414*4 if (helper_OOP > 12414*4 & helper_
+> OOP != .)
+(1 real change made)
+
+. sum helper_OOP, det
+
+                      (sum) helper_OOP
+-------------------------------------------------------------
+      Percentiles      Smallest
+ 1%            0              0
+ 5%            0              0
+10%            0              0       Obs               1,126
+25%            0              0       Sum of Wgt.       1,126
+
+50%            0                      Mean           1215.925
+                        Largest       Std. Dev.      4113.888
+75%            0          30000
+90%         4680          30200       Variance       1.69e+07
+95%         6600          37242       Skewness       5.141453
+99%     19497.17          49656       Kurtosis       38.01372
+
+. 
+. /**************************************************************
+> **
+>         SECTION 2: Insurance Costs
+> ***************************************************************
+> */
+. 
+. /**************************************************************
+> **
+>         SECTION 2.1: Medicare/Medicaid through an HMO (MC_HMO) 
+> ***************************************************************
+> */
+. gen MC_HMO = Q2579
+(37,343 missing values generated)
+
+. replace MC_HMO = . if (MC_HMO == 9998 | MC_HMO == 9999)
+(58 real changes made, 58 to missing)
+
+. 
+. * make the premium in terms of one month (other/DK unadjusted)
+. replace MC_HMO = 1 * MC_HMO if Q2580 == 1
+(0 real changes made)
+
+. replace MC_HMO = (1/3) * MC_HMO if Q2580 == 2
+(6 real changes made)
+
+. replace MC_HMO = (1/6) * MC_HMO if Q2580 == 3
+(2 real changes made)
+
+. replace MC_HMO = (1/12) * MC_HMO if Q2580 == 4
+(3 real changes made)
+
+. 
+. * Replace DKs with the mean.
+. qui sum MC_HMO
+
+. replace MC_HMO = r(mean) if (inlist(Q2579, 9998, 9999) | (Q2575
+>  == 1)) & mi(MC_HMO)
+(59 real changes made)
+
+. 
+. * people w/out medicare/medicaid through HMO at the time of the
+> ir death
+. replace MC_HMO = 0 if (Q2575 == 5 | Q2560 == 5)
+(996 real changes made)
+
+. 
+. *Assign this mean to ppl who DK if they coverage through an HMO
+. qui sum MC_HMO
+
+. replace MC_HMO = r(mean) if (Q2575 == 8 | Q2575 == 9) & mi(MC_H
+> MO)
+(58 real changes made)
+
+. 
+. summ MC_HMO, det
+
+                           MC_HMO
+-------------------------------------------------------------
+      Percentiles      Smallest
+ 1%            0              0
+ 5%            0              0
+10%            0              0       Obs               1,241
+25%            0              0       Sum of Wgt.       1,241
+
+50%            0                      Mean           2.947706
+                        Largest       Std. Dev.      18.28059
+75%            0            100
+90%     2.947706            125       Variance       334.1799
+95%     18.64779            220       Skewness       18.55155
+99%           50            500       Kurtosis       461.7613
+
+. 
+. /**************************************************************
+> **
+>         SECTION 2.2: Medicare Part B 
+> ***************************************************************
+> */
+. gen MC_B = (43.8) if (Q2561 == 1 & Q2563 != 1 & Q2572 != 1)
+(36,793 missing values generated)
+
+. 
+. /**************************************************************
+> **
+>         SECTION 2.3: Private Insurance
+> ***************************************************************
+> */
+. gen work_ins = Q2592  // amount paid OOP for insurance through 
+> the employer
+(37,361 missing values generated)
+
+. replace work_ins = . if (work_ins == 9998 | work_ins == 9999)
+(61 real changes made, 61 to missing)
+
+. 
+. * Make the premium in terms of one month
+. replace work_ins = ((1/12) * work_ins ) if Q2593 == 1
+(10 real changes made)
+
+. replace work_ins = ((1/3) * work_ins ) if Q2593 == 2
+(4 real changes made)
+
+. replace work_ins = ((1/6) * work_ins ) if Q2593 == 3
+(0 real changes made)
+
+. replace work_ins = (1 * work_ins ) if Q2593 == 4
+(0 real changes made)
+
+. replace work_ins = (4 * work_ins ) if Q2593 == 5
+(8 real changes made)
+
+. replace work_ins = (2 * work_ins ) if Q2593 == 6
+(2 real changes made)
+
+. 
+. * Replace the DKs with the mean
+. qui sum work_ins
+
+. replace work_ins = r(mean) if (Q2592 == 9998 | Q2592 == 9999) &
+>  mi(work_ins)
+(61 real changes made)
+
+. 
+. * people w/out health ins from their employer at the time of th
+> eir death
+. replace work_ins = 0 if Q2585 == 5
+(874 real changes made)
+
+. 
+. * Add people who did not have pay any of the costs for this pre
+> mium
+. replace work_ins = 0 if Q2591 == 3
+(165 real changes made)
+
+. 
+. * Add yes values with no number and the DK/RFs for the above
+. * Q2586 is the number of plans variable 
+. qui sum work_ins
+
+. replace work_ins = r(mean) if (inlist(Q2585, 1, 8, 9) | ///
+>         inlist(Q2591, 1, 2, 8, 9)) & mi(work_ins)
+(46 real changes made)
+
+. 
+. summ work_ins, det
+
+                          work_ins
+-------------------------------------------------------------
+      Percentiles      Smallest
+ 1%            0              0
+ 5%            0              0
+10%            0              0       Obs               1,253
+25%            0              0       Sum of Wgt.       1,253
+
+50%            0                      Mean           13.77919
+                        Largest       Std. Dev.      44.37994
+75%            0       333.3333
+90%           50            350       Variance       1969.579
+95%     98.99689            430       Skewness        6.21589
+99%          200            720       Kurtosis       68.59696
+
+. 
+. /* ************************************************************
+> *********** */
+. gen other_ins = Q2612  // Amt paid OOP for a medicare or mediga
+> p supplement plan
+(37,266 missing values generated)
+
+. replace other_ins = . if (other_ins == 999998 | other_ins == 99
+> 9999)
+(87 real changes made, 87 to missing)
+
+. 
+. * Make the premium in terms of one month
+. replace other_ins = (1 * other_ins ) if Q2613 == 1
+(0 real changes made)
+
+. replace other_ins = ((1/3) * other_ins ) if Q2613 == 2
+(36 real changes made)
+
+. replace other_ins = ((1/6) * other_ins ) if Q2613 == 3
+(2 real changes made)
+
+. replace other_ins = ((1/12) * other_ins ) if Q2613 == 4
+(22 real changes made)
+
+. 
+. * Replace the DKs with the mean
+. qui sum other_ins
+
+. replace other_ins = r(mean) if (Q2612 == 999998 | Q2612 == 9999
+> 99) & mi(other_ins)
+(87 real changes made)
+
+. 
+. * Assign zero cost to people w/out a medicare or medigap supple
+> ment plan
+. replace other_ins = 0 if Q2609 == 5
+(636 real changes made)
+
+. 
+. * Assign zero cost to people who did not pay a premium for thei
+> r plan
+. replace other_ins = 0 if Q2611 == 3
+(16 real changes made)
+
+. 
+. * Assign unconditional mean tothe DK/RF above and the Yeses sti
+> ll missing value
+. qui sum other_ins
+
+. replace other_ins = r(mean) if (inlist(Q2609, 1, 8, 9) | ///
+>         inlist(Q2611, 1, 2, 8, 9)) & mi(other_ins)
+(41 real changes made)
+
+. 
+. summ other_ins, det
+
+                          other_ins
+-------------------------------------------------------------
+      Percentiles      Smallest
+ 1%            0              0
+ 5%            0              0
+10%            0              0       Obs                 956
+25%            0              0       Sum of Wgt.         956
+
+50%            0                      Mean           33.06186
+                        Largest       Std. Dev.      60.59698
+75%           51            350
+90%     115.0251            400       Variance       3671.994
+95%          135       466.6667       Skewness       2.535202
+99%          273            470       Kurtosis       12.48966
+
+. 
+. /* ************************************************************
+> *********** */
+. * Amount paid OOP for a purchased medicare plan such as AARP or
+>  a state plan
+. gen AARP_ins = Q2624
+(37,504 missing values generated)
+
+. replace AARP_ins = . if (AARP_ins == 999998 | AARP_ins == 99999
+> 9)
+(11 real changes made, 11 to missing)
+
+. 
+. * Make the premium in terms of one month
+. replace AARP_ins = (1 * AARP_ins ) if Q2625 == 1
+(0 real changes made)
+
+. replace AARP_ins = ((1/3) * AARP_ins ) if Q2625 == 2
+(3 real changes made)
+
+. replace AARP_ins = ((1/6) * AARP_ins ) if Q2625 == 3
+(1 real change made)
+
+. replace AARP_ins = ((1/12) * AARP_ins ) if Q2625 == 4
+(1 real change made)
+
+. 
+. * Replace the DKs with the mean
+. qui sum AARP_ins
+
+. replace AARP_ins = r(mean)  if (Q2624 == 999998 | Q2624 == 9999
+> 99) & mi(AARP_ins)
+(11 real changes made)
+
+. 
+. * Assign zero cost to people who did not purchase a separate pl
+> an
+. replace AARP_ins = 0 if Q2621 == 5
+(77 real changes made)
+
+. 
+. * Assign unconditional mean to ppl who purchased but didn't rep
+> ort a value & DK/RF
+. qui sum AARP_ins
+
+. replace AARP_ins = r(mean)  if inlist(Q2621, 1, 8, 9) & mi(AARP
+> _ins)
+(6 real changes made)
+
+. 
+. summ AARP_ins, det
+
+                          AARP_ins
+-------------------------------------------------------------
+      Percentiles      Smallest
+ 1%            0              0
+ 5%            0              0
+10%            0              0       Obs                 108
+25%            0              0       Sum of Wgt.         108
+
+50%            0                      Mean           38.39286
+                        Largest       Std. Dev.      79.44926
+75%     38.39286            225
+90%     156.6429       233.3333       Variance       6312.185
+95%     156.6429            325       Skewness       2.605309
+99%          325       466.6667       Kurtosis        11.0655
+
+. 
+. /* ************************************************************
+> *********** */
+. 
+. * this private medigap variable is asked differently than in 20
+> 02+
+. egen private_medigap = rowtotal(work_ins other_ins AARP_ins), m
+(36276 missing values generated)
+
+.  
+. /**************************************************************
+> **
+>         SECTION 2.4: Long-term-care
+> ***************************************************************
+> */ 
+. gen long_term_care = Q2668
+(37,463 missing values generated)
+
+. recode long_term_care (999998 999999 = . )
+(long_term_care: 26 changes made)
+
+. 
+. *Make the premiums all per month
+. replace long_term_care = (1/12) * long_term_care if (Q2669 == 1
+> )
+(9 real changes made)
+
+. replace long_term_care = (1/3) * long_term_care if (Q2669 == 2)
+(0 real changes made)
+
+. replace long_term_care = 4 * long_term_care if (Q2669 == 3)
+(0 real changes made)
+
+. replace long_term_care = (1) * long_term_care if (Q2669 == 4)
+(0 real changes made)
+
+. replace long_term_care = ((1/20) * (1/12)) * long_term_care if 
+> (Q2669 == 6)
+(0 real changes made)
+
+. 
+. *Assign the mean to the DK/RF amounts
+. qui sum long_term_care
+
+. replace long_term_care = r(mean) if (Q2668 == 999998 | Q2668 ==
+>  999999) & ///
+>         mi(long_term_care)
+(26 real changes made)
+
+. 
+. * Assign zero cost to ppl w/out LTC ins
+. replace long_term_care = 0 if (Q2664 == 5 & long_term_care == .
+>  )
+(1,137 real changes made)
+
+. 
+. * Assign unconditional mean to DK/RF and ppl w/ins but no assig
+> ned amt
+. qui sum long_term_care
+
+. replace long_term_care = r(mean) if inlist(Q2664, 1, 8, 9) & mi
+> (long_term_care)
+(50 real changes made)
+
+. 
+. summ long_term_care, det
+
+                       long_term_care
+-------------------------------------------------------------
+      Percentiles      Smallest
+ 1%            0              0
+ 5%            0              0
+10%            0              0       Obs               1,253
+25%            0              0       Sum of Wgt.       1,253
+
+50%            0                      Mean           9.883998
+                        Largest       Std. Dev.      118.4721
+75%            0       316.6667
+90%            0            500       Variance       14035.63
+95%     9.883999            500       Skewness       30.73046
+99%     180.1583           4000       Kurtosis       1029.155
+
+. 
+. 
+. egen avg_long_term_care = mean(long_term_care)
+
+. drop avg_long_term_care
+
+. 
+. /**************************************************************
+> **
+>         SECTION 2.5: Sum Insurnace Costs
+> ***************************************************************
+> */ 
+. 
+. egen insurance_costs = rowtotal(MC_HMO private_medigap long_ter
+> m_care MC_B), m
+(36276 missing values generated)
+
+. 
+. * Cap monthly premium expenditure at $2,000 (in 06 dollars)
+. replace insurance_costs = 1655 if (insurance_costs > 1655 & ins
+> urance_costs != .)
+(1 real change made)
+
+. 
+. * Make insurance costs for the time period between interviews
+. replace insurance_costs = (months * insurance_costs)
+(940 real changes made)
+
+. 
+. summ insurance_costs, det
+
+                       insurance_costs
+-------------------------------------------------------------
+      Percentiles      Smallest
+ 1%            0              0
+ 5%            0              0
+10%            0              0       Obs               1,253
+25%     41.26788              0       Sum of Wgt.       1,253
+
+50%     652.3333                      Mean           1186.418
+                        Largest       Std. Dev.      1950.068
+75%     1530.044       11970.73
+90%     3021.333       13022.55       Variance        3802766
+95%      4141.15          14000       Skewness       8.518818
+99%      7753.75          41375       Kurtosis       150.9558
+
+. 
+. /**************************************************************
+> **
+>         SECTION 3: Medical Expenditures
+> ***************************************************************
+> */
+. 
+. /**************************************************************
+> **
+>         SECTION 3.1: Hospital & Nursing home
+> ***************************************************************
+> */
+. gen hospital_OOP = Q1749
+(37,073 missing values generated)
+
+. recode hospital_OOP (9999998 9999999 = .)
+(hospital_OOP: 208 changes made)
+
+. 
+. do "${deps}/x98hospital.do"  // create upper and lower bounds f
+> rom seq vars
+
+. * creates an upper and lower bound for repute program
+. gen hospital_low = .
+(37,529 missing values generated)
+
+. gen hospital_high = .
+(37,529 missing values generated)
+
+. 
+.         replace hospital_low = 0 if Q1756 == 1
+(17 real changes made)
+
+.         replace hospital_high = 500 if Q1756 == 1
+(17 real changes made)
+
+. 
+.         replace hospital_low = 500 if Q1756 == 3
+(11 real changes made)
+
+.         replace hospital_high = 500 if Q1756 == 3
+(11 real changes made)
+
+. 
+.         replace hospital_low = 500 if Q1756 == 5
+(60 real changes made)
+
+.         replace hospital_high = 5000 if Q1756 == 5
+(60 real changes made)
+
+. 
+.         replace hospital_low = 0 if (Q1756 == 8| Q1756 == 9)
+(2 real changes made)
+
+.         replace hospital_high = 5000 if (Q1756 == 8| Q1756 == 9
+> )
+(2 real changes made)
+
+. 
+.         replace hospital_low = 5000 if Q1755 == 3
+(10 real changes made)
+
+.         replace hospital_high = 5000 if Q1755 == 3
+(10 real changes made)
+
+. 
+.         replace hospital_low = 5000 if Q1755 == 5
+(13 real changes made)
+
+.         replace hospital_high = 10000 if Q1755 == 5
+(13 real changes made)
+
+. 
+.         replace hospital_low = 0 if (Q1755 == 8 | Q1755 == 9)
+(6 real changes made)
+
+.         replace hospital_high = 10000 if (Q1755 == 8 | Q1755 ==
+>  9)
+(6 real changes made)
+
+. 
+.         replace hospital_low = 10000 if Q1754 == 3
+(4 real changes made)
+
+.         replace hospital_high = 10000 if Q1754 == 3
+(4 real changes made)
+
+. 
+.         replace hospital_low = 10000 if Q1754 == 5
+(4 real changes made)
+
+.         replace hospital_high = 20000 if Q1754 == 5
+(4 real changes made)
+
+. 
+.         replace hospital_low = 0 if (Q1754 == 8 | Q1754 == 9)
+(1 real change made)
+
+.         replace hospital_high = 20000 if (Q1754 == 8 | Q1754 ==
+>  9)
+(1 real change made)
+
+. 
+.         replace hospital_low = 20000 if Q1753 == 1
+(4 real changes made)
+
+.         replace hospital_high = 50000 if Q1753 == 1
+(4 real changes made)
+
+. 
+.         replace hospital_low = 50000 if Q1753 == 3
+(0 real changes made)
+
+.         replace hospital_high = 50000 if Q1753 == 3
+(0 real changes made)
+
+. 
+.         replace hospital_low = 50000 if Q1753 == 5
+(9 real changes made)
+
+.         replace hospital_high = 999999 if Q1753 == 5
+(9 real changes made)
+
+. 
+.         replace hospital_low = 20000 if (Q1753 == 8 | Q1753 == 
+> 9)
+(0 real changes made)
+
+.         replace hospital_high = 999999 if (Q1753 == 8 | Q1753 =
+> = 9)
+(0 real changes made)
+
+. 
+.         replace hospital_low = 10000 if Q1752 == 1
+(33 real changes made)
+
+.         replace hospital_high = 20000 if Q1752 == 1
+(36 real changes made)
+
+. 
+.         replace hospital_low = 20000 if Q1752 == 3
+(3 real changes made)
+
+.         replace hospital_high = 20000 if Q1752 == 3
+(3 real changes made)
+
+. 
+.                 replace hospital_low = 10000 if ((Q1752 == 8 | 
+> Q1752 == 9) & Q1751 == 5)
+(0 real changes made)
+
+.                 replace hospital_high = 999999 if ((Q1752 == 8 
+> | Q1752 == 9) & Q1751 == 5)
+(0 real changes made)
+
+. 
+.                 replace hospital_low = 0 if ((Q1752 == 8 | Q175
+> 2 == 9) & Q1751 != 5)
+(19 real changes made)
+
+.                 replace hospital_high = 999999 if ((Q1752 == 8 
+> | Q1752 == 9) & Q1751 != 5)
+(19 real changes made)
+
+. 
+.         replace hospital_low = 5000 if Q1751 == 1
+(38 real changes made)
+
+.         replace hospital_high = 10000 if Q1751 == 1
+(39 real changes made)
+
+. 
+.         replace hospital_low = 10000 if Q1751 == 3
+(5 real changes made)
+
+.         replace hospital_high = 10000 if Q1751 == 3
+(5 real changes made)
+
+. 
+.         replace hospital_low = 0 if ((Q1751 == 8 | Q1751 == 9) 
+> | (Q1750 == 8 | Q1750 == 9))
+(30 real changes made)
+
+.         replace hospital_high = 999999 if ((Q1751 == 8 | Q1751 
+> == 9) | (Q1750 == 8 | Q1750 == 9))
+(30 real changes made)
+
+. 
+.         replace hospital_low = 5000 if Q1750 == 3
+(2 real changes made)
+
+.         replace hospital_high = 5000 if Q1750 == 3
+(2 real changes made)
+
+. 
+end of do-file
+
+. repute hospital_low hospital_high hospital_NH_all hospital_OOP
+(99 real changes made)
+
+. 
+. *Assign conditional mean to ppl who DK the bounds of their exp
+. qui sum hospital_OOP
+
+. #del ;
+delimiter now ;
+. replace hospital_OOP = r(mean) if ((Q1749 == 9999998| Q1749 == 
+> 9999999) |  
+> (Q1750 == 8 | Q1750 == 9) | (Q1751 == 8 | Q1751 == 9) | (Q1752 
+> == 8 | Q1752 == 9) | 
+> (Q1753 == 8 | Q1753 == 9) | (Q1754 == 8 | Q1754 == 9) | (Q1755 
+> == 8 | Q1755 == 9) | 
+> (Q1756 == 8 | Q1756 == 9)) & mi(hospital_OOP);
+(109 real changes made)
+
+. #del cr;
+delimiter now cr
+. 
+. 
+. *Assign zero cost to people whose hospital/Nursing Home costs w
+> ere fully covered
+. replace hospital_OOP = 0 if Q1748 == 1
+(258 real changes made)
+
+. 
+. * Assign unconditional mean to ppl with some copays or DK/RF
+. qui sum hospital_OOP
+
+. replace hospital_OOP = r(mean) if inlist(Q1748, 2, 3, 7, 8, 9) 
+> & mi(hospital_OOP)
+(0 real changes made)
+
+. 
+. * Cap monthly expenditure at 30,000 dollars
+. replace hospital_OOP = cap30k if (hospital_OOP > cap30k & ~mi(h
+> ospital_OOP))
+(0 real changes made)
+
+. 
+. summ hospital_OOP, det
+
+                        hospital_OOP
+-------------------------------------------------------------
+      Percentiles      Smallest
+ 1%            0              0
+ 5%            0              0
+10%            0              0       Obs                 683
+25%            0              0       Sum of Wgt.         683
+
+50%          800                      Mean           5591.767
+                        Largest       Std. Dev.      12604.39
+75%     8755.269          90000
+90%     9881.947          90000       Variance       1.59e+08
+95%        20000          97000       Skewness        5.41372
+99%        67500         150000       Kurtosis       43.02225
+
+. 
+. /**************************************************************
+> **
+>         SECTION 3.3: Doctor Visits
+> ***************************************************************
+> */
+. gen doctor_OOP = Q1784
+(37,070 missing values generated)
+
+. recode doctor_OOP (999998 999999 = .)
+(doctor_OOP: 268 changes made)
+
+. 
+. do "${deps}/x98dr.do"
+
+. * creates an upper and lower bound for repute program
+. gen dr_low = .
+(37,529 missing values generated)
+
+. gen dr_high = .
+(37,529 missing values generated)
+
+. 
+.         replace dr_low = 0 if Q1791 == 1
+(23 real changes made)
+
+.         replace dr_high = 200 if Q1791 == 1
+(23 real changes made)
+
+. 
+.         replace dr_low = 200 if Q1791 == 3
+(15 real changes made)
+
+.         replace dr_high = 200 if Q1791 == 3
+(15 real changes made)
+
+. 
+.         replace dr_low = 200 if Q1791 == 5
+(23 real changes made)
+
+.         replace dr_high = 500 if Q1791 == 5
+(23 real changes made)
+
+. 
+.         replace dr_low = 0 if (Q1791 == 8| Q1791 == 9)
+(2 real changes made)
+
+.         replace dr_high = 500 if (Q1791 == 8| Q1791 == 9)
+(2 real changes made)
+
+. 
+.         replace dr_low = 500 if Q1790 == 3
+(19 real changes made)
+
+.         replace dr_high = 500 if Q1790 == 3
+(19 real changes made)
+
+. 
+.         replace dr_low = 500 if Q1790 == 5
+(21 real changes made)
+
+.         replace dr_high = 1000 if Q1790 == 5
+(21 real changes made)
+
+. 
+.         replace dr_low = 0 if (Q1790 == 8 | Q1790 == 9)
+(2 real changes made)
+
+.         replace dr_high = 1000 if (Q1790 == 8 | Q1790 == 9)
+(2 real changes made)
+
+. 
+.         replace dr_low = 1000 if Q1789 == 3
+(5 real changes made)
+
+.         replace dr_high = 1000 if Q1789 == 3
+(5 real changes made)
+
+. 
+.         replace dr_low = 1000 if Q1789 == 5
+(19 real changes made)
+
+.         replace dr_high = 5000 if Q1789 == 5
+(19 real changes made)
+
+. 
+.         replace dr_low = 0 if (Q1789 == 8 | Q1789 == 9)
+(2 real changes made)
+
+.         replace dr_high = 5000 if (Q1789 == 8 | Q1789 == 9)
+(2 real changes made)
+
+. 
+.         replace dr_low = 5000 if Q1788 == 1
+(10 real changes made)
+
+.         replace dr_high = 20000 if Q1788 == 1
+(10 real changes made)
+
+. 
+.         replace dr_low = 20000 if Q1788 == 3
+(1 real change made)
+
+.         replace dr_high = 20000 if Q1788 == 3
+(1 real change made)
+
+. 
+.         replace dr_low = 20000 if Q1788 == 5
+(2 real changes made)
+
+.         replace dr_high = 999999 if Q1788 == 5
+(2 real changes made)
+
+. 
+.         replace dr_low = 5000 if (Q1788 == 8 | Q1788 == 9)
+(1 real change made)
+
+.         replace dr_high = 999999 if (Q1788 == 8 | Q1788 == 9)
+(1 real change made)
+
+. 
+.         replace dr_low = 1000 if Q1787 == 1
+(59 real changes made)
+
+.         replace dr_high = 5000 if Q1787 == 1
+(62 real changes made)
+
+. 
+.         replace dr_low = 5000 if Q1787 == 3
+(11 real changes made)
+
+.         replace dr_high = 5000 if Q1787 == 3
+(11 real changes made)
+
+. 
+.                 replace dr_low = 1000 if ((Q1787 == 8 | Q1787 =
+> = 9) & Q1786 == 5)
+(1 real change made)
+
+.                 replace dr_high = 999999 if ((Q1787 == 8 | Q178
+> 7 == 9) & Q1786 == 5)
+(1 real change made)
+
+. 
+.                 replace dr_low = 0 if ((Q1787 == 8 | Q1787 == 9
+> ) & Q1786 != 5)
+(26 real changes made)
+
+.                 replace dr_high = 999999 if ((Q1787 == 8 | Q178
+> 7 == 9) & Q1786 != 5)
+(26 real changes made)
+
+. 
+.         replace dr_low = 500 if Q1786 == 1
+(24 real changes made)
+
+.         replace dr_high = 1000 if Q1786 == 1
+(35 real changes made)
+
+. 
+.         replace dr_low = 1000 if Q1786 == 3
+(10 real changes made)
+
+.         replace dr_high = 1000 if Q1786 == 3
+(10 real changes made)
+
+. 
+.                 replace dr_low = 500 if ((Q1786 == 8 | Q1786 ==
+>  9) & Q1785 == 5)
+(2 real changes made)
+
+.                 replace dr_high = 999999 if ((Q1786 == 8 | Q178
+> 6 == 9) & Q1785 == 5)
+(2 real changes made)
+
+. 
+.         replace dr_low = 0 if ((Q1786 == 8 | Q1786 == 9) & Q178
+> 5 != 5)
+(15 real changes made)
+
+.         replace dr_high = 999999 if ((Q1786 == 8 | Q1786 == 9) 
+> & Q1785 != 5)
+(15 real changes made)
+
+. 
+.         replace dr_low = 500 if Q1785 == 3
+(8 real changes made)
+
+.         replace dr_high = 500 if Q1785 == 3
+(8 real changes made)
+
+. 
+.         replace dr_low = 0 if (Q1785 == 8 | Q1785 == 9)
+(27 real changes made)
+
+.         replace dr_high = 999999 if (Q1785 == 8 | Q1785 == 9)
+(27 real changes made)
+
+. 
+end of do-file
+
+. repute dr_low dr_high doctor_all doctor_OOP
+(100 real changes made)
+
+. 
+. *Assign conditional mean to ppl who DK the bounds of their exp
+. quietly sum doctor_OOP
+
+. #del ;
+delimiter now ;
+. replace doctor_OOP = r(mean) if ((Q1784 == 999998 | Q1784 == 99
+> 9999) | 
+> (Q1785 == 8 | Q1785 == 9) | (Q1786 == 8 | Q1786 == 9) | (Q1787 
+> == 8 | Q1787 == 9) | 
+> (Q1788 == 8 | Q1788 == 9) | (Q1789 == 8 | Q1789 == 9) | 
+> (Q1790 == 8 | Q1790 == 9) | (Q1791 == 8 | Q1791 == 9)) & mi(doc
+> tor_OOP);
+(168 real changes made)
+
+. #del cr;
+delimiter now cr
+. 
+. 
+. *Assign zero cost to people whose costs were fully covered by i
+> nsurance
+. replace doctor_OOP = 0 if Q1779 == 1
+(728 real changes made)
+
+. 
+. * adds in the yes values with no number and the DK/RFs for the 
+> above
+. quietly sum doctor_OOP
+
+. replace doctor_OOP = r(mean) if inlist(Q1779, 3, 5, 7, 8) & mi(
+> doctor_OOP)
+(0 real changes made)
+
+. 
+. 
+. * Cap monthly expenditure at 5,000 dollars
+. replace doctor_OOP = cap5k if (doctor_OOP > cap5k & ~mi(doctor_
+> OOP))
+(1 real change made)
+
+. 
+. summ doctor_OOP, det
+
+                         doctor_OOP
+-------------------------------------------------------------
+      Percentiles      Smallest
+ 1%            0              0
+ 5%            0              0
+10%            0              0       Obs               1,187
+25%            0              0       Sum of Wgt.       1,187
+
+50%            0                      Mean           376.5767
+                        Largest       Std. Dev.      1645.114
+75%          500          10000
+90%     1063.247          10000       Variance        2706402
+95%     1063.247          28966       Skewness       19.57244
+99%         3000          43000       Kurtosis       459.5986
+
+. 
+. /**************************************************************
+> **
+>         SECTION 3.4: Hospice
+> ***************************************************************
+> */
+. gen hospice_OOP = Q1770
+(37,519 missing values generated)
+
+. replace hospice_OOP = . if (hospice_OOP == 99998 | hospice_OOP 
+> == 99999)
+(4 real changes made, 4 to missing)
+
+. 
+. do "${deps}/x98hospice.do"
+
+. * creates an upper and lower bound for repute program
+. gen hospice_low = .
+(37,529 missing values generated)
+
+. gen hospice_high = .
+(37,529 missing values generated)
+
+. 
+. 
+.         replace hospice_low = 0 if Q1777 == 1
+(1 real change made)
+
+.         replace hospice_high = 500 if Q1777 == 1
+(1 real change made)
+
+. 
+.         replace hospice_low = 20000 if Q1773 == 1
+(1 real change made)
+
+.         replace hospice_high = 0 if Q1773 == 1
+(1 real change made)
+
+. 
+.         replace hospice_low = 0 if (Q1772 == 8 | Q1771 == 9) 
+(2 real changes made)
+
+.         replace hospice_high = 999999 if (Q1772 == 8 | Q1771 ==
+>  9) 
+(2 real changes made)
+
+. 
+end of do-file
+
+. repute hospice_low hospice_high hospice_all hospice_OOP
+(3 real changes made)
+
+. 
+. *Assign conditional mean to ppl who DK the bounds of their exp
+. qui sum hospice_OOP
+
+. #del ;
+delimiter now ;
+. replace hospice_OOP = r(mean) if (inlist(Q1769, 3, 5, 7, 8, 9) 
+> | 
+> (Q1770 == 99998 | Q1770 == 99999) | (Q1771 == 8 |  Q1771 == 9) 
+> |
+> (Q1772 == 8 |  Q1772 == 9) | (Q1773 == 8 |  Q1773 == 9) | 
+> (Q1774 == 8 |  Q1774 == 9) | (Q1775 == 8 |  Q1775 == 9) | 
+> (Q1776 == 8 |  Q1776 == 9) | (Q1777 == 8 |  Q1777 == 9)) & mi(h
+> ospice_OOP);
+(1 real change made)
+
+. #del cr;
+delimiter now cr
+. 
+. 
+. *Assign zero cost to people whose costs were fully covered by i
+> nsurance
+. replace hospice_OOP = 0 if Q1769 == 1
+(39 real changes made)
+
+. 
+. * adds in the yes values with no number and the DK/RFs for the 
+> above
+. * qui sum hospice_OOP
+. * replace hospice_OOP = r(mean) if inlist(Q1769, 3, 5, 7, 8, 9)
+>  & mi(hospice_OOP)
+. 
+. * Cap expenditure at 5k per month
+. replace hospice_OOP = cap5k if (hospice_OOP > cap5k & ~mi(hospi
+> ce_OOP))
+(0 real changes made)
+
+. 
+. summ hospice_OOP, det
+
+                         hospice_OOP
+-------------------------------------------------------------
+      Percentiles      Smallest
+ 1%            0              0
+ 5%            0              0
+10%            0              0       Obs                  49
+25%            0              0       Sum of Wgt.          49
+
+50%            0                      Mean           428.1414
+                        Largest       Std. Dev.      1396.177
+75%            0       2097.893
+90%         2000       2404.424       Variance        1949311
+95%     2404.424       2404.424       Skewness       4.723804
+99%         8800           8800       Kurtosis       27.77233
+
+. 
+. /**************************************************************
+> **
+>         SECTION 3.5: RX costs (annual)
+>         The HRS reports in months, so this will have to be conv
+> erted 
+> ***************************************************************
+> */
+. gen RX_OOP = Q1794
+(36,792 missing values generated)
+
+. replace RX_OOP = . if (RX_OOP == 99998 | RX_OOP == 99999)
+(279 real changes made, 279 to missing)
+
+. 
+. do "${deps}/x98rx.do"
+
+. * creates an upper and lower bound for repute program
+. gen rx_low = .
+(37,529 missing values generated)
+
+. gen rx_high = .
+(37,529 missing values generated)
+
+. 
+.         replace rx_low = 0 if Q1801 == 1
+(1 real change made)
+
+.         replace rx_high = 5 if Q1801 == 1
+(1 real change made)
+
+. 
+.         replace rx_low = 5 if Q1801 == 3
+(2 real changes made)
+
+.         replace rx_high = 5 if Q1801 == 3
+(2 real changes made)
+
+. 
+.         replace rx_low = 5 if Q1801 == 5
+(6 real changes made)
+
+.         replace rx_high = 10 if Q1801 == 5
+(6 real changes made)
+
+. 
+.         replace rx_low = 0 if (Q1801 == 8| Q1801 == 9)
+(1 real change made)
+
+.         replace rx_high = 10 if (Q1801 == 8| Q1801 == 9)
+(1 real change made)
+
+. 
+.         replace rx_low = 10 if Q1800 == 3
+(3 real changes made)
+
+.         replace rx_high = 10 if Q1800 == 3
+(3 real changes made)
+
+. 
+.         replace rx_low = 10 if Q1800 == 5
+(6 real changes made)
+
+.         replace rx_high = 20 if Q1800 == 5
+(6 real changes made)
+
+. 
+.         replace rx_low = 0 if (Q1800 == 8 | Q1800 == 9)
+(0 real changes made)
+
+.         replace rx_high = 20 if (Q1800 == 8 | Q1800 == 9)
+(0 real changes made)
+
+. 
+.         replace rx_low = 20 if Q1799 == 3
+(7 real changes made)
+
+.         replace rx_high = 20 if Q1799 == 3
+(7 real changes made)
+
+. 
+.         replace rx_low = 20 if Q1799 == 5
+(21 real changes made)
+
+.         replace rx_high = 100 if Q1799 == 5
+(21 real changes made)
+
+. 
+.         replace rx_low = 0 if (Q1799 == 8 | Q1799 == 9)
+(2 real changes made)
+
+.         replace rx_high = 100 if (Q1799 == 8 | Q1799 == 9)
+(2 real changes made)
+
+. 
+.         replace rx_low = 100 if Q1798 == 1
+(49 real changes made)
+
+.         replace rx_high = 500 if Q1798 == 1
+(49 real changes made)
+
+. 
+.         replace rx_low = 500 if Q1798 == 3
+(4 real changes made)
+
+.         replace rx_high = 500 if Q1798 == 3
+(4 real changes made)
+
+. 
+.         replace rx_low = 500 if Q1798 == 5
+(4 real changes made)
+
+.         replace rx_high = 999999 if Q1798 == 5
+(4 real changes made)
+
+. 
+.         replace rx_low = 100 if (Q1798 == 8 | Q1798 == 9)
+(0 real changes made)
+
+.         replace rx_high = 999999 if (Q1798 == 8 | Q1798 == 9)
+(0 real changes made)
+
+. 
+.         replace rx_low = 20 if Q1797 == 1
+(60 real changes made)
+
+.         replace rx_high = 100 if Q1797 == 1
+(65 real changes made)
+
+. 
+.         replace rx_low = 100 if Q1797 == 3
+(22 real changes made)
+
+.         replace rx_high = 100 if Q1797 == 3
+(22 real changes made)
+
+. 
+.                 replace rx_low = 20 if ((Q1797 == 8 | Q1797 == 
+> 9) & Q1796 == 5)
+(2 real changes made)
+
+.                 replace rx_high = 999999 if ((Q1797 == 8 | Q179
+> 7 == 9) & Q1796 == 5)
+(2 real changes made)
+
+. 
+.                 replace rx_low = 0 if ((Q1797 == 8 | Q1797 == 9
+> ) & Q1796 != 5)
+(19 real changes made)
+
+.                 replace rx_high = 999999 if ((Q1797 == 8 | Q179
+> 7 == 9) & Q1796 != 5)
+(19 real changes made)
+
+. 
+.         replace rx_low = 10 if Q1796 == 1
+(6 real changes made)
+
+.         replace rx_high = 20 if Q1796 == 1
+(8 real changes made)
+
+. 
+.         replace rx_low = 20 if Q1796 == 3
+(13 real changes made)
+
+.         replace rx_high = 20 if Q1796 == 3
+(13 real changes made)
+
+. 
+.                 replace rx_low = 10 if ((Q1796 == 8 | Q1796 == 
+> 9) & Q1795 == 5)
+(3 real changes made)
+
+.                 replace rx_high = 999999 if ((Q1796 == 8 | Q179
+> 6 == 9) & Q1795 == 5)
+(3 real changes made)
+
+. 
+.         replace rx_low = 0 if ((Q1796 == 8 | Q1796 == 9) & Q179
+> 5 != 5)
+(23 real changes made)
+
+.         replace rx_high = 999999 if ((Q1796 == 8 | Q1796 == 9) 
+> & Q1795 != 5)
+(23 real changes made)
+
+. 
+.         replace rx_low = 10 if Q1795 == 3
+(7 real changes made)
+
+.         replace rx_high = 10 if Q1795 == 3
+(7 real changes made)
+
+. 
+.         replace rx_low = 0 if (Q1795 == 8 | Q1795 == 9)
+(27 real changes made)
+
+.         replace rx_high = 999999 if (Q1795 == 8 | Q1795 == 9)
+(27 real changes made)
+
+. 
+end of do-file
+
+. repute rx_low rx_high RX_all RX_OOP
+(100 real changes made)
+
+.   
+. *Assign conditional mean to ppl who DK the bounds of their exp
+. quietly sum RX_OOP
+
+. #del ;
+delimiter now ;
+. replace RX_OOP = r(mean) if ((Q1794 == 99998 | Q1794 == 99999) 
+> | (Q1795 == 8 | 
+> Q1795 == 9) | (Q1796 == 8 | Q1796 == 9) | (Q1797 == 8 | Q1797 =
+> = 9) | (Q1798 == 8 | 
+> Q1798 == 9) | (Q1799 == 8 | Q1799 == 9) | (Q1800 == 8 | Q1800 =
+> = 9) | (Q1801 == 8 | 
+> Q1801 == 9) | ((Q1792 == 1 | Q1792 == 7) & Q1793 != 1)) & mi(RX
+> _OOP);
+(179 real changes made)
+
+. #del cr;
+delimiter now cr
+. 
+. 
+. *Assign zero cost to people whose costs were fully covered by i
+> nsurance
+. replace RX_OOP = 0 if Q1793 == 1
+(357 real changes made)
+
+. 
+. * adds in the yes values with no number and the DK/RFs for the 
+> above
+. quietly sum RX_OOP
+
+. replace RX_OOP = r(mean) if inlist(Q1793, 3, 5, 7, 8, 9) & (RX_
+> OOP == . | RX_OOP == 0)
+(15 real changes made)
+
+. 
+. * Cap monthly expenditure at $5k
+. replace RX_OOP = 4138 if ((RX_OOP > 4138) & RX_OOP != .)
+(1 real change made)
+
+. 
+. *Scale payments to time between interviews
+. replace RX_OOP = (months * RX_OOP)
+(727 real changes made)
+
+. 
+. summ RX_OOP, det
+
+                           RX_OOP
+-------------------------------------------------------------
+      Percentiles      Smallest
+ 1%            0              0
+ 5%            0              0
+10%            0              0       Obs               1,094
+25%            0              0       Sum of Wgt.       1,094
+
+50%     388.1384                      Mean           1362.407
+                        Largest       Std. Dev.      3984.836
+75%      1868.08          21600
+90%     3335.857          28800       Variance       1.59e+07
+95%         4200          32000       Skewness       18.53153
+99%        11200         107588       Kurtosis       469.4709
+
+. 
+. /**************************************************************
+> **
+>         SECTION 3.6: In Home health care costs 
+> ***************************************************************
+> */
+. gen home_OOP = Q1811
+(37,307 missing values generated)
+
+. replace home_OOP = . if (home_OOP == 999998 | home_OOP == 99999
+> 9)
+(71 real changes made, 71 to missing)
+
+. 
+. do "${deps}/x98home.do"
+
+. * creates an upper and lower bound for repute program
+. gen home_low = .
+(37,529 missing values generated)
+
+. gen home_high = .
+(37,529 missing values generated)
+
+. 
+.         replace home_low = 0 if Q1816 == 1
+(18 real changes made)
+
+.         replace home_high = 500 if Q1816 == 1
+(18 real changes made)
+
+. 
+.         replace home_low = 500 if Q1816 == 3
+(2 real changes made)
+
+.         replace home_high = 500 if Q1816 == 3
+(2 real changes made)
+
+. 
+.         replace home_low = 500 if Q1816 == 5
+(4 real changes made)
+
+.         replace home_high = 1000 if Q1816 == 5
+(4 real changes made)
+
+. 
+.         replace home_low = 0 if (Q1816 == 8| Q1816 == 9)
+(4 real changes made)
+
+.         replace home_high = 1000 if (Q1816 == 8| Q1816 == 9)
+(4 real changes made)
+
+. 
+.         replace home_low = 1000 if Q1815 == 3
+(5 real changes made)
+
+.         replace home_high = 1000 if Q1815 == 3
+(5 real changes made)
+
+. 
+.         replace home_low = 1000 if Q1815 == 5
+(4 real changes made)
+
+.         replace home_high = 5000 if Q1815 == 5
+(4 real changes made)
+
+. 
+.         replace home_low = 0 if (Q1815 == 8 | Q1815 == 9)
+(0 real changes made)
+
+.         replace home_high = 5000 if (Q1815 == 8 | Q1815 == 9)
+(0 real changes made)
+
+. 
+.         replace home_low = 20000 if Q1814 == 3
+(0 real changes made)
+
+.         replace home_high = 20000 if Q1814 == 3
+(0 real changes made)
+
+. 
+.         replace home_low = 10000 if Q1814 == 1
+(4 real changes made)
+
+.         replace home_high = 20000 if Q1814 == 1
+(4 real changes made)
+
+. 
+.         replace home_low = 5000 if Q1813 == 1
+(4 real changes made)
+
+.         replace home_high = 10000 if Q1813 == 1
+(4 real changes made)
+
+. 
+.         replace home_low = 10000 if Q1813 == 3
+(2 real changes made)
+
+.         replace home_high = 10000 if Q1813 == 3
+(2 real changes made)
+
+. 
+.         replace home_low = 5000 if Q1812 == 3
+(2 real changes made)
+
+.         replace home_high = 5000 if Q1812 == 3
+(2 real changes made)
+
+. 
+.         replace home_low = 0 if (Q1812 == 8 | Q1812 == 9)
+(20 real changes made)
+
+.         replace home_high = 999999 if (Q1812 == 8 | Q1812 == 9)
+(20 real changes made)
+
+. 
+. 
+end of do-file
+
+. repute home_low home_high home_all home_OOP
+(69 real changes made)
+
+. 
+. * this will replace the Dks/RFs/NAs with the mean
+. qui sum home_OOP
+
+. #del ;
+delimiter now ;
+. replace home_OOP = r(mean) if (((Q1811 == 999998 | Q1811 == 999
+> 999) | 
+> (Q1812 == 8 | Q1812 == 9) | (Q1813 == 8 | Q1813 == 9) | (Q1814 
+> == 8 | Q1814 == 9) | 
+> (Q1815 == 8 | Q1815 == 9) | (Q1817 == 8 | Q1817 == 9) | (Q1808 
+> == 1)) & (home_OOP == .));
+(2 real changes made)
+
+. #del cr;
+delimiter now cr
+. 
+. 
+. *Assign zero cost to people who didn't use any of the services
+. replace home_OOP = 0 if (Q1808 == 5 & home_OOP == .)
+(659 real changes made)
+
+. 
+. * Assign unconditional mean to people with this type of expendi
+> ture or DK/RF
+. qui sum home_OOP
+
+. replace home_OOP = r(mean) if inlist(Q1808, 1, 8, 9) & mi(home_
+> OOP)
+(4 real changes made)
+
+. 
+. * cap exp at 15k per month
+. replace home_OOP = cap15k if (home_OOP > cap15k & ~mi(home_OOP)
+> )
+(0 real changes made)
+
+. 
+. summ home_OOP, det
+
+                          home_OOP
+-------------------------------------------------------------
+      Percentiles      Smallest
+ 1%            0              0
+ 5%            0              0
+10%            0              0       Obs                 885
+25%            0              0       Sum of Wgt.         885
+
+50%            0                      Mean           679.7504
+                        Largest       Std. Dev.      5857.996
+75%            0          40000
+90%          300          50000       Variance       3.43e+07
+95%     2605.036         100000       Skewness       16.21742
+99%     14099.09         120000       Kurtosis        296.774
+
+. 
+. /**************************************************************
+> **
+>         SECTION 3.7: Other medical expenses
+>                 expenses not covered by insurance, such as
+>                   medications, special food, equipment such as 
+> a special
+>                   bed or chair, visits by doctors or other heal
+> th professionals,
+>                   or other costs
+> ***************************************************************
+> */
+. gen other_OOP = Q1818
+(37,452 missing values generated)
+
+. replace other_OOP = . if (other_OOP == 999998)
+(41 real changes made, 41 to missing)
+
+. 
+. do "${deps}/x98other.do"
+
+. * creates an upper and lower bound for repute program
+. gen other_low = .
+(37,529 missing values generated)
+
+. gen other_high = .
+(37,529 missing values generated)
+
+. 
+.         replace other_low = 0 if Q1823 == 1
+(9 real changes made)
+
+.         replace other_high = 500 if Q1823 == 1
+(9 real changes made)
+
+. 
+.         replace other_low = 500 if Q1823 == 3
+(2 real changes made)
+
+.         replace other_high = 500 if Q1823 == 3
+(2 real changes made)
+
+. 
+.         replace other_low = 500 if Q1823 == 5
+(5 real changes made)
+
+.         replace other_high = 1000 if Q1823 == 5
+(5 real changes made)
+
+. 
+.         replace other_low = 1000 if Q1822 == 3
+(4 real changes made)
+
+.         replace other_high = 1000 if Q1822 == 3
+(4 real changes made)
+
+. 
+.         replace other_low = 1000 if Q1822 == 5
+(14 real changes made)
+
+.         replace other_high = 5000 if Q1822 == 5
+(14 real changes made)
+
+. 
+.         replace other_low = 10000 if Q1821 == 1
+(2 real changes made)
+
+.         replace other_high = 20000 if Q1821 == 1
+(2 real changes made)
+
+. 
+.         replace other_low = 5000 if Q1820 == 1
+(2 real changes made)
+
+.         replace other_high = 10000 if Q1820 == 1
+(2 real changes made)
+
+. 
+.         replace other_low = 5000 if Q1820 == 8
+(1 real change made)
+
+.         replace other_high = 999999 if Q1820 == 8
+(1 real change made)
+
+. 
+.         replace other_low = 5000 if Q1819 == 3
+(1 real change made)
+
+.         replace other_high = 5000 if Q1819 == 3
+(1 real change made)
+
+. 
+.         replace other_low = 0 if Q1819 == 8
+(2 real changes made)
+
+.         replace other_high = 999999 if Q1819 == 8
+(2 real changes made)
+
+. 
+end of do-file
+
+. repute other_low other_high other_all other_OOP
+(41 real changes made)
+
+. 
+. * Assign DK/RF with the mean
+. qui sum other_OOP
+
+. #del ;
+delimiter now ;
+. replace other_OOP = r(mean) if (((Q1818 == 999998) | (Q1819 == 
+> 8 | Q1819 == 9) | 
+> (Q1820 == 8 | Q1820 == 9) | (Q1821 == 8 | Q1821 == 9) |
+> (Q1822 == 8 | Q1822 == 9) | (Q1823 == 8 | Q1823 == 9)) & (other
+> _OOP == .));
+(0 real changes made)
+
+. #del cr;
+delimiter now cr
+. 
+. 
+. * Assign zero cost to people who had no expenses of this type
+. replace other_OOP = 0 if Q1817 == 5
+(139 real changes made)
+
+. 
+. * Assign unconditional mean to people with this type of expendi
+> ture or DK/RF
+. qui sum other_OOP
+
+. replace other_OOP = r(mean) if inlist(Q1817, 1, 8, 9) & mi(othe
+> r_OOP)
+(6 real changes made)
+
+. 
+. * Cap expenditure at 15k per month
+. replace other_OOP = cap15k if (other_OOP > cap15k & ~mi(other_O
+> OP))
+(0 real changes made)
+
+. 
+. summ other_OOP, det
+
+                          other_OOP
+-------------------------------------------------------------
+      Percentiles      Smallest
+ 1%            0              0
+ 5%            0              0
+10%            0              0       Obs                 222
+25%            0              0       Sum of Wgt.         222
+
+50%            0                      Mean           655.2478
+                        Largest       Std. Dev.      1919.081
+75%          450       6747.864
+90%     2248.152       13059.16       Variance        3682872
+95%     2248.152       14092.53       Skewness       4.994206
+99%     13059.16       14092.53       Kurtosis       31.63373
+
+. 
+. /**************************************************************
+> **
+>         SECTION 3.8: Non-medical expenditure 
+> ***************************************************************
+> */
+. gen non_med_OOP = Q1844
+(37,313 missing values generated)
+
+. replace non_med_OOP = . if non_med_OOP == 999998
+(83 real changes made, 83 to missing)
+
+. 
+. do "${deps}/x98nmed.do"
+
+. gen non_med_low = .
+(37,529 missing values generated)
+
+. gen non_med_high = .
+(37,529 missing values generated)
+
+. 
+.         replace non_med_low = 0 if Q1849 == 1
+(8 real changes made)
+
+.         replace non_med_high = 500 if Q1849 == 1
+(8 real changes made)
+
+. 
+.         replace non_med_low = 500 if Q1849 == 3
+(7 real changes made)
+
+.         replace non_med_high = 500 if Q1849 == 3
+(7 real changes made)
+
+. 
+.         replace non_med_low = 500 if Q1849 == 5
+(6 real changes made)
+
+.         replace non_med_high = 1000 if Q1849 == 5
+(6 real changes made)
+
+. 
+.         replace non_med_low = 0 if Q1849 == 8
+(1 real change made)
+
+.         replace non_med_high = 1000 if Q1849 == 8
+(1 real change made)
+
+. 
+.         replace non_med_low = 1000 if Q1848 == 3
+(8 real changes made)
+
+.         replace non_med_high = 1000 if Q1848 == 3
+(8 real changes made)
+
+. 
+.         replace non_med_low = 1000 if Q1848 == 5
+(25 real changes made)
+
+.         replace non_med_high = 5000 if Q1848 == 5
+(25 real changes made)
+
+. 
+.         replace non_med_low = 0 if Q1848 == 8
+(0 real changes made)
+
+.         replace non_med_high = 5000 if Q1848 == 8
+(0 real changes made)
+
+. 
+.         replace non_med_low = 10000 if Q1847 == 1
+(2 real changes made)
+
+.         replace non_med_high = 20000 if Q1847 == 1
+(2 real changes made)
+
+. 
+.         replace non_med_low = 20000 if Q1847 == 5
+(1 real change made)
+
+.         replace non_med_high = 999999 if Q1847 == 5
+(1 real change made)
+
+. 
+.         replace non_med_low = 5000 if Q1846 == 1
+(7 real changes made)
+
+.         replace non_med_high = 10000 if Q1846 == 1
+(7 real changes made)
+
+. 
+.         replace non_med_low = 10000 if Q1846 == 3
+(4 real changes made)
+
+.         replace non_med_high = 10000 if Q1846 == 3
+(4 real changes made)
+
+. 
+.         replace non_med_low = 5000 if Q1846 == 8
+(1 real change made)
+
+.         replace non_med_high = 999999 if Q1846 == 8
+(1 real change made)
+
+. 
+.         replace non_med_low = 5000 if Q1845 == 3
+(4 real changes made)
+
+.         replace non_med_high = 5000 if Q1845 == 3
+(4 real changes made)
+
+. 
+.         replace non_med_low = 0 if (Q1845 == 8 | Q1845 == 9)
+(10 real changes made)
+
+.         replace non_med_high = 999999 if (Q1845 == 8 | Q1845 ==
+>  9)
+(10 real changes made)
+
+. 
+end of do-file
+
+. repute non_med_low non_med_high nmed_all non_med_OOP
+(83 real changes made)
+
+. 
+. * replace the Dks/RFs/NAs with the mean
+. quietly sum non_med_OOP
+
+. replace non_med_OOP = r(mean) if ((Q1845 == 8 | Q1845 == 9) | /
+> //
+>         (Q1846 == 8 | Q1846 == 9) | (Q1847 == 8 | Q1847 == 9) |
+>  ///
+>         (Q1848 == 8 | Q1848 == 9) | (Q1849 == 8 | Q1849 == 9)) 
+> & mi(non_med_OOP)
+(0 real changes made)
+
+. 
+. * people who had none of these expenses
+. replace non_med_OOP = 0 if Q1843 == 5
+(1,027 real changes made)
+
+. 
+. * adds in the yes values with no number and the DK/RFs for pos 
+> exp
+. quietly sum non_med_OOP
+
+. replace non_med_OOP = r(mean) if inlist(Q1843, 1, 8, 9) & mi(no
+> n_med_OOP)
+(10 real changes made)
+
+. 
+. * makes the max of 5k per month
+. replace non_med_OOP = cap5k if (non_med_OOP > cap5k & ~mi(non_m
+> ed_OOP))
+(3 real changes made)
+
+. 
+. summ non_med_OOP, det
+
+                         non_med_OOP
+-------------------------------------------------------------
+      Percentiles      Smallest
+ 1%            0              0
+ 5%            0              0
+10%            0              0       Obs               1,253
+25%            0              0       Sum of Wgt.       1,253
+
+50%            0                      Mean           760.0481
+                        Largest       Std. Dev.      4738.684
+75%            0          57000
+90%         1000          57932       Variance       2.25e+07
+95%         3000          75000       Skewness       11.83754
+99%        14000          78622       Kurtosis       161.5669
+
+. 
+. /**************************************************************
+> **
+>         SECTION 4: Total OOP expenditure
+> ***************************************************************
+> */
+. 
+. egen total_OOP = rowtotal(insurance_costs hospital_OOP doctor_O
+> OP ///
+>         hospice_OOP RX_OOP home_OOP other_OOP non_med_OOP helpe
+> r_OOP), m
+(36276 missing values generated)
+
+. 
+. summ total_OOP, det
+
+                          total_OOP
+-------------------------------------------------------------
+      Percentiles      Smallest
+ 1%            0              0
+ 5%            0              0
+10%     41.26788              0       Obs               1,253
+25%          884              0       Sum of Wgt.       1,253
+
+50%     3277.352                      Mean           8246.388
+                        Largest       Std. Dev.      14725.74
+75%     10404.12       110241.6
+90%     18560.66       116728.9       Variance       2.17e+08
+95%      30882.6         150000       Skewness       4.703567
+99%     77414.41       170960.3       Kurtosis       34.28822
+
+. 
+. /**************************************************************
+> **
+>         SECTION 5: Clean Up
+> ***************************************************************
+> */
+. rename Q492M death_area
+
+. label values death_area death_region
+
+. 
+. #del ;
+delimiter now ;
+. global OOP "insurance_costs hospital_OOP doctor_OOP 
+> hospice_OOP RX_OOP home_OOP other_OOP non_med_OOP total_OOP 
+> helper_OOP MC_HMO work_ins AARP_ins long_term_care MC_B";
+
+. #del cr;
+delimiter now cr
+. 
+. 
+. * make expenses in 2006 dollars
+. foreach y of global OOP {
+  2.         replace `y' = 0 if mi(`y') & ~mi(total_OOP)
+  3.         replace `y' = (`y' * (116.567/96.472))
+  4. }
+(0 real changes made)
+(958 real changes made)
+(570 real changes made)
+(401 real changes made)
+(66 real changes made)
+(438 real changes made)
+(1,204 real changes made)
+(8 real changes made)
+(159 real changes made)
+(737 real changes made)
+(368 real changes made)
+(124 real changes made)
+(1,031 real changes made)
+(81 real changes made)
+(0 real changes made)
+(217 real changes made)
+(0 real changes made)
+(1,139 real changes made)
+(127 real changes made)
+(182 real changes made)
+(12 real changes made)
+(153 real changes made)
+(0 real changes made)
+(214 real changes made)
+(1,145 real changes made)
+(31 real changes made)
+(0 real changes made)
+(100 real changes made)
+(517 real changes made)
+(736 real changes made)
+
+. 
+. keep HHID PN *_OOP death_area insurance_costs death_month death
+> _year time ///
+>         months weight98 MC_HMO work_ins other_ins AARP_ins long
+> _term_care MC_B
+
+. drop if total_OOP == .
+(36,276 observations deleted)
+
+. merge 1:1 HHID PN using "${rawdata}/${trversion}", keep(match) 
+> nogen
+
+    Result                           # of obs.
+    -----------------------------------------
+    not matched                             0
+    matched                             1,253  
+    -----------------------------------------
+
+. program drop repute
+
+. save "${OOPdata}/X1998OOP.dta", replace
+file C:/Users/sm2856/Dropbox/MMS_2011_Replication/distribution V2
+> _0/data/OOP/X1998OOP.dta saved
+
+. 
+. * print results
+. foreach y of global OOP {
+  2.         sum `y', det
+  3. }
+
+                       insurance_costs
+-------------------------------------------------------------
+      Percentiles      Smallest
+ 1%            0              0
+ 5%            0              0
+10%            0              0       Obs               1,253
+25%     49.86393              0       Sum of Wgt.       1,253
+
+50%     788.2136                      Mean           1433.548
+                        Largest       Std. Dev.      2356.265
+75%      1848.75       14464.22
+90%     3650.673       15735.13       Variance        5551985
+95%     5003.747       16916.18       Skewness       8.518818
+99%     9368.846       49993.36       Kurtosis       150.9558
+
+                        hospital_OOP
+-------------------------------------------------------------
+      Percentiles      Smallest
+ 1%            0              0
+ 5%            0              0
+10%            0              0       Obs               1,253
+25%            0              0       Sum of Wgt.       1,253
+
+50%            0                      Mean           3682.927
+                        Largest       Std. Dev.      11733.63
+75%     1691.618       108746.9
+90%     10578.98       108746.9       Variance       1.38e+08
+95%     11940.34         117205       Skewness       7.163671
+99%     67664.73       181244.8       Kurtosis       73.61439
+
+                         doctor_OOP
+-------------------------------------------------------------
+      Percentiles      Smallest
+ 1%            0              0
+ 5%            0              0
+10%            0              0       Obs               1,253
+25%            0              0       Sum of Wgt.       1,253
+
+50%            0                      Mean           431.0498
+                        Largest       Std. Dev.      1937.357
+75%     422.9046       12082.99
+90%      1284.72       12082.99       Variance        3753352
+95%      1284.72       34999.58       Skewness       20.06262
+99%     3020.747       51956.85       Kurtosis       483.4765
+
+                         hospice_OOP
+-------------------------------------------------------------
+      Percentiles      Smallest
+ 1%            0              0
+ 5%            0              0
+10%            0              0       Obs               1,253
+25%            0              0       Sum of Wgt.       1,253
+
+50%            0                      Mean            20.2305
+                        Largest       Std. Dev.      345.2173
+75%            0       2534.881
+90%            0       2905.262       Variance         119175
+95%            0       2905.262       Skewness       24.99955
+99%            0       10633.03       Kurtosis       727.4383
+
+                           RX_OOP
+-------------------------------------------------------------
+      Percentiles      Smallest
+ 1%            0              0
+ 5%            0              0
+10%            0              0       Obs               1,253
+25%            0              0       Sum of Wgt.       1,253
+
+50%     253.7427                      Mean             1437.3
+                        Largest       Std. Dev.      4532.032
+75%     1933.278       26099.25
+90%     3708.255          34799       Variance       2.05e+07
+95%     4921.038       38665.56       Skewness       19.53125
+99%     12566.31       129998.5       Kurtosis       525.6771
+
+                          home_OOP
+-------------------------------------------------------------
+      Percentiles      Smallest
+ 1%            0              0
+ 5%            0              0
+10%            0              0       Obs               1,253
+25%            0              0       Sum of Wgt.       1,253
+
+50%            0                      Mean           580.1175
+                        Largest       Std. Dev.      5959.439
+75%            0       48331.95
+90%            0       60414.94       Variance       3.55e+07
+95%     1208.299       120829.9       Skewness       19.30357
+99%     12082.99       144995.9       Kurtosis       419.9879
+
+                          other_OOP
+-------------------------------------------------------------
+      Percentiles      Smallest
+ 1%            0              0
+ 5%            0              0
+10%            0              0       Obs               1,253
+25%            0              0       Sum of Wgt.       1,253
+
+50%            0                      Mean           140.2755
+                        Largest       Std. Dev.      1020.089
+75%            0       8153.436
+90%            0       15779.37       Variance        1040581
+95%     241.6598       17027.99       Skewness       12.12787
+99%     2716.439       17027.99       Kurtosis       177.2165
+
+                         non_med_OOP
+-------------------------------------------------------------
+      Percentiles      Smallest
+ 1%            0              0
+ 5%            0              0
+10%            0              0       Obs               1,253
+25%            0              0       Sum of Wgt.       1,253
+
+50%            0                      Mean           918.3652
+                        Largest       Std. Dev.      5725.746
+75%            0       68873.03
+90%     1208.299       69999.16       Variance       3.28e+07
+95%     3624.896       90622.41       Skewness       11.83754
+99%     16916.18       94998.87       Kurtosis       161.5669
+
+                          total_OOP
+-------------------------------------------------------------
+      Percentiles      Smallest
+ 1%            0              0
+ 5%            0              0
+10%     49.86393              0       Obs               1,253
+25%     1068.136              0       Sum of Wgt.       1,253
+
+50%     3960.021                      Mean           9964.101
+                        Largest       Std. Dev.      17793.09
+75%     12571.28       133204.8
+90%     22426.82       141043.4       Variance       3.17e+08
+95%     37315.41       181244.8       Skewness       4.703567
+99%     93539.73       206571.1       Kurtosis       34.28821
+
+                      (sum) helper_OOP
+-------------------------------------------------------------
+      Percentiles      Smallest
+ 1%            0              0
+ 5%            0              0
+10%            0              0       Obs               1,253
+25%            0              0       Sum of Wgt.       1,253
+
+50%            0                      Mean           1320.288
+                        Largest       Std. Dev.      4732.786
+75%            0       36248.96
+90%     3624.896       36490.62       Variance       2.24e+07
+95%     7850.518       44999.46       Skewness       5.443774
+99%     23551.56       59999.28       Kurtosis       42.24172
+
+                           MC_HMO
+-------------------------------------------------------------
+      Percentiles      Smallest
+ 1%            0              0
+ 5%            0              0
+10%            0              0       Obs               1,253
+25%            0              0       Sum of Wgt.       1,253
+
+50%            0                      Mean           3.527599
+                        Largest       Std. Dev.      21.98504
+75%            0       120.8299
+90%      3.56171       151.0374       Variance        483.342
+95%      22.5321       265.8257       Skewness       18.63868
+99%     60.41494       604.1494       Kurtosis       466.1098
+
+                          work_ins
+-------------------------------------------------------------
+      Percentiles      Smallest
+ 1%            0              0
+ 5%            0              0
+10%            0              0       Obs               1,253
+25%            0              0       Sum of Wgt.       1,253
+
+50%            0                      Mean           16.64937
+                        Largest       Std. Dev.      53.62423
+75%            0       402.7663
+90%     60.41494       422.9046       Variance       2875.558
+95%     119.6178       519.5685       Skewness        6.21589
+99%     241.6598       869.9751       Kurtosis       68.59695
+
+                          AARP_ins
+-------------------------------------------------------------
+      Percentiles      Smallest
+ 1%            0              0
+ 5%            0              0
+10%            0              0       Obs               1,253
+25%            0              0       Sum of Wgt.       1,253
+
+50%            0                      Mean           3.998503
+                        Largest       Std. Dev.      30.93933
+75%            0       271.8672
+90%            0       281.9364       Variance       957.2419
+95%            0       392.6971       Skewness       10.22632
+99%     189.2714       563.8727       Kurtosis       132.8021
+
+                       long_term_care
+-------------------------------------------------------------
+      Percentiles      Smallest
+ 1%            0              0
+ 5%            0              0
+10%            0              0       Obs               1,253
+25%            0              0       Sum of Wgt.       1,253
+
+50%            0                      Mean           11.94282
+                        Largest       Std. Dev.      143.1497
+75%            0       382.6279
+90%            0       604.1494       Variance       20491.83
+95%     11.94282       604.1494       Skewness       30.73046
+99%     217.6851       4833.195       Kurtosis       1029.155
+
+                            MC_B
+-------------------------------------------------------------
+      Percentiles      Smallest
+ 1%            0              0
+ 5%            0              0
+10%            0              0       Obs               1,253
+25%            0              0       Sum of Wgt.       1,253
+
+50%     52.92348                      Mean           31.08674
+                        Largest       Std. Dev.      26.06483
+75%     52.92348       52.92348
+90%     52.92348       52.92348       Variance       679.3754
+95%     52.92348       52.92348       Skewness      -.3550258
+99%     52.92348       52.92348       Kurtosis       1.126043
+
+. 
+. log close 
+      name:  <unnamed>
+       log:  C:/Users/sm2856/Dropbox/MMS_2011_Replication/distrib
+> ution V2_0/logs/1998exit.log
+  log type:  text
+ closed on:  21 Sep 2018, 16:00:48
+-----------------------------------------------------------------

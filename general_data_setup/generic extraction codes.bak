@@ -1,0 +1,2335 @@
+= V4 Outline MultiLine NoSorting TabWidth=30
+
+H="generic extraction codes"
+this is a repository for generic extraction codes.  the hope is that it will make it easier/more straightforward to reuse code if there are codes that only need defined, consistent, minimal changes to run.  the hope at the outset is to be able to have code that only needs time frames, dx/procedure codes, and (occasionally) datasets specified.
+
+
+/*hrs cleaned path*/
+libname hrs_fnl 'E:\data\hrs_cleaned';
+
+/*medicare xwalk and claims path*/
+libname medi 'E:\data\cms_DUA_24548_2012';
+
+/*rand data path*/
+libname rand 'E:\data\hrs_public_2012\rand2012\main';
+
+/*dartmouth atlas data path*/
+libname dmouth "E:\data\Dartmouth_misc";
+
+
+/*project data paths*/
+libname proj 'E:\data\Evan_SAS_practice';
+
+H="HRS restricted and death date"
+/***********************************************************************/
+/*Pulls variables from restricted, cleans and formats to long datset
+  Replaces death date from tracker with death date from Karen's corrected dataset*/
+/***********************************************************************/
+
+data core;
+set hrs_fnl.core_00_to_12;
+label c_ivw_year="Core interview year";
+keep c_ivw_year core_year id c_ivw_date;
+run;
+
+proc sort data=core nodupkey;
+by id core_year;
+run;
+
+
+data death(rename=(death_all=death_date));
+set hrs_fnl.death_date_2012;
+keep id death_all;
+run;
+
+proc sort data=death nodupkey;
+by id;
+run;
+
+data restr(rename=(ZIP10_2000=ZIP10));
+set hrs_fnl.restr_tracker_v2012(keep=hhid pn id birth_date white black hisp_eth native_amer 
+asian_pi other_race other_na_api_race zip: stateusps: cause_death_12_n degree gender);
+id_c=trim(hhid)||trim(pn);
+drop id;
+rename id_c=id;
+restr_yes=1;
+run;
+
+proc sort data=restr nodupkey;
+by id;
+run;
+
+proc contents data=restr; run;
+
+proc sql;
+create table core_dob(drop=id2) as select * from core a left join
+restr(rename=(id=id2) drop=hhid pn) b 
+on a.id=b.id2;
+quit;
+
+*6 obs have no match in the restricted dataset;
+*These obs each only have 1 inteview, so can't use them anyway;
+proc freq data=core_dob; table restr_yes /missprint; run;
+
+data restr_test;
+set core_dob;
+if restr_yes=.;
+run;
+
+proc sql;
+create table core_dob1(drop=id2) as select * from core_dob a left join
+death(rename=(id=id2)) b 
+on a.id=b.id2;
+quit;
+
+data core_age_1;
+set core_dob1;
+format death_date date9.;
+age_at_core=floor((c_ivw_date-birth_date)/365.25);
+label age_at_core="Age at core interview";
+if age_at_core>=65 then age_ge_65=1;
+if age_at_core<65 then age_ge_65=0;
+label age_ge_65="Age at core interview > 65";
+
+core_to_death=(death_date-c_ivw_date)/365.25;
+label core_to_death="Time from core ivw to death, years";
+if core_to_death<=1 and core_to_death~=. then core_to_dod_1yr=1;
+if core_to_death>1 or core_to_death=. then core_to_dod_1yr=0;
+label core_to_dod_1yr="Died within 1 year of core interview";
+
+if core_to_death<=0.5 and core_to_death~=. then core_to_dod_6m=1;
+if core_to_death>0.5 or core_to_death=. then core_to_dod_6m=0;
+label core_to_dod_6m="Died within 6 months of core interview";
+
+run;
+
+proc freq data=core_age_1;
+table age_at_core*age_ge_65 core_to_dod_1yr*core_to_dod_6m /missprint;
+run;
+
+
+****************************************************************;
+*get clean zip code variable by wave;
+proc sort data=core_age_1; by id core_year; run;
+
+/*get list of first and last interview years*/
+data ivw_years_1;
+set core_age_1;
+by id; 
+if first.id then first_ivw_year=core_year;
+if last.id then last_ivw_year=core_year;
+run;
+
+data ivw_years_1a;
+set ivw_years_1;
+if first_ivw_year~=.;
+run;
+
+data ivw_years_1b;
+set ivw_years_1;
+if last_ivw_year~=.;
+run;
+
+proc sql;
+create table ivw_years_2 as select a.id,a.first_ivw_year,b.last_ivw_year
+from ivw_years_1a a left join
+ivw_years_1b b
+on a.id=b.id;
+quit;
+
+proc freq; table first_ivw_year last_ivw_year; run;
+
+*merge into overall dataset;
+proc sql;
+create table core_age_zip_1 as select
+a.*, b.first_ivw_year,b.last_ivw_year from
+core_age_1 a left join
+ivw_years_2 b
+on a.id=b.id;
+quit;
+
+proc freq; table first_ivw_year last_ivw_year; run;
+
+/*clean up missing zip variables
+1. if missing, use interview prior
+2. if still missing, use interview after
+3. if still missing, use interview 2x prior...*/
+
+data core_age_zip_2 ;
+set core_age_zip_1 ;
+/*1998 updates, use 2000 zip
+1 obs only has one interview in our dataset for 1998 and is missing zip that year, won't be
+in the final sample so leave as missing now*/
+if zip98='' & first_ivw_year<=1998<=last_ivw_year then do;
+	zip_98_imp_yes=1;
+	zip98=zip00;
+	end;
+/*2000 updates, use 1998 zip
+2 obs only have one interview in the dataset for 2000, missing zip that year, again not
+in final sample so leave missing here*/
+if zip00='' & first_ivw_year<=2000<=last_ivw_year then do;
+	zip_00_imp_yes=1;
+	zip00=zip98;
+	end;
+/*2002 updates, use 2000 or 2004 zip
+1 obs has only the 2002 interview, leave zip missing for that person*/
+if zip02='' & first_ivw_year<=2002<=last_ivw_year then do;
+	zip_02_imp_yes=1;
+	zip02=zip00;
+		if zip02='' then do;
+		zip02=zip04;
+		end;
+	end;
+/*2004 updates, use 2002 or 2006 zip
+13 obs has only the 2004 interview, leave zip missing for those observations*/
+if zip04='' & first_ivw_year<=2004<=last_ivw_year then do;
+	zip_04_imp_yes=1;
+	zip04=zip02;
+		if zip04='' then do;
+		zip04=zip06;
+		end; /*1 obs still missing, use 1998 zip for this person*/
+				if zip04='' then do;
+				zip04=zip98;
+				end; 
+	end;
+/*2006 updates, use 2004 or 2008 zip
+no observations missing*/
+if zip06='' & first_ivw_year<=2006<=last_ivw_year then do;
+	zip_06_imp_yes=1;
+	zip06=zip04;
+		if zip06='' then do;
+		zip06=zip08;
+		end; 
+	end;
+/*2008 updates, use 2006 zip
+no observations missing*/
+if zip08='' & first_ivw_year<=2008<=last_ivw_year then do;
+	zip_08_imp_yes=1;
+	zip08=zip06;
+	end;
+/*2010 updates, use 2008 zip
+1 obs has only 2010 interview and missing zip that year, so leave missing*/
+if zip10='' & first_ivw_year<=2010<=last_ivw_year then do;
+	zip_10_imp_yes=1;
+	zip10=zip08;
+	end;
+/*2012 12 observations missing, use 2010*/
+if zip12='' & first_ivw_year<=2012<=last_ivw_year then do;
+	zip_12_imp_yes=1;
+	zip12=ZIP10_2010;
+	end;
+run;
+
+****************************************************************;
+*get clean state code variable by wave;
+data core_age_zip_state;
+set core_age_zip_2;
+/*1998 state - n=1 obs only has one interview with missing zip,state, leave blank*/
+if stateusps98='' & first_ivw_year<=1998<=last_ivw_year then do;
+	st_98_imp_yes=1;
+	stateusps98=stateusps00;
+	end;
+/*2000 state - n=2 obs only single interview so leave missing*/ 
+if stateusps00='' & first_ivw_year<=2000<=last_ivw_year then do;
+	st_00_imp_yes=1;
+	stateusps00=stateusps98;
+	end;
+/*2002 state - n=1 obs only single interview so leave missing*/ 
+if stateusps02='' & first_ivw_year<=2002<=last_ivw_year then do;
+	st_02_imp_yes=1;
+	stateusps02=stateusps00;
+	if stateusps02='' then do;
+		stateusps02=stateusps04;
+		end;
+	end;
+/*2004 updates, use 2002 or 2006 state
+13 obs has only the 2004 interview, leave state missing for those observations*/
+if stateusps04='' & first_ivw_year<=2004<=last_ivw_year then do;
+	st_04_imp_yes=1;
+	stateusps04=stateusps02;
+		if stateusps04='' then do;
+		stateusps04=stateusps06;
+		end; /*1 obs still missing, use 1998 state for this person*/
+				if stateusps04='' then do;
+				stateusps04=stateusps98;
+				end; 
+	end;
+/*2006 updates, use 2004 or 2008 state
+no observations missing*/
+if stateusps06='' & first_ivw_year<=2006<=last_ivw_year then do;
+	st_06_imp_yes=1;
+	stateusps06=stateusps04;
+		if stateusps06='' then do;
+		stateusps06=stateusps08;
+		end; 
+	end;
+/*2008 updates, use 2006 state
+no observations missing*/
+if stateusps08='' & first_ivw_year<=2008<=last_ivw_year then do;
+	st_08_imp_yes=1;
+	stateusps08=stateusps06;
+	end;
+/*2010 updates, use 2008 state
+1 obs has only 2010 interview and missing state that year, so leave missing*/
+if stateusps10='' & first_ivw_year<=2010<=last_ivw_year then do;
+	st_10_imp_yes=1;
+	stateusps10=stateusps08;
+	end;
+/*2012 updates, use 2010 state
+no observations missing*/
+if stateusps12='' & first_ivw_year<=2012<=last_ivw_year then do;
+	st_12_imp_yes=1;
+	stateusps12=stateusps10;
+	end;
+run;
+
+proc sort data=core_age_zip_state; by id core_year; run;
+
+data core_age_zip;
+set core_age_zip_state;
+zip_wave=vvaluex("zip"||substr(trim(left(core_year)),3,2) );
+zip_imputed=vvaluex("zip_"||substr(trim(left(core_year)),3,2)||"_imp_yes" );
+drop zip9: zip0: zip1: ;
+label zip_wave="ZIP code, residence at time of interview";
+label zip_imputed="ZIP code imputed";
+
+state_wave=vvaluex("stateusps"||substr(trim(left(core_year)),3,2) );
+state_imputed=vvaluex("st_"||substr(trim(left(core_year)),3,2)||"_imp_yes" );
+drop stateusps: ;
+label state_wave="State, residence at time of interview";
+label state_imputed="State imputed";
+run;
+
+/*create census variables*/
+
+data core_age_zip1;
+set core_age_zip;
+
+/* create census regions */
+if state_wave in ('CT','ME','MA','NH','RI','VT','NJ','NY','PA') then REGION=1;
+   else if state_wave in ('IN','IL','MI','OH','WI','IA','KS','MN','MO','NE','ND','SD') then REGION=2;
+   else if state_wave in ('DE','DC','FL','GA','MD','NC','SC','VA','WV','AL','KY','MS','TN',
+        'AR','LA','OK','TX' ) then REGION=3;
+   else if state_wave in ('AZ','CO','ID','NM','MT','UT','NV','WY','AK','CA','HI','OR','WA') then REGION=4;
+/*create census divisions */
+if state_wave in ('CT','ME','MA','NH','RI','VT') then DIVISION=1;
+   else if state_wave in ('NJ','NY','PA') then DIVISION=2;
+   else if state_wave in ('IN','IL','MI','OH','WI') then DIVISION=3;
+   else if state_wave in ('IA','KS','MN','MO','NE','ND','SD') then DIVISION=4;
+   else if state_wave in ('DE','DC','FL','GA','MD','NC','SC','VA','WV') then DIVISION=5;
+   else if state_wave in ('AL','KY','MS','TN') then DIVISION=6;
+   else if state_wave in ('AR','LA','OK','TX' ) then DIVISION=7;
+   else if state_wave in ('AZ','CO','ID','NM','MT','UT','NV','WY') then DIVISION=8;
+   else if state_wave in ('AK','CA','HI','OR','WA') then DIVISION=9;
+
+/* create medicaid eligibility groupings: =>138% or <138% */
+if state_wave in ('AL','AK','FL','GA','ID','KS','LA','ME','MS','MO','MT','NE','NC',
+        'OK','SC','SD','TN','TX','UT','VA','WI','WY') then MEDICAID_138=0;
+   else if state_wave in ('AR','AZ','CA','CO','CT','DE','DC','HI','IN','IL','IA',
+        'KY','MA','MI','MN','MD','NH','ND','NM','NV','NJ','NY','OH','OR','PA',
+        'RI','VT','WV','WA') then MEDICAID_138=1;
+label region='Census Region: 1=NE,2=MW,3=S,4=W';
+label division='Census Division';
+label medicaid_138='Medicaid eligibility GE 138% FPL';
+run;
+
+/*save dataset and drop raw zip code variables*/
+data proj.restr_age_zip;
+set core_age_zip1;
+drop st_: zip_9: zip_0: zip_1: ;
+run;
+
+proc freq data=core_age_zip; table zip_wave state_wave  /missprint ; run;
+
+proc freq; table zip_imputed state_imputed /missprint ; run;
+
+proc contents data=proj.restr_age_zip; run;
+
+H="Rand data preparation"
+/*Pulls data from Rand dataset that has not already been included in general HRS processing.  
+  As of 10/26/15, only includes Rand BMI*/
+
+
+****************************************************************;
+/*bring in BMI from rand dataset*/
+libname rand 'E:\data\hrs_public_2012\rand2012\main';
+/*pull each wave bmi variable from rand xwave data file
+wave 5 = 2000
+wave 6 = 2002 ... wave 10 = 2010
+*/
+options fmterr=no;
+data bmi_rand;
+set rand.rndhrs_n(keep=hhid pn R4BMI R5BMI R6BMI R7BMI R8BMI R9BMI R10BMI R11BMI);
+id = hhid||pn;
+run;
+
+%macro getBMI(w=,year=);
+
+data bmi_rand1_&w;
+set bmi_rand;
+keep id core_year R&w.BMI;
+core_year=&year;
+run;
+
+data bmi_rand2_&w;
+set bmi_rand1_&w;
+rename R&w.BMI=BMI;
+%mend;
+
+%getBMI(w=4,year=1998);
+%getBMI(w=5,year=2000);
+%getBMI(w=6,year=2002);
+%getBMI(w=7,year=2004);
+%getBMI(w=8,year=2006);
+%getBMI(w=9,year=2008);
+%getBMI(w=10,year=2010);
+%getBMI(w=11,year=2012);
+
+data rand_bmi_9812;
+set bmi_rand2_4 bmi_rand2_5 bmi_rand2_6 bmi_rand2_7 bmi_rand2_8 bmi_rand2_9 bmi_rand2_10 bmi_rand2_11;
+label BMI='Body Mass Index';
+label id='HRS ID';
+run;
+
+data proj.rand_9812;
+set rand_bmi_9812;
+run;
+
+H="dartmouth atlas & wage index"
+/*Brings in wage index by ZIP or state
+
+Also gets HRR, Dartmouth EOL spending by ZIP
+
+Note that the raw data with the regional data is saved in the out of pocket
+(OOP) spending project folders rather than duplicating it for this project
+
+Final dataset is int.core_age_zip_wi_da*/
+
+/******************************************************************/
+/* Adjust subtotals for wage index */
+/******************************************************************/
+
+/******************************************************************/
+/* Link CBSA codes and zip codes from the WI file*/
+/******************************************************************/
+/*Bring in xwalk file between CBSA codes and zip codes
+Note only keep variables needed from xwalk file because formats 
+are missing for some of the other text variables
+2012 WI/CBSA - based on 2000 census so no change in the xwalk*/
+
+data zip_cb;
+set dmouth.xtract(keep=zip5 cbsa state);
+zip_n=zip5+0;
+cbsa_n=cbsa+0;
+/*If zip code is not missing, add state code*/
+if zip_n~=.;
+state_n=state+0;
+run;
+
+*Remove duplicate entries for zip5 and cbsa from xwalk file;
+*Goes from 399045 to 49289 rows;
+proc sort data=zip_cb out=zip_cb2 nodupkey;
+by zip_n cbsa_n;
+run;
+
+*Check to see zip codes in a cbsa code for Rochester, NY;
+proc sql;
+select zip5, cbsa from zip_cb2
+where cbsa_n in (40380);
+quit;
+
+/*note several zip codes have multiple cbsa*/
+/*create dataset with just one entry for each zip code
+8029 zip codes have more than one cbsa code
+Just use the first one when sort*/
+proc sort data=zip_cb2 out=cbsa_zip_final nodupkey;
+by zip_n;
+run;
+
+*Check to see zip codes in a cbsa code for Rochester, NY;
+proc sql;
+select zip_n, cbsa from cbsa_zip_final
+where cbsa_n in (40380);
+quit;
+
+/******************************************************************/
+/* Create dataset with cbsa, state, wage index and zip code */
+/******************************************************************/
+/******************************************************************/
+/* Pull in wage index, set up with wage_index_setup.txt code 
+in the general HRS processing directory*/
+/******************************************************************/
+/*bring in 2012 wage index file*/
+
+data wage_index;
+set 'E:\data\Dartmouth_misc\Wage Index\wage_index_2012';
+run;
+
+proc means;
+var wage_index_2012;
+run;
+
+/*for zip codes with no cbsa, wage index is left missing
+there are also many cbsas with missing wage index*/
+proc sql;
+create table zip_cbsa_wage_index as
+select a.*,b.wage_index_2012 from
+cbsa_zip_final a
+left join
+wage_index b
+on a.cbsa_n=b.cbsa_n;
+quit;
+
+/*Check for and remove duplicates by zip, keep first entry*/
+proc sort data=zip_cbsa_wage_index out=zip_cbsa_wage_index2 nodupkey;
+by zip_n;
+run;
+
+proc sort data=wage_index out=wage_index3 nodupkey;
+by state_in_wage_index;
+run;
+
+data wage_index4; set wage_index3; if state_in_wage_index~='';
+run;
+
+/*Merges in wage index if there's one for the state but was missing for the zip*/
+proc sql;
+create table zip_cbsa_wage_index3 
+as select a.*,coalesce(a.wage_index_2012,b.wage_index_2012) as wage_index_2012_2
+from
+zip_cbsa_wage_index2 a
+left join
+wage_index4 b
+on a.cbsa=b.cbsa;
+quit;
+
+/******************************************************************/
+/******************************************************************/
+/* Bring in Dartmouth spending data by HRR/zip xwalk  */
+/******************************************************************/
+/******************************************************************/
+
+/*first get HRR - ZIP crosswalk, 2007 since using the 2003-2007 eol spending data*/
+proc import
+datafile="E:\data\Dartmouth_misc\Dartmouth HRR_ZIP_xwalk\ziphsahrr07.xls"
+out=ziphsahrr07 dbms=xls replace;	
+run;
+
+data ziphsahrr07_1;
+set ziphsahrr07(rename=(zipcode07=zip));
+*zip_n = put(zip,z5.);
+zip_n=zip;
+label zip_n="Zip code for HRR xwalk";
+drop zip hsa: ;
+run;
+proc freq; table hrrnum; run;
+
+/*merge in Dartmouth eol spending and HCI (2003-2007) to HRR-zip xwalk*/
+proc import
+datafile="E:\data\Dartmouth_misc\EOL_mc_2yrs_HRR\DAP_HRR_03_07_to_merge.xls"
+out=EOL_dartmouth dbms=xls replace;
+run;
+
+data EOL_dartmouth_1;
+set EOL_dartmouth;
+rename HRR = HRR_number; /*note this is not the right HRR number, not sure what it is*/
+rename TOTAL_MEDICARE_SPENDING=tot_eol_spending_hrr;
+label TOTAL_MEDICARE_SPENDING="EOL MC spend last 2 yr of life HRR level";
+run;
+
+proc freq; table HRR_number; run;
+
+/*merge in additional Dartmouth data for number hospital beds, specialists, physicians
+This is 2006 data by HRR from Dartmouth*/
+/*capacity data per capita - number beds/physicians/specialists*/
+proc import datafile="E:\data\Dartmouth_misc\Dartmouth archive_ref\HRR_data_beds_specialist_per_capital.xls"
+out=hrr_beds_per_capita dbms=xls
+replace;
+run;
+proc contents ;
+run;
+
+proc freq; table HRR; run;
+
+/*merge the two DA datasets together by hrr*/
+proc sql; 
+create table da_full as select
+a.HRR_number, a.tot_eol_spending_hrr, a.Hospital_care_intensity_index__s,
+b.Physicians, b.Specialists, b.hospital_beds
+from 
+EOL_dartmouth_1 a
+left join
+hrr_beds_per_capita b
+on a.HRR_number=b.HRR;
+quit;
+
+/*merge the DA data into the zip code/hrr list*/
+proc sql;
+create table zip_eol_2(drop=HRR_number) as select *
+from ziphsahrr07_1 a left join
+da_full b
+on a.hrrnum=b.HRR_number;
+quit;
+
+/*all matched using hrr number to link*/
+proc means; var tot_eol_spending_hrr; run;
+
+/*merge into the wage index dataset by zip code*/
+proc sql;
+create table zip_wi_da(drop=State state_n Zip5 CBSA) as select
+a.*,b.* from
+zip_cbsa_wage_index3 a left join
+zip_eol_2 b
+on a.zip_n=b.zip_n;
+quit;
+
+proc contents data=zip_wi_da; run;
+
+
+H="core date claims crosswalk"
+/*Get claims 1 year and 2 year before each core interview*/
+
+/*Step 1: Bring in mc xwalk id*/
+
+/*prepare core dataset to merge*/
+data core;
+set hrs_fnl.core_00_to_12;
+keep core_year id c_ivw_date c_ivw_year c_ivw_month;
+run;
+
+proc sort data=core out=core_id nodupkey;
+by id c_ivw_date;
+run;
+
+/*prepare xwalk id file to merge*/
+data crosswalk_1;
+set medi.cmsxref2012;
+keep bid_hrs_21 hhid pn;
+run;
+
+/*get 2 variables bid_hrs = claims id, id=HRS id*/
+data crosswalk_2;
+set crosswalk_1;
+bid_hrs=bid_hrs_21;
+id=trim(hhid)||trim(pn);
+drop hhid pn;
+drop bid_hrs_21;
+run;
+
+proc sort data= crosswalk_2;
+by id;
+run;
+
+/*bring in xwalk id to core interview dataset*/
+proc sql;
+create table core_xwalk as select
+a.*,b.bid_hrs from
+core_id a
+left join
+crosswalk_2 b
+on a.id=b.id;
+quit;
+
+/*check for missing xwalk ids
+47839 of 157534 interviews are missing xwalk ids*/
+data check1;
+set core_xwalk ;
+if bid_hrs ='';
+run;
+
+/*create indicator for having xwalk id*/
+data core_xwalk_1;
+set core_xwalk;
+xwalk_yes=.;
+if bid_hrs ='' then xwalk_yes=0;
+if bid_hrs~='' then xwalk_yes=1;
+run;
+
+/*save entire set, including those without xwalk*/
+data proj.ivw_dt_xwalk;
+set core_xwalk_1(keep=id core_year c_ivw_date c_ivw_month c_ivw_year bid_hrs xwalk_yes);
+run;
+
+
+
+H="FFS check prior"
+/*Use denominator file to determine which interviews / r's have ffs mc
+during the full 12 months preceeding the core interview
+
+2 sets of variables created, 1 for 12 month lookback,
+one for 6 month lookback to see what the difference in sample
+size would be with the more relaxed requirement*/
+
+proc sort data=medi.dn_2000_2012 out=dn_2000_20122  nodupkey;
+by BID_HRS_21 year;
+run;
+
+proc sort data=proj.ivw_dt_xwalk out=core_mc_ids nodupkey;
+by bid_hrs c_ivw_date;
+run;
+
+/*pull medicare and hmo status variables from dn file
+for the core interview years
+interviews are dropped if they don't have a matching dn entry that year*/
+proc sql;
+create table dn_core_y as select
+a.*,b.buyin12,b.year,b.HMOIND12
+from core_mc_ids a inner join
+dn_2000_20122 b
+on trim(left(a.BID_hrs))=trim(left(b.BID_hrs_21))
+and a.c_ivw_year=b.year;
+quit;
+
+/*18127 r's have at least 1 interview with a denominator file linked*/
+proc sql;
+select count(distinct BID_hrs) from dn_core_y ;
+quit;
+
+data dn_core_y2;
+set dn_core_y;
+if length(trim(left(buyin12)))=12 and c_ivw_month>0 then do;
+buyin_dy=substr(trim(left(buyin12)),1,c_ivw_month);
+hmo_dy=substr(trim(left(HMOIND12)),1,c_ivw_month);
+end;
+else do;
+buyin_dy=trim(left(buyin12));
+hmo_dy=trim(left(HMOIND12));
+end;
+format c_ivw_date date9.;
+run;
+
+
+/*Check year prior to core interview to backfill for interview dates
+in the first half of the year (since doing 12 mo look back)*/
+/* 62565 have the -1 year dn file*/
+proc sql;
+create table dn_core_y_bef as select
+a.BID_hrs,a.c_ivw_year ,
+b.year as c_ivw_year_bef,
+b.year,b.buyin12,b.HMOIND12
+from dn_core_y a inner join
+dn_2000_20122 b
+on trim(left(a.BID_hrs))=trim(left(b.BID_hrs_21))
+and 0<a.c_ivw_year-b.year<=1 order by bid_hrs,c_ivw_year;
+quit;
+
+proc sql;
+create table all_insurance as select a.*,b.year as year_bef_civw, 
+b.buyin12 as buyin_bef,b.HMOIND12 as hmo_bef from
+dn_core_y2 a
+left join
+dn_core_y_bef b
+on trim(left(a.BID_hrs))=trim(left(b.BID_hrs)) 
+and a.c_ivw_year=b.c_ivw_year;
+quit;
+
+proc freq data=all_insurance;
+table c_ivw_year*year_bef_civw /missprint;
+run;
+
+/*merge interview year and year before interview buy-in and hmo variables
+Trim so the final variable _12m is 12 months pre-interview
+Note: indicator variables for parts a and b and hmo are null if don't
+have information for full 12 months pre-interview*/
+data all_insurance3;
+set all_insurance;
+buyin_2y=trim(left(buyin_bef))||trim(left(buyin_dy));
+hmo_2y=trim(left(hmo_bef))||trim(left(hmo_dy));
+
+buyin_2y_r=reverse(trim(buyin_2y));
+hmo_2y_r=reverse(trim(hmo_2y));
+
+*************************************************;
+** 12 month variables                          **;
+*************************************************;
+if length(buyin_2y_r)>11 then buyin_12m_r=substr(trim(left(buyin_2y_r)),1,12);
+if length(hmo_2y_r)>11 then hmo_12m_r=substr(trim(left(hmo_2y_r)),1,12);
+
+if length(buyin_2y_r)<12 then buyin_12m_r="";
+if length(hmo_2y_r)<12 then hmo_12m_r="";
+
+buyin_12m=reverse(trim(buyin_12m_r));
+hmo_12m=reverse(trim(hmo_12m_r));
+
+/*create indicator variable for mc coverage 12 mo. 0=no, 1=yes*/
+if length(buyin_12m)=12 then do;
+if indexc(buyin_12m,"0","1","2","A","B") then part_ab_12m=0;
+if indexc(buyin_12m,"0","1","2","A","B")=0 then part_ab_12m=1;
+end;
+if length(hmo_12m)=12 then do;
+if index(hmo_12m,"00000000000") then hmo_d_12m=0;
+if index(hmo_12m,"00000000000")=0 then hmo_d_12m=1;
+end;
+
+*************************************************;
+** 6 month variables                          **;
+*************************************************;
+if length(buyin_2y_r)>5 then buyin_6m_r=substr(trim(left(buyin_2y_r)),1,6);
+if length(hmo_2y_r)>5 then hmo_6m_r=substr(trim(left(hmo_2y_r)),1,6);
+
+if length(buyin_2y_r)<6 then buyin_6m_r="";
+if length(hmo_2y_r)<6 then hmo_6m_r="";
+
+buyin_6m=reverse(trim(buyin_6m_r));
+hmo_6m=reverse(trim(hmo_6m_r));
+
+/*create indicator variable for mc coverage 6 mo. 0=no, 1=yes*/
+if length(buyin_6m)=6 then do;
+if indexc(buyin_6m,"0","1","2","A","B") then part_ab_6m=0;
+if indexc(buyin_6m,"0","1","2","A","B")=0 then part_ab_6m=1;
+end;
+if length(hmo_6m)=6 then do;
+if index(hmo_6m,"000000") then hmo_d_6m=0;
+if index(hmo_6m,"000000")=0 then hmo_d_6m=1;
+end;
+
+if part_ab_12m=1 & hmo_d_12m=0 then ffs_yes_12m=1;
+if part_ab_12m=0 | hmo_d_12m=1 then ffs_yes_12m=0;
+if part_ab_6m=1 & hmo_d_6m=0 then ffs_yes_6m=1;
+if part_ab_6m=0 | hmo_d_6m=1 then ffs_yes_6m=0;
+ 
+run;
+
+data proj.all_insurance;
+set all_insurance3;
+keep id bid_hrs year part_ab_12m part_ab_6m hmo_d_12m hmo_d_6m xwalk_yes;
+run; 
+
+H="FFS check post"
+/*This section checks for ffs medicare the 2 years after each
+core interview or until death if that is within 2 years. 
+This will be a check when looking at the 2 year
+outcomes to make sure we have full claims datasets 
+in the 2 years post-interview
+*/
+
+proc sort data=proj.ivw_dt_xwalk out=core_mc_ids nodupkey;
+by bid_hrs c_ivw_date;
+run;
+
+proc sql;
+create table core_mc_ids_dod1 as select 
+a.*, b.death_all
+from core_mc_ids a inner join
+hrs_fnl.death_date_2012 b 
+on a.id=b.id;
+quit;
+
+data core_mc_ids_dod (rename=(death_all=death_date));
+set core_mc_ids_dod1;
+run;
+
+/*get months from core until death date where relevant*/
+data meet_pre2;
+set core_mc_ids_dod;
+*core_to_death is years so convert to months;
+if death_date~=. then do;
+	death_mo = month(death_date);
+	death_yr = year(death_date);
+	if death_yr=c_ivw_year then core_to_death_mos=death_mo-c_ivw_month+1;
+	if death_yr=1+c_ivw_year then core_to_death_mos=death_mo+(13-c_ivw_month);
+	if death_yr=2+c_ivw_year then core_to_death_mos=death_mo+(25-c_ivw_month);
+end; 
+*if core_to_death<=(1 + 1/12) & core_to_death~=. then core_to_death_mos = floor((death_date-c_ivw_date) / 30.5);
+*if core_to_death_mos<0 & core_to_death_mos~=. then core_to_death_mos=0;
+run;
+
+proc freq; table core_to_death_mos; run;
+
+proc sort data=medi.dn_2000_2012 out=dn_2000_20122  nodupkey;
+by BID_HRS_21 year;
+run;
+
+/*get medicare and hmo status variables from the dn file
+for the year of the core interview*/
+proc sql;
+create table dn_core_y as select
+a.*,b.buyin12,b.year,b.HMOIND12
+from meet_pre2 a inner join
+dn_2000_20122 b
+on trim(left(a.BID_hrs))=trim(left(b.BID_hrs_21))
+and a.c_ivw_year=b.year;
+quit;
+
+proc freq data=dn_core_y ;
+table c_ivw_year c_ivw_month ;
+run;
+
+/*11982 r's have at least 1 interview with a denominator file linked*/
+proc sql;
+select count(distinct BID_hrs) from dn_core_y ;
+quit;
+
+/*trim variables to show status month of interview and later
+these are all interviews with full info 12m before, so don't 
+have to check for missing months in the variable*/
+data dn_core_y2;
+set dn_core_y;
+if length(trim(left(buyin12)))=12 and c_ivw_month>0 then do;
+buyin_dy=substr(trim(left(buyin12)),c_ivw_month,(13-c_ivw_month));
+hmo_dy=substr(trim(left(HMOIND12)),c_ivw_month,(13-c_ivw_month));
+end;
+else do;
+buyin_dy=trim(left(buyin12));
+hmo_dy=trim(left(HMOIND12));
+end;
+format c_ivw_date date9.;
+run;
+
+/*Get info for year after interview to fill in remainder of the 12m period*/
+/*n=34320 have +1 year dn file*/
+proc sql;
+create table dn_core_y_aft as select
+a.BID_hrs,a.c_ivw_year ,
+b.year as c_ivw_year_aft,
+b.year,b.buyin12,b.HMOIND12
+from dn_core_y a inner join
+dn_2000_20122 b
+on trim(left(a.BID_hrs))=trim(left(b.BID_hrs_21))
+and -1<=a.c_ivw_year-b.year<0 order by bid_hrs,c_ivw_year;
+quit;
+
+
+/*Get info for years after interview to fill in remainder of the 24m period*/
+/*n=31055 have +2 year dn file*/
+proc sql;
+create table dn_core_2y_aft as select
+a.BID_hrs,a.c_ivw_year ,
+b.year as c_ivw_year_2aft,
+b.year,b.buyin12,b.HMOIND12
+from dn_core_y a inner join
+dn_2000_20122 b
+on trim(left(a.BID_hrs))=trim(left(b.BID_hrs_21))
+and -2<=a.c_ivw_year-b.year<-1 order by bid_hrs,c_ivw_year;
+quit;
+
+proc sql;
+create table all_insurance as select a.*,b.year as year_aft_civw, 
+b.buyin12 as buyin_aft,b.HMOIND12 as hmo_aft from
+dn_core_y2 a
+left join
+dn_core_y_aft b
+on trim(left(a.BID_hrs))=trim(left(b.BID_hrs)) 
+and a.c_ivw_year=b.c_ivw_year;
+quit;
+
+proc sql;
+create table all_insurance1 as select a.*,b.year as year_2aft_civw, 
+b.buyin12 as buyin_2aft,b.HMOIND12 as hmo_2aft from
+all_insurance a
+left join
+dn_core_2y_aft b
+on trim(left(a.BID_hrs))=trim(left(b.BID_hrs)) 
+and a.c_ivw_year=b.c_ivw_year;
+quit;
+
+
+/*trim 2years after if its the death year---I don't understand this right now*/
+data data all_insurance2;
+set all_insurance1;
+if year_aft_civw=death_yr & year_aft_civw~=. then do;
+	buyin_aft=substr(trim(left(buyin_aft)),1,death_mo);
+	hmo_aft=substr(trim(left(hmo_aft)),1,death_mo);
+end;
+if year_2aft_civw=death_yr & year_2aft_civw~=. then do;
+	buyin_2aft=substr(trim(left(buyin_2aft)),1,death_mo);
+	hmo_2aft=substr(trim(left(hmo_2aft)),1,death_mo);
+end;
+run;
+
+/*merge interview year and year after interview buy-in and hmo variables
+Trim so the final variable _24m is 24 months post-interview
+Note: indicator variables for parts a and b and hmo are null if don't
+have information for full 24 months post-interview*/
+data all_insurance3;
+set all_insurance2;
+buyin_2y=trim(left(buyin_dy))||trim(left(buyin_aft))||trim(left(buyin_2aft));
+hmo_2y=trim(left(hmo_dy))||trim(left(hmo_aft))||trim(left(hmo_2aft));
+
+*************************************************;
+** 12 month variables                          **;
+*************************************************;
+if length(buyin_2y)>24 then buyin_24m=substr(trim(left(buyin_2y)),1,25);
+if length(hmo_2y)>24 then hmo_24m=substr(trim(left(hmo_2y)),1,25);
+
+if length(buyin_2y)>12 then buyin_12m=substr(trim(left(buyin_2y)),1,13);
+if length(hmo_2y)>12 then hmo_12m=substr(trim(left(hmo_2y)),1,13);
+
+if length(buyin_2y)<25 & core_to_death_mos>=25 & core_to_death_mos~=. then buyin_24m="";
+if length(hmo_2y)<25 & core_to_death_mos>=25 & core_to_death_mos~=. then hmo_24m="";
+
+if length(buyin_2y)<13 & core_to_death_mos>=13 & core_to_death_mos~=. then buyin_12m="";
+if length(hmo_2y)<13 & core_to_death_mos>=13 & core_to_death_mos~=. then hmo_12m="";
+
+if length(buyin_2y)<25 & 0<core_to_death_mos<25 & core_to_death_mos~=. & length(buyin_2y)>=core_to_death_mos  then 
+	buyin_24m=substr(trim(left(buyin_2y)),1,core_to_death_mos);
+if length(hmo_2y)<25 & 0<core_to_death_mos<25 & core_to_death_mos~=. & length(hmo_2y)>=core_to_death_mos then 
+	hmo_24m=substr(trim(left(hmo_2y)),1,core_to_death_mos);
+
+if length(buyin_2y)<13 & 0<core_to_death_mos<13 & core_to_death_mos~=. & length(buyin_2y)>=core_to_death_mos  then 
+	buyin_12m=substr(trim(left(buyin_2y)),1,core_to_death_mos);
+if length(hmo_2y)<13 & 0<core_to_death_mos<13 & core_to_death_mos~=. & length(hmo_2y)>=core_to_death_mos then 
+	hmo_12m=substr(trim(left(hmo_2y)),1,core_to_death_mos);
+
+/*create indicator variable for mc coverage 12 mo. 0=no, 1=yes*/
+	/*for obs that dont die within 2 years*/
+if length(buyin_24m)=25 then do;
+	if indexc(buyin_24m,"0","1","2","A","B") then part_ab_24m_aft=0;
+	if indexc(buyin_24m,"0","1","2","A","B")=0 then part_ab_24m_aft=1;
+end;
+	/*for obs that do die within 2 years*/
+else if 0<length(buyin_24m)<=25 & length(buyin_24m)=core_to_death_mos & core_to_death_mos~=. then do;
+	if indexc(buyin_24m,"0","1","2","A","B") then part_ab_24m_aft=0;
+	if indexc(buyin_24m,"0","1","2","A","B")=0 then part_ab_24m_aft=1;
+end;
+
+
+if length(hmo_24m)=25 then do;
+	if indexc(hmo_24m,"1","2","A","B","C") then hmo_d_24m_aft=1;
+	if indexc(hmo_24m,"1","2","A","B","C")=0 then hmo_d_24m_aft=0;
+end;
+
+else if 0<length(hmo_24m)<=25 & length(hmo_24m)=core_to_death_mos & core_to_death_mos~=. then do;
+	if indexc(hmo_24m,"1","2","A","B","C") then hmo_d_24m_aft=1;
+	if indexc(hmo_24m,"1","2","A","B","C")=0 then hmo_d_24m_aft=0;
+end;
+
+if length(buyin_12m)=13 then do;
+	if indexc(buyin_12m,"0","1","2","A","B") then part_ab_12m_aft=0;
+	if indexc(buyin_12m,"0","1","2","A","B")=0 then part_ab_12m_aft=1;
+end;
+	/*for obs that do die within the year*/
+else if 0<length(buyin_12m)<=13 & length(buyin_12m)=core_to_death_mos & core_to_death_mos~=. then do;
+	if indexc(buyin_12m,"0","1","2","A","B") then part_ab_12m_aft=0;
+	if indexc(buyin_12m,"0","1","2","A","B")=0 then part_ab_12m_aft=1;
+end;
+
+
+if length(hmo_12m)=13 then do;
+	if indexc(hmo_12m,"1","2","A","B","C") then hmo_d_12m_aft=1;
+	if indexc(hmo_12m,"1","2","A","B","C")=0 then hmo_d_12m_aft=0;
+end;
+
+else if 0<length(hmo_12m)<=13 & length(hmo_12m)=core_to_death_mos & core_to_death_mos~=. then do;
+	if indexc(hmo_12m,"1","2","A","B","C") then hmo_d_12m_aft=1;
+	if indexc(hmo_12m,"1","2","A","B","C")=0 then hmo_d_12m_aft=0;
+end;
+
+run;
+
+data proj.all_insurance_aft;
+set all_insurance3;
+keep id bid_hrs year part_ab_12m_aft part_ab_24m_aft hmo_d_12m_aft hmo_d_24m_aft;
+run; 
+
+
+
+H="Probability of Dementia (Hurd for now)"
+
+
+H="helper hours (Fahle)"
+
+
+H="OOP"
+
+
+H="merge above datasets with core"
+/*merges all above created datasets with core for (hopefully) useful interview-based dataset without claims yet*/
+/*those datasets are:
+proj.restr_age_zip
+proj.rand_9812
+proj.zip_wi_da
+proj.all_insurance
+proj.all_insurance_aft
+*/
+
+proc sql;
+create table merge1 as select *
+from proj.restr_age_zip a
+left join 
+proj.rand_9812 b
+on a.id=b.id and a.core_year=b.core_year;
+quit;
+
+data merge1;
+set merge1;
+zip=zip_wave+0;
+run;
+
+proc sql; 
+create table merge2 as select * 
+from merge1 a
+left join 
+proj.zip_wi_da b
+on a.zip=b.zip_n;
+quit;
+
+proc sql;
+create table bothins as select * 
+from proj.all_insurance a
+left join 
+proj.all_insurance_aft b
+on a.bid_hrs=b.bid_hrs and a.year=b.year;
+quit;
+
+proc sql;
+create table merge3 as select *
+from merge2 a
+left join
+bothins b
+on a.id=b.id and a.core_year=b.year;
+quit;
+
+proc sql;
+create table proj.core_00_12_ins as select *
+from hrs_fnl.core_00_to_12 a
+left join
+merge3 b
+on a.id=b.id and a.core_year=b.year;
+quit;
+
+H="get mc claims"
+/*While still determining criteria, create variables looking at the 1 year, 2 years
+after and 6 months after interview for all interviews (regardless of when meet criteria)
+
+Outcomes are:
+1. Urgent or emergency hospital admissions 1 year after meet critera
+2. Hospice enrollment 1 year after meet criteria
+3. Total Medicare payments 1 year after meet criteria
+
+Note: Final dataset is set of interviews that meet ffs mc 1 year and age 65+
+with outcomes added
+*/
+
+/*ids of those interviews with ffs medicare year preceding interview and 65+*/
+
+proc sql;
+create table age_ge_65_mc as 
+select * from proj.core_00_12_ins 
+where age_ge_65=1 and xwalk_yes=1 and part_ab_12m=1 and hmo_d_12m=0 
+and core_year in (2000,2002,2004,2006,2008,2010,2012);
+quit;
+
+
+data age_ge_65_mc_ltd;
+set age_ge_65_mc(keep=bid_hrs c_ivw_date core_year);
+run;
+
+/**********************************************************************/
+/**********************************************************************/
+*get claims 2 years after interview, all claim types;
+/**********************************************************************/
+/**********************************************************************/
+/*medpar claims
+List of claims with some time within 1 year of interview*/
+%macro mp(days_start=,days_after_core=,source=,time_label=);
+
+proc sql;
+create table &source._meet_post as select a.*,b.c_ivw_date,b.core_year
+from medi.&source._2000_2012 a inner join
+age_ge_65_mc_ltd b
+on trim(left(a.bid_hrs_21))=trim(left(b.bid_hrs))
+and &days_start<=a.disch_date-b.c_ivw_date<=&days_after_core;
+quit;
+
+proc sql;
+create table &source._meet2_post as select a.*,b.c_ivw_date,b.core_year
+from medi.&source._2000_2012 a inner join
+age_ge_65_mc_ltd b
+on trim(left(a.bid_hrs_21))=trim(left(b.bid_hrs))
+and a.disch_date-b.c_ivw_date>&days_after_core and a.admit_date-b.c_ivw_date<=&days_after_core;
+quit;
+
+data proj.&source._meet3_post_&days_after_core.;
+set &source._meet_post &source._meet2_post;
+format admit_date date9. disch_date date9.;
+run;
+
+%mend;
+
+/*otherclaims, Just keep payment info to limit size of dataset
+Pull list of any claims with admission date within 1 year of the interview*/
+%macro other(days_start=,days_after_core=,source= );
+
+proc sql;
+create table proj.&source._meet_post_&days_after_core. as select 
+a.*,b.c_ivw_date,b.core_year
+from medi.&source._2000_2012(keep=admit_date BID_hrs_21 pmt_amt) a inner join
+age_ge_65_mc_ltd b
+on trim(left(a.bid_hrs_21))=trim(left(b.bid_hrs))
+and &days_start<=a.admit_date-b.c_ivw_date<=&days_after_core;
+quit;
+
+%mend;
+
+/*2 year claims lists*/
+%mp(days_start=0,days_after_core=730,source=mp );
+%other(days_start=0,days_after_core=730,source=op );
+%other(days_start=0,days_after_core=730,source=pb );
+%other(days_start=0,days_after_core=730,source=hh );
+%other(days_start=0,days_after_core=730,source=hs );
+%other(days_start=0,days_after_core=730,source=dm );
+
+
+/*1 year claims lists*/
+%mp(days_start=0,days_after_core=365,source=mp );
+%other(days_start=0,days_after_core=365,source=op );
+%other(days_start=0,days_after_core=365,source=pb );
+%other(days_start=0,days_after_core=365,source=hh );
+%other(days_start=0,days_after_core=365,source=hs );
+%other(days_start=0,days_after_core=365,source=dm );
+
+/*6 months claims lists*/
+%mp(days_start=0,days_after_core=183,source=mp );
+%other(days_start=0,days_after_core=183,source=op );
+%other(days_start=0,days_after_core=183,source=pb );
+%other(days_start=0,days_after_core=183,source=hh );
+%other(days_start=0,days_after_core=183,source=hs );
+%other(days_start=0,days_after_core=183,source=dm );
+
+
+
+H="mc payments"
+/*Add total Medicare payments from claims 1 year after interview, 2 yrs after
+and 6m after interview*/
+
+/*Claims files from 2000-2012, claims pulled in previous section
+to get just claims that are within 1 year of the interview dates
+for those interviews were r>65 and ffs medicare 1 yr prior to ivw*/
+
+/**********************************************************/
+/**********************************************************/
+/*totals from mp file*/
+/*Note: variable SSLSSNF from mp claims is N=Skilled nursing facility*/
+/*Two totals are calculated - one for skilled nursing facility claims
+and one for all other claims in the mp file (inpatient claims)*/
+/**********************************************************/
+/**********************************************************/
+
+/*get count of snf vs ip claims from claim list */
+data snf_all;
+set proj.mp_meet3_post_730(where=(trim(left(SSLSSNF))="N")) ;
+ivw_to_admit=admit_date-c_ivw_date;
+ivw_to_disch=disch_date-c_ivw_date;
+run;
+
+proc means; var ivw_to_admit ivw_to_disch; run;
+
+data ip_all;
+set proj.mp_meet3_post_730(where=(trim(left(SSLSSNF))~="N")) ;
+run;
+
+
+%macro mp(month_n=,days_start=,days_after_core=,source=,equ=,name=);
+%let source0=mp;
+
+/*Case 1 - no adjustment needed - claims where entire claim is within the x months after the interview*/
+proc sql;
+create table &source._meet_post_1 as select *
+from proj.&source0._meet3_post_&days_after_core.(where=(trim(left(SSLSSNF))&equ.="N")) 
+where &days_start<=disch_date-c_ivw_date<=&days_after_core and
+&days_start<=admit_date-c_ivw_date<=&days_after_core;
+quit;
+
+data zz_&source._meet_post_1;
+set &source._meet_post_1;
+ivw_to_admit=admit_date-c_ivw_date;
+ivw_to_disch=disch_date-c_ivw_date;
+run;
+proc means; var ivw_to_admit ivw_to_disch; run;
+
+/*Case 2 - adjustment needed because part of stay is in the window but part is after the window has ended
+Claims with admission date within start of x months but discharge date is after the x month window*/
+proc sql;
+create table &source._meet2_post as select *
+from proj.&source0._meet3_post_&days_after_core.(where=(trim(left(SSLSSNF))&equ.="N")) 
+where disch_date-c_ivw_date>&days_after_core and 0<=admit_date-c_ivw_date<=&days_after_core;
+quit;
+
+data zz_&source._meet2_post;
+set &source._meet2_post;
+ivw_to_admit=admit_date-c_ivw_date;
+ivw_to_disch=disch_date-c_ivw_date;
+run;
+proc means; var ivw_to_admit ivw_to_disch; run;
+
+
+/*identify fraction of claims that span x month period that should be 
+attributed to the x month period
+by just using the fraction of time that was included in the span*/
+data &source._meet3_post;
+set &source._meet2_post;
+pct_xm=((c_ivw_date+&days_after_core)-admit_date)/(disch_date-admit_date);
+array list pmt_amt passthru;
+do over list;
+if list=. then list=0;
+/*scale the partial claims by the time within the x month period*/
+list=list*pct_xm;
+end;
+
+run;
+
+/*Case 3 - adjustment needed because part of stay is in the window but part is before the window started
+Claims with discharge date within start of x months but admit date is before the interview date*/
+proc sql;
+create table &source._meet4_post as select *
+from proj.&source0._meet3_post_&days_after_core.(where=(trim(left(SSLSSNF))&equ.="N")) 
+where disch_date-c_ivw_date<=&days_after_core and admit_date-c_ivw_date<&days_start;
+quit;
+
+data zz_&source._meet4_post;
+set &source._meet4_post;
+ivw_to_admit=admit_date-c_ivw_date;
+ivw_to_disch=disch_date-c_ivw_date;
+run;
+proc means; var ivw_to_admit ivw_to_disch; run;
+
+
+data &source._meet5_post;
+set &source._meet4_post;
+pct_xm=(disch_date-c_ivw_date)/(disch_date-admit_date);
+array list pmt_amt passthru;
+do over list;
+if list=. then list=0;
+/*scale the partial claims by the time within the x month period*/
+list=list*pct_xm;
+end;
+
+run;
+
+/*adjust for inflation, Uses CPI for Medical Services from 
+BLS website, accessed 5/4/2015*/
+
+/*create table merging both the claims fully in the 2 year period 
+and those partially in that time
+adjust for inflation here also*/
+data &source._cost_post;
+set &source._meet_post_1 &source._meet3_post &source._meet5_post;
+array list pmt_amt passthru;
+do over list;
+if list=. then list=0;
+end;
+
+if year(admit_date)>=2012 then rate=1;
+if year(admit_date)=2011 then rate=1.03902;
+if year(admit_date)=2010 then rate=1.07086;
+if year(admit_date)=2009 then rate=1.10835;
+if year(admit_date)=2008 then rate=1.1439;
+if year(admit_date)=2007 then rate=1.1923;
+if year(admit_date)=2006 then rate=1.25586;
+if year(admit_date)=2005 then rate=1.30783;
+if year(admit_date)=2004 then rate=1.37027;
+if year(admit_date)=2003 then rate=1.43908;
+if year(admit_date)=2002 then rate=1.50337;
+if year(admit_date)=2001 then rate=1.57963;
+if year(admit_date)=2000 then rate=1.65519;
+if year(admit_date)<=1999 then rate=1.72641;
+
+
+&source._paid_by_mc=rate*(pmt_amt+passthru);
+run;
+
+*calculates total of mc charges for the claim type by hrs bid;
+proc sql;
+create table &source._pay_post as select distinct bid_hrs_21,core_year,
+sum(&source._paid_by_mc) as &source._paid_by_mc 
+from &source._cost_post group by BID_HRS_21,core_year;
+quit;
+
+*merges the totals above with the full interview list;
+proc sql;
+create table &source._&name. as select
+a.BID_hrs,a.id,a.core_year,coalesce(b.&source._paid_by_mc,0) as &source._paid_by_mc_&name.
+from proj.core_ids_init_outcomes a
+left join
+ &source._pay_post b
+ on trim(left(a.BID_hrs))=trim(left(b.bid_hrs_21)) and a.core_year=b.core_year;
+ quit;
+
+ proc sort data=&source._&name. ;
+ by BID_hrs core_year;
+ run;
+%mend;
+
+/*Runs macro to get total for the SNF claims*/
+%mp(days_start=0,days_after_core=730,source=snf,equ=,name=24m );
+%mp(days_start=0,days_after_core=365,source=snf,equ=,name=12m );
+%mp(days_start=0,days_after_core=183,source=snf,equ=,name=6m );
+/*Runs macro to get total for the inpatient (not SNF) claims*/
+%mp(days_start=0,days_after_core=730,source=ip,equ=~,name=24m );
+%mp(days_start=0,days_after_core=365,source=ip,equ=~,name=12m );
+%mp(days_start=0,days_after_core=183,source=ip,equ=~,name=6m );
+
+/**********************************************************/
+/**********************************************************/
+/*totals from other claim types*/
+/**********************************************************/
+/**********************************************************/
+/*macro to calculate totals for the claims that are not in medpar files*/
+%macro all_other(source=,month_n=,days_start=,days_after_core=);
+
+/*Adjust for inflation*/
+data &source._meet2_post;
+set proj.&source._meet_post_&days_after_core.;
+/*adjust to 2012 dollars*/
+if year(admit_date)>=2012 then rate=1;
+if year(admit_date)=2011 then rate=1.03902;
+if year(admit_date)=2010 then rate=1.07086;
+if year(admit_date)=2009 then rate=1.10835;
+if year(admit_date)=2008 then rate=1.1439;
+if year(admit_date)=2007 then rate=1.1923;
+if year(admit_date)=2006 then rate=1.25586;
+if year(admit_date)=2005 then rate=1.30783;
+if year(admit_date)=2004 then rate=1.37027;
+if year(admit_date)=2003 then rate=1.43908;
+if year(admit_date)=2002 then rate=1.50337;
+if year(admit_date)=2001 then rate=1.57963;
+if year(admit_date)=2000 then rate=1.65519;
+if year(admit_date)<=1999 then rate=1.72641;
+
+&source._paid_by_mc=rate*(pmt_amt);
+run;
+
+/*Calculate total mc payments by ID*/
+proc sql;
+create table &source._pay_post as select distinct BID_hrs_21,core_year,
+sum(&source._paid_by_mc) as &source._paid_by_mc
+from &source._meet2_post group by BID_hrs_21,core_year;
+quit;
+
+/*merge in mc totals with interview list*/
+proc sql;
+create table &source.&month_n._post as select
+a.BID_hrs,a.id,a.core_year,coalesce(b.&source._paid_by_mc,0) as &source._paid_by_mc&month_n 
+from proj.core_ids_init_outcomes a
+left join
+ &source._pay_post b
+ on trim(left(a.BID_hrs))=trim(left(b.BID_hrs_21)) and a.core_year=b.core_year;
+ quit;
+
+ proc sort data=&source&month_n._post ;
+ by BID_hrs core_year;
+ run;
+ %mend all_other;
+
+/******************************************************************/
+/* Run the macro over the mc claims files for 2 years prior to death*/
+/******************************************************************/
+
+ %all_other(source=op,month_n=_24m,days_start=0,days_after_core=730);
+  %all_other(source=pb,month_n=_24m,days_start=0,days_after_core=730);
+   %all_other(source=hh,month_n=_24m,days_start=0,days_after_core=730);
+    %all_other(source=hs,month_n=_24m,days_start=0,days_after_core=730);
+     %all_other(source=dm,month_n=_24m,days_start=0,days_after_core=730);
+
+ %all_other(source=op,month_n=_12m,days_start=0,days_after_core=365);
+  %all_other(source=pb,month_n=_12m,days_start=0,days_after_core=365);
+   %all_other(source=hh,month_n=_12m,days_start=0,days_after_core=365);
+    %all_other(source=hs,month_n=_12m,days_start=0,days_after_core=365);
+     %all_other(source=dm,month_n=_12m,days_start=0,days_after_core=365);
+
+ %all_other(source=op,month_n=_6m,days_start=0,days_after_core=183);
+  %all_other(source=pb,month_n=_6m,days_start=0,days_after_core=183);
+   %all_other(source=hh,month_n=_6m,days_start=0,days_after_core=183);
+    %all_other(source=hs,month_n=_6m,days_start=0,days_after_core=183);
+     %all_other(source=dm,month_n=_6m,days_start=0,days_after_core=183);
+
+/******************************************************************/
+/* Merge into single file, by id and interview */
+/******************************************************************/
+*first merge 12m and 6m spending into single dataset;
+data mc_costs_all;
+merge ip_24m snf_24m hh_24m_post hs_24m_post pb_24m_post op_24m_post dm_24m_post
+ip_12m snf_12m hh_12m_post hs_12m_post pb_12m_post op_12m_post dm_12m_post
+ ip_6m snf_6m hh_6m_post hs_6m_post pb_6m_post op_6m_post dm_6m_post;
+by BID_hrs core_year;
+run;
+
+/******************************************************************/
+/* Adjust for the wage index */
+/******************************************************************/
+
+*add wage index to the costs totals files;
+proc sql;
+create table mc_costs_all_wi_1 as select a.*, b.wage_index_2012_2
+from mc_costs_all a left join
+proj.core_lmt_xwalk_2 b
+on a.BID_hrs=b.bid_hrs and a.core_year=b.core_year;
+quit;
+
+/*if wage index is missing, set to 1 and identify with an indicator variable*/
+data mc_costs_all_wi_2;
+set mc_costs_all_wi_1;
+if wage_index_2012_2=. then do;
+	wage_index_missing_yes = 1;
+	wage_index_2012_2 = 1;
+end;
+run;
+
+proc freq; table wage_index_missing_yes; run;
+
+%macro wage_ind(source=);
+data mc_costs_all_wi_2;
+set mc_costs_all_wi_2;
+&source._paid_by_mc_24m_wi = &source._paid_by_mc_24m / wage_index_2012_2;
+&source._paid_by_mc_12m_wi = &source._paid_by_mc_12m / wage_index_2012_2;
+&source._paid_by_mc_6m_wi = &source._paid_by_mc_6m / wage_index_2012_2;
+run;
+%mend;
+
+%wage_ind(source=ip);
+%wage_ind(source=snf);
+ %wage_ind(source=op);
+  %wage_ind(source=pb);
+   %wage_ind(source=hh);
+    %wage_ind(source=hs);
+     %wage_ind(source=dm);
+
+
+/******************************************************************/
+/* Get totals across all claim types */
+/******************************************************************/
+
+data proj.mc_costs_12m_6m;
+set mc_costs_all_wi_2;
+/*total not adjusted for wage index*/
+tot_paid_by_mc_24m=sum(of ip_paid_by_mc_24m snf_paid_by_mc_24m hh_paid_by_mc_24m hs_paid_by_mc_24m
+pb_paid_by_mc_24m op_paid_by_mc_24m dm_paid_by_mc_24m);
+
+tot_paid_by_mc_12m=sum(of ip_paid_by_mc_12m snf_paid_by_mc_12m hh_paid_by_mc_12m hs_paid_by_mc_12m
+pb_paid_by_mc_12m op_paid_by_mc_12m dm_paid_by_mc_12m);
+
+tot_paid_by_mc_6m=sum(of ip_paid_by_mc_6m snf_paid_by_mc_6m hh_paid_by_mc_6m hs_paid_by_mc_6m
+pb_paid_by_mc_6m op_paid_by_mc_6m dm_paid_by_mc_6m);
+
+/*wage index adjusted*/
+tot_paid_by_mc_24m_wi=sum(of ip_paid_by_mc_24m_wi snf_paid_by_mc_24m_wi hh_paid_by_mc_24m_wi hs_paid_by_mc_24m_wi
+pb_paid_by_mc_24m_wi op_paid_by_mc_24m_wi dm_paid_by_mc_24m_wi);
+
+tot_paid_by_mc_12m_wi=sum(of ip_paid_by_mc_12m_wi snf_paid_by_mc_12m_wi hh_paid_by_mc_12m_wi hs_paid_by_mc_12m_wi
+pb_paid_by_mc_12m_wi op_paid_by_mc_12m_wi dm_paid_by_mc_12m_wi);
+
+tot_paid_by_mc_6m_wi=sum(of ip_paid_by_mc_6m_wi snf_paid_by_mc_6m_wi hh_paid_by_mc_6m_wi hs_paid_by_mc_6m_wi
+pb_paid_by_mc_6m_wi op_paid_by_mc_6m_wi dm_paid_by_mc_6m_wi);
+
+/*label variables*/
+label tot_paid_by_mc_24m="Medicare payment total 2 years following interview"
+ip_paid_by_mc_24m="IP Medicare payments 2 years following interview" 
+snf_paid_by_mc_24m="SNF Medicare payments 2 years following interview"
+hh_paid_by_mc_24m="Home health Medicare payments 2 years following interview" 
+hs_paid_by_mc_24m="Hospice Medicare payments 2 years following interview"
+pb_paid_by_mc_24m="Carrier Medicare payments 2 years following interview" 
+op_paid_by_mc_24m="OP Medicare payments 2 years following interview" 
+dm_paid_by_mc_24m="DME Medicare payments 2 years following interview"
+
+tot_paid_by_mc_24m_wi="WI adj Medicare payment total 2 years following interview"
+ip_paid_by_mc_24m_wi="WI adj IP Medicare payments 2 years following interview" 
+snf_paid_by_mc_24m_wi="WI adj SNF Medicare payments 2 years following interview"
+hh_paid_by_mc_24m_wi="WI adj Home health Medicare payments 2 years following interview" 
+hs_paid_by_mc_24m_wi="WI adj Hospice Medicare payments 2 years following interview"
+pb_paid_by_mc_24m_wi="WI adj Carrier Medicare payments 2 years following interview" 
+op_paid_by_mc_24m_wi="WI adj OP Medicare payments 2 years following interview" 
+dm_paid_by_mc_24m_wi="WI adj DME Medicare payments 2 years following interview"
+;
+
+label tot_paid_by_mc_12m="Medicare payment total 1 year following interview"
+ip_paid_by_mc_12m="IP Medicare payments 1 year following interview" 
+snf_paid_by_mc_12m="SNF Medicare payments 1 year following interview"
+hh_paid_by_mc_12m="Home health Medicare payments 1 year following interview" 
+hs_paid_by_mc_12m="Hospice Medicare payments 1 year following interview"
+pb_paid_by_mc_12m="Carrier Medicare payments 1 year following interview" 
+op_paid_by_mc_12m="OP Medicare payments 1 year following interview" 
+dm_paid_by_mc_12m="DME Medicare payments 1 year following interview"
+
+tot_paid_by_mc_12m_wi="WI adj Medicare payment total 1 year following interview"
+ip_paid_by_mc_12m_wi="WI adj IP Medicare payments 1 year following interview" 
+snf_paid_by_mc_12m_wi="WI adj SNF Medicare payments 1 year following interview"
+hh_paid_by_mc_12m_wi="WI adj Home health Medicare payments 1 year following interview" 
+hs_paid_by_mc_12m_wi="WI adj Hospice Medicare payments 1 year following interview"
+pb_paid_by_mc_12m_wi="WI adj Carrier Medicare payments 1 year following interview" 
+op_paid_by_mc_12m_wi="WI adj OP Medicare payments 1 year following interview" 
+dm_paid_by_mc_12m_wi="WI adj DME Medicare payments 1 year following interview"
+;
+
+label tot_paid_by_mc_6m="Medicare payment total 6 months following interview"
+ip_paid_by_mc_6m="IP Medicare payments 6 months following interview" 
+snf_paid_by_mc_6m="SNF Medicare payments 6 months following interview"
+hh_paid_by_mc_6m="Home health Medicare payments 6 months following interview" 
+hs_paid_by_mc_6m="Hospice Medicare payments 6 months following interview"
+pb_paid_by_mc_6m="Carrier Medicare payments 6 months following interview" 
+op_paid_by_mc_6m="OP Medicare payments 6 months following interview" 
+dm_paid_by_mc_6m="DME Medicare payments 6 months following interview"
+
+tot_paid_by_mc_6m_wi="WI adj Medicare payment total 6 months following interview"
+ip_paid_by_mc_6m_wi="WI adj IP Medicare payments 6 months following interview" 
+snf_paid_by_mc_6m_wi="WI adj SNF Medicare payments 6 months following interview"
+hh_paid_by_mc_6m_wi="WI adj Home health Medicare payments 6 months following interview" 
+hs_paid_by_mc_6m_wi="WI adj Hospice Medicare payments 6 months following interview"
+pb_paid_by_mc_6m_wi="WI adj Carrier Medicare payments 6 months following interview" 
+op_paid_by_mc_6m_wi="WI adj OP Medicare payments 6 months following interview" 
+dm_paid_by_mc_6m_wi="WI adj DME Medicare payments 6 months following interview"
+;
+run;
+
+proc sort data=proj.core_ids_init_outcomes; by bid_hrs core_year; run;
+proc sort data=proj.mc_costs_12m_6m; by bid_hrs core_year; run;
+
+
+*merge into overall dataset*;
+proc sql;
+create table proj.core_ids_outcomes(drop=bid_hrs2 id2 core_year2 wi) as select * from
+proj.core_ids_init_outcomes a left join
+proj.mc_costs_12m_6m(rename=(bid_hrs=bid_hrs2) rename=(id=id2) rename=(core_year=core_year2) rename=(wage_index_2012_2=wi)) b
+on trim(left(a.bid_hrs))=trim(left(b.bid_hrs2)) and a.core_year=b.core_year2;
+quit;
+
+proc export data=proj.core_ids_outcomes outfile="E:\data\Evan_SAS_practice\Core_00_12_with_outcomes.dta" replace; run;
+
+proc export data=proj.core_ids_1yr outfile="E:\data\Evan_SAS_practice\Core_00_12_FFS.dta" replace; run;
+
+H="outcomes from claims"
+/**********************************************************************/
+/**********************************************************************/
+/*Count of hospital admissions 1 year after interview
+Use suffix p24m to indicate post interview*/
+/**********************************************************************/
+/**********************************************************************/
+%macro admissions(days=,suffix=);
+/*pull list of ip claims from all medpar claims x days after interview*/
+data ip_meet_post_&days.;
+set proj.mp_meet3_post_&days.(where=(trim(left(SSLSSNF))~="N"));
+*if admit_date>=c_ivw_date;
+run;
+
+data ip_post_&days._2;
+set ip_meet_post_&days.;
+em_urgent_admit=0; /*Urgent , emergent admissions from admission type*/
+if type_adm in (1,2) then em_urgent_admit=1;
+em_admit=0;
+if type_adm=1 then em_admit=1;
+urgent_admit=0;
+if type_adm=2 then urgent_admit=1;
+elect_admit=0;
+if type_adm=3 then elect_admit=1;
+ind_ed_charge=0; /*ED charges as another indicator of ED use*/
+if ER_AMT>0 & ER_AMT~=. then ind_ed_charge=1;
+if ER_AMT=0 | ER_AMT=. then ind_ed_charge=0;
+
+*truncate admit and discharge dates to get all days within the window;
+admit_trunc=0;
+disch_trunc=0;
+if admit_date<c_ivw_date then do;
+	admit_date=c_ivw_date;
+	admit_trunc=1;
+end;
+if disch_date-c_ivw_date>&days. then do;
+	disch_date=c_ivw_date+&days.;
+	disch_trunc=1;
+end;
+adj_los=disch_date-admit_date;
+if disch_date-admit_date=0 then adj_los=1;
+run;
+
+proc sort data=ip_post_&days._2;
+by BID_hrs_21 core_year;
+run;
+
+proc sql;
+create table ip_post_&days._3 as select distinct BID_hrs_21,core_year,
+/*count of IP admissions, all types*/
+count(*) as n_ip_admit_&suffix. label="total n of hospital admit &suffix. after core ivw",
+/*count of nights in hospital*/
+sum(adj_los) as n_hospd_&suffix. label="total n of hospital nights &suffix. after core ivw",
+/*count urgent or emergency admissions*/
+count(case when em_urgent_admit=1 then em_urgent_admit else . end) as n_em_urgent_admit_&suffix. 
+	label="total n of urgent/emergent hospital admit &suffix. after core ivw",
+/*count of emergency admissions, from admission type code*/
+count(case when em_admit=1 then em_admit else . end) as n_em_admit_&suffix. 
+	label="total n of emergent hospital admit &suffix. after core ivw",
+/*count of urgent admissions, from admission type code*/
+count(case when urgent_admit=1 then urgent_admit else . end) as n_urgent_admit_&suffix. 
+	label="total n of urgent hospital admit &suffix. after core ivw",
+/*count of elective admissions, from admission type code*/
+count(case when elect_admit=1 then elect_admit else . end) as n_elect_admit_&suffix. 
+	label="total n of elective hospital admit &suffix. after core ivw",
+/*count of admissions with any ED charges*/
+count(case when ind_ed_charge=1 then ind_ed_charge else . end) as n_ED_ip_&suffix. 
+	label="total n of ED visits with subsequent admit &suffix. after core ivw",
+sum(admit_trunc) as adm_trunc_ind_&suffix.
+	label="admit before interview indicator, counted as both pre and post admit"
+
+ from ip_post_&days._2 group by BID_hrs_21,core_year;
+quit;
+
+data ip_post_&days._4;
+set ip_post_&days._3;
+if adm_trunc_ind_&suffix.>1 then adm_trunc_ind_&suffix.=1;
+run;
+
+%mend;
+
+%admissions(days=730,suffix=p24m); /*1 year admisions details*/
+%admissions(days=365,suffix=p12m); /*1 year admisions details*/
+%admissions(days=183,suffix=p6m); /*6 months admisions details*/
+
+/*merge in new variables to full variable list*/
+proc sql;
+create table core_ids_admit_post_1 as select a.*,
+b.n_ip_admit_p24m,b.adm_trunc_ind_p24m,b.n_hospd_p24m,
+b.n_em_urgent_admit_p24m,b.n_em_admit_p24m,
+b.n_urgent_admit_p24m,b.n_elect_admit_p24m,b.n_ED_ip_p24m
+from age_ge_65_mc_ltd(drop=c_ivw_date) a
+left join
+ip_post_730_4 b 
+on trim(left(a.bid_hrs))=trim(left(b.bid_hrs_21)) and a.core_year=b.core_year;
+quit;
+
+proc sql;
+create table core_ids_admit_post_2 as select a.*,
+b.n_ip_admit_p12m,b.adm_trunc_ind_p12m,b.n_hospd_p12m,
+b.n_em_urgent_admit_p12m,b.n_em_admit_p12m,
+b.n_urgent_admit_p12m,b.n_elect_admit_p12m,b.n_ED_ip_p12m
+from age_ge_65_mc_ltd(drop=c_ivw_date) a
+left join
+ip_post_365_4 b 
+on trim(left(a.bid_hrs))=trim(left(b.bid_hrs_21)) and a.core_year=b.core_year;
+quit;
+
+proc sql;
+create table core_ids_admit_post_3 as select a.*,
+b.n_ip_admit_p6m,b.adm_trunc_ind_p6m,b.n_hospd_p6m,
+b.n_em_urgent_admit_p6m,b.n_em_admit_p6m,
+b.n_urgent_admit_p6m,b.n_elect_admit_p6m,b.n_ED_ip_p6m
+from core_ids_admit_post_2 a
+left join
+ip_post_183_4 b 
+on trim(left(a.bid_hrs))=trim(left(b.bid_hrs_21)) and a.core_year=b.core_year;
+quit;
+
+
+/*Since dataset is just those with ffs mc 1 year preceeding the
+core interview, replace admit info with 0 if missing b/c there were no ip claims*/
+ data core_ids_admit_post_3;
+ set core_ids_admit_post_2;
+ array list 
+ 	n_ip_admit_p24m n_hospd_p24m n_em_urgent_admit_p24m
+	n_em_admit_p24m n_urgent_admit_p24m n_elect_admit_p24m n_ED_ip_p24m
+	n_ip_admit_p12m n_hospd_p12m n_em_urgent_admit_p12m
+	n_em_admit_p12m n_urgent_admit_p12m n_elect_admit_p12m n_ED_ip_p12m
+	n_ip_admit_p6m n_hospd_p6m n_em_urgent_admit_p6m
+	n_em_admit_p6m n_urgent_admit_p6m n_elect_admit_p6m n_ED_ip_p6m;
+ do over list;
+ if list=. then list=0;
+ end;
+
+ if n_ip_admit_p24m=0 then ind_hosp_adm_p24m=0;
+ if n_ip_admit_p24m>0 & n_ip_admit_p24m~=. then ind_hosp_adm_p24m=1;
+ label ind_hosp_adm_p24m="Indicator for any hospital admission 24m after core";
+
+ if n_ip_admit_p12m=0 then ind_hosp_adm_p12m=0;
+ if n_ip_admit_p12m>0 & n_ip_admit_p12m~=. then ind_hosp_adm_p12m=1;
+ label ind_hosp_adm_p12m="Indicator for any hospital admission 12m after core";
+
+ if n_ip_admit_p6m=0 then ind_hosp_adm_p6m=0;
+ if n_ip_admit_p6m>0 & n_ip_admit_p6m~=. then ind_hosp_adm_p6m=1;
+ label ind_hosp_adm_p6m="Indicator for any hospital admission 6m after core";
+
+ if n_em_urgent_admit_p24m=0 then ind_em_ur_adm_p24m=0;
+ if n_em_urgent_admit_p24m>0 & n_em_urgent_admit_p24m~=. then ind_em_ur_adm_p24m=1;
+ label ind_em_ur_adm_p24m="Ind any urgent or emergent hospital admission 24m after core";
+
+ if n_em_urgent_admit_p12m=0 then ind_em_ur_adm_p12m=0;
+ if n_em_urgent_admit_p12m>0 & n_em_urgent_admit_p12m~=. then ind_em_ur_adm_p12m=1;
+ label ind_em_ur_adm_p12m="Ind any urgent or emergent hospital admission 12m after core";
+
+ if n_em_urgent_admit_p6m=0 then ind_em_ur_adm_p6m=0;
+ if n_em_urgent_admit_p6m>0 & n_em_urgent_admit_p6m~=. then ind_em_ur_adm_p6m=1;
+ label ind_em_ur_adm_p6m="Ind any urgent or emergent hospital admission 6m after core";
+
+ if n_em_admit_p24m=0 then ind_em_adm_p24m=0;
+ if n_em_admit_p24m>0 & n_em_admit_p24m~=. then ind_em_adm_p24m=1;
+ label ind_em_adm_p24m="Ind any emergency hospital admission 24m after core";
+
+ if n_em_admit_p12m=0 then ind_em_adm_p12m=0;
+ if n_em_admit_p12m>0 & n_em_admit_p12m~=. then ind_em_adm_p12m=1;
+ label ind_em_adm_p12m="Ind any emergency hospital admission 12m after core";
+
+ if n_em_admit_p6m=0 then ind_em_adm_p6m=0;
+ if n_em_admit_p6m>0 & n_em_admit_p6m~=. then ind_em_adm_p6m=1;
+ label ind_em_adm_p6m="Ind any emergency hospital admission 6m after core";
+
+ if n_urgent_admit_p24m=0 then ind_ur_adm_p24m=0;
+ if n_urgent_admit_p24m>0 & n_urgent_admit_p24m~=. then ind_ur_adm_p24m=1;
+ label ind_ur_adm_p24m="Ind any urgent hospital admission 24m after core";
+
+ if n_urgent_admit_p12m=0 then ind_ur_adm_p12m=0;
+ if n_urgent_admit_p12m>0 & n_urgent_admit_p12m~=. then ind_ur_adm_p12m=1;
+ label ind_ur_adm_p12m="Ind any urgent hospital admission 12m after core";
+
+ if n_urgent_admit_p6m=0 then ind_ur_adm_p6m=0;
+ if n_urgent_admit_p6m>0 & n_urgent_admit_p6m~=. then ind_ur_adm_p6m=1;
+ label ind_ur_adm_p6m="Ind any urgent hospital admission 6m after core";
+
+ if n_elect_admit_p24m =0 then ind_elect_adm_p24m=0;
+ if n_elect_admit_p24m >0 & n_elect_admit_p24m ~=. then ind_elect_adm_p24m=1;
+ label ind_elect_adm_p24m="Ind any elective hospital admission 24m after core";
+
+
+ if n_elect_admit_p12m =0 then ind_elect_adm_p12m=0;
+ if n_elect_admit_p12m >0 & n_elect_admit_p12m ~=. then ind_elect_adm_p12m=1;
+ label ind_elect_adm_p12m="Ind any elective hospital admission 12m after core";
+
+ if n_elect_admit_p6m =0 then ind_elect_adm_p6m=0;
+ if n_elect_admit_p6m >0 & n_elect_admit_p6m ~=. then ind_elect_adm_p6m=1;
+ label ind_elect_adm_p6m="Ind any elective hospital admission 6m after core";
+
+ if (n_ip_admit_p24m - n_elect_admit_p24m)=0 then ind_nonelect_adm_p24m=0;
+ if (n_ip_admit_p24m - n_elect_admit_p24m)>0 & n_elect_admit_p24m~=. then ind_nonelect_adm_p24m=1;
+ label ind_nonelect_adm_p24m="Ind any non-elective hospital admission 24m after core";
+
+ if (n_ip_admit_p12m - n_elect_admit_p12m)=0 then ind_nonelect_adm_p12m=0;
+ if (n_ip_admit_p12m - n_elect_admit_p12m)>0 & n_elect_admit_p12m~=. then ind_nonelect_adm_p12m=1;
+ label ind_nonelect_adm_p12m="Ind any non-elective hospital admission 12m after core";
+
+ if (n_ip_admit_p6m - n_elect_admit_p6m)=0 then ind_nonelect_adm_p6m=0;
+ if (n_ip_admit_p6m - n_elect_admit_p6m)>0 & n_elect_admit_p6m~=. then ind_nonelect_adm_p6m=1;
+ label ind_nonelect_adm_p6m="Ind any non-elective hospital admission 6m after core";
+
+ n_nonelect_adm_p24m=(n_ip_admit_p24m - n_elect_admit_p24m);
+ label n_nonelect_adm_p24m="total n non-elective ip admit 24m after core";
+
+ n_nonelect_adm_p12m=(n_ip_admit_p12m - n_elect_admit_p12m);
+ label n_nonelect_adm_p12m="total n non-elective ip admit 12m after core";
+
+ n_nonelect_adm_p6m=(n_ip_admit_p6m - n_elect_admit_p6m);
+ label n_nonelect_adm_p6m="total n non-elective ip admit 6m after core";
+
+ if n_ED_ip_p24m=0 then ind_ED_adm_p24m=0;
+ if n_ED_ip_p24m>0 & n_ED_ip_p24m~=. then ind_ED_adm_p24m=1;
+ label ind_ED_adm_p24m="Ind ED use with hospital admission 24m after core, from charges";
+
+ if n_ED_ip_p12m=0 then ind_ED_adm_p12m=0;
+ if n_ED_ip_p12m>0 & n_ED_ip_p12m~=. then ind_ED_adm_p12m=1;
+ label ind_ED_adm_p12m="Ind ED use with hospital admission 12m after core, from charges";
+
+ if n_ED_ip_p6m=0 then ind_ED_adm_p6m=0;
+ if n_ED_ip_p6m>0 & n_ED_ip_p6m~=. then ind_ED_adm_p6m=1;
+ label ind_ED_adm_p6m="Ind ED use with hospital admission 6m after core, from charges";
+
+run;
+
+proc freq;
+table n_ip_admit_p: adm_trunc_ind_p: n_hospd_p: ind_hosp_adm_p: n_em_urgent_admit_p: ind_em_ur_adm_p:
+	ind_em_adm_p: ind_ur_adm_p: ind_nonelect_adm_p: n_nonelect_adm_p: n_ED_ip_p: ind_ED_adm_p: 
+	ind_em_adm_p24m*ind_ED_adm_p24m ind_em_adm_p12m*ind_ED_adm_p12m ind_em_adm_p6m*ind_ED_adm_p6m /missprint;
+run;
+
+/**********************************************************************/
+/**********************************************************************/
+/*Indicator of any hospice enrollment after interview
+Use suffix p24m to indicate post interview*/
+/**********************************************************************/
+/**********************************************************************/
+/*check of hospice claim list*/
+data hospice_check1;
+set proj.hs_meet_post_730;
+ivw_to_admit=admit_date-c_ivw_date;
+run;
+proc means; var ivw_to_admit;run;
+
+data hospice_check;
+set proj.hs_meet_post_365;
+ivw_to_admit=admit_date-c_ivw_date;
+run;
+proc means; var ivw_to_admit;run;
+
+data hospice_check2;
+set proj.hs_meet_post_183;
+ivw_to_admit=admit_date-c_ivw_date;
+run;
+proc means; var ivw_to_admit;run;
+
+
+%macro hospice(days=,suffix=);
+
+proc sort data=proj.hs_meet_post_&days.;
+by bid_hrs_21 c_ivw_date admit_date;
+run;
+
+/*just keep 1 claim per beneficiary-interview since only need indicator of hospice use*/
+data hs_meet_post_2_&days.;
+set proj.hs_meet_post_&days.;
+by bid_hrs_21 c_ivw_date;
+if first.c_ivw_date;
+hs_admit_&suffix.=1;
+label hs_admit_&suffix.="Hospice admission &suffix. after interview";
+format admit_date date9.;
+run;
+
+%mend;
+
+%hospice(days=730,suffix=p24m);
+%hospice(days=365,suffix=p12m);
+%hospice(days=183,suffix=p6m);
+
+*merge hospice indicators with full dataset;
+proc sql;
+create table core_ids_admit_hs_post_2 as select a.*,b.hs_admit_p12m from
+core_ids_admit_post_3 a left join
+hs_meet_post_2_365 b
+on trim(left(a.bid_hrs))=trim(left(b.bid_hrs_21)) and a.core_year=b.core_year;
+quit;
+
+proc sql;
+create table core_ids_admit_hs_post_3 as select a.*,b.hs_admit_p6m from
+core_ids_admit_hs_post_2 a left join
+hs_meet_post_2_183 b
+on trim(left(a.bid_hrs))=trim(left(b.bid_hrs_21)) and a.core_year=b.core_year;
+quit;
+
+proc sql;
+create table core_ids_admit_hs_post_4 as select a.*,b.hs_admit_p24m from
+core_ids_admit_hs_post_3 a left join
+hs_meet_post_2_730 b
+on trim(left(a.bid_hrs))=trim(left(b.bid_hrs_21)) and a.core_year=b.core_year;
+quit;
+
+
+proc freq; table hs_admit_p6m*hs_admit_p12m /missprint; run;
+
+/*replace with 0 when have full info but no hospice claims
+core interview*/
+data core_ids_admit_hs_post_5 ;
+set core_ids_admit_hs_post_4 ;
+if hs_admit_p24m=. then hs_admit_p24m=0;
+if hs_admit_p12m=. then hs_admit_p12m=0;
+if hs_admit_p6m=. then hs_admit_p6m=0;
+run;
+proc freq; table hs_admit_p6m*hs_admit_p12m; run;
+
+
+/*bring new outcomes variables into full interview dataset for those with ffs medicare */
+proc sql;
+create table proj.core_ids_init_outcomes(drop=bid_hrs2 core_year2)
+as select * from
+age_ge_65_mc a left join
+core_ids_admit_hs_post_5(rename=(bid_hrs=bid_hrs2) rename=(core_year=core_year2)) b
+on a.bid_hrs=b.bid_hrs2 and a.core_year=b.core_year2;
+quit;
+
+proc contents; run;
+
+proc freq; table core_year; run;
+
+proc freq; table hs_admit_p6m*hs_admit_p12m; run;
+
+proc freq;
+table n_ip_admit_p12m adm_trunc_ind_p12m n_hospd_p12m ind_hosp_adm_p12m n_em_urgent_admit_p12m ind_em_ur_adm_p12m
+	ind_em_adm_p12m ind_ur_adm_p12m ind_nonelect_adm_p12m n_nonelect_adm_p12m n_ED_ip_p12m ind_ED_adm_p12m 
+	ind_em_adm_p12m*ind_ED_adm_p12m /missprint;
+run;
+
+
+
+H="********************************"
+
+
+H="The above works, now better"
+this is the perfect time for this.  I'm looking to pull claims data for men and women at the mean ages their spouses die (79 and 77, respectively, I think).  I want:
+
+to start with just a list of index dates (in this instance, it's 365.25*79+whatever the birthdate was)
+pull n2, n1, n0, p1, p2 interviews
+pull exit interviews
+pull the death date
+pull the dartmouth stuff
+check for fee for service before & after
+dementia
+helper hours
+oop
+medicare claims--$, hospitalizations, hospice, other stuff?
+
+there should be very little bundling--each duck gets lined up before any of them are combined
+
+this way, if there's a change in the HRS data, I can just update that and one or two (well marked--vimp) other bits
+***********************************************************
+
+This is built for spouse claims, so that'll be it.
+
+
+/*hrs cleaned path*/
+libname hrs_fnl 'E:\data\hrs_cleaned';
+
+/*medicare xwalk and claims path*/
+libname medi 'E:\data\cms_DUA_24548_2012';
+
+/*rand data path*/
+libname rand 'E:\data\hrs_public_2012\rand2012\main';
+
+/*dartmouth atlas data path*/
+libname dmouth "E:\data\Dartmouth_misc";
+
+
+/*project data paths*/
+libname proj 'this needs to change every time';
+
+H="get index date"
+/*this should hopefully be the only thing that needs to change between projects, besides specifications of procedures.  To move forward with the code, we need to start the next tab with a dataset named proj.index_date that includes id and the index date(s), year(s), and month(s) for each id.  In this instance, I am pulling the date when women are 77 and men are 79, so I start with the tracker.*/
+
+data date1;
+set hrs_fnl.restr_tracker_v2012(keep=birth_date id gender);
+if gender=2 then do;
+index_date=floor(birth_date+(365.25*77));
+end;
+if gender=1 then do;
+index_date=floor(birth_date+(365.25*79));
+end;
+index_year=year(index_date);
+index_month=month(index_date);
+run;
+
+data date2;
+set date1 (where=(index_year > 1999));
+run;
+
+data date3;
+set date2 (where=(index_year < 2013));
+run;
+
+data proj.index_date (keep=id index_date index_year index_month);
+set date3;
+run;
+
+
+
+
+
+
+H="HRS restricted and death date"
+/***********************************************************************/
+/*Pulls variables from restricted, cleans and formats to long datset
+  Replaces death date from tracker with death date from Karen's corrected dataset*/
+/*Uses the following datasets: 
+	hrs_fnl.core_00_to_12
+	hrs_fnl.death_date_2012
+	hrs_fnl.restr_tracker_v2012
+	
+/***********************************************************************/
+
+data date;
+set proj.index_date;
+label c_ivw_year="Core interview year";
+keep c_ivw_year core_year id c_ivw_date;
+run;
+
+proc sort data=core nodupkey;
+by id core_year;
+run;
+
+
+data death(rename=(death_all=death_date));
+set hrs_fnl.death_date_2012;
+keep id death_all;
+run;
+
+proc sort data=death nodupkey;
+by id;
+run;
+
+data restr(rename=(ZIP10_2000=ZIP10));
+set hrs_fnl.restr_tracker_v2012(keep=hhid pn id birth_date white black hisp_eth native_amer 
+asian_pi other_race other_na_api_race zip: stateusps: cause_death_12_n degree gender);
+id_c=trim(hhid)||trim(pn);
+drop id;
+rename id_c=id;
+restr_yes=1;
+run;
+
+proc sort data=restr nodupkey;
+by id;
+run;
+
+proc contents data=restr; run;
+
+proc sql;
+create table core_dob(drop=id2) as select * from core a left join
+restr(rename=(id=id2) drop=hhid pn) b 
+on a.id=b.id2;
+quit;
+
+*6 obs have no match in the restricted dataset;
+*These obs each only have 1 inteview, so can't use them anyway;
+proc freq data=core_dob; table restr_yes /missprint; run;
+
+data restr_test;
+set core_dob;
+if restr_yes=.;
+run;
+
+proc sql;
+create table core_dob1(drop=id2) as select * from core_dob a left join
+death(rename=(id=id2)) b 
+on a.id=b.id2;
+quit;
+
+data core_age_1;
+set core_dob1;
+format death_date date9.;
+age_at_core=floor((c_ivw_date-birth_date)/365.25);
+label age_at_core="Age at core interview";
+if age_at_core>=65 then age_ge_65=1;
+if age_at_core<65 then age_ge_65=0;
+label age_ge_65="Age at core interview > 65";
+
+core_to_death=(death_date-c_ivw_date)/365.25;
+label core_to_death="Time from core ivw to death, years";
+if core_to_death<=1 and core_to_death~=. then core_to_dod_1yr=1;
+if core_to_death>1 or core_to_death=. then core_to_dod_1yr=0;
+label core_to_dod_1yr="Died within 1 year of core interview";
+
+if core_to_death<=0.5 and core_to_death~=. then core_to_dod_6m=1;
+if core_to_death>0.5 or core_to_death=. then core_to_dod_6m=0;
+label core_to_dod_6m="Died within 6 months of core interview";
+
+run;
+
+proc freq data=core_age_1;
+table age_at_core*age_ge_65 core_to_dod_1yr*core_to_dod_6m /missprint;
+run;
+
+
+****************************************************************;
+*get clean zip code variable by wave;
+proc sort data=core_age_1; by id core_year; run;
+
+/*get list of first and last interview years*/
+data ivw_years_1;
+set core_age_1;
+by id; 
+if first.id then first_ivw_year=core_year;
+if last.id then last_ivw_year=core_year;
+run;
+
+data ivw_years_1a;
+set ivw_years_1;
+if first_ivw_year~=.;
+run;
+
+data ivw_years_1b;
+set ivw_years_1;
+if last_ivw_year~=.;
+run;
+
+proc sql;
+create table ivw_years_2 as select a.id,a.first_ivw_year,b.last_ivw_year
+from ivw_years_1a a left join
+ivw_years_1b b
+on a.id=b.id;
+quit;
+
+proc freq; table first_ivw_year last_ivw_year; run;
+
+*merge into overall dataset;
+proc sql;
+create table core_age_zip_1 as select
+a.*, b.first_ivw_year,b.last_ivw_year from
+core_age_1 a left join
+ivw_years_2 b
+on a.id=b.id;
+quit;
+
+proc freq; table first_ivw_year last_ivw_year; run;
+
+/*clean up missing zip variables
+1. if missing, use interview prior
+2. if still missing, use interview after
+3. if still missing, use interview 2x prior...*/
+
+data core_age_zip_2 ;
+set core_age_zip_1 ;
+/*1998 updates, use 2000 zip
+1 obs only has one interview in our dataset for 1998 and is missing zip that year, won't be
+in the final sample so leave as missing now*/
+if zip98='' & first_ivw_year<=1998<=last_ivw_year then do;
+	zip_98_imp_yes=1;
+	zip98=zip00;
+	end;
+/*2000 updates, use 1998 zip
+2 obs only have one interview in the dataset for 2000, missing zip that year, again not
+in final sample so leave missing here*/
+if zip00='' & first_ivw_year<=2000<=last_ivw_year then do;
+	zip_00_imp_yes=1;
+	zip00=zip98;
+	end;
+/*2002 updates, use 2000 or 2004 zip
+1 obs has only the 2002 interview, leave zip missing for that person*/
+if zip02='' & first_ivw_year<=2002<=last_ivw_year then do;
+	zip_02_imp_yes=1;
+	zip02=zip00;
+		if zip02='' then do;
+		zip02=zip04;
+		end;
+	end;
+/*2004 updates, use 2002 or 2006 zip
+13 obs has only the 2004 interview, leave zip missing for those observations*/
+if zip04='' & first_ivw_year<=2004<=last_ivw_year then do;
+	zip_04_imp_yes=1;
+	zip04=zip02;
+		if zip04='' then do;
+		zip04=zip06;
+		end; /*1 obs still missing, use 1998 zip for this person*/
+				if zip04='' then do;
+				zip04=zip98;
+				end; 
+	end;
+/*2006 updates, use 2004 or 2008 zip
+no observations missing*/
+if zip06='' & first_ivw_year<=2006<=last_ivw_year then do;
+	zip_06_imp_yes=1;
+	zip06=zip04;
+		if zip06='' then do;
+		zip06=zip08;
+		end; 
+	end;
+/*2008 updates, use 2006 zip
+no observations missing*/
+if zip08='' & first_ivw_year<=2008<=last_ivw_year then do;
+	zip_08_imp_yes=1;
+	zip08=zip06;
+	end;
+/*2010 updates, use 2008 zip
+1 obs has only 2010 interview and missing zip that year, so leave missing*/
+if zip10='' & first_ivw_year<=2010<=last_ivw_year then do;
+	zip_10_imp_yes=1;
+	zip10=zip08;
+	end;
+/*2012 12 observations missing, use 2010*/
+if zip12='' & first_ivw_year<=2012<=last_ivw_year then do;
+	zip_12_imp_yes=1;
+	zip12=ZIP10_2010;
+	end;
+run;
+
+****************************************************************;
+*get clean state code variable by wave;
+data core_age_zip_state;
+set core_age_zip_2;
+/*1998 state - n=1 obs only has one interview with missing zip,state, leave blank*/
+if stateusps98='' & first_ivw_year<=1998<=last_ivw_year then do;
+	st_98_imp_yes=1;
+	stateusps98=stateusps00;
+	end;
+/*2000 state - n=2 obs only single interview so leave missing*/ 
+if stateusps00='' & first_ivw_year<=2000<=last_ivw_year then do;
+	st_00_imp_yes=1;
+	stateusps00=stateusps98;
+	end;
+/*2002 state - n=1 obs only single interview so leave missing*/ 
+if stateusps02='' & first_ivw_year<=2002<=last_ivw_year then do;
+	st_02_imp_yes=1;
+	stateusps02=stateusps00;
+	if stateusps02='' then do;
+		stateusps02=stateusps04;
+		end;
+	end;
+/*2004 updates, use 2002 or 2006 state
+13 obs has only the 2004 interview, leave state missing for those observations*/
+if stateusps04='' & first_ivw_year<=2004<=last_ivw_year then do;
+	st_04_imp_yes=1;
+	stateusps04=stateusps02;
+		if stateusps04='' then do;
+		stateusps04=stateusps06;
+		end; /*1 obs still missing, use 1998 state for this person*/
+				if stateusps04='' then do;
+				stateusps04=stateusps98;
+				end; 
+	end;
+/*2006 updates, use 2004 or 2008 state
+no observations missing*/
+if stateusps06='' & first_ivw_year<=2006<=last_ivw_year then do;
+	st_06_imp_yes=1;
+	stateusps06=stateusps04;
+		if stateusps06='' then do;
+		stateusps06=stateusps08;
+		end; 
+	end;
+/*2008 updates, use 2006 state
+no observations missing*/
+if stateusps08='' & first_ivw_year<=2008<=last_ivw_year then do;
+	st_08_imp_yes=1;
+	stateusps08=stateusps06;
+	end;
+/*2010 updates, use 2008 state
+1 obs has only 2010 interview and missing state that year, so leave missing*/
+if stateusps10='' & first_ivw_year<=2010<=last_ivw_year then do;
+	st_10_imp_yes=1;
+	stateusps10=stateusps08;
+	end;
+/*2012 updates, use 2010 state
+no observations missing*/
+if stateusps12='' & first_ivw_year<=2012<=last_ivw_year then do;
+	st_12_imp_yes=1;
+	stateusps12=stateusps10;
+	end;
+run;
+
+proc sort data=core_age_zip_state; by id core_year; run;
+
+data core_age_zip;
+set core_age_zip_state;
+zip_wave=vvaluex("zip"||substr(trim(left(core_year)),3,2) );
+zip_imputed=vvaluex("zip_"||substr(trim(left(core_year)),3,2)||"_imp_yes" );
+drop zip9: zip0: zip1: ;
+label zip_wave="ZIP code, residence at time of interview";
+label zip_imputed="ZIP code imputed";
+
+state_wave=vvaluex("stateusps"||substr(trim(left(core_year)),3,2) );
+state_imputed=vvaluex("st_"||substr(trim(left(core_year)),3,2)||"_imp_yes" );
+drop stateusps: ;
+label state_wave="State, residence at time of interview";
+label state_imputed="State imputed";
+run;
+
+/*create census variables*/
+
+data core_age_zip1;
+set core_age_zip;
+
+/* create census regions */
+if state_wave in ('CT','ME','MA','NH','RI','VT','NJ','NY','PA') then REGION=1;
+   else if state_wave in ('IN','IL','MI','OH','WI','IA','KS','MN','MO','NE','ND','SD') then REGION=2;
+   else if state_wave in ('DE','DC','FL','GA','MD','NC','SC','VA','WV','AL','KY','MS','TN',
+        'AR','LA','OK','TX' ) then REGION=3;
+   else if state_wave in ('AZ','CO','ID','NM','MT','UT','NV','WY','AK','CA','HI','OR','WA') then REGION=4;
+/*create census divisions */
+if state_wave in ('CT','ME','MA','NH','RI','VT') then DIVISION=1;
+   else if state_wave in ('NJ','NY','PA') then DIVISION=2;
+   else if state_wave in ('IN','IL','MI','OH','WI') then DIVISION=3;
+   else if state_wave in ('IA','KS','MN','MO','NE','ND','SD') then DIVISION=4;
+   else if state_wave in ('DE','DC','FL','GA','MD','NC','SC','VA','WV') then DIVISION=5;
+   else if state_wave in ('AL','KY','MS','TN') then DIVISION=6;
+   else if state_wave in ('AR','LA','OK','TX' ) then DIVISION=7;
+   else if state_wave in ('AZ','CO','ID','NM','MT','UT','NV','WY') then DIVISION=8;
+   else if state_wave in ('AK','CA','HI','OR','WA') then DIVISION=9;
+
+/* create medicaid eligibility groupings: =>138% or <138% */
+if state_wave in ('AL','AK','FL','GA','ID','KS','LA','ME','MS','MO','MT','NE','NC',
+        'OK','SC','SD','TN','TX','UT','VA','WI','WY') then MEDICAID_138=0;
+   else if state_wave in ('AR','AZ','CA','CO','CT','DE','DC','HI','IN','IL','IA',
+        'KY','MA','MI','MN','MD','NH','ND','NM','NV','NJ','NY','OH','OR','PA',
+        'RI','VT','WV','WA') then MEDICAID_138=1;
+label region='Census Region: 1=NE,2=MW,3=S,4=W';
+label division='Census Division';
+label medicaid_138='Medicaid eligibility GE 138% FPL';
+run;
+
+/*save dataset and drop raw zip code variables*/
+data proj.restr_age_zip;
+set core_age_zip1;
+drop st_: zip_9: zip_0: zip_1: ;
+run;
+
+proc freq data=core_age_zip; table zip_wave state_wave  /missprint ; run;
+
+proc freq; table zip_imputed state_imputed /missprint ; run;
+
+proc contents data=proj.restr_age_zip; run;

@@ -1,0 +1,132 @@
+/*get 2012 wage index file set up
+
+starts with the file E:\data\Dartmouth_misc\FY_2012_FR_cbsaoccmix_nooccmix
+cbsaom_noom0702211.xls
+
+brings in cbsa descriptions, drops unneeded columns
+
+saves file to E:\data\Dartmouth_misc\
+*/
+
+*proc import datafile='C:\data\dartmouth\raw_data\wage_index_cms_orig\2012\cbsaom_noom0702211.xls';
+proc import datafile="E:\data\Dartmouth_misc\FY_2012_FR_cbsaoccmix_nooccmix\cbsaom_noom0702211.xls" 
+out=wi dbms=xls replace;
+run;
+
+proc means; 
+var occ_mix_adjusted_wage_index;
+*var var9;
+run;
+
+data wi_2;
+set wi (keep=CBSAGEO occ_mix_adjusted_wage_index);
+rename occ_mix_adjusted_wage_index=wage_index_2012;
+cbsageo=trim(left(cbsageo));
+run;
+
+
+*proc import datafile="C:\data\dartmouth\raw_data\wage_index_cms_orig\2012\cbsaxwalk09puf.xls";
+proc import datafile="E:\data\Dartmouth_misc\FY_2012_FR_cbsaoccmix_nooccmix\cbsaxwalk09puf.xls"
+out=cbsaxwalk dbms=xls;
+run;
+
+data cbsaxwalk1;
+set cbsaxwalk;
+if cbsa~=.;
+keep cbsa cbsa_name st;
+run;
+
+/*add state level names,codes*/
+proc sort data=cbsaxwalk1 out=cbsaxwalk2 nodupkey; by cbsa; run;
+
+/*now fill in state codes for state averages*/
+*proc import datafile="C:\data\dartmouth\raw_data\wage_index_cms_orig\2012\cbsa_state_level_xwalk.xls";
+proc import datafile="E:\data\Dartmouth_misc\FY_2012_FR_cbsaoccmix_nooccmix\cbsa_state_level_xwalk.xls"
+out=statecbsa dbms=xls REPLACE;
+run;
+
+data statecbsa1;
+set statecbsa;
+rename CBSA_Code=cbsa;
+rename Urban_Area_Title=cbsa_name;
+run;
+
+/*add to xwalk*/
+data cbsaxwalk3;
+set cbsaxwalk2 statecbsa1;
+run;
+
+proc sort data=cbsaxwalk3; by state_in_wage_index cbsa; run;
+
+/*merge in descriptions to wage index file*/
+proc sql;
+create table wi_3 as select a.CBSA_Name,a.st,a.state_in_wage_index,a.cbsa,b.* from
+cbsaxwalk3 a
+left join
+wi_2 b
+on a.cbsa=b.CBSAGEO;
+quit;
+
+proc sort data=wi_3; by state_in_wage_index cbsageo; run;
+
+/*missing CBSA's aren't in the 2012 wage index spradsheet*/
+data misswi_test;
+set wi_3;
+if wage_index_2012=.;
+run;
+
+data wi_4;
+set wi_3;
+if wage_index_2012~=. | (wage_index_2012=. & state_in_wage_index~=.);
+run;
+
+/*now fill in DC, NJ, RI since missing state avg wi in list*/
+data wi_ri;
+set wi_4;
+if st='RI' | index(trim(left(CBSA_Name)),", RI")>0;
+run;
+
+proc means;
+var wage_index_2012;
+run;
+
+/*get NJ average*/
+data wi_nj;
+set wi_4;
+if st='NJ' | index(trim(left(CBSA_Name)),", NJ")>0;
+run;
+
+proc means;
+var wage_index_2012;
+run;
+
+/*get DC average*/
+data wi_dc;
+set wi_4;
+if st='DC' | index(trim(left(CBSA_Name)),", DC")>0;
+run;
+
+proc means;
+var wage_index_2012;
+run;
+
+data wi_5;
+set wi_4;
+cbsa_n=cbsa+0;
+if trim(left(cbsa))~="";
+if st='RI' | index(trim(left(CBSA_Name)),", RI")>0 then RI=1;
+if st='NJ' | index(trim(left(CBSA_Name)),", NJ")>0 then NJ=1;
+if st='DC' | index(trim(left(CBSA_Name)),", DC")>0 then DC=1;
+*state 44=RI , state 34=NJ, state 11=DC;
+if state_in_wage_index=44 then wage_index_2012=1.0657000; 
+if state_in_wage_index=34 then wage_index_2012=1.0788222; 
+if state_in_wage_index=11 then wage_index_2012= 1.0642000; 
+run;
+
+proc freq; table RI NJ DC; run;
+
+/*save dataset*/
+libname misc 'E:\data\Dartmouth_misc';
+data misc.wage_index_2012;
+set wi_5;
+run;

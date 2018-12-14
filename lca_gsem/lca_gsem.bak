@@ -1,0 +1,2272 @@
+= V4 Outline MultiLine NoSorting TabWidth=30
+
+H="***** LCA"
+
+
+H="Create data set"
+/* Serious illness LCA  */
+* 02242016 use 2008 data only. evaluate total population and then subgroups of No criteria, A, B & C;
+
+libname SI_fin "E:\data\serious_ill\final_data";
+libname SI_int "E:\data\serious_ill\int_data";
+libname SI_out "E:\data\serious_ill\logs";
+libname lca "C:\Users\mckenk04\serious_illness";
+options nofmterr;
+
+/* documentation for the construction of data ;
+set more off, perm
+local logpath E:\data\serious_ill\logs
+local datapath E:\data\serious_ill\final_data
+cd `datapath'
+
+/* THIS ORIGINAL CODE OUTDATED 5/4/16 TO BRING IN HELPER HOURS AND CONTACT DAYS
+* CRITERIA A + HCC in 2008
+use n0_n1_p1_p2_x_criteria_a_v1 if core_year_n0==2008
+* add the HCC data		 
+drop _merge 
+merge 1:1 id using "E:\data\cms_DUA_24548_2012\HCC2008.dta" //, nogenerate
+tab _merge
+keep if _merge==3
+gen criteria_a_file=1
+save n0_n1_p1_p2_x_criteria_a_hcc08, replace
+
+* CRITERIA B + HCC in 2008
+use n0_n1_p1_p2_x_criteria_b_v1 if core_year_n0==2008
+* add the HCC data		 
+drop _merge 
+merge 1:1 id using "E:\data\cms_DUA_24548_2012\HCC2008.dta" //, nogenerate
+tab _merge
+keep if _merge==3
+gen criteria_b_file=1
+save n0_n1_p1_p2_x_criteria_b_hcc08, replace
+
+* CRITERIA C + HCC in 2008
+use n0_n1_p1_p2_x_criteria_c_v1 if core_year_n0==2008
+* add the HCC data		 
+drop _merge 
+merge 1:1 id using "E:\data\cms_DUA_24548_2012\HCC2008.dta" //, nogenerate
+tab _merge
+keep if _merge==3
+gen criteria_c_file=1
+save n0_n1_p1_p2_x_criteria_c_hcc08, replace
+
+* CRITERIA COMPARISON + HCC in 2008
+use n0_n1_p1_p2_x_criteria_2008_v1
+keep if (criteria_a_n0==0 & criteria_b_n0==0 & criteria_c_n0==0) 
+* add the HCC data		 
+drop _merge 
+merge 1:1 id using "E:\data\cms_DUA_24548_2012\HCC2008.dta" //, nogenerate
+tab _merge
+keep if _merge==3
+gen criteria_0_file=1
+save n0_n1_p1_p2_x_criteria_comp_hcc08, replace
+
+* combine 2008 data and create HCC risk adj and spending 
+use n0_n1_p1_p2_x_criteria_a_hcc08 
+append using "n0_n1_p1_p2_x_criteria_b_hcc08" ///
+             "n0_n1_p1_p2_x_criteria_c_hcc08" ///
+             "n0_n1_p1_p2_x_criteria_comp_hcc08"
+gen group=0
+   replace group=1 if criteria_a_file==1			 
+   replace group=2 if criteria_b_file==1	
+   replace group=3 if criteria_c_file==1	
+tab group
+
+gen hcc_adj       = score_community
+  replace hcc_adj = score_institutional if nhres_n0==1 
+  replace hcc_adj = score_new_enrollee if new==1 
+gen hcc_spend     = hcc_sp_2008_adj2012 * hcc_adj
+
+save "E:\data\serious_ill\final_data\n0_n1_p1_p2_x_criteria_all_hcc08.dta", replace
+END ORIGINAL CODE*/ 
+
+/* data set created by evan that includes contact hours 5/4/16
+use E:\data\serious_ill\final_data\n0_n1_p1_p2_x_criteria_2008.dta
+* add the HCC data		 
+merge 1:1 id using "E:\data\cms_DUA_24548_2012\HCC2008.dta" //, nogenerate
+tab _merge
+keep if _merge==1 | _merge==3
+
+* add helper hours
+drop _merge 
+merge 1:1 id using "E:\data\serious_ill\final_data\n0_n1_p1_p2_x_criteria_2008_v1.dta" , keepusing(re_white re_black cost_mos_n0 hlphrs nomisshrs) 
+tab _merge
+
+saveold n0_n1_p1_p2_x_criteria_all_hcc08, replace
+
+
+proc import out=SI_fin.n0_n1_p1_p2_x_criteria_all_hcc08
+datafile="E:\data\serious_ill\final_data\n0_n1_p1_p2_x_criteria_all_hcc08.dta"  
+dbms=dta replace; 
+run;
+*/
+
+
+
+
+/*************************************************************/
+* Set up data ;
+data lca.lcawork;
+set SI_fin.n0_n1_p1_p2_x_criteria_all_hcc08;
+
+* define 10% 5% cut offs (DOES NOT INCLUDE WAGE INDEX _wi_) ;
+if tot_paid_by_mc_12m_n0 > 52719.138198 then spend_med5=1 ;
+ else spend_med5=2 ;
+if tot_paid_by_mc_12m_n0 > 32162.686776 then spend_med10=1  ;
+ else spend_med10=2 ;
+spend_med5_0=spend_med5;
+spend_med10_0=spend_med10;
+if spend_med5_0=2 then spend_med5_0=0;
+if spend_med10_0=2 then spend_med10_0=0;
+
+/* create census regions */
+if state_wave_n0 in ('CT','ME','MA','NH','RI','VT','NJ','NY','PA') then region=1;
+   else if state_wave_n0 in ('IN','IL','MI','OH','WI','IA','KS','MN','MO','NE','ND','SD') then region=2;
+   else if state_wave_n0 in ('DE','DC','FL','GA','MD','NC','SC','VA','WV','AL','KY','MS','TN',
+        'AR','LA','OK','TX' ) then region=3;
+   else if state_wave_n0 in ('AZ','CO','ID','NM','MT','UT','NV','WY','AK','CA','HI','OR','WA') then region=4;
+/*create census divisions */
+if state_wave_n0 in ('CT','ME','MA','NH','RI','VT') then division=1;
+   else if state_wave_n0 in ('NJ','NY','PA') then division=2;
+   else if state_wave_n0 in ('IN','IL','MI','OH','WI') then division=3;
+   else if state_wave_n0 in ('IA','KS','MN','MO','NE','ND','SD') then division=4;
+   else if state_wave_n0 in ('DE','DC','FL','GA','MD','NC','SC','VA','WV') then division=5;
+   else if state_wave_n0 in ('AL','KY','MS','TN') then division=6;
+   else if state_wave_n0 in ('AR','LA','OK','TX' ) then division=7;
+   else if state_wave_n0 in ('AZ','CO','ID','NM','MT','UT','NV','WY') then division=8;
+   else if state_wave_n0 in ('AK','CA','HI','OR','WA') then division=9;
+/* create medicaid eligibility groupings: =>138% or <138% */
+if state_wave_n0 in ('AL','AK','FL','GA','ID','KS','LA','ME','MS','MO','MT','NE','NC',
+        'OK','SC','SD','TN','TX','UT','VA','WI','WY') then medicaid_138=2;
+   else if state_wave_n0 in ('AR','AZ','CA','CO','CT','DE','DC','HI','IN','IL','IA',
+        'KY','MA','MI','MN','MD','NH','ND','NM','NV','NJ','NY','OH','OR','PA',
+        'RI','VT','WV','WA') then medicaid_138=1;
+/* create dummy variables */
+northeast=2;
+midwest=2;
+south=2;
+west=2;
+if region=1 then northeast=1;
+if region=2 then midwest=1;
+if region=3 then south=1;
+if region=4 then west=1;
+label region='Census Region: 1=NE,2=MW,3=S,4=W';
+label division='Census Division';
+label medicaid_138='Medicaid eligibility GE 138% FPL';  
+
+/* because 93* of the SMI group has 3+ comorbidities create ordinal variable of 
+illness severity: 0=none, 1=3+ comordities (no SMI), 2=SMI (<3 comorbidities), 3=SMI & 3+ comorbidities
+*/
+sev_ill=1;
+if el_ge3_comorb_1yr_n0=1 & ser_med_illness_n0=0 then sev_ill=2;  
+if el_ge3_comorb_1yr_n0=0 & ser_med_illness_n0=1 then sev_ill=3;
+if el_ge3_comorb_1yr_n0=1 & ser_med_illness_n0=1 then sev_ill=4; 
+
+
+/* VARIABLES BASED ON LEE INDEX */  
+* age: 60-64, 65-69, 70-74 (4), 75-79 (5), >=85 (7) 
+* AGE: our sample 48% <75, 38% 75-84 and 14% 85+ ;
+if age_at_core_n0<75 then age_3gp=1;
+   else if age_at_core_n0 ge 75 & age_at_core_n0< 85 then age_3gp=2;
+   else if age_at_core_n0 ge 85 then age_3gp=3;
+if age_at_core_n0 ge 80 then age_80 =1  ;
+   else if age_at_core_n0 < 80 then age_80 =2;
+
+if age_at_core_n0<75 then age_75=2 ;
+  else if age_at_core_n0 ge 75 then age_75=1;
+
+* race;
+if re_cat=5 then re_cat=4;
+
+* comorbidities: diabetes, cancer, lung disease, heart failure, 
+* diabetes (use charlson any). other variables compl/uncompl include
+  smi_diab_compl_ind_n0 dm_hrs_n0 charls_11_0_1yr_n0
+  charls_10_0_1yr_n0 comorb_11_0_1yr_n0 comorb_10_0_1yr_n0;
+* cancer (use charlson any). others options include: smi_cancer_ind_n0 
+  cancer_hrs_n0 charls_14_0_1yr_n0 charls_16_0_1yr_n0 comorb_18_0_1yr_n0 
+  comorb_19_0_1yr_n0 el_cancer_1yr_n0 ;
+* lung disease(use charlson any). others options include: smi_copd_ind_n0 
+ lung_hrs_n0  charls_6_0_1yr_n0 comorb_9_0_1yr_n0;
+* heart failure (use charlson any). others options include: smi_chf_ind_n0
+  heart_hrs_n0 chf_hrs_n0  charls_1_0_1yr_n0  charls_2_0_1yr_n0 comorb_1_0_1yr_n0;
+array comorb(24) cc_9_diabetes_1yr_n0 cc_cncr_chronic_1yr_n0 cc_7_copd_1yr_n0
+      cc_8_chf_1yr_n0 smi_diab_compl_ind_n0 dm_hrs_n0 charls_11_0_1yr_n0 
+	  smi_cancer_ind_n0 cancer_hrs_n0 charls_14_0_1yr_n0 charls_16_0_1yr_n0 
+      comorb_18_0_1yr_n0 comorb_19_0_1yr_n0 el_cancer_1yr_n0 smi_copd_ind_n0
+	  lung_hrs_n0  charls_6_0_1yr_n0 comorb_9_0_1yr_n0 smi_chf_ind_n0
+      heart_hrs_n0 chf_hrs_n0  charls_1_0_1yr_n0  charls_2_0_1yr_n0 
+      comorb_1_0_1yr_n0;
+do i = 1 to 24;
+if comorb(i) = 0 | comorb(i) = . then comorb(i) =2 ;
+end; drop i;
+
+* behaviors: BMI<25, current smoker
+* BMI missing data for n=3265 so replace missing data with n1 data;
+bmi_n0_n1= bmi_n0;
+   if bmi_n0=. then bmi_n0_n1=bmi_n1;
+bmi_25=.;
+   if  bmi_n0_n1 le 24.9 then bmi_25=2;
+   else if bmi_n0_n1 ge 25 then bmi_25=1;
+   if bmi_25=. & comorb_22_0_1yr_n0=1 then bmi_25=1;
+
+* current smoker (ever = smoke_ever_n0);
+if smoke_curr_n0 = 0 then smoke_curr_n0 =2 ;
+
+* functional measures: bathing, finances, walking several blocks, pushing/pulling heavy objects;
+* adl_diff_bh_n0 iadl_diff_m_n0 adl_diff_wk_n0 fl_diff_wk_many_n0 fl_diff_push_n0 ;
+if adl_diff_bh_n0=. & adl_bh_core_n0=1 then adl_diff_bh_n0=1;
+  else if adl_diff_bh_n0=. & adl_bh_core_n0=0 then adl_diff_bh_n0=0;
+if iadl_diff_m_n0=. & iadl_m_core_n0=1 then iadl_diff_m_n0=1;
+  else if iadl_diff_m_n0=. & iadl_m_core_n0=0 then iadl_diff_m_n0=0;
+if adl_diff_wk_n0=. & adl_wk_core_n0=1 then adl_diff_wk_n0=1;
+  else if adl_diff_wk_n0=. & adl_wk_core_n0=0 then adl_diff_wk_n0=0;
+
+adl_cat_core_n0r = adl_cat_core_n0;
+if adl_cat_core_n0r =2 then adl_cat_core_n0r =1;
+  else if adl_cat_core_n0r =0 then adl_cat_core_n0r =2;
+
+* SMI & comorbitities;
+smi_count_n0_1 = smi_count_n0 + 1;
+if smi_count_n0_1 >4 then smi_count_n0_1=4;
+label smi_count_n0_1="Num SMI- minus 1 for actual num";
+
+elix_count_n0= comorb_all_0_1yr_n0 +1;
+if elix_count_n0 >4 then elix_count_n0=4;
+label elix_count_n0="Num comorbidities- minus 1 for actual num";
+
+charls_index_wt_3=2;
+if charls_index_wt_0_1yr_n0 ge 3 then charls_index_wt_3=1;
+
+* SES ;
+if medicaid_n0=. then medicaid_n0=0;
+nw_low_no_medicaid=2;
+   if medicaid_n0=0 & nw_lowest_n0=1 then nw_low_no_medicaid=1 ;
+nw_mid_no_medicaid=2;
+   if medicaid_n0=0 & (nw_lowest_n0=1 | nw_midlow_n0=1) then nw_mid_no_medicaid=1 ;
+fw_low_no_medicaid=2;
+   if medicaid_n0=0 & fw_lowest_n0=1 then fw_low_no_medicaid=1 ;
+fw_mid_no_medicaid=2;
+   if medicaid_n0=0 & (fw_lowest_n0=1 | fw_midlow_n0=1) then fw_mid_no_medicaid=1 ;
+nw_lowmid_n0=2;
+fw_lowmid_n0=2;
+   if nw_lowest_n0=1 | nw_midlow_n0=1 then nw_lowmid_n0=1 ;
+   if fw_lowest_n0=1 | fw_midlow_n0=1 then fw_lowmid_n0=1 ;
+
+* pain;
+if pain_limit_act_hrs_n0=. then pain_limit_act_hrs_n0=0;
+pain_mod_sev=2;
+if pain_level_hrs_n0=2 | pain_level_hrs_n0=3 then pain_mod_sev=1;
+pain_severe=2;
+if pain_level_hrs_n0=3 then pain_severe=1;
+
+* alcohol ;
+n_drinks_day = n_drinks_3m_n0 + 1;
+  if n_drinks_day=3 then n_drinks_day=2 ; 
+  else if n_drinks_day ge 4 then n_drinks_day=3;
+
+* helper hours and contact days;
+hlphrs_1=2;
+if hlphrs>0 | hlphrs=. then hlphrs_1=1;
+hlphrs_24=2;
+if hlphrs>23 | hlphrs=. then hlphrs_24=1;
+
+contact_days_n0_20=2;
+if contact_days_n0 ge 20 then contact_days_n0_20=1;
+contact_days_n0_30=2;
+if contact_days_n0 ge 30 then contact_days_n0_30=1;
+contact_days_n0_27=2;
+if contact_days_n0 ge 27 then contact_days_n0_27=1;
+
+
+* create high school degree indicator variable;
+if degree_n0 ge 1 & degree_n0 ne . then hs_deg_ind=1 ;
+if degree_n0=0 then hs_deg_ind=0 ;
+label hs_deg_ind="High school degree, 1=yes";
+
+
+* recode 0s to 2s; 
+Array health (61) re_white re_black re_hisp hs_deg_ind educ_level_col 
+  married_n0 resspouse_n0 medicaid_n0 nw_lowest_n0 fw_lowest_n0 
+  ser_med_illness_n0 smi_dem_ind_n0 smi_ge3_ind_n0 smi_liver_ind_n0 
+  smi_hiv_ind_n0 smi_als_ind_n0 smi_esrd_ind_n0 smi_hip_ind_n0 smi_nh_ind_n0 
+  smi_helper_ind_n0 adl_diff_bh_n0 iadl_diff_m_n0 fl_diff_wk_many_n0 
+  fl_diff_push_n0 adl_independent_core_n0 adl_impair_core_n0 iadl_independent_core_n0
+  adl_ind_core_n_n0 home_oxygen_n0 ind_snf_use_12m_n0 nhres_n0 ind_hosp_adm_12m_n0 
+  ind_ed_adm_6m_n0 ind_elect_adm_12m_n0 ind_ed_op_or_ip_12m_n0 ind_em_ur_adm_12m_n0
+  pain_hrs_n0 pain_limit_act_hrs_n0 srh_pf_n0 cesd_tot_ge3_n0
+  multi_any_ind_n0 el_ge3_comorb_1yr_n0
+  cc_alzheim_1yr_n0 cc_ami_isch_1yr_n0 cc_cncr_chronic_1yr_n0 cc_3_alzhdmta_1yr_n0 
+  cc_4_atrialfb_1yr_n0 cc_6_chrnkidn_1yr_n0 cc_9_diabetes_1yr_n0 cc_13_depressn_1yr_n0    
+  cc_15_ra_oa_1yr_n0 charls_2_0_1yr_n0 charls_3_0_1yr_n0 charls_4_0_1yr_n0 
+  charls_6_0_1yr_n0 charls_5_0_1yr_n0 comorb_8_0_1yr_n0 charls_11_0_1yr_n0 
+  comorb_3_0_1yr_n0 psych_overall_hrs_n0 comorb_31_0_1yr_n0;
+do i=1 to 61;
+  if health(i)=0 then health(i)=2;
+  end; drop i ;
+
+label spend_med5="Medicare Spending Top 5%";
+label spend_med10="Medicare Spending Top 10%";
+label core_to_dod_1yr_n0= "Died, n (%)";
+label hs_admit_p12m_n0= "Enrolled in hospice, n (%)";
+label ind_em_ur_adm_p12m_n0= "Hospital admission, n (%)";
+label n_hospd_p12m_n0= "Hospital nights, mean (sd)";
+label cost_mos_n0= "Costs per month";
+
+label gender_n0="Gender 1=Male" ;
+label bmi_25="BMI ge 25 (1) lt 25 (2)";
+label n_drinks_day="1=0,2=1/2,3=3+";
+label adl_cat_core_n0r="1=partial,2=severe,3=indep";
+
+run; 
+proc sort data=lca.lcawork; by bid_hrs_21 ; run;
+proc export data=lca.lcawork
+outfile="C:\Users\mckenk04\serious_illness\lcawork.dta" replace;
+run;
+
+
+H="Devel & test LCA models"
+
+/* model from 4/11/16 
+ser_med_illness_n0 smi_dem_ind_n0 adl_impair_core_n0 ind_em_ur_adm_12m_n0 
+ind_hosp_adm_12m_n0 smi_nh_ind_n0 home_oxygen_n0 pain_hrs_n0 srh_pf_n0
+age_3gp gender_n0 re_white hs_deg_ind resspouse_n0 nw_lowest_n0
+spend_med5
+
+proc LCA data=lca.lcawork ;
+ID bid_hrs_21 spend_med5;
+NCLASS 10; 
+ ITEMS ser_med_illness_n0 smi_dem_ind_n0 adl_impair_core_n0 ind_em_ur_adm_12m_n0 
+ind_hosp_adm_12m_n0 smi_nh_ind_n0 home_oxygen_n0 pain_hrs_n0 srh_pf_n0
+age_3gp gender_n0 re_white hs_deg_ind resspouse_n0 nw_lowest_n0
+spend_med5; /*indicator variables used to measure latent classes*/
+/*CATEGORIES 2 2 2 2 2 2 2 2 2 3 2 2 2 2 2 2 ; /*num response categories for each indicator*/
+/*RHO PRIOR=1;
+SEED 861551; 
+run;
+proc LCA data=lca.lcawork ;
+ID bid_hrs_21 ;
+NCLASS 10; 
+ ITEMS ser_med_illness_n0 smi_dem_ind_n0 adl_impair_core_n0 ind_em_ur_adm_12m_n0 
+ind_hosp_adm_12m_n0 smi_nh_ind_n0 home_oxygen_n0 pain_hrs_n0 srh_pf_n0
+age_3gp gender_n0 re_white hs_deg_ind resspouse_n0 nw_lowest_n0; /*indicator variables used to measure latent classes*/
+/*CATEGORIES 2 2 2 2 2 2 2 2 2 3 2 2 2 2 2 ; /*num response categories for each indicator*/
+* GROUPS ser_med_illness_n0 ; *GROUPNAMES SMI NO_SMI;
+/*COVARIATES spend_med5  ; /*the distal outcome*/
+*REFERENCE 6;
+/*RHO PRIOR=1;
+SEED 861551; 
+run;
+* Execute macro to obtain distribution of Z given C (latent class);
+%LCA_distal(input_data = lcawork,         /*input data set*/
+/*param = estimates_spd5,                   /*beta parameter from LCA*/
+/*distal = spend_med5,
+metric=1,								  /*1=discrete, 2=continuous, 3=count,4=categorical*/
+/*output_dataset_name = res11,              /*output results*/
+/*alpha= 0.05
+);
+*/
+
+
+
+/* revise with variable changes:
+remove oxygen, 
+use age_75, re_black, pain_mod_sev, ind_ed_op_or_ip_12m_n0
+add medicaid_n0 
+*/
+proc LCA data=lca.lcawork ;
+ID bid_hrs_21 ;
+NCLASS 8; 
+ ITEMS ser_med_illness_n0 smi_dem_ind_n0 adl_impair_core_n0 
+ ind_ed_op_or_ip_12m_n0 ind_hosp_adm_12m_n0 smi_nh_ind_n0 
+ pain_mod_sev srh_pf_n0 age_75 gender_n0 resspouse_n0 re_black hs_deg_ind 
+ medicaid_n0 nw_lowest_n0 spend_med5; /*indicator variables used to measure latent classes*/
+CATEGORIES 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2; /*num response categories for each indicator*/
+RHO PRIOR=1;
+SEED 861551; 
+run;
+proc LCA data=lca.lcawork outparam=estimates_spd5 outpost=poterior_spd5;
+ID bid_hrs_21 ;
+NCLASS 8; 
+ ITEMS ser_med_illness_n0 smi_dem_ind_n0 adl_impair_core_n0 
+ ind_ed_op_or_ip_12m_n0 ind_hosp_adm_12m_n0 smi_nh_ind_n0 
+ pain_mod_sev srh_pf_n0 age_75 gender_n0 resspouse_n0 re_black hs_deg_ind 
+ medicaid_n0 nw_lowest_n0; /*indicator variables used to measure latent classes*/
+CATEGORIES 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 ; /*num response categories for each indicator*/
+* GROUPS ser_med_illness_n0 ; *GROUPNAMES SMI NO_SMI;
+COVARIATES spend_med5_0  ; /*the distal outcome*/
+REFERENCE 6;
+RHO PRIOR=1;
+SEED 861551; 
+run;
+* Execute macro to obtain distribution of Z given C (latent class);
+%LCA_distal(input_data = lca.lcawork,         /*input data set*/
+param = estimates_spd5,                   /*beta parameter from LCA*/
+distal = spend_med5,
+metric=1,								  /*1=discrete, 2=continuous, 3=count,4=categorical*/
+output_dataset_name = res11,              /*output results*/
+alpha= 0.05
+);
+proc sort data=poterior_spd5; by bid_hrs_21 ; run;
+data outcomes;
+merge lca.lcawork poterior_spd5;
+by bid_hrs_21 ;
+run;
+proc freq data=outcomes;
+table (core_to_dod_1yr_n0 hs_admit_p12m_n0 ind_em_ur_adm_p12m_n0 
+ criteria_a_n0 criteria_b_n0 criteria_c_n0 south) *best / chisq norow nopercent;
+run;
+proc sort data=outcomes; by best; run;
+proc means data=outcomes n mean std min max median;
+var tot_paid_by_mc_12m_n0 n_hospd_p12m_n0; by best; run;
+proc means data=outcomes n mean std min max median;
+var  n_hospd_p12m_n0; by best; where n_hospd_p12m_n0>0; run;
+
+
+
+/* revise with variable changes:
+remove smi_nh_ind_n0
+use pain_hrs_n0
+add el_ge3_comorb_1yr_n0 charls_index_wt_3 nw_mid_no_medicaid
+*/
+proc LCA data=lca.lcawork ;
+ID bid_hrs_21 ;
+NCLASS 8; 
+ ITEMS ser_med_illness_n0 smi_dem_ind_n0 adl_impair_core_n0 
+ ind_ed_op_or_ip_12m_n0 ind_hosp_adm_12m_n0 pain_hrs_n0 srh_pf_n0 
+ el_ge3_comorb_1yr_n0 charls_index_wt_3
+ age_75 gender_n0 resspouse_n0 re_black hs_deg_ind medicaid_n0 nw_lowest_n0 
+ nw_mid_no_medicaid spend_med5; /*indicator variables used to measure latent classes*/
+CATEGORIES 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2; /*num response categories for each indicator*/
+RHO PRIOR=1;
+SEED 861551; 
+run;
+proc LCA data=lca.lcawork outparam=estimates_spd5 outpost=poterior_spd5;
+ID bid_hrs_21 ;
+NCLASS 8; 
+ ITEMS ser_med_illness_n0 smi_dem_ind_n0 adl_impair_core_n0 
+ ind_ed_op_or_ip_12m_n0 ind_hosp_adm_12m_n0 pain_hrs_n0 srh_pf_n0 
+ el_ge3_comorb_1yr_n0 charls_index_wt_3
+ age_75 gender_n0 resspouse_n0 re_black hs_deg_ind medicaid_n0 nw_lowest_n0 
+ nw_mid_no_medicaid; /*indicator variables used to measure latent classes*/
+CATEGORIES 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2; /*num response categories for each indicator*/
+* GROUPS ser_med_illness_n0 ; *GROUPNAMES SMI NO_SMI;
+COVARIATES spend_med5_0  ; /*the distal outcome*/
+REFERENCE 5;
+RHO PRIOR=1;
+SEED 861551; 
+run;
+* Execute macro to obtain distribution of Z given C (latent class);
+%LCA_distal(input_data = lca.lcawork,         /*input data set*/
+param = estimates_spd5,                   /*beta parameter from LCA*/
+distal = spend_med5,
+metric=1,				  /*1=discrete, 2=continuous, 3=count,4=categorical*/
+output_dataset_name = res11,              /*output results*/
+alpha= 0.05
+);
+proc sort data=poterior_spd5; by bid_hrs_21 ; run;
+data outcomes;
+merge lca.lcawork poterior_spd5;
+by bid_hrs_21 ;
+run;
+proc freq data=outcomes;
+table (core_to_dod_1yr_n0 hs_admit_p12m_n0 ind_em_ur_adm_p12m_n0 
+ criteria_a_n0 criteria_b_n0 criteria_c_n0 south) *best / chisq norow nopercent;
+run;
+proc sort data=outcomes; by best; run;
+proc means data=outcomes n mean std min max median;
+var tot_paid_by_mc_12m_n0 n_hospd_p12m_n0; by best; run;
+proc means data=outcomes n mean std min max median;
+var  n_hospd_p12m_n0; by best; where n_hospd_p12m_n0>0; run;
+
+
+/* 5/4/16 meeing with amy changes:
+run SMI groups separately
+use 10% spending and replicate with 5%
+remove ind_ed_op_or_ip_12m_n0 srh_pf_n0 charls_index_wt_3 gender_n0 hs_deg_ind 
+  nw_lowest_n0 
+add hlphrs_1 contact_days_n0_20
+* married & resspouse look the same
+* elix same across
+* helper better than adl ;
+*/
+*** Top 10% spending;
+/*proc LCA data=lca.lcawork ;
+ID bid_hrs_21 ;
+NCLASS 6; 
+ ITEMS smi_dem_ind_n0 adl_impair_core_n0 hlphrs_24
+ ind_hosp_adm_12m_n0 contact_days_n0_30 pain_hrs_n0 pain_mod_sev 
+ el_ge3_comorb_1yr_n0 age_75 resspouse_n0 re_black 
+ medicaid_n0 nw_mid_no_medicaid 
+ spend_med10; 
+CATEGORIES 2 2 2 2 2 2 2 2 2 2 2 2 2 2; 
+GROUPS ser_med_illness_n0 ; GROUPNAMES SMI NO_SMI;
+RHO PRIOR=1;
+SEED 861551; 
+run;
+*/
+proc LCA data=lca.lcawork outparam=estimates_spd10_5 outpost=poterior_spd10_5;
+ID bid_hrs_21 ;
+NCLASS 5; 
+ ITEMS smi_dem_ind_n0 adl_impair_core_n0 hlphrs_24
+ ind_hosp_adm_12m_n0 contact_days_n0_30 pain_hrs_n0 pain_mod_sev 
+ el_ge3_comorb_1yr_n0 age_75 resspouse_n0 re_black 
+ medicaid_n0 nw_mid_no_medicaid ; /*indicator variables used to measure latent classes*/
+CATEGORIES 2 2 2 2 2 2 2 2 2 2 2 2 2; /*num response categories for each indicator*/
+GROUPS ser_med_illness_n0 ; GROUPNAMES SMI NO_SMI;
+COVARIATES spend_med10_0  ; /*the distal outcome*/
+REFERENCE 1;
+RHO PRIOR=1;
+SEED 861551; 
+run;
+proc export data=poterior_spd10_5
+outfile="C:\Users\mckenk04\serious_illness\poterior_spd10_5.dta" replace;
+run;
+* Execute macro to obtain distribution of Z given C (latent class);
+%LCA_distal(input_data = lca.lcawork,         /*input data set*/
+param = estimates_spd10_3,                   /*beta parameter from LCA*/
+distal = spend_med10_0,
+metric=1,				  /*1=discrete, 2=continuous, 3=count,4=categorical*/
+output_dataset_name = res11,              /*output results*/
+alpha= 0.05
+);
+*** Top 5% spending;
+proc LCA data=lca.lcawork outparam=estimates_spd5_4 outpost=poterior_spd5_4;
+ID bid_hrs_21 ;
+NCLASS 4; 
+ ITEMS smi_dem_ind_n0 adl_impair_core_n0 hlphrs_24
+ ind_hosp_adm_12m_n0 contact_days_n0_30 pain_hrs_n0 pain_mod_sev 
+ el_ge3_comorb_1yr_n0 age_75 resspouse_n0 re_black 
+ medicaid_n0 nw_mid_no_medicaid ; /*indicator variables used to measure latent classes*/
+CATEGORIES 2 2 2 2 2 2 2 2 2 2 2 2 2; /*num response categories for each indicator*/
+GROUPS ser_med_illness_n0 ; GROUPNAMES SMI NO_SMI;
+COVARIATES spend_med5_0  ; /*the distal outcome*/
+REFERENCE 2;
+RHO PRIOR=1;
+SEED 861551; 
+run;
+proc export data=poterior_spd5_4
+outfile="C:\Users\mckenk04\serious_illness\poterior_spd5_4.dta" replace;
+run;
+
+
+
+proc sort data=poterior_spd10_3; by bid_hrs_21 ; run;
+data outcomes;
+merge lca.lcawork poterior_spd10_3;
+by bid_hrs_21 ;
+run;
+proc freq data=outcomes;
+table (core_to_dod_1yr_n0 hs_admit_p12m_n0 ind_em_ur_adm_p12m_n0 
+ criteria_a_n0 criteria_b_n0 criteria_c_n0 south smi_diab_compl_ind_n0
+ smi_chf_ind_n0 smi_copd_ind_n0 smi_esrd_ind_n0 smi_cancer_ind_n0 
+ smi_liver_ind_n0 smi_hip_ind_n0 smi_hiv_ind_n0 ) 
+ *best / chisq norow nopercent;
+run;
+proc sort data=outcomes; by best; run;
+proc means data=outcomes n mean std min max median;
+var tot_paid_by_mc_12m_n0 n_hospd_p12m_n0; by best; run;
+proc means data=outcomes n mean std min max median;
+var  n_hospd_p12m_n0; by best; where n_hospd_p12m_n0>0; run;
+
+
+
+proc freq data=lca.lcawork ; table sev_ill; run;
+*****************************************************************************;
+* 05/20/2016 create measure of severity illness, contact days 27 days (75%), age 80+
+*** Top 10% spending;
+proc LCA data=lca.lcawork ;
+ID bid_hrs_21 ;
+NCLASS 6; 
+ ITEMS sev_ill adl_impair_core_n0 pain_hrs_n0 comorb_31_0_1yr_n0 age_80 
+ contact_days_n0_27 re_black medicaid_n0 spend_med10; 
+CATEGORIES 4 2 2 2 2 2 2 2 2 ; 
+RHO PRIOR=1;
+SEED 861551; 
+run;
+
+proc LCA data=lca.lcawork ;
+ID bid_hrs_21 ;
+NCLASS 4; 
+ ITEMS el_ge3_comorb_1yr_n0 comorb_31_0_1yr_n0 age_80 adl_impair_core_n0 pain_hrs_n0 
+ contact_days_n0_27 re_black medicaid_n0 spend_med10; 
+CATEGORIES 2 2 2 2 2 2 2 2 2 ; 
+GROUPS ser_med_illness_n0 ; GROUPNAMES SMI NO_SMI;
+RHO PRIOR=1;
+SEED 861551; 
+run;
+
+proc LCA data=lca.lcawork outparam=estimates_spd10_5 outpost=poterior_spd10_5;
+ID bid_hrs_21 ;
+NCLASS 5; 
+ ITEMS smi_dem_ind_n0 adl_impair_core_n0 hlphrs_24
+ ind_hosp_adm_12m_n0 contact_days_n0_30 pain_hrs_n0 pain_mod_sev 
+ el_ge3_comorb_1yr_n0 age_75 resspouse_n0 re_black 
+ medicaid_n0 nw_mid_no_medicaid ; /*indicator variables used to measure latent classes*/
+CATEGORIES 2 2 2 2 2 2 2 2 2 2 2 2 2; /*num response categories for each indicator*/
+GROUPS ser_med_illness_n0 ; GROUPNAMES SMI NO_SMI;
+COVARIATES spend_med10_0  ; /*the distal outcome*/
+REFERENCE 1;
+RHO PRIOR=1;
+SEED 861551; 
+run;
+proc export data=poterior_spd10_5
+outfile="C:\Users\mckenk04\serious_illness\poterior_spd10_5.dta" replace;
+run;
+* Execute macro to obtain distribution of Z given C (latent class);
+%LCA_distal(input_data = lca.lcawork,         /*input data set*/
+param = estimates_spd10_3,                   /*beta parameter from LCA*/
+distal = spend_med10_0,  metric=1, 	  /*1=discrete, 2=continuous, 3=count,4=categorical*/
+output_dataset_name = res11,              /*output results*/
+alpha= 0.05
+);
+
+
+
+
+
+
+
+
+
+
+
+
+
+* revise the model using results from factor anaysis of comorbidites/cc's and smi variables;
+* use ED instead of ER/UR, age_75, re_black, remove oxygen ;
+proc LCA data=lca.lcawork ;
+ID bid_hrs_21 ;
+NCLASS 10; 
+ ITEMS ser_med_illness_n0 adl_impair_core_n0 srh_pf_n0 pain_hrs_n0
+ smi_dem_ind_n0 smi_nh_ind_n0 ind_ed_op_or_ip_12m_n0 ind_hosp_adm_12m_n0
+ age_75 gender_n0 resspouse_n0 re_black hs_deg_ind nw_lowest_n0 
+ spend_med5; /*indicator variables used to measure latent classes*/
+CATEGORIES 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2; /*num response categories for each indicator*/
+* GROUPS ser_med_illness_n0 ; *GROUPNAMES SMI NO_SMI;
+*COVARIATES spend_med5  ; /*the distal outcome*/
+*REFERENCE 6;
+RHO PRIOR=1;
+SEED 861551; 
+run;
+
+
+* revise the model using results from factor anaysis of comorbidites/cc's and smi variables;
+* pain_hrs_n0 shows more results than pain_mod_sev 
+* cc_ami_isch_1yr_n0 stronger & duplicative to charls_2_0_1yr_n0 -- better cardiac measure?
+* take out south 
+title "SMI - 8 classes";
+proc LCA data=lca.lcawork ;
+ID bid_hrs_21 ;
+NCLASS 8; 
+ ITEMS ser_med_illness_n0 adl_impair_core_n0 srh_pf_n0 pain_hrs_n0
+ smi_dem_ind_n0 smi_copd_ind_n0 cc_ami_isch_1yr_n0 el_ge3_comorb_1yr_n0 
+ ind_ed_op_or_ip_12m_n0 ind_hosp_adm_12m_n0
+ age_75 gender_n0 married_n0 re_black hs_deg_ind medicaid_n0 nw_lowest_n0 
+ spend_med5; /*indicator variables used to measure latent classes*/
+CATEGORIES 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 ; /*num response categories for each indicator*/
+* GROUPS ser_med_illness_n0 ; *GROUPNAMES SMI NO_SMI;
+*COVARIATES spend_med5  ; /*the distal outcome*/
+*REFERENCE 6;
+RHO PRIOR=1;
+SEED 861551; 
+run;
+
+
+
+
+
+title "SMI - 4 classes";
+proc LCA data=lca.lcawork ;
+ID bid_hrs_21 ;
+NCLASS 4;
+ITEMS  adl_impair_core_n0 srh_pf_n0 pain_mod_sev
+cc_alzheim_1yr_n0 cc_13_depressn_1yr_n0 cc_ami_isch_1yr_n0 cc_cncr_chronic_1yr_n0
+cc_15_ra_oa_1yr_n0 cc_6_chrnkidn_1yr_n0 cc_9_diabetes_1yr_n0 cc_4_atrialfb_1yr_n0
+charls_2_0_1yr_n0 charls_3_0_1yr_n0 charls_4_0_1yr_n0 charls_6_0_1yr_n0
+ind_ed_op_or_ip_12m_n0 ind_em_ur_adm_12m_n0 ind_hosp_adm_12m_n0
+age_75 gender_n0 married_n0 re_black hs_deg_ind
+medicaid_n0 nw_mid_no_medicaid medicaid_138 south spend_med5; /*indicator variables used to measure latent classes*/
+CATEGORIES 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2; /*num response categories for each indicator*/
+GROUPS ser_med_illness_n0 ; GROUPNAMES SMI NO_SMI;
+*COVARIATES spend_med5  ; /*the distal outcome*/
+*REFERENCE 6;
+RHO PRIOR=1;
+SEED 861551;
+run;
+
+
+
+
+* tried smi as a count variable 0, 1,2,3+ but results showed biggest difference 
+  between 0,1; 
+* tried elix as a count 0, 1,2,3+ but results showed biggest difference between 0-2 and 3+;
+* add smi 0/1 & elix3+ ;
+proc freq data=lca.lcawork ; table el_ge3_comorb_1yr_n0 ser_med_illness_n0
+  smi_dem_ind_n0 smi_cancer_ind_n0 smi_esrd_ind_n0 smi_chf_ind_n0 smi_copd_ind_n0 
+  smi_diab_compl_ind_n0 smi_liver_ind_n0 smi_hip_ind_n0 
+  smi_nh_ind_n0 smi_helper_ind_n0 adl_ind_core_n_n0  ind_ed_op_or_ip_12m_n0; run;
+title "SMI - 7 classes add any SMI & Elix 3+ ";
+proc LCA data=lca.lcawork ;
+ID bid_hrs_21 ;
+NCLASS 7; 
+ ITEMS el_ge3_comorb_1yr_n0 ser_med_illness_n0
+  smi_dem_ind_n0 smi_cancer_ind_n0 smi_esrd_ind_n0 smi_chf_ind_n0 smi_copd_ind_n0 
+  smi_diab_compl_ind_n0 smi_liver_ind_n0 smi_hip_ind_n0 
+  smi_nh_ind_n0 smi_helper_ind_n0 adl_ind_core_n_n0  ind_ed_op_or_ip_12m_n0 spend_med5;
+*spend_med5;  /*indicator variables used to measure latent classes*/
+CATEGORIES 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2; /*num response categories for each indicator*/
+*COVARIATES spend_med5  ; /*the distal outcome*/
+*REFERENCE 6;
+RHO PRIOR=1;
+SEED 861551; 
+run;
+
+
+
+
+
+
+
+title "Top 5%: Separate the SMI groups";
+proc LCA data=lca.lcawork outparam=lca.estimates_spd5 outpost=lca.poterior_spd5;
+ID bid_hrs_21 spend_med5;
+NCLASS 10; 
+ ITEMS age_3gp gender_n0 re_white hs_deg_ind resspouse_n0 nw_lowest_n0
+ser_med_illness_n0 smi_dem_ind_n0 home_oxygen_n0 pain_hrs_n0 srh_pf_n0 
+adl_impair_core_n0 ind_em_ur_adm_12m_n0 ind_hosp_adm_12m_n0 smi_nh_ind_n0;
+*spend_med5;  /*indicator variables used to measure latent classes*/
+CATEGORIES 3 2 2 2 2 2 2 2 2 2 2 2 2 2 2  ; /*num response categories for each indicator*/
+COVARIATES spend_med5  ; /*the distal outcome*/
+REFERENCE 6;
+RHO PRIOR=1;
+SEED 861551; 
+run;
+
+
+
+
+
+
+
+
+
+title "Top 5%: 10 Latent Classes";
+proc LCA data=lca.lcawork outparam=lca.estimates_spd5 outpost=lca.poterior_spd5;
+ID bid_hrs_21 spend_med5;
+NCLASS 10; 
+ ITEMS age_3gp gender_n0 re_white hs_deg_ind resspouse_n0 nw_lowest_n0
+ser_med_illness_n0 smi_dem_ind_n0 home_oxygen_n0 pain_hrs_n0 srh_pf_n0 
+adl_impair_core_n0 ind_em_ur_adm_12m_n0 ind_hosp_adm_12m_n0 smi_nh_ind_n0;
+*spend_med5;  /*indicator variables used to measure latent classes*/
+CATEGORIES 3 2 2 2 2 2 2 2 2 2 2 2 2 2 2  ; /*num response categories for each indicator*/
+COVARIATES spend_med5  ; /*the distal outcome*/
+REFERENCE 6;
+RHO PRIOR=1;
+SEED 861551; 
+run;
+/*export to Stata*/
+proc export data=lca.estimates_spd5
+outfile="C:\Users\mckenk04\serious_illness\estimates_spd5.dta" replace;
+run;
+proc export data=lca.poterior_spd5
+outfile="C:\Users\mckenk04\serious_illness\poterior_spd5.dta" replace;
+run;
+
+
+
+
+* Fit baseline model
+title "Top 5%: 3 Latent Classes";
+proc LCA data=lcawork outparam=estimates_spd5 outpost=poterior_spd5;
+ID bid_hrs_21 spend_med5;
+NCLASS 3; 
+ ITEMS age_3gp gender_n0 re_white hs_deg_ind resspouse_n0 nw_lowest_n0
+ser_med_illness_n0 smi_dem_ind_n0 home_oxygen_n0 pain_hrs_n0 srh_pf_n0 
+adl_impair_core_n0 ind_em_ur_adm_12m_n0 ind_hosp_adm_12m_n0 smi_nh_ind_n0
+spend_med5;  /*indicator variables used to measure latent classes*/
+CATEGORIES 3 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 ; /*num response categories for each indicator*/
+*COVARIATES spend_med5  ; /*the distal outcome*/
+*REFERENCE 1;
+RHO PRIOR=1;
+SEED 861551; 
+run;
+title "Top 5%: 4 Latent Classes";
+proc LCA data=lcawork outparam=estimates_spd5 outpost=poterior_spd5;
+ID bid_hrs_21 spend_med5;
+NCLASS 4; 
+ ITEMS age_3gp gender_n0 re_white hs_deg_ind resspouse_n0 nw_lowest_n0
+ser_med_illness_n0 smi_dem_ind_n0 home_oxygen_n0 pain_hrs_n0 srh_pf_n0 
+adl_impair_core_n0 ind_em_ur_adm_12m_n0 ind_hosp_adm_12m_n0 smi_nh_ind_n0
+spend_med5;  /*indicator variables used to measure latent classes*/
+CATEGORIES 3 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 ; /*num response categories for each indicator*/
+*COVARIATES spend_med5  ; /*the distal outcome*/
+*REFERENCE 1;
+RHO PRIOR=1;
+SEED 861551; 
+run;
+title "Top 5%: 5 Latent Classes";
+proc LCA data=lcawork outparam=estimates_spd5 outpost=poterior_spd5;
+ID bid_hrs_21 spend_med5;
+NCLASS 5; 
+ ITEMS age_3gp gender_n0 re_white hs_deg_ind resspouse_n0 nw_lowest_n0
+ser_med_illness_n0 smi_dem_ind_n0 home_oxygen_n0 pain_hrs_n0 srh_pf_n0 
+adl_impair_core_n0 ind_em_ur_adm_12m_n0 ind_hosp_adm_12m_n0 smi_nh_ind_n0
+spend_med5;  /*indicator variables used to measure latent classes*/
+CATEGORIES 3 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 ; /*num response categories for each indicator*/
+*COVARIATES spend_med5  ; /*the distal outcome*/
+*REFERENCE 1;
+RHO PRIOR=1;
+SEED 861551; 
+run;
+title "Top 5%: 6 Latent Classes";
+proc LCA data=lcawork outparam=estimates_spd5 outpost=poterior_spd5;
+ID bid_hrs_21 spend_med5;
+NCLASS 6; 
+ ITEMS age_3gp gender_n0 re_white hs_deg_ind resspouse_n0 nw_lowest_n0
+ser_med_illness_n0 smi_dem_ind_n0 home_oxygen_n0 pain_hrs_n0 srh_pf_n0 
+adl_impair_core_n0 ind_em_ur_adm_12m_n0 ind_hosp_adm_12m_n0 smi_nh_ind_n0
+spend_med5;  /*indicator variables used to measure latent classes*/
+CATEGORIES 3 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 ; /*num response categories for each indicator*/
+*COVARIATES spend_med5  ; /*the distal outcome*/
+*REFERENCE 1;
+RHO PRIOR=1;
+SEED 861551; 
+run;
+title "Top 5%: 7 Latent Classes";
+proc LCA data=lcawork outparam=estimates_spd5 outpost=poterior_spd5;
+ID bid_hrs_21 spend_med5;
+NCLASS 7; 
+ ITEMS age_3gp gender_n0 re_white hs_deg_ind resspouse_n0 nw_lowest_n0
+ser_med_illness_n0 smi_dem_ind_n0 home_oxygen_n0 pain_hrs_n0 srh_pf_n0 
+adl_impair_core_n0 ind_em_ur_adm_12m_n0 ind_hosp_adm_12m_n0 smi_nh_ind_n0
+spend_med5;  /*indicator variables used to measure latent classes*/
+CATEGORIES 3 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 ; /*num response categories for each indicator*/
+*COVARIATES spend_med5  ; /*the distal outcome*/
+*REFERENCE 1;
+RHO PRIOR=1;
+SEED 861551; 
+run;
+title "Top 5%: 8 Latent Classes";
+proc LCA data=lcawork outparam=estimates_spd5 outpost=poterior_spd5;
+ID bid_hrs_21 spend_med5;
+NCLASS 8; 
+ ITEMS age_3gp gender_n0 re_white hs_deg_ind resspouse_n0 nw_lowest_n0
+ser_med_illness_n0 smi_dem_ind_n0 home_oxygen_n0 pain_hrs_n0 srh_pf_n0 
+adl_impair_core_n0 ind_em_ur_adm_12m_n0 ind_hosp_adm_12m_n0 smi_nh_ind_n0
+spend_med5;  /*indicator variables used to measure latent classes*/
+CATEGORIES 3 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 ; /*num response categories for each indicator*/
+*COVARIATES spend_med5  ; /*the distal outcome*/
+*REFERENCE 1;
+RHO PRIOR=1;
+SEED 861551; 
+run;
+title "Top 5%: 9 Latent Classes";
+proc LCA data=lcawork outparam=estimates_spd5 outpost=poterior_spd5;
+ID bid_hrs_21 spend_med5;
+NCLASS 9; 
+ ITEMS age_3gp gender_n0 re_white hs_deg_ind resspouse_n0 nw_lowest_n0
+ser_med_illness_n0 smi_dem_ind_n0 home_oxygen_n0 pain_hrs_n0 srh_pf_n0 
+adl_impair_core_n0 ind_em_ur_adm_12m_n0 ind_hosp_adm_12m_n0 smi_nh_ind_n0
+spend_med5;  /*indicator variables used to measure latent classes*/
+CATEGORIES 3 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 ; /*num response categories for each indicator*/
+*COVARIATES spend_med5  ; /*the distal outcome*/
+*REFERENCE 1;
+RHO PRIOR=1;
+SEED 861551; 
+run;
+title "Top 5%: 10 Latent Classes";
+proc LCA data=lcawork outparam=estimates_spd5 outpost=poterior_spd5;
+ID bid_hrs_21 spend_med5;
+NCLASS 10; 
+ ITEMS age_3gp gender_n0 re_white hs_deg_ind resspouse_n0 nw_lowest_n0
+ser_med_illness_n0 smi_dem_ind_n0 home_oxygen_n0 pain_hrs_n0 srh_pf_n0 
+adl_impair_core_n0 ind_em_ur_adm_12m_n0 ind_hosp_adm_12m_n0 smi_nh_ind_n0
+spend_med5;  /*indicator variables used to measure latent classes*/
+CATEGORIES 3 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 ; /*num response categories for each indicator*/
+*COVARIATES spend_med5  ; /*the distal outcome*/
+*REFERENCE 1;
+RHO PRIOR=1;
+SEED 861551; 
+run;
+title "Top 5%: 11 Latent Classes";
+proc LCA data=lcawork outparam=estimates_spd5 outpost=poterior_spd5;
+ID bid_hrs_21 spend_med5;
+NCLASS 11; 
+ ITEMS age_3gp gender_n0 re_white hs_deg_ind resspouse_n0 nw_lowest_n0
+ser_med_illness_n0 smi_dem_ind_n0 home_oxygen_n0 pain_hrs_n0 srh_pf_n0 
+adl_impair_core_n0 ind_em_ur_adm_12m_n0 ind_hosp_adm_12m_n0 smi_nh_ind_n0
+spend_med5;  /*indicator variables used to measure latent classes*/
+CATEGORIES 3 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 ; /*num response categories for each indicator*/
+*COVARIATES spend_med5  ; /*the distal outcome*/
+*REFERENCE 1;
+RHO PRIOR=1;
+SEED 861551; 
+run;
+title "Top 5%: 12 Latent Classes";
+proc LCA data=lcawork outparam=estimates_spd5 outpost=poterior_spd5;
+ID bid_hrs_21 spend_med5;
+NCLASS 12; 
+ ITEMS age_3gp gender_n0 re_white hs_deg_ind resspouse_n0 nw_lowest_n0
+ser_med_illness_n0 smi_dem_ind_n0 home_oxygen_n0 pain_hrs_n0 srh_pf_n0 
+adl_impair_core_n0 ind_em_ur_adm_12m_n0 ind_hosp_adm_12m_n0 smi_nh_ind_n0
+spend_med5;  /*indicator variables used to measure latent classes*/
+CATEGORIES 3 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 ; /*num response categories for each indicator*/
+*COVARIATES spend_med5  ; /*the distal outcome*/
+*REFERENCE 1;
+RHO PRIOR=1;
+SEED 861551; 
+run;
+
+title "Top 5%: 14 Latent Classes";
+proc LCA data=lcawork outparam=estimates_spd5 outpost=poterior_spd5;
+ID bid_hrs_21 spend_med5;
+NCLASS 14; 
+ ITEMS age_3gp gender_n0 re_white hs_deg_ind resspouse_n0 nw_lowest_n0
+ser_med_illness_n0 smi_dem_ind_n0 home_oxygen_n0 pain_hrs_n0 srh_pf_n0 
+adl_impair_core_n0 ind_em_ur_adm_12m_n0 ind_hosp_adm_12m_n0 smi_nh_ind_n0
+spend_med5;  /*indicator variables used to measure latent classes*/
+CATEGORIES 3 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 ; /*num response categories for each indicator*/
+*COVARIATES spend_med5  ; /*the distal outcome*/
+*REFERENCE 1;
+RHO PRIOR=1;
+SEED 861551; 
+run;
+title "Top 5%: 16 Latent Classes";
+proc LCA data=lcawork outparam=estimates_spd5 outpost=poterior_spd5;
+ID bid_hrs_21 spend_med5;
+NCLASS 16; 
+ ITEMS age_3gp gender_n0 re_white hs_deg_ind resspouse_n0 nw_lowest_n0
+ser_med_illness_n0 smi_dem_ind_n0 home_oxygen_n0 pain_hrs_n0 srh_pf_n0 
+adl_impair_core_n0 ind_em_ur_adm_12m_n0 ind_hosp_adm_12m_n0 smi_nh_ind_n0
+spend_med5;  /*indicator variables used to measure latent classes*/
+CATEGORIES 3 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 ; /*num response categories for each indicator*/
+*COVARIATES spend_med5  ; /*the distal outcome*/
+*REFERENCE 1;
+RHO PRIOR=1;
+SEED 861551; 
+run;
+
+
+
+
+
+
+
+
+* Execute macro to obtain distribution of Z given C (latent class);
+%LCA_distal(input_data = lcawork,         /*input data set*/
+param = estimates_spd5,                   /*beta parameter from LCA*/
+distal = spend_med5,
+metric=1,								  /*1=discrete, 2=continuous, 3=count,4=categorical*/
+output_dataset_name = res11,              /*output results*/
+alpha= 0.05
+);
+/*post = sasf.Posterior_bin_y,            /*posterior membership probabilities*/
+/*id = bid_hrs_21,*/   
+/*y_cat = 2,							  /*number categories of Z, given yc=1*/
+/*method =1,                              /*model-based, max assignment or pseudo class*/
+proc export 
+data=estimates_spd5 
+dbms=xlsx
+outfile="C:\Users\mckenk04\serious_illness\estimates_spd5.xls" 
+replace;
+run;
+
+
+H="Prepare Stata data"
+*** Program to use factor analytic techniques to identify patterns or key variables in the
+* serious illness variables and the groups of comorbidities
+* also answer other questions brought up at last 4/20/16 meeting with Amy Kelley 
+* 5/6/2016 add table to compare classes for outcomes and illnesses etc
+* 
+clear all
+
+/* prepare dementia probability file
+use "E:\data\hrs_public_2012\dementia\pdem_withvarnames_ebl.dta", clear
+keep if core_year==2008
+save "C:\Users\mckenk04\serious_illness\pdem_withvarnames_ebl.dta", replace
+*/
+
+use "C:\Users\mckenk04\serious_illness\lcawork.dta", clear
+drop if missing(bid_hrs_21)
+drop _merge 
+merge 1:1 id using "C:\Users\mckenk04\serious_illness\pdem_withvarnames_ebl.dta"
+keep if _merge==3
+
+
+/*use "C:\Users\mckenk04\serious_illness\poterior_spd10_5.dta" 
+drop if missing(bid_hrs_21)
+save "C:\Users\mckenk04\serious_illness\poterior_spd10_5.dta", replace
+clear all
+
+
+use "C:\Users\mckenk04\serious_illness\lcawork.dta", clear
+drop if missing(bid_hrs_21)
+drop _merge 
+*merge 1:1 bid_hrs_21 using "C:\Users\mckenk04\serious_illness\poterior_spd10_4.dta" 
+merge 1:1 bid_hrs_21 using "C:\Users\mckenk04\serious_illness\poterior_spd10_5.dta" 
+tab _merge
+keep if _merge==3
+*/
+
+//create high school degree indicator variable
+replace hs_deg_ind=.
+replace hs_deg_ind=1 if degree_n0>=1 & degree_n0~=.
+replace hs_deg_ind=0 if degree_n0==0
+la var hs_deg_ind "High school degree, 1=yes"
+tab hs_deg_ind, missing
+tab degree_n0 hs_deg_ind, missing
+
+
+* recode data from 1/2 to 0/1
+foreach x in  smi_ge3_ind_n0 smi_dem_ind_n0 smi_cancer_ind_n0  ///   ser_med_illness_n0
+  smi_esrd_ind_n0 smi_chf_ind_n0 smi_copd_ind_n0 smi_diab_compl_ind_n0 smi_liver_ind_n0 ///
+  smi_hip_ind_n0 smi_hiv_ind_n0  smi_als_ind_n0 smi_nh_ind_n0 smi_helper_ind_n0 ///
+  home_oxygen_n0 adl_impair_core_n0  adl_ind_core_n_n0  ///
+  ind_ed_op_or_ip_12m_n0 ind_em_ur_adm_12m_n0 ind_hosp_adm_12m_n0  ///
+  charls_index_wt_3 charls_1_0_1yr_n0 charls_2_0_1yr_n0 charls_3_0_1yr_n0 charls_4_0_1yr_n0 ///
+  charls_5_0_1yr_n0 charls_6_0_1yr_n0 charls_7_0_1yr_n0 charls_8_0_1yr_n0 charls_9_0_1yr_n0 ///
+  charls_10_0_1yr_n0 charls_11_0_1yr_n0 charls_12_0_1yr_n0 charls_13_0_1yr_n0 ///
+  charls_14_0_1yr_n0 charls_15_0_1yr_n0 charls_16_0_1yr_n0 charls_17_0_1yr_n0 ///
+  el_ge3_comorb_1yr_n0 el_ge4_comorb_1yr_n0 comorb_1_0_1yr_n0 comorb_2_0_1yr_n0 ///
+  comorb_3_0_1yr_n0 comorb_4_0_1yr_n0 comorb_5_0_1yr_n0 comorb_6_0_1yr_n0 ///
+  comorb_7_0_1yr_n0 comorb_8_0_1yr_n0 comorb_9_0_1yr_n0 comorb_10_0_1yr_n0 ///
+  comorb_11_0_1yr_n0 comorb_12_0_1yr_n0 comorb_13_0_1yr_n0 comorb_14_0_1yr_n0 ///
+  comorb_15_0_1yr_n0 comorb_16_0_1yr_n0 comorb_17_0_1yr_n0 comorb_18_0_1yr_n0 ///
+  comorb_19_0_1yr_n0 comorb_20_0_1yr_n0 comorb_21_0_1yr_n0 comorb_22_0_1yr_n0 ///
+  comorb_23_0_1yr_n0 comorb_24_0_1yr_n0 comorb_25_0_1yr_n0 comorb_26_0_1yr_n0 ///
+  comorb_27_0_1yr_n0 comorb_28_0_1yr_n0 comorb_29_0_1yr_n0 comorb_30_0_1yr_n0 ///
+  comorb_31_0_1yr_n0 comorb_32_0_1yr_n0 comorb_33_0_1yr_n0 comorb_34_0_1yr_n0 ///
+  cc_ge4_comorb_1yr_n0 cc2_ge4_comorb_1yr_n0 cc_ami_isch_1yr_n0  cc_1_ami_1yr_n0 ///
+  cc_12_ischmcht_1yr_n0 cc_alzheim_1yr_n0 cc_2_alzh_1yr_n0 cc_3_alzhdmta_1yr_n0 ///
+  cc_4_atrialfb_1yr_n0 cc_5_cataract_1yr_n0 cc_6_chrnkidn_1yr_n0 cc_7_copd_1yr_n0 ///
+  cc_8_chf_1yr_n0 cc_9_diabetes_1yr_n0 cc_10_glaucoma_1yr_n0 cc_11_hipfrac_1yr_n0  ///
+  cc_13_depressn_1yr_n0 cc_14_osteoprs_1yr_n0 cc_15_ra_oa_1yr_n0 cc_16_strketia_1yr_n0 ///
+  cc_cncr_chronic_1yr_n0 cc_17_cncrbrst_1yr_n0 cc_18_cncrclrc_1yr_n0 cc_19_cncrprst_1yr_n0 ///
+  cc_20_cncrlung_1yr_n0 cc_21_cncrendm_1yr_n0 ///
+  age_75 gender_n0 re_black hs_deg_ind resspouse_n0 married_n0 marital_nev_n0  ///
+  marital_wid_n0 medicaid_n0 nw_lowest_n0 fw_lowest_n0 northeast midwest south ///
+  west medicaid_138 pain_hrs_n0 pain_limit_act_hrs_n0 pain_mod_sev srh_pf_n0 ///
+  nw_low_no_medicaid nw_mid_no_medicaid age_80{
+replace `x'=0 if `x'==2
+}
+
+egen dem_nh_adl=concat(smi_dem_ind_n0 smi_nh_ind_n0 adl_impair_core_n0) 
+tab dem_nh_adl
+  
+* hospital nights for those with any hospital
+gen n_hospd_p12m_n0_1=n_hospd_p12m_n0
+replace n_hospd_p12m_n0_1=. if n_hospd_p12m_n0==0
+
+
+* use .70 criteria to determine best class
+gen best_70=5
+replace best_70=1 if postlc1 >= 0.70 
+replace best_70=2 if postlc2 >= 0.70 
+replace best_70=3 if postlc3 >= 0.70 
+replace best_70=4 if postlc4 >= 0.70 
+tab best_70
+
+
+
+H="Tables - descriptives by class"
+
+*log using "C:\Users\mckenk04\serious_illness\LCA_spend10_best_0509016.rft", append
+tab2  best_70 best, col 
+tab2  best_70 best if ser_med_illness_n0==1, col 
+tab2  best_70 best if ser_med_illness_n0==2, col 
+*log close  
+tab postlc1 if best==1 & ser_med_illness_n0==1
+tab postlc2 if best==2 & ser_med_illness_n0==1
+tab postlc3 if best==3 & ser_med_illness_n0==1
+tab postlc4 if best==4 & ser_med_illness_n0==1
+tab postlc5 if best==5 & ser_med_illness_n0==1
+
+
+
+* x tabs for dx of interest - from 5/11/2016 meeting
+tab2 smi_esrd_ind_n0 smi_diab_compl_ind_n0, col row chi
+tab2 comorb_13_0_1yr_n0 comorb_11_0_1yr_n0, col row chi
+tab2 comorb_8_0_1yr_n0 comorb_31_0_1yr_n0, col row chi
+tab2 comorb_8_0_1yr_n0 comorb_29_0_1yr_n0, col row chi
+tab2 comorb_29_0_1yr_n0 comorb_31_0_1yr_n0, col row chi
+tab2 medicaid_n0  medigap_n0, col row chi
+tab2 comorb_29_0_1yr_n0 comorb_31_0_1yr_n0, col row chi
+tab2 medicaid_n0  medigap_n0, col row chi
+tab2 nw_low_no_medicaid medigap_n0, col row chi
+tab2 nw_mid_no_medicaid medigap_n0, col row chi
+
+
+
+
+* create descriptive table for latent classes
+* Top 10% 
+mat table_x=J(71,10,.)
+local r=1
+local c=1
+
+forvalues smi=1/2{
+forvalues class=1/5{
+* dichotomous outcomes
+foreach x in spend_med10_0 spend_med5_0 core_to_dod_1yr_n0 hs_admit_p12m_n0 ///
+ ind_em_ur_adm_p12m_n0{
+sum `x' if `smi'==ser_med_illness_n0 & `class'==best  // replace best with best for 5 class model
+mat table_x[`r',`c']=r(mean)*100
+local r=`r'+1
+}
+* continuous outcomes
+foreach x in tot_paid_by_mc_12m_n0 n_hospd_p12m_n0 n_hospd_p12m_n0_1{
+sum `x' if `smi'==ser_med_illness_n0 & `class'==best
+mat table_x[`r',`c']=r(mean)
+local r=`r'+1
+sum `x' if `smi'==ser_med_illness_n0 & `class'==best, det
+mat table_x[`r',`c']=r(p50)
+local r=`r'+1
+}
+* descriptives
+foreach x in criteria_a_n0 criteria_b_n0 criteria_c_n0 smi_dem_ind_n0 ///
+  smi_cancer_ind_n0 smi_esrd_ind_n0 smi_chf_ind_n0 smi_copd_ind_n0 ///
+  smi_diab_compl_ind_n0 smi_liver_ind_n0 smi_hip_ind_n0 ///
+  el_ge3_comorb_1yr_n0 comorb_1_0_1yr_n0 comorb_2_0_1yr_n0 ///
+  comorb_3_0_1yr_n0 comorb_4_0_1yr_n0 comorb_5_0_1yr_n0 comorb_6_0_1yr_n0 ///
+  comorb_7_0_1yr_n0 comorb_8_0_1yr_n0 comorb_9_0_1yr_n0 comorb_10_0_1yr_n0 ///
+  comorb_11_0_1yr_n0 comorb_12_0_1yr_n0 comorb_13_0_1yr_n0 comorb_14_0_1yr_n0 ///
+  comorb_15_0_1yr_n0 comorb_16_0_1yr_n0 comorb_17_0_1yr_n0 comorb_18_0_1yr_n0 ///
+  comorb_19_0_1yr_n0 comorb_20_0_1yr_n0 comorb_21_0_1yr_n0 comorb_22_0_1yr_n0 ///
+  comorb_23_0_1yr_n0 comorb_24_0_1yr_n0 comorb_25_0_1yr_n0 comorb_26_0_1yr_n0 ///
+  comorb_27_0_1yr_n0 comorb_28_0_1yr_n0 comorb_29_0_1yr_n0 comorb_30_0_1yr_n0 ///
+  comorb_31_0_1yr_n0 comorb_32_0_1yr_n0 comorb_33_0_1yr_n0 comorb_34_0_1yr_n0 ///
+  smi_nh_ind_n0 adl_impair_core_n0 adl_diff_wk_n0 adl_diff_tx_n0 ///
+  ind_ed_op_or_ip_12m_n0 ind_em_ur_adm_12m_n0 ind_hosp_adm_12m_n0 ///
+  medicaid_n0 nw_lowest_n0 nw_low_no_medicaid nw_mid_no_medicaid ///
+  south medicaid_138{
+sum `x' if `smi'==ser_med_illness_n0 & `class'==best
+mat table_x[`r',`c']=r(mean)*100
+local r=`r'+1
+}
+local c=`c'+1
+local r=1
+}
+*local c=`c'+1
+local r=1
+} 
+
+frmttable using "C:\Users\mckenk04\serious_illness\LCA_spend10_5class_descript_0509016.rft", ///
+   statmat(table_x) ///
+   title("Descriptives for 10% of Spending: 5 Classes") ///
+   rtitle("Top 10% spending"\"Top 5% spending"\"Deceased"\"Hospice"\"ED/urgent admission"\ ///
+   "Total paid, mean"\"Total paid, median"\"Nights hospital, mean"\"Nights hospital, median"\ ///
+   "Nights hospital no 0, mean"\"Nights hospital no 0, median"\ ///
+   "Criteria A"\"Criteria B"\"Criteria C"\"SMI dementia"\"SMI cancer"\"SMI ESRD"\ ///
+   "SMI CHF"\"SMI COPD"\"SMI diab_compl"\"SMI liver"\"SMI hip fracture"\"Elixhauser 3+"\ ///
+   "Comorbidity: CHF"\"Comorbidity: Arrhythmias"\"Comorbidity: Valvular Disease"\ ///
+   "Comorbidity: Pulmonary Circulation"\"Comorbidity: Peripheral Vascular"\ ///
+   "Comorbidity: Hypertension"\"Comorbidity: Paralysis"\"Comorbidity: Other neuro"\ ///
+   "Comorbidity: COPD"\"Comorbidity: Diabetes, uncomp"\"Comorbidity: Diabetes, comp"\ ///
+   "Comorbidity: Hypothyroidism"\"Comorbidity: renal failure"\"Comorbidity: Adv liver dis"\ ///
+   "Comorbidity: Peptic ulcer"\"Comorbidity: AIDS"\"Comorbidity: Lymphoma"\ ///
+   "Comorbidity: Metastic/hematological"\"Comorbidity: Solid tumor"\ ///
+   "Comorbidity: Rheumatoid/Coll vasc"\"Comorbidity: Coagulopathy"\"Comorbidity: Obesity"\ ///
+   "Comorbidity:Weight loss"\"Comorbidity: Electrolyte"\"Comorbidity: Blood loss anemia"\ ///
+   "Comorbidity: Deficiency anemia"\"Comorbidity: Alcohol abuse"\"Comorbidity: Drug abuse"\ ///
+   "Comorbidity: Psychoses"\"Comorbidity: Depression"\"Comorbidity: Dementia"\ ///
+   "Comorbidity: CAD"\"Comorbidity: ALS"\"Comorbidity: Renal Disease"\ ///
+   "SMI NH"\"ADL impair"\"ADL difficulty walking"\"ADL difficulting transferring"\  ///
+   "ED use 12m"\"Urgent/emergent hospital admit 12m"\"Hospital admission 12m"\ ///
+   "Medicaid"\"Networth lowest quartile"\"NW lowest no Medicaid"\"NW low/mid no Medicaid"\ ///
+   "South"\"Medicaid_138") /// 
+   ctitle("" "SMI 1" "SMI 2" "SMI 3" "SMI 4" "SMI 5" "No SMI 1" "No SMI 2" "No SMI 3" ///
+   "No SMI 4" "No SMI 5") ///
+   sdec(2,2,2,2,2) basefont(arial fs10) varlabels replace
+
+/* use for 4 class model
+
+frmttable using "C:\Users\mckenk04\serious_illness\LCA_spend10_descript_0509016.rft", ///
+
+   title("Descriptives for 10% of Spending: .70 criteria for class membership") ///
+   
+     ctitle("" "SMI 1" "SMI 2" "SMI 3" "SMI 4" "SMI <0.70" "No SMI 1" "No SMI 2" "No SMI 3" ///
+   "No SMI 4" "No SMI <0.70") ///
+*/
+
+
+* calculate OR across SMI groups
+gen best_notsmi=.
+replace best_notsmi=best if ser_med_illness_n0==1
+replace best_notsmi=0 if ser_med_illness_n0==2 & best==1 | best==2
+
+logistic spend_med10_0 i1.best_notsmi
+sum tot_paid_by_mc_12m_n0 if best_notsmi==1, det
+tab2 spend_med10_0 best_notsmi, chi col
+
+* create 9 classes: 5 SMI & 4 non SMI
+gen best_9=.
+replace best_9=1 if ser_med_illness_n0==2 & best==1 | best==2
+replace best_9=2 if ser_med_illness_n0==2 & best==5 
+replace best_9=3 if ser_med_illness_n0==1 & best==1 
+replace best_9=4 if ser_med_illness_n0==1 & best==2 
+replace best_9=5 if ser_med_illness_n0==2 & best==4 
+replace best_9=6 if ser_med_illness_n0==1 & best==4 
+replace best_9=7 if ser_med_illness_n0==2 & best==3 
+replace best_9=8 if ser_med_illness_n0==1 & best==5 
+replace best_9=9 if ser_med_illness_n0==1 & best==3 
+label define classes 1 "No SMI:healthy" 2 "No SMI:comorbid" 3 "SMI:comorbid no spending" ///
+ 4 "SMI:comorbid speding" 5 "No SMI: pain" 6 "SMI: pain" 7 "No SMI: ADL" 8 "SMI: ADL" ///
+ 9 "SMI: dementia", add 
+label values best_9 classes
+
+* create descriptive table for latent classes
+* Top 10% 
+mat table_x=J(71,9,.)
+local r=1
+local c=1
+
+forvalues class=1/9{
+* dichotomous outcomes
+foreach x in spend_med10_0 spend_med5_0 core_to_dod_1yr_n0 hs_admit_p12m_n0 ///
+ ind_em_ur_adm_p12m_n0{
+sum `x' if `class'==best_9
+mat table_x[`r',`c']=r(mean)*100
+local r=`r'+1
+}
+* continuous outcomes
+foreach x in tot_paid_by_mc_12m_n0 n_hospd_p12m_n0 n_hospd_p12m_n0_1{
+sum `x' if `class'==best_9
+mat table_x[`r',`c']=r(mean)
+local r=`r'+1
+sum `x' if `class'==best_9, det
+mat table_x[`r',`c']=r(p50)
+local r=`r'+1
+}
+* descriptives
+foreach x in criteria_a_n0 criteria_b_n0 criteria_c_n0 smi_dem_ind_n0 ///
+  smi_cancer_ind_n0 smi_esrd_ind_n0 smi_chf_ind_n0 smi_copd_ind_n0 ///
+  smi_diab_compl_ind_n0 smi_liver_ind_n0 smi_hip_ind_n0 ///
+  el_ge3_comorb_1yr_n0 comorb_1_0_1yr_n0 comorb_2_0_1yr_n0 ///
+  comorb_3_0_1yr_n0 comorb_4_0_1yr_n0 comorb_5_0_1yr_n0 comorb_6_0_1yr_n0 ///
+  comorb_7_0_1yr_n0 comorb_8_0_1yr_n0 comorb_9_0_1yr_n0 comorb_10_0_1yr_n0 ///
+  comorb_11_0_1yr_n0 comorb_12_0_1yr_n0 comorb_13_0_1yr_n0 comorb_14_0_1yr_n0 ///
+  comorb_15_0_1yr_n0 comorb_16_0_1yr_n0 comorb_17_0_1yr_n0 comorb_18_0_1yr_n0 ///
+  comorb_19_0_1yr_n0 comorb_20_0_1yr_n0 comorb_21_0_1yr_n0 comorb_22_0_1yr_n0 ///
+  comorb_23_0_1yr_n0 comorb_24_0_1yr_n0 comorb_25_0_1yr_n0 comorb_26_0_1yr_n0 ///
+  comorb_27_0_1yr_n0 comorb_28_0_1yr_n0 comorb_29_0_1yr_n0 comorb_30_0_1yr_n0 ///
+  comorb_31_0_1yr_n0 comorb_32_0_1yr_n0 comorb_33_0_1yr_n0 comorb_34_0_1yr_n0 ///
+  smi_nh_ind_n0 adl_impair_core_n0 adl_diff_wk_n0 adl_diff_tx_n0 ///
+  ind_ed_op_or_ip_12m_n0 ind_em_ur_adm_12m_n0 ind_hosp_adm_12m_n0 ///
+  medicaid_n0 nw_lowest_n0 nw_low_no_medicaid nw_mid_no_medicaid ///
+  south medicaid_138{
+sum `x' if `class'==best_9
+mat table_x[`r',`c']=r(mean)*100
+local r=`r'+1
+}
+local c=`c'+1
+local r=1
+}
+
+
+frmttable using "C:\Users\mckenk04\serious_illness\LCA_spend10_9class_descript_0511016.rft", ///
+   statmat(table_x) ///
+   title("Descriptives for 10% of Spending: 9 Classes") ///
+   rtitle("Top 10% spending"\"Top 5% spending"\"Deceased"\"Hospice"\"ED/urgent admission"\ ///
+   "Total paid, mean"\"Total paid, median"\"Nights hospital, mean"\"Nights hospital, median"\ ///
+   "Nights hospital no 0, mean"\"Nights hospital no 0, median"\ ///
+   "Criteria A"\"Criteria B"\"Criteria C"\"SMI dementia"\"SMI cancer"\"SMI ESRD"\ ///
+   "SMI CHF"\"SMI COPD"\"SMI diab_compl"\"SMI liver"\"SMI hip fracture"\"Elixhauser 3+"\ ///
+   "Comorbidity: CHF"\"Comorbidity: Arrhythmias"\"Comorbidity: Valvular Disease"\ ///
+   "Comorbidity: Pulmonary Circulation"\"Comorbidity: Peripheral Vascular"\ ///
+   "Comorbidity: Hypertension"\"Comorbidity: Paralysis"\"Comorbidity: Other neuro"\ ///
+   "Comorbidity: COPD"\"Comorbidity: Diabetes, uncomp"\"Comorbidity: Diabetes, comp"\ ///
+   "Comorbidity: Hypothyroidism"\"Comorbidity: renal failure"\"Comorbidity: Adv liver dis"\ ///
+   "Comorbidity: Peptic ulcer"\"Comorbidity: AIDS"\"Comorbidity: Lymphoma"\ ///
+   "Comorbidity: Metastic/hematological"\"Comorbidity: Solid tumor"\ ///
+   "Comorbidity: Rheumatoid/Coll vasc"\"Comorbidity: Coagulopathy"\"Comorbidity: Obesity"\ ///
+   "Comorbidity:Weight loss"\"Comorbidity: Electrolyte"\"Comorbidity: Blood loss anemia"\ ///
+   "Comorbidity: Deficiency anemia"\"Comorbidity: Alcohol abuse"\"Comorbidity: Drug abuse"\ ///
+   "Comorbidity: Psychoses"\"Comorbidity: Depression"\"Comorbidity: Dementia"\ ///
+   "Comorbidity: CAD"\"Comorbidity: ALS"\"Comorbidity: Renal Disease"\ ///
+   "SMI NH"\"ADL impair"\"ADL difficulty walking"\"ADL difficulting transferring"\  ///
+   "ED use 12m"\"Urgent/emergent hospital admit 12m"\"Hospital admission 12m"\ ///
+   "Medicaid"\"Networth lowest quartile"\"NW lowest no Medicaid"\"NW low/mid no Medicaid"\ ///
+   "South"\"Medicaid_138") /// 
+   ctitle("" "No SMI health" "No SMI comorbid" "SMI comorbid no $" "SMI comorbid $$" ///
+   "No SMI pain" "SMI pain" "No SMI ALD" "SMI ADL" "SMI dementia") ///
+   sdec(2,2,2,2,2,2,2) basefont(arial fs10) varlabels replace
+
+H="Address questions"
+*** Program to answer other questions brought up at last 4/20/16 meeting with Amy Kelley 
+* 5/6/2016 add table to compare classes for outcomes and illnesses etc
+* ***************************************************************************************
+*************************************************************************************** 
+  
+* what is the relationship between the variables resspouse_n0 marst_n0 & nhres_n0
+tab2 marst_n0 resspouse_n0 if nhres_n0==1, col chi
+tab2 marst_n0 resspouse_n0 if nhres_n0==2, col chi
+
+* what is the relationship between low networh and medicaid
+foreach x in nw_quartile_65_n0 nw_lowest_n0 fw_quart_n0 fw_lowest_n0{
+tab2 `x' medicaid_n0, col
+}
+
+
+* compare comorbidity measures
+* compare COPD measures
+tab2 comorb_9_0_1yr_n0 charls_6_0_1yr_n0, missing
+tab2 comorb_9_0_1yr_n0 cc_7_copd_1yr_n0, missing
+tab2 charls_6_0_1yr_n0 cc_7_copd_1yr_n0, missing
+* liver disease
+gen liver_dis=0
+   replace liver_dis=1 if comorb_14_0_1yr_n0==1 | charls_9_0_1yr_n0==1 |charls_15_0_1yr_n0==1
+tab liver_dis
+tab2 liver_dis spend_med5, col chi
+* stroke - cerebrovascular
+tab2 cc_16_strketia_1yr_n0 charls_4_0_1yr_n0
+
+H="Table - compare subjects based on Top Spending"
+***************************************************************************************
+*************************************************************************************** 
+* create a table to detect higher percentage groups for top 5% and 10% spending
+
+mat table_x=J(121,5,.)
+local r=1
+local c=1
+
+foreach x in age_75 gender_n0 re_black re_white hs_deg_ind resspouse_n0 married_n0 ///
+  marital_nev_n0 marital_wid_n0 medicaid_n0 nw_lowest_n0 nw_lowmid_n0 ///
+  nw_low_no_medicaid nw_mid_no_medicaid fw_lowest_n0 fw_lowmid_n0 fw_low_no_medicaid ///
+  fw_mid_no_medicaid northeast midwest south west medicaid_138 pain_hrs_n0 ///
+  pain_limit_act_hrs_n0 pain_mod_sev pain_severe srh_pf_n0  ///
+  ser_med_illness_n0 smi_ge3_ind_n0 smi_dem_ind_n0 smi_cancer_ind_n0 ///
+  smi_esrd_ind_n0 smi_chf_ind_n0 smi_copd_ind_n0 smi_diab_compl_ind_n0  ///
+  smi_liver_ind_n0 smi_hip_ind_n0 smi_nh_ind_n0 adl_impair_core_n0 home_oxygen_n0 ///
+  ind_ed_op_or_ip_12m_n0 ind_em_ur_adm_12m_n0 ind_hosp_adm_12m_n0 ///
+  el_ge3_comorb_1yr_n0 el_ge4_comorb_1yr_n0 comorb_1_0_1yr_n0 comorb_2_0_1yr_n0 ///
+  comorb_3_0_1yr_n0 comorb_4_0_1yr_n0 comorb_5_0_1yr_n0 comorb_6_0_1yr_n0 ///
+  comorb_7_0_1yr_n0 comorb_8_0_1yr_n0 comorb_9_0_1yr_n0 comorb_10_0_1yr_n0 ///
+  comorb_11_0_1yr_n0 comorb_12_0_1yr_n0 comorb_13_0_1yr_n0 comorb_14_0_1yr_n0 ///
+  comorb_15_0_1yr_n0 comorb_16_0_1yr_n0 comorb_17_0_1yr_n0 comorb_18_0_1yr_n0 ///
+  comorb_19_0_1yr_n0 comorb_20_0_1yr_n0 comorb_21_0_1yr_n0 comorb_22_0_1yr_n0 ///
+  comorb_23_0_1yr_n0 comorb_24_0_1yr_n0 comorb_25_0_1yr_n0 comorb_26_0_1yr_n0 ///
+  comorb_27_0_1yr_n0 comorb_28_0_1yr_n0 comorb_29_0_1yr_n0 comorb_30_0_1yr_n0 ///
+  comorb_31_0_1yr_n0 comorb_32_0_1yr_n0 comorb_33_0_1yr_n0 comorb_34_0_1yr_n0 ///
+  charls_index_wt_3 charls_1_0_1yr_n0 charls_2_0_1yr_n0 charls_3_0_1yr_n0 ///
+  charls_4_0_1yr_n0 charls_5_0_1yr_n0 charls_6_0_1yr_n0 charls_7_0_1yr_n0 ///
+  charls_8_0_1yr_n0 charls_9_0_1yr_n0 charls_10_0_1yr_n0 charls_11_0_1yr_n0 ///
+  charls_13_0_1yr_n0 charls_14_0_1yr_n0 charls_15_0_1yr_n0 charls_16_0_1yr_n0 ///
+  cc2_ge4_comorb_1yr_n0 cc_ami_isch_1yr_n0 cc_1_ami_1yr_n0 cc_12_ischmcht_1yr_n0 ///
+  cc_alzheim_1yr_n0 cc_2_alzh_1yr_n0 cc_3_alzhdmta_1yr_n0 cc_4_atrialfb_1yr_n0  ///
+  cc_5_cataract_1yr_n0 cc_6_chrnkidn_1yr_n0 cc_7_copd_1yr_n0 cc_8_chf_1yr_n0  ///
+  cc_9_diabetes_1yr_n0 cc_10_glaucoma_1yr_n0 cc_11_hipfrac_1yr_n0  ///
+  cc_13_depressn_1yr_n0 cc_14_osteoprs_1yr_n0 cc_15_ra_oa_1yr_n0 ///
+  cc_16_strketia_1yr_n0 cc_cncr_chronic_1yr_n0 cc_17_cncrbrst_1yr_n0  ///
+  cc_18_cncrclrc_1yr_n0 cc_19_cncrprst_1yr_n0 cc_20_cncrlung_1yr_n0  ///
+  cc_21_cncrendm_1yr_n0{
+sum `x' if `x'==1 
+mat table_x[`r',`c']=r(N)
+local r=`r'+1
+}
+local c=`c'+1
+local r=1
+foreach x in age_75 gender_n0 re_black re_white hs_deg_ind resspouse_n0 married_n0 ///
+  marital_nev_n0 marital_wid_n0 medicaid_n0 nw_lowest_n0 nw_lowmid_n0 ///
+  nw_low_no_medicaid nw_mid_no_medicaid fw_lowest_n0 fw_lowmid_n0 fw_low_no_medicaid ///
+  fw_mid_no_medicaid northeast midwest south west medicaid_138 pain_hrs_n0 ///
+  pain_limit_act_hrs_n0 pain_mod_sev pain_severe srh_pf_n0  ///
+  ser_med_illness_n0 smi_ge3_ind_n0 smi_dem_ind_n0 smi_cancer_ind_n0 ///
+  smi_esrd_ind_n0 smi_chf_ind_n0 smi_copd_ind_n0 smi_diab_compl_ind_n0  ///
+  smi_liver_ind_n0 smi_hip_ind_n0 smi_nh_ind_n0 adl_impair_core_n0 home_oxygen_n0 ///
+  ind_ed_op_or_ip_12m_n0 ind_em_ur_adm_12m_n0 ind_hosp_adm_12m_n0 ///
+  el_ge3_comorb_1yr_n0 el_ge4_comorb_1yr_n0 comorb_1_0_1yr_n0 comorb_2_0_1yr_n0 ///
+  comorb_3_0_1yr_n0 comorb_4_0_1yr_n0 comorb_5_0_1yr_n0 comorb_6_0_1yr_n0 ///
+  comorb_7_0_1yr_n0 comorb_8_0_1yr_n0 comorb_9_0_1yr_n0 comorb_10_0_1yr_n0 ///
+  comorb_11_0_1yr_n0 comorb_12_0_1yr_n0 comorb_13_0_1yr_n0 comorb_14_0_1yr_n0 ///
+  comorb_15_0_1yr_n0 comorb_16_0_1yr_n0 comorb_17_0_1yr_n0 comorb_18_0_1yr_n0 ///
+  comorb_19_0_1yr_n0 comorb_20_0_1yr_n0 comorb_21_0_1yr_n0 comorb_22_0_1yr_n0 ///
+  comorb_23_0_1yr_n0 comorb_24_0_1yr_n0 comorb_25_0_1yr_n0 comorb_26_0_1yr_n0 ///
+  comorb_27_0_1yr_n0 comorb_28_0_1yr_n0 comorb_29_0_1yr_n0 comorb_30_0_1yr_n0 ///
+  comorb_31_0_1yr_n0 comorb_32_0_1yr_n0 comorb_33_0_1yr_n0 comorb_34_0_1yr_n0 ///
+  charls_index_wt_3 charls_1_0_1yr_n0 charls_2_0_1yr_n0 charls_3_0_1yr_n0 ///
+  charls_4_0_1yr_n0 charls_5_0_1yr_n0 charls_6_0_1yr_n0 charls_7_0_1yr_n0 ///
+  charls_8_0_1yr_n0 charls_9_0_1yr_n0 charls_10_0_1yr_n0 charls_11_0_1yr_n0 ///
+  charls_13_0_1yr_n0 charls_14_0_1yr_n0 charls_15_0_1yr_n0 charls_16_0_1yr_n0 ///
+  cc2_ge4_comorb_1yr_n0 cc_ami_isch_1yr_n0 cc_1_ami_1yr_n0 cc_12_ischmcht_1yr_n0 ///
+  cc_alzheim_1yr_n0 cc_2_alzh_1yr_n0 cc_3_alzhdmta_1yr_n0 cc_4_atrialfb_1yr_n0  ///
+  cc_5_cataract_1yr_n0 cc_6_chrnkidn_1yr_n0 cc_7_copd_1yr_n0 cc_8_chf_1yr_n0  ///
+  cc_9_diabetes_1yr_n0 cc_10_glaucoma_1yr_n0 cc_11_hipfrac_1yr_n0  ///
+  cc_13_depressn_1yr_n0 cc_14_osteoprs_1yr_n0 cc_15_ra_oa_1yr_n0 ///
+  cc_16_strketia_1yr_n0 cc_cncr_chronic_1yr_n0 cc_17_cncrbrst_1yr_n0  ///
+  cc_18_cncrclrc_1yr_n0 cc_19_cncrprst_1yr_n0 cc_20_cncrlung_1yr_n0  ///
+  cc_21_cncrendm_1yr_n0{
+sum `x' if `x'==1 & spend_med5==1
+mat table_x[`r',`c']=r(N)
+local r=`r'+1
+}
+local c=`c'+1
+local r=1
+foreach x in age_75 gender_n0 re_black re_white hs_deg_ind resspouse_n0 married_n0 ///
+  marital_nev_n0 marital_wid_n0 medicaid_n0 nw_lowest_n0 nw_lowmid_n0 ///
+  nw_low_no_medicaid nw_mid_no_medicaid fw_lowest_n0 fw_lowmid_n0 fw_low_no_medicaid ///
+  fw_mid_no_medicaid northeast midwest south west medicaid_138 pain_hrs_n0 ///
+  pain_limit_act_hrs_n0 pain_mod_sev pain_severe srh_pf_n0  ///
+  ser_med_illness_n0 smi_ge3_ind_n0 smi_dem_ind_n0 smi_cancer_ind_n0 ///
+  smi_esrd_ind_n0 smi_chf_ind_n0 smi_copd_ind_n0 smi_diab_compl_ind_n0  ///
+  smi_liver_ind_n0 smi_hip_ind_n0 smi_nh_ind_n0 adl_impair_core_n0 home_oxygen_n0 ///
+  ind_ed_op_or_ip_12m_n0 ind_em_ur_adm_12m_n0 ind_hosp_adm_12m_n0 ///
+  el_ge3_comorb_1yr_n0 el_ge4_comorb_1yr_n0 comorb_1_0_1yr_n0 comorb_2_0_1yr_n0 ///
+  comorb_3_0_1yr_n0 comorb_4_0_1yr_n0 comorb_5_0_1yr_n0 comorb_6_0_1yr_n0 ///
+  comorb_7_0_1yr_n0 comorb_8_0_1yr_n0 comorb_9_0_1yr_n0 comorb_10_0_1yr_n0 ///
+  comorb_11_0_1yr_n0 comorb_12_0_1yr_n0 comorb_13_0_1yr_n0 comorb_14_0_1yr_n0 ///
+  comorb_15_0_1yr_n0 comorb_16_0_1yr_n0 comorb_17_0_1yr_n0 comorb_18_0_1yr_n0 ///
+  comorb_19_0_1yr_n0 comorb_20_0_1yr_n0 comorb_21_0_1yr_n0 comorb_22_0_1yr_n0 ///
+  comorb_23_0_1yr_n0 comorb_24_0_1yr_n0 comorb_25_0_1yr_n0 comorb_26_0_1yr_n0 ///
+  comorb_27_0_1yr_n0 comorb_28_0_1yr_n0 comorb_29_0_1yr_n0 comorb_30_0_1yr_n0 ///
+  comorb_31_0_1yr_n0 comorb_32_0_1yr_n0 comorb_33_0_1yr_n0 comorb_34_0_1yr_n0 ///
+  charls_index_wt_3 charls_1_0_1yr_n0 charls_2_0_1yr_n0 charls_3_0_1yr_n0 ///
+  charls_4_0_1yr_n0 charls_5_0_1yr_n0 charls_6_0_1yr_n0 charls_7_0_1yr_n0 ///
+  charls_8_0_1yr_n0 charls_9_0_1yr_n0 charls_10_0_1yr_n0 charls_11_0_1yr_n0 ///
+  charls_13_0_1yr_n0 charls_14_0_1yr_n0 charls_15_0_1yr_n0 charls_16_0_1yr_n0 ///
+  cc2_ge4_comorb_1yr_n0 cc_ami_isch_1yr_n0 cc_1_ami_1yr_n0 cc_12_ischmcht_1yr_n0 ///
+  cc_alzheim_1yr_n0 cc_2_alzh_1yr_n0 cc_3_alzhdmta_1yr_n0 cc_4_atrialfb_1yr_n0  ///
+  cc_5_cataract_1yr_n0 cc_6_chrnkidn_1yr_n0 cc_7_copd_1yr_n0 cc_8_chf_1yr_n0  ///
+  cc_9_diabetes_1yr_n0 cc_10_glaucoma_1yr_n0 cc_11_hipfrac_1yr_n0  ///
+  cc_13_depressn_1yr_n0 cc_14_osteoprs_1yr_n0 cc_15_ra_oa_1yr_n0 ///
+  cc_16_strketia_1yr_n0 cc_cncr_chronic_1yr_n0 cc_17_cncrbrst_1yr_n0  ///
+  cc_18_cncrclrc_1yr_n0 cc_19_cncrprst_1yr_n0 cc_20_cncrlung_1yr_n0  ///
+  cc_21_cncrendm_1yr_n0{
+sum `x' if `x'==1 & spend_med5==1
+mat table_x[`r',`c']=r(N)/317
+local r=`r'+1
+}
+local c=`c'+1
+local r=1
+foreach x in age_75 gender_n0 re_black re_white hs_deg_ind resspouse_n0 married_n0 ///
+  marital_nev_n0 marital_wid_n0 medicaid_n0 nw_lowest_n0 nw_lowmid_n0 ///
+  nw_low_no_medicaid nw_mid_no_medicaid fw_lowest_n0 fw_lowmid_n0 fw_low_no_medicaid ///
+  fw_mid_no_medicaid northeast midwest south west medicaid_138 pain_hrs_n0 ///
+  pain_limit_act_hrs_n0 pain_mod_sev pain_severe srh_pf_n0  ///
+  ser_med_illness_n0 smi_ge3_ind_n0 smi_dem_ind_n0 smi_cancer_ind_n0 ///
+  smi_esrd_ind_n0 smi_chf_ind_n0 smi_copd_ind_n0 smi_diab_compl_ind_n0  ///
+  smi_liver_ind_n0 smi_hip_ind_n0 smi_nh_ind_n0 adl_impair_core_n0 home_oxygen_n0 ///
+  ind_ed_op_or_ip_12m_n0 ind_em_ur_adm_12m_n0 ind_hosp_adm_12m_n0 ///
+  el_ge3_comorb_1yr_n0 el_ge4_comorb_1yr_n0 comorb_1_0_1yr_n0 comorb_2_0_1yr_n0 ///
+  comorb_3_0_1yr_n0 comorb_4_0_1yr_n0 comorb_5_0_1yr_n0 comorb_6_0_1yr_n0 ///
+  comorb_7_0_1yr_n0 comorb_8_0_1yr_n0 comorb_9_0_1yr_n0 comorb_10_0_1yr_n0 ///
+  comorb_11_0_1yr_n0 comorb_12_0_1yr_n0 comorb_13_0_1yr_n0 comorb_14_0_1yr_n0 ///
+  comorb_15_0_1yr_n0 comorb_16_0_1yr_n0 comorb_17_0_1yr_n0 comorb_18_0_1yr_n0 ///
+  comorb_19_0_1yr_n0 comorb_20_0_1yr_n0 comorb_21_0_1yr_n0 comorb_22_0_1yr_n0 ///
+  comorb_23_0_1yr_n0 comorb_24_0_1yr_n0 comorb_25_0_1yr_n0 comorb_26_0_1yr_n0 ///
+  comorb_27_0_1yr_n0 comorb_28_0_1yr_n0 comorb_29_0_1yr_n0 comorb_30_0_1yr_n0 ///
+  comorb_31_0_1yr_n0 comorb_32_0_1yr_n0 comorb_33_0_1yr_n0 comorb_34_0_1yr_n0 ///
+  charls_index_wt_3 charls_1_0_1yr_n0 charls_2_0_1yr_n0 charls_3_0_1yr_n0 ///
+  charls_4_0_1yr_n0 charls_5_0_1yr_n0 charls_6_0_1yr_n0 charls_7_0_1yr_n0 ///
+  charls_8_0_1yr_n0 charls_9_0_1yr_n0 charls_10_0_1yr_n0 charls_11_0_1yr_n0 ///
+  charls_13_0_1yr_n0 charls_14_0_1yr_n0 charls_15_0_1yr_n0 charls_16_0_1yr_n0 ///
+  cc2_ge4_comorb_1yr_n0 cc_ami_isch_1yr_n0 cc_1_ami_1yr_n0 cc_12_ischmcht_1yr_n0 ///
+  cc_alzheim_1yr_n0 cc_2_alzh_1yr_n0 cc_3_alzhdmta_1yr_n0 cc_4_atrialfb_1yr_n0  ///
+  cc_5_cataract_1yr_n0 cc_6_chrnkidn_1yr_n0 cc_7_copd_1yr_n0 cc_8_chf_1yr_n0  ///
+  cc_9_diabetes_1yr_n0 cc_10_glaucoma_1yr_n0 cc_11_hipfrac_1yr_n0  ///
+  cc_13_depressn_1yr_n0 cc_14_osteoprs_1yr_n0 cc_15_ra_oa_1yr_n0 ///
+  cc_16_strketia_1yr_n0 cc_cncr_chronic_1yr_n0 cc_17_cncrbrst_1yr_n0  ///
+  cc_18_cncrclrc_1yr_n0 cc_19_cncrprst_1yr_n0 cc_20_cncrlung_1yr_n0  ///
+  cc_21_cncrendm_1yr_n0{
+sum `x' if `x'==1 & spend_med10==1
+mat table_x[`r',`c']=r(N)
+local r=`r'+1
+}
+local c=`c'+1
+local r=1
+foreach x in age_75 gender_n0 re_black re_white hs_deg_ind resspouse_n0 married_n0 ///
+  marital_nev_n0 marital_wid_n0 medicaid_n0 nw_lowest_n0 nw_lowmid_n0 ///
+  nw_low_no_medicaid nw_mid_no_medicaid fw_lowest_n0 fw_lowmid_n0 fw_low_no_medicaid ///
+  fw_mid_no_medicaid northeast midwest south west medicaid_138 pain_hrs_n0 ///
+  pain_limit_act_hrs_n0 pain_mod_sev pain_severe srh_pf_n0 ///
+  ser_med_illness_n0 smi_ge3_ind_n0 smi_dem_ind_n0 smi_cancer_ind_n0 ///
+  smi_esrd_ind_n0 smi_chf_ind_n0 smi_copd_ind_n0 smi_diab_compl_ind_n0  ///
+  smi_liver_ind_n0 smi_hip_ind_n0 smi_nh_ind_n0 adl_impair_core_n0 home_oxygen_n0 ///
+  ind_ed_op_or_ip_12m_n0 ind_em_ur_adm_12m_n0 ind_hosp_adm_12m_n0 ///
+  el_ge3_comorb_1yr_n0 el_ge4_comorb_1yr_n0 comorb_1_0_1yr_n0 comorb_2_0_1yr_n0 ///
+  comorb_3_0_1yr_n0 comorb_4_0_1yr_n0 comorb_5_0_1yr_n0 comorb_6_0_1yr_n0 ///
+  comorb_7_0_1yr_n0 comorb_8_0_1yr_n0 comorb_9_0_1yr_n0 comorb_10_0_1yr_n0 ///
+  comorb_11_0_1yr_n0 comorb_12_0_1yr_n0 comorb_13_0_1yr_n0 comorb_14_0_1yr_n0 ///
+  comorb_15_0_1yr_n0 comorb_16_0_1yr_n0 comorb_17_0_1yr_n0 comorb_18_0_1yr_n0 ///
+  comorb_19_0_1yr_n0 comorb_20_0_1yr_n0 comorb_21_0_1yr_n0 comorb_22_0_1yr_n0 ///
+  comorb_23_0_1yr_n0 comorb_24_0_1yr_n0 comorb_25_0_1yr_n0 comorb_26_0_1yr_n0 ///
+  comorb_27_0_1yr_n0 comorb_28_0_1yr_n0 comorb_29_0_1yr_n0 comorb_30_0_1yr_n0 ///
+  comorb_31_0_1yr_n0 comorb_32_0_1yr_n0 comorb_33_0_1yr_n0 comorb_34_0_1yr_n0 ///
+  charls_index_wt_3 charls_1_0_1yr_n0 charls_2_0_1yr_n0 charls_3_0_1yr_n0 ///
+  charls_4_0_1yr_n0 charls_5_0_1yr_n0 charls_6_0_1yr_n0 charls_7_0_1yr_n0 ///
+  charls_8_0_1yr_n0 charls_9_0_1yr_n0 charls_10_0_1yr_n0 charls_11_0_1yr_n0 ///
+  charls_13_0_1yr_n0 charls_14_0_1yr_n0 charls_15_0_1yr_n0 charls_16_0_1yr_n0 ///
+  cc2_ge4_comorb_1yr_n0 cc_ami_isch_1yr_n0 cc_1_ami_1yr_n0 cc_12_ischmcht_1yr_n0 ///
+  cc_alzheim_1yr_n0 cc_2_alzh_1yr_n0 cc_3_alzhdmta_1yr_n0 cc_4_atrialfb_1yr_n0  ///
+  cc_5_cataract_1yr_n0 cc_6_chrnkidn_1yr_n0 cc_7_copd_1yr_n0 cc_8_chf_1yr_n0  ///
+  cc_9_diabetes_1yr_n0 cc_10_glaucoma_1yr_n0 cc_11_hipfrac_1yr_n0  ///
+  cc_13_depressn_1yr_n0 cc_14_osteoprs_1yr_n0 cc_15_ra_oa_1yr_n0 ///
+  cc_16_strketia_1yr_n0 cc_cncr_chronic_1yr_n0 cc_17_cncrbrst_1yr_n0  ///
+  cc_18_cncrclrc_1yr_n0 cc_19_cncrprst_1yr_n0 cc_20_cncrlung_1yr_n0  ///
+  cc_21_cncrendm_1yr_n0{
+sum `x' if `x'==1 & spend_med10==1
+mat table_x[`r',`c']=r(N)/633
+local r=`r'+1
+}
+
+frmttable using "C:\Users\mckenk04\serious_illness\LCA_spend_med5_04272016.rft", ///
+   statmat(table_x) ///
+   title("Possible predictor variables for Top 5% & 10% of Spending") ///
+   rtitle("Age 75+"\"Male"\"Black"\"White"\"HS degree"\"Live spouse/partner"\"Married"\ ///
+   "Never married"\"Widowed"\"Medicaid"\"Networth lowest"\"Networth low/mid"\ ///
+   "Networth low-no Medicaid"\"Networth mid/low no Medicaid"\"Wealth lowest"\ ///
+   "Wealth low/mid"\"Wealth low no Medicaid"\"Wealth low/mid no Medicaid"\ ///
+   "Northeast"\"Midwest"\"South"\"West"\"Medicaid_138"\"Pain"\"Pain limits activity"\ ///
+   "Pain mod/severe"\"Pain severe"\"Poor/Fair health"\ /// 
+   "SMI any"\"SMI 3+"\"SMI dementia"\"SMI cancer"\"SMI ESRD"\"SMI CHF"\"SMI COPD"\ ///
+   "SMI diab_compl"\"SMI liver"\"SMI hip fracture"\"SMI NH"\"ADL impair"\"Home oxygen"\  ///
+   "ED use 12m"\"Urgent/emergent hospital admit 12m"\"Hospital admission 12m"\ ///
+   "Elixhauser 3+"\"Elixhauser 4+"\"Comorbidity: CHF"\"Comorbidity: Arrhythmias"\ ///
+   "Comorbidity: Valvular Disease"\"Comorbidity: Pulmonary Circulation"\ ///
+   "Comorbidity: Peripheral Vascular"\"Comorbidity: Hypertension"\"Comorbidity: Paralysis"\ ///
+   "Comorbidity: Other neuro"\"Comorbidity: COPD"\"Comorbidity: Diabetes, uncomp"\ ///
+   "Comorbidity: Diabetes, comp"\"Comorbidity: Hypothyroidism"\"Comorbidity: renal failure"\ ///
+   "Comorbidity: Adv liver dis"\"Comorbidity: Peptic ulcer"\"Comorbidity: AIDS"\ ///
+   "Comorbidity: Lymphoma"\"Comorbidity: Metastic/hematological"\"Comorbidity: Solid tumor"\ ///
+   "Comorbidity: Rheumatoid/Coll vasc"\"Comorbidity: Coagulopathy"\"Comorbidity: Obesity"\ ///
+   "Comorbidity:Weight loss"\"Comorbidity: Electrolyte"\"Comorbidity: Blood loss anemia"\ ///
+   "Comorbidity: Deficiency anemia"\"Comorbidity: Alcohol abuse"\"Comorbidity: Drug abuse"\ ///
+   "Comorbidity: Psychoses"\"Comorbidity: Depression"\"Comorbidity: Dementia"\ ///
+   "Comorbidity: CAD"\"Comorbidity: ALS"\"Comorbidity: Renal Disease"\ ///
+   "Charlson 3+"\"Charlson: Myocardial infarc"\"Charlson: CHF"\"Charlson: Peripheral Vasc"\ ///
+   "Charlson: Cerebrovascular"\"Charlson: Dementia"\"Charlson: COPD"\ ///
+   "Charlson: Rheumatic"\"Charlson: Peptic ulcer"\"Charlson: Mild liver"\ ///
+   "Charlson: Diabetes, uncomp"\"Charlson: Diabetes, comp"\"Charlson: Renal"\ ///
+   "Charlson: Malignancy ex neoplasm"\"Charlson: Mod/sev liver"\"Charlson: Mestastic solid"\ ///
+   "CC: DW Chronic Conditions 4+"\"CC: ami_isch"\"CC: 1_ami"\"CC: 12_ischmcht"\"CC: alzheim"\ ///
+   "CC: 2_alzh"\"CC: 3_alzhdmta"\"CC: 4_atrialfb"\"CC: 5_cataract"\ ///
+   "CC: 6_chrnkidn"\"CC: 7_copd"\"CC: 8_chf"\"CC: 9_diabetes"\"CC: 10_glaucoma"\ ///
+   "CC: 11_hipfrac"\"CC: 13_depressn"\"CC: 14_osteoprs"\"CC: 15_ra_oa"\"CC: 16_strketia"\ ///
+   "CC: cncr_chronic"\"CC: 17_cncrbrst"\"CC: 18_cncrclrc"\"CC: 19_cncrprst"\"CC: 20_cncrlung"\ ///
+   "CC: 21_cncrendm_1yr ") /// 
+   ctitle("" "N" "N Top 5%" "% (N=317)" "N Top 10%" "% (N=633)") ///
+   sdec(0,0,3,0,3) basefont(arial fs10) varlabels replace
+
+tab1 northeast midwest south west medicaid_138
+tab2 el_ge3_comorb_1yr_n0 charls_index_wt_3 
+tab2 el_ge3_comorb_1yr_n0 cc2_ge4_comorb_1yr_n0 
+
+H="**** GSEM"
+
+
+H="Prepare the GSEM data- devel groups & logistic regression"
+
+*************************************************************************************** 
+*************************************************************************************** 
+* thinking thru a path-type analysis
+* main effect for SMI, ADL, comorbidities & pain
+* invesigate after utilization, resources/SES, frailty
+ 
+clear all
+
+use "C:\Users\mckenk04\serious_illness\lcawork.dta", clear
+drop if missing(bid_hrs_21)
+drop _merge 
+merge 1:1 id using "C:\Users\mckenk04\serious_illness\pdem_withvarnames_ebl.dta"
+keep if _merge==3
+
+
+//create high school degree indicator variable
+replace hs_deg_ind=.
+replace hs_deg_ind=1 if degree_n0>=1 & degree_n0~=.
+replace hs_deg_ind=0 if degree_n0==0
+la var hs_deg_ind "High school degree, 1=yes"
+tab hs_deg_ind, missing
+tab degree_n0 hs_deg_ind, missing
+
+
+* recode data from 1/2 to 0/1
+foreach x in ser_med_illness_n0 smi_ge3_ind_n0 smi_dem_ind_n0 smi_cancer_ind_n0  ///   
+  smi_esrd_ind_n0 smi_chf_ind_n0 smi_copd_ind_n0 smi_diab_compl_ind_n0 smi_liver_ind_n0 ///
+  smi_hip_ind_n0 smi_hiv_ind_n0  smi_als_ind_n0 smi_nh_ind_n0 smi_helper_ind_n0 ///
+  home_oxygen_n0 adl_impair_core_n0  adl_ind_core_n_n0  ///
+  ind_ed_op_or_ip_12m_n0 ind_em_ur_adm_12m_n0 ind_hosp_adm_12m_n0  ///
+  charls_index_wt_3 charls_1_0_1yr_n0 charls_2_0_1yr_n0 charls_3_0_1yr_n0 charls_4_0_1yr_n0 ///
+  charls_5_0_1yr_n0 charls_6_0_1yr_n0 charls_7_0_1yr_n0 charls_8_0_1yr_n0 charls_9_0_1yr_n0 ///
+  charls_10_0_1yr_n0 charls_11_0_1yr_n0 charls_12_0_1yr_n0 charls_13_0_1yr_n0 ///
+  charls_14_0_1yr_n0 charls_15_0_1yr_n0 charls_16_0_1yr_n0 charls_17_0_1yr_n0 ///
+  el_ge3_comorb_1yr_n0 el_ge4_comorb_1yr_n0 comorb_1_0_1yr_n0 comorb_2_0_1yr_n0 ///
+  comorb_3_0_1yr_n0 comorb_4_0_1yr_n0 comorb_5_0_1yr_n0 comorb_6_0_1yr_n0 ///
+  comorb_7_0_1yr_n0 comorb_8_0_1yr_n0 comorb_9_0_1yr_n0 comorb_10_0_1yr_n0 ///
+  comorb_11_0_1yr_n0 comorb_12_0_1yr_n0 comorb_13_0_1yr_n0 comorb_14_0_1yr_n0 ///
+  comorb_15_0_1yr_n0 comorb_16_0_1yr_n0 comorb_17_0_1yr_n0 comorb_18_0_1yr_n0 ///
+  comorb_19_0_1yr_n0 comorb_20_0_1yr_n0 comorb_21_0_1yr_n0 comorb_22_0_1yr_n0 ///
+  comorb_23_0_1yr_n0 comorb_24_0_1yr_n0 comorb_25_0_1yr_n0 comorb_26_0_1yr_n0 ///
+  comorb_27_0_1yr_n0 comorb_28_0_1yr_n0 comorb_29_0_1yr_n0 comorb_30_0_1yr_n0 ///
+  comorb_31_0_1yr_n0 comorb_32_0_1yr_n0 comorb_33_0_1yr_n0 comorb_34_0_1yr_n0 ///
+  cc_ge4_comorb_1yr_n0 cc2_ge4_comorb_1yr_n0 cc_ami_isch_1yr_n0  cc_1_ami_1yr_n0 ///
+  cc_12_ischmcht_1yr_n0 cc_alzheim_1yr_n0 cc_2_alzh_1yr_n0 cc_3_alzhdmta_1yr_n0 ///
+  cc_4_atrialfb_1yr_n0 cc_5_cataract_1yr_n0 cc_6_chrnkidn_1yr_n0 cc_7_copd_1yr_n0 ///
+  cc_8_chf_1yr_n0 cc_9_diabetes_1yr_n0 cc_10_glaucoma_1yr_n0 cc_11_hipfrac_1yr_n0  ///
+  cc_13_depressn_1yr_n0 cc_14_osteoprs_1yr_n0 cc_15_ra_oa_1yr_n0 cc_16_strketia_1yr_n0 ///
+  cc_cncr_chronic_1yr_n0 cc_17_cncrbrst_1yr_n0 cc_18_cncrclrc_1yr_n0 cc_19_cncrprst_1yr_n0 ///
+  cc_20_cncrlung_1yr_n0 cc_21_cncrendm_1yr_n0 ///
+  age_75 gender_n0 re_black hs_deg_ind resspouse_n0 married_n0 marital_nev_n0  ///
+  marital_wid_n0 medicaid_n0 nw_lowest_n0 fw_lowest_n0 northeast midwest south ///
+  west medicaid_138 pain_hrs_n0 pain_limit_act_hrs_n0 pain_mod_sev srh_pf_n0 ///
+  nw_low_no_medicaid nw_mid_no_medicaid age_80{
+replace `x'=0 if `x'==2
+}
+
+foreach x in pain_hrs_n0 medicaid_n0 medigap_n0{ 
+replace `x'=0 if missing(`x')
+}
+
+
+* hospital nights limited to those with any hospital
+gen n_hospd_p12m_n0_1=n_hospd_p12m_n0
+replace n_hospd_p12m_n0_1=. if n_hospd_p12m_n0==0
+
+
+/* because 93* of the SMI group has 3+ comorbidities create ordinal variable of 
+illness severity: 0=none, 1=3+ comordities (no SMI), 2=SMI (<3 comorbidities), 3=SMI & 3+ comorbidities
+*/
+drop sev_ill 
+gen sev_ill=0
+  replace sev_ill=1 if el_ge3_comorb_1yr_n0==1 & ser_med_illness_n0==0
+  replace sev_ill=2 if el_ge3_comorb_1yr_n0==0 & ser_med_illness_n0==1
+  replace sev_ill=3 if el_ge3_comorb_1yr_n0==1 & ser_med_illness_n0==1
+tab sev_ill
+* create dummy variables for SEM
+gen sev1=0
+gen sev2=0
+gen sev3=0
+replace sev1=1 if sev_ill==1
+replace sev2=1 if sev_ill==2
+replace sev3=1 if sev_ill==3
+
+logistic spend_med10_0 i.sev_ill  i.adl_impair_core_n0 i.pain_hrs_n0 
+
+egen sev_adl=concat(sev_ill adl_impair_core_n0)
+egen sev_adl_pain=concat(sev_ill adl_impair_core_n0 pain_hrs_n0)
+  tab1 sev_adl sev_adl_pain
+   destring sev_adl, generate(sev_adl_n)
+   destring sev_adl_pain, generate(sev_adl_pain_n)
+   
+egen medis=concat(medicaid_n0 medigap_n0)
+  tab medis
+   destring medis, generate(medi_n)   
+gen contact_27=0
+  replace contact_27=1 if contact_days_n0>=27.0
+
+
+tab sev_adl_n
+*drop severity
+gen severity=0
+replace severity=2 if sev_adl_n==1
+replace severity=3 if sev_adl_n==10
+replace severity=5 if sev_adl_n==11
+replace severity=1 if sev_adl_n==20
+replace severity=6 if sev_adl_n==21
+replace severity=4 if sev_adl_n==30
+replace severity=7 if sev_adl_n==31
+label define sevgp 0 "None" 1 "SMI only" 2 "ADL only" 3 "3+ only" 4 "SMI 3+" 5 "3+ ADL" 6 "SMI ADL" 7 "SMI 3+ ADL", replace
+label values severity sevgp 
+tab severity
+ 
+  
+* create 4 severity-ADL groups: none, SMI/ADL/3+, SMI3+/ADL3+, SMI(3+)ADL 
+gen severity4=0
+replace severity4=1 if severity==1 | severity==2 | severity==3
+replace severity4=2 if severity==4 | severity==5 
+replace severity4=3 if severity==6 | severity==7 
+label define sev4gp 0 "None" 1 "SMI/ADL/3+" 2 "SMI3+/ADL3+" 3 "SMI~3+& ADL" , replace
+label values severity4 sev4gp 
+tab severity4 
+logit spend_med10_0 i.severity4 i.pain_hrs_n0 i.contact_27 i.medicaid_n0 
+logistic spend_med10_0 i.severity4 i.pain_hrs_n0 i.contact_27 i.medicaid_n0  
+logistic spend_med10_0 i.severity i.adl_impair_core_n0 i.pain_hrs_n0 i.contact_27 i.medicaid_n0  
+
+
+*** START HERE
+* what is the rel betw util (contact hours) &  caregiver
+twoway (scatter hlphrs contact_days_n0)
+look at hospitalization as 0,1,2,3+
+SES to LOW SES: measures in same direction as each other and in relation to other paths
+
+
+H="Table - compare groups based on SMI, comorbidities & ADL"
+* concat variable to look at groups/interactions  
+egen dem_nh_adl=concat(smi_dem_ind_n0 smi_nh_ind_n0 adl_impair_core_n0) 
+tab dem_nh_adl
+ 
+egen lgroup=concat(ser_med_illness_n0 adl_impair_core_n0 el_ge3_comorb_1yr_n0 pain_hrs_n0)
+  tab lgroup
+   destring lgroup, generate(lgroup_n)
+logistic spend_med10_0 i.lgroup_n
+
+* Look at SMI dx for SMI groups with/out 3+ comorbidities
+* Top 10% 
+mat table_x=J(10,3,.)
+local r=1
+local c=1
+
+foreach x in smi_dem_ind_n0 smi_cancer_ind_n0 smi_esrd_ind_n0 smi_chf_ind_n0 smi_copd_ind_n0 ///
+   smi_diab_compl_ind_n0 smi_liver_ind_n0 smi_hip_ind_n0 smi_hiv_ind_n0  smi_als_ind_n0{
+sum `x' if ser_med_illness_n0==1  
+mat table_x[`r',`c']=r(mean)*100
+local r=`r'+1
+}
+local c=`c'+1
+local r=1
+
+forvalues class=2/3{
+* dichotomous outcomes
+foreach x in smi_dem_ind_n0 smi_cancer_ind_n0 smi_esrd_ind_n0 smi_chf_ind_n0 smi_copd_ind_n0 ///
+   smi_diab_compl_ind_n0 smi_liver_ind_n0 smi_hip_ind_n0 smi_hiv_ind_n0  smi_als_ind_n0{
+sum `x' if `class'==sev_ill  
+mat table_x[`r',`c']=r(mean)*100
+local r=`r'+1
+}
+local c=`c'+1
+local r=1
+}
+
+frmttable using "C:\Users\mckenk04\serious_illness\SMI_comorbid_05202016.rft",  ///
+   statmat(table_x) ///
+   title("Serious Illnesses with/without 3+ Comorbidities") ///
+   rtitle("SMI Dementia"\"SMI Cancer"\"SMI ESRD"\"SMI CHF"\"SMI COPD"\"SMI Diabetes"\ ///
+   "SMI Liver"\"SMI Hip fracture"\"SMI HIV"\"SMI ALS") /// 
+   ctitle("" "ALL SMI" "SMI <3" "SMI 3+" ) ///
+   sdec(2,2,2,2,2) basefont(arial fs10) varlabels replace
+ 
+* GET Ns Look at SMI dx for SMI groups with/out 3+ comorbidities
+* Top 10% 
+mat table_x=J(10,3,.)
+local r=1
+local c=1
+
+foreach x in smi_dem_ind_n0 smi_cancer_ind_n0 smi_esrd_ind_n0 smi_chf_ind_n0 smi_copd_ind_n0 ///
+   smi_diab_compl_ind_n0 smi_liver_ind_n0 smi_hip_ind_n0 smi_hiv_ind_n0  smi_als_ind_n0{
+sum `x' if ser_med_illness_n0==1  
+mat table_x[`r',`c']=r(mean)*r(N)
+local r=`r'+1
+}
+local c=`c'+1
+local r=1
+
+forvalues class=2/3{
+* dichotomous outcomes
+foreach x in smi_dem_ind_n0 smi_cancer_ind_n0 smi_esrd_ind_n0 smi_chf_ind_n0 smi_copd_ind_n0 ///
+   smi_diab_compl_ind_n0 smi_liver_ind_n0 smi_hip_ind_n0 smi_hiv_ind_n0  smi_als_ind_n0{
+sum `x' if `class'==sev_ill  
+mat table_x[`r',`c']=r(mean)*r(N)
+local r=`r'+1
+}
+local c=`c'+1
+local r=1
+}
+
+frmttable using "C:\Users\mckenk04\serious_illness\SMI_comorbid_05202016.rft", addtable pretext("\pagebreak") ///
+   statmat(table_x) ///
+   title("Serious Illnesses with/without 3+ Comorbidities") ///
+   rtitle("SMI Dementia"\"SMI Cancer"\"SMI ESRD"\"SMI CHF"\"SMI COPD"\"SMI Diabetes"\ ///
+   "SMI Liver"\"SMI Hip fracture"\"SMI HIV"\"SMI ALS") /// 
+   ctitle("" "ALL SMI" "SMI <3" "SMI 3+" ) ///
+   sdec(0,0,0) basefont(arial fs10) varlabels 
+
+* check other predictors by sev illness   
+mat table_x=J(11,4,.)
+local r=1
+local c=1
+
+forvalues sev=0/3 { // sev_ill 
+foreach x in adl_impair_core_n0 pain_hrs_n0 comorb_31_0_1yr_n0 age_80 contact_27 medicaid_n0 ///
+ re_black married_n0 resspouse_n0  medicaid_138 south{ 
+sum `x' if `sev'==sev_ill  
+mat table_x[`r',`c']=r(mean)*100
+local r=`r'+1
+}
+local c=`c'+1
+local r=1 
+}   
+
+frmttable using "C:\Users\mckenk04\serious_illness\SMI_comorbid_05202016.rft", addtable pretext("\pagebreak") ///
+   statmat(table_x) ///
+   title("Severity of Illness & Other Predictors") ///
+   rtitle("ADL Impairment"\"Any pain"\"Dementia (Elix)"\"Age 80+"\"Contact days 27+"\ ///
+   "Medicaid"\"Black"\"Married"\"Cohabiting"\"Generous state"\"South" ) /// 
+   ctitle("" "None" "3+ only" "SMI <3" "SMI 3+" ) ///
+   sdec(2,2,2) basefont(arial fs10) varlabels    
+
+
+
+/* because 93* of the SMI group has 3+ comorbidities create ordinal variable of 
+illness severity: 0=none, 1=3+ comordities (no SMI), 2=SMI (<3 comorbidities), 3=SMI & 3+ comorbidities
+*/
+tab1 sev_adl  
+logistic spend_med10_0 i.sev_adl_n 
+logistic spend_med10_0 i.sev_adl_n i.pain_hrs_n0
+logistic spend_med10_0 i.sev_adl_n i.pain_hrs_n0 i.contact_27
+logistic spend_med10_0 i.sev_adl_n i.pain_hrs_n0 i.contact_27 i.comorb_31_0_1yr_n0 i.medicaid_n0 
+logistic spend_med10_0 i.sev_adl_n i.pain_hrs_n0 i.contact_27 i.comorb_31_0_1yr_n0 i.medicaid_n0 
+
+
+
+
+* create descriptive table severity illness
+* Top 10% 
+mat table_x=J(100,8,.)
+local r=1
+local c=1
+
+forvalues smi=0/7{
+* dichotomous outcomes
+foreach x in spend_med10_0 spend_med5_0 core_to_dod_1yr_n0 hs_admit_p12m_n0 ///
+ ind_em_ur_adm_p12m_n0{
+sum `x' if `smi'==severity
+mat table_x[`r',`c']=r(mean)*100
+local r=`r'+1
+}
+* continuous outcomes
+foreach x in tot_paid_by_mc_12m_n0 n_hospd_p12m_n0 n_hospd_p12m_n0_1 contact_days_n0 pdem{
+sum `x' if `smi'==severity
+mat table_x[`r',`c']=r(mean)
+local r=`r'+1
+sum `x' if `smi'==severity, det
+mat table_x[`r',`c']=r(p50)
+local r=`r'+1
+}
+
+* descriptives
+foreach x in gender_n0 re_black hs_deg_ind resspouse_n0 married_n0 marital_nev_n0 ///
+  pain_hrs_n0 pain_limit_act_hrs_n0 pain_mod_sev srh_pf_n0 comorb_31_0_1yr_n0 age_80 ///
+  smi_nh_ind_n0 adl_diff_wk_n0 adl_diff_tx_n0 contact_27 ///
+  ind_ed_op_or_ip_12m_n0 ind_em_ur_adm_12m_n0 ind_hosp_adm_12m_n0 ///
+  medicaid_n0 nw_lowest_n0 nw_low_no_medicaid nw_mid_no_medicaid ///
+  south medicaid_138 criteria_a_n0 criteria_b_n0 criteria_c_n0 smi_dem_ind_n0 ///
+  smi_cancer_ind_n0 smi_esrd_ind_n0 smi_chf_ind_n0 smi_copd_ind_n0 ///
+  smi_diab_compl_ind_n0 smi_liver_ind_n0 smi_hip_ind_n0 ///
+  comorb_1_0_1yr_n0 comorb_2_0_1yr_n0 ///
+  comorb_3_0_1yr_n0 comorb_4_0_1yr_n0 comorb_5_0_1yr_n0 comorb_6_0_1yr_n0 ///
+  comorb_7_0_1yr_n0 comorb_8_0_1yr_n0 comorb_9_0_1yr_n0 comorb_10_0_1yr_n0 ///
+  comorb_11_0_1yr_n0 comorb_12_0_1yr_n0 comorb_13_0_1yr_n0 comorb_14_0_1yr_n0 ///
+  comorb_15_0_1yr_n0 comorb_16_0_1yr_n0 comorb_17_0_1yr_n0 comorb_18_0_1yr_n0 ///
+  comorb_19_0_1yr_n0 comorb_20_0_1yr_n0 comorb_21_0_1yr_n0 comorb_22_0_1yr_n0 ///
+  comorb_23_0_1yr_n0 comorb_24_0_1yr_n0 comorb_25_0_1yr_n0 comorb_26_0_1yr_n0 ///
+  comorb_27_0_1yr_n0 comorb_28_0_1yr_n0 comorb_29_0_1yr_n0 comorb_30_0_1yr_n0 ///
+  comorb_32_0_1yr_n0 comorb_33_0_1yr_n0 comorb_34_0_1yr_n0{
+sum `x' if `smi'==severity
+mat table_x[`r',`c']=r(mean)*100
+local r=`r'+1
+}
+local c=`c'+1
+local r=1
+}
+
+
+frmttable using "C:\Users\mckenk04\serious_illness\severity_descript_05232016.rft", ///
+   statmat(table_x) ///
+   title("Descriptives for 10% of Spending: 8 groups based on severity (Comorbidity/SMI) and ADL") ///
+   rtitle("Top 10% spending"\"Top 5% spending"\"Deceased"\"Hospice"\"ED/urgent admission"\ ///
+   "Total paid, mean"\"Total paid, median"\"Nights hospital, mean"\"Nights hospital, median"\ ///
+   "Nights hospital no 0, mean"\"Nights hospital no 0, median"\"Contact days, mean"\ ///
+   "Contact days, median"\"Prob dementia, mean"\"Prob dementia, median"\"Gender-male"\"Race-black"\"HS diploma"\ ///
+   "Cohabiting"\"Married"\"Never married"\ /// 
+   "Any pain"\"Pain limits activity"\"Pain mod/sev"\"Poor/Fair health"\ ///
+   "Comorbidity: Dementia"\"Age 80+"\"SMI NH"\"ADL difficulty walking"\"ADL difficulting transferring"\  ///
+   "Contact days 27+"\"ED use 12m"\"Urgent/emergent hospital admit 12m"\"Hospital admission 12m"\ ///
+   "Medicaid"\"Networth lowest quartile"\"NW lowest no Medicaid"\"NW low/mid no Medicaid"\ ///
+   "South"\"Medicaid_138"\ ///
+   "Criteria A"\"Criteria B"\"Criteria C"\"SMI dementia"\"SMI cancer"\"SMI ESRD"\ ///
+   "SMI CHF"\"SMI COPD"\"SMI diab_compl"\"SMI liver"\"SMI hip fracture"\ ///
+   "Comorbidity: CHF"\"Comorbidity: Arrhythmias"\"Comorbidity: Valvular Disease"\ ///
+   "Comorbidity: Pulmonary Circulation"\"Comorbidity: Peripheral Vascular"\ ///
+   "Comorbidity: Hypertension"\"Comorbidity: Paralysis"\"Comorbidity: Other neuro"\ ///
+   "Comorbidity: COPD"\"Comorbidity: Diabetes, uncomp"\"Comorbidity: Diabetes, comp"\ ///
+   "Comorbidity: Hypothyroidism"\"Comorbidity: renal failure"\"Comorbidity: Adv liver dis"\ ///
+   "Comorbidity: Peptic ulcer"\"Comorbidity: AIDS"\"Comorbidity: Lymphoma"\ ///
+   "Comorbidity: Metastic/hematological"\"Comorbidity: Solid tumor"\ ///
+   "Comorbidity: Rheumatoid/Coll vasc"\"Comorbidity: Coagulopathy"\"Comorbidity: Obesity"\ ///
+   "Comorbidity:Weight loss"\"Comorbidity: Electrolyte"\"Comorbidity: Blood loss anemia"\ ///
+   "Comorbidity: Deficiency anemia"\"Comorbidity: Alcohol abuse"\"Comorbidity: Drug abuse"\ ///
+   "Comorbidity: Psychoses"\"Comorbidity: Depression"\ ///
+   "Comorbidity: CAD"\"Comorbidity: ALS"\"Comorbidity: Renal Disease") /// 
+   ctitle("" "None" "SMI only" "ADL only" "Comorbid only" "Comorb ADL" "SMI 3+" "SMI ADL"  ///
+   "SMI 3+ ADL") ///
+   sdec(2,2,2,2,2) basefont(arial fs10) varlabels replace
+ 
+ 
+ *** pairwise testsmat table_x=J(100,8,.)
+ foreach x in spend_med10_0 spend_med5_0 core_to_dod_1yr_n0 hs_admit_p12m_n0 ///
+ ind_em_ur_adm_p12m_n0{
+ logit `x' i.severity
+ pwcompare i.severity, group
+ }
+ foreach x in tot_paid_by_mc_12m_n0 n_hospd_p12m_n0 n_hospd_p12m_n0_1 contact_days_n0 pdem{
+ pwmean `x', over(severity) mcompare(bon) group 
+ }
+ foreach x in gender_n0 re_black resspouse_n0 married_n0 marital_nev_n0 ///
+  pain_hrs_n0 pain_limit_act_hrs_n0 pain_mod_sev srh_pf_n0 comorb_31_0_1yr_n0 age_80 ///
+  smi_nh_ind_n0 adl_diff_wk_n0 adl_diff_tx_n0 contact_27 ///
+  ind_ed_op_or_ip_12m_n0 ind_em_ur_adm_12m_n0 ind_hosp_adm_12m_n0 ///
+  medicaid_n0 nw_lowest_n0 nw_low_no_medicaid nw_mid_no_medicaid ///
+  south medicaid_138 criteria_b_n0 criteria_c_n0 smi_dem_ind_n0 /// criteria_a_n0 
+  smi_cancer_ind_n0 smi_esrd_ind_n0 smi_chf_ind_n0 smi_copd_ind_n0 ///
+  smi_diab_compl_ind_n0 smi_liver_ind_n0 smi_hip_ind_n0{
+ logit `x' i.severity
+ pwcompare i.severity, group
+ }
+ foreach x in   comorb_1_0_1yr_n0 comorb_2_0_1yr_n0 ///
+  comorb_3_0_1yr_n0 comorb_4_0_1yr_n0 comorb_5_0_1yr_n0 comorb_6_0_1yr_n0 ///
+  comorb_7_0_1yr_n0 comorb_8_0_1yr_n0 comorb_9_0_1yr_n0 comorb_10_0_1yr_n0 ///
+  comorb_11_0_1yr_n0 comorb_12_0_1yr_n0 comorb_13_0_1yr_n0 comorb_14_0_1yr_n0 ///
+  comorb_15_0_1yr_n0 comorb_16_0_1yr_n0 comorb_17_0_1yr_n0 comorb_18_0_1yr_n0 ///
+  comorb_19_0_1yr_n0 comorb_20_0_1yr_n0 comorb_21_0_1yr_n0 comorb_22_0_1yr_n0 ///
+  comorb_23_0_1yr_n0 comorb_24_0_1yr_n0 comorb_25_0_1yr_n0 comorb_26_0_1yr_n0 ///
+  comorb_27_0_1yr_n0 comorb_28_0_1yr_n0 comorb_29_0_1yr_n0 comorb_30_0_1yr_n0 ///
+  comorb_32_0_1yr_n0 comorb_33_0_1yr_n0 comorb_34_0_1yr_n0{
+ logit `x' i.severity
+ pwcompare i.severity, group
+ }
+
+
+H="Table - descriptives for 4 groups"
+ 
+* create descriptive table severity illness - 4 groups
+* Top 10% 
+mat table_x=J(100,4,.)
+local r=1
+local c=1
+
+forvalues smi=0/3{
+* dichotomous outcomes
+foreach x in spend_med10_0 spend_med5_0 core_to_dod_1yr_n0 hs_admit_p12m_n0 ///
+ ind_em_ur_adm_p12m_n0{
+sum `x' if `smi'==severity4
+mat table_x[`r',`c']=r(mean)*100
+local r=`r'+1
+}
+* continuous outcomes
+foreach x in tot_paid_by_mc_12m_n0 n_hospd_p12m_n0 n_hospd_p12m_n0_1 contact_days_n0 pdem{
+sum `x' if `smi'==severity4
+mat table_x[`r',`c']=r(mean)
+local r=`r'+1
+sum `x' if `smi'==severity4, det
+mat table_x[`r',`c']=r(p50)
+local r=`r'+1
+}
+
+* descriptives
+foreach x in gender_n0 re_black hs_deg_ind resspouse_n0 married_n0 marital_nev_n0 ///
+  pain_hrs_n0 pain_limit_act_hrs_n0 pain_mod_sev srh_pf_n0 comorb_31_0_1yr_n0 age_80 ///
+  smi_nh_ind_n0 adl_diff_wk_n0 adl_diff_tx_n0 contact_27 ///
+  ind_ed_op_or_ip_12m_n0 ind_em_ur_adm_12m_n0 ind_hosp_adm_12m_n0 ///
+  medicaid_n0 nw_lowest_n0 nw_low_no_medicaid nw_mid_no_medicaid ///
+  south medicaid_138 criteria_a_n0 criteria_b_n0 criteria_c_n0 smi_dem_ind_n0 ///
+  smi_cancer_ind_n0 smi_esrd_ind_n0 smi_chf_ind_n0 smi_copd_ind_n0 ///
+  smi_diab_compl_ind_n0 smi_liver_ind_n0 smi_hip_ind_n0 ///
+  comorb_1_0_1yr_n0 comorb_2_0_1yr_n0 ///
+  comorb_3_0_1yr_n0 comorb_4_0_1yr_n0 comorb_5_0_1yr_n0 comorb_6_0_1yr_n0 ///
+  comorb_7_0_1yr_n0 comorb_8_0_1yr_n0 comorb_9_0_1yr_n0 comorb_10_0_1yr_n0 ///
+  comorb_11_0_1yr_n0 comorb_12_0_1yr_n0 comorb_13_0_1yr_n0 comorb_14_0_1yr_n0 ///
+  comorb_15_0_1yr_n0 comorb_16_0_1yr_n0 comorb_17_0_1yr_n0 comorb_18_0_1yr_n0 ///
+  comorb_19_0_1yr_n0 comorb_20_0_1yr_n0 comorb_21_0_1yr_n0 comorb_22_0_1yr_n0 ///
+  comorb_23_0_1yr_n0 comorb_24_0_1yr_n0 comorb_25_0_1yr_n0 comorb_26_0_1yr_n0 ///
+  comorb_27_0_1yr_n0 comorb_28_0_1yr_n0 comorb_29_0_1yr_n0 comorb_30_0_1yr_n0 ///
+  comorb_32_0_1yr_n0 comorb_33_0_1yr_n0 comorb_34_0_1yr_n0{
+sum `x' if `smi'==severity4
+mat table_x[`r',`c']=r(mean)*100
+local r=`r'+1
+}
+local c=`c'+1
+local r=1
+}
+
+
+frmttable using "C:\Users\mckenk04\serious_illness\severity_descript_06012016.rft", ///
+   statmat(table_x) ///
+   title("Descriptives for 10% of Spending: 8 groups based on severity (Comorbidity/SMI) and ADL") ///
+   rtitle("Top 10% spending"\"Top 5% spending"\"Deceased"\"Hospice"\"ED/urgent admission"\ ///
+   "Total paid, mean"\"Total paid, median"\"Nights hospital, mean"\"Nights hospital, median"\ ///
+   "Nights hospital no 0, mean"\"Nights hospital no 0, median"\"Contact days, mean"\ ///
+   "Contact days, median"\"Prob dementia, mean"\"Prob dementia, median"\"Gender-male"\"Race-black"\"HS diploma"\ ///
+   "Cohabiting"\"Married"\"Never married"\ /// 
+   "Any pain"\"Pain limits activity"\"Pain mod/sev"\"Poor/Fair health"\ ///
+   "Comorbidity: Dementia"\"Age 80+"\"SMI NH"\"ADL difficulty walking"\"ADL difficulting transferring"\  ///
+   "Contact days 27+"\"ED use 12m"\"Urgent/emergent hospital admit 12m"\"Hospital admission 12m"\ ///
+   "Medicaid"\"Networth lowest quartile"\"NW lowest no Medicaid"\"NW low/mid no Medicaid"\ ///
+   "South"\"Medicaid_138"\ ///
+   "Criteria A"\"Criteria B"\"Criteria C"\"SMI dementia"\"SMI cancer"\"SMI ESRD"\ ///
+   "SMI CHF"\"SMI COPD"\"SMI diab_compl"\"SMI liver"\"SMI hip fracture"\ ///
+   "Comorbidity: CHF"\"Comorbidity: Arrhythmias"\"Comorbidity: Valvular Disease"\ ///
+   "Comorbidity: Pulmonary Circulation"\"Comorbidity: Peripheral Vascular"\ ///
+   "Comorbidity: Hypertension"\"Comorbidity: Paralysis"\"Comorbidity: Other neuro"\ ///
+   "Comorbidity: COPD"\"Comorbidity: Diabetes, uncomp"\"Comorbidity: Diabetes, comp"\ ///
+   "Comorbidity: Hypothyroidism"\"Comorbidity: renal failure"\"Comorbidity: Adv liver dis"\ ///
+   "Comorbidity: Peptic ulcer"\"Comorbidity: AIDS"\"Comorbidity: Lymphoma"\ ///
+   "Comorbidity: Metastic/hematological"\"Comorbidity: Solid tumor"\ ///
+   "Comorbidity: Rheumatoid/Coll vasc"\"Comorbidity: Coagulopathy"\"Comorbidity: Obesity"\ ///
+   "Comorbidity:Weight loss"\"Comorbidity: Electrolyte"\"Comorbidity: Blood loss anemia"\ ///
+   "Comorbidity: Deficiency anemia"\"Comorbidity: Alcohol abuse"\"Comorbidity: Drug abuse"\ ///
+   "Comorbidity: Psychoses"\"Comorbidity: Depression"\ ///
+   "Comorbidity: CAD"\"Comorbidity: ALS"\"Comorbidity: Renal Disease") /// 
+   ctitle("" "None" "SMI/ADL/Comorbid" "ADL/SMI & 3+" "SMI(3+) & ADL") ///
+   sdec(2,2,2,2,2) basefont(arial fs10) varlabels replace
+ 
+ 
+ *** pairwise testsmat table_x=J(100,8,.)
+ foreach x in spend_med10_0 spend_med5_0 core_to_dod_1yr_n0 hs_admit_p12m_n0 ///
+ ind_em_ur_adm_p12m_n0{
+ logit `x' i.severity
+ pwcompare i.severity, group
+ }
+ foreach x in tot_paid_by_mc_12m_n0 n_hospd_p12m_n0 n_hospd_p12m_n0_1 contact_days_n0 pdem{
+ pwmean `x', over(severity) mcompare(bon) group 
+ }
+ foreach x in gender_n0 re_black resspouse_n0 married_n0 marital_nev_n0 ///
+  pain_hrs_n0 pain_limit_act_hrs_n0 pain_mod_sev srh_pf_n0 comorb_31_0_1yr_n0 age_80 ///
+  smi_nh_ind_n0 adl_diff_wk_n0 adl_diff_tx_n0 contact_27 ///
+  ind_ed_op_or_ip_12m_n0 ind_em_ur_adm_12m_n0 ind_hosp_adm_12m_n0 ///
+  medicaid_n0 nw_lowest_n0 nw_low_no_medicaid nw_mid_no_medicaid ///
+  south medicaid_138 criteria_b_n0 criteria_c_n0 smi_dem_ind_n0 /// criteria_a_n0 
+  smi_cancer_ind_n0 smi_esrd_ind_n0 smi_chf_ind_n0 smi_copd_ind_n0 ///
+  smi_diab_compl_ind_n0 smi_liver_ind_n0 smi_hip_ind_n0{
+ logit `x' i.severity
+ pwcompare i.severity, group
+ }
+ foreach x in   comorb_1_0_1yr_n0 comorb_2_0_1yr_n0 ///
+  comorb_3_0_1yr_n0 comorb_4_0_1yr_n0 comorb_5_0_1yr_n0 comorb_6_0_1yr_n0 ///
+  comorb_7_0_1yr_n0 comorb_8_0_1yr_n0 comorb_9_0_1yr_n0 comorb_10_0_1yr_n0 ///
+  comorb_11_0_1yr_n0 comorb_12_0_1yr_n0 comorb_13_0_1yr_n0 comorb_14_0_1yr_n0 ///
+  comorb_15_0_1yr_n0 comorb_16_0_1yr_n0 comorb_17_0_1yr_n0 comorb_18_0_1yr_n0 ///
+  comorb_19_0_1yr_n0 comorb_20_0_1yr_n0 comorb_21_0_1yr_n0 comorb_22_0_1yr_n0 ///
+  comorb_23_0_1yr_n0 comorb_24_0_1yr_n0 comorb_25_0_1yr_n0 comorb_26_0_1yr_n0 ///
+  comorb_27_0_1yr_n0 comorb_28_0_1yr_n0 comorb_29_0_1yr_n0 comorb_30_0_1yr_n0 ///
+  comorb_32_0_1yr_n0 comorb_33_0_1yr_n0 comorb_34_0_1yr_n0{
+ logit `x' i.severity
+ pwcompare i.severity, group
+
+H="Devel GSEM models"
+ 
+* build the gsem model
+logit spend_med10_0 i.sev_ill 1.adl_impair_core_n0 i.sev_ill#1.adl_impair_core_n0
+
+gsem (spend_med10_0 <- i.sev_ill 1.adl_impair_core_n0 i.sev_ill#1.adl_impair_core_n0, logit)
+estat eform
+
+gsem (spend_med10_0 <- sev1 sev2 sev3 adl_impair_core_n0, logit)
+estat eform
+
+logit spend_med10_0 i.severity
+gsem (spend_med10_0 <- i.severity, logit)
+estat eform
+
+
+* Utilization: contact_days_n0 ind_ed_adm_12m_n0 ind_em_ur_adm_12m_n0 ind_hosp_adm_12m_n0
+* SES: degree_n0
+gsem (1.severity4 2.severity4 3.severity4 pain_hrs_n0 medicaid_n0 contact_27 -> ///
+      spend_med10_0, family(binomial) link(logit)) ///
+     (1.severity4 2.severity4 3.severity4 -> pain_hrs_n0, family(binomial) link(logit)) ///
+     (1.severity4 2.severity4 3.severity4 -> medicaid_n0, family(binomial) link(logit)) ///
+     (1.severity4 2.severity4 3.severity4 -> contact_27, family(binomial) link(logit)), nocapslatent
+estat eform
+
+
+
+
+gsem (sev1 -> spend_med10_0, family(binomial) link(logit)) (sev1 -> adl_impair_core_n0, ///
+ family(binomial) link(logit)) (sev2 -> spend_med10_0, family(binomial) link(logit)) ///
+ (sev2 -> adl_impair_core_n0, family(binomial) link(logit)) (sev3 -> spend_med10_0, ///
+ family(binomial) link(logit)) (sev3 -> adl_impair_core_n0, family(binomial) link(logit)) ///
+ (adl_impair_core_n0 -> spend_med10_0, family(binomial) link(logit)), nocapslatent
+estat eform
+ 
+ 
+gsem (1.severity4 -> pain_hrs_n0, family(bernoulli) link(logit)) (1.severity4 -> spend_med10_0, ///
+ family(bernoulli) link(logit)) (1.severity4 -> Util, ) (2.severity4 -> pain_hrs_n0, ///
+ family(bernoulli) link(logit)) (2.severity4 -> spend_med10_0, family(bernoulli) link(logit)) ///
+ (2.severity4 -> Util, ) (3.severity4 -> pain_hrs_n0, family(bernoulli) link(logit)) ///
+ (3.severity4 -> spend_med10_0, family(bernoulli) link(logit)) (3.severity4 -> Util, ) ///
+ (pain_hrs_n0 -> spend_med10_0, family(bernoulli) link(logit)) (Util -> spend_med10_0, ///
+ family(bernoulli) link(logit)) (Util -> contact_27, family(bernoulli) link(logit)) ///
+ (Util -> ind_hosp_adm_12m_n0, family(bernoulli) link(logit)), latent(Util ) nocapslatent
+ estat eform
+  
+* add latent Utilization  
+gsem (1.severity4 2.severity4 3.severity4 pain_hrs_n0 Util -> spend_med10_0, family(bernoulli) link(logit)) ///
+     (1.severity4 2.severity4 3.severity4 -> pain_hrs_n0, family(bernoulli) link(logit)) ///
+	 (1.severity4 2.severity4 3.severity4 -> Util, ) ///
+     (Util -> contact_27 ind_hosp_adm_12m_n0, family(bernoulli) link(logit)), latent(Util ) nocapslatent
+estat eform  
+
+* add latent SES   
+gsem (1.severity4 2.severity4 3.severity4 pain_hrs_n0 Util Ses -> spend_med10_0, family(bernoulli) link(logit)) ///
+     (1.severity4 2.severity4 3.severity4 -> pain_hrs_n0, family(bernoulli) link(logit)) ///
+	 (1.severity4 2.severity4 3.severity4 -> Util, ) ///
+	 (1.severity4 2.severity4 3.severity4 -> Ses, ) ///
+     (Util -> contact_27 ind_hosp_adm_12m_n0, family(bernoulli) link(logit)) ///
+	 (Ses -> hs_deg_ind medicaid_n0 fw_lowest_n0, family(bernoulli) link(logit)), ///
+	 latent(Util Ses) nocapslatent
+estat eform    
+
+
+
+
+* Model for SEM 2 06202016 
+* running the models from this type of code lets you organize the output 
+gsem (1.severity4 2.severity4 3.severity4 hlphrs_0 pain_hrs_n0 Util low_ses -> spend_med10_0, family(bernoulli) link(logit)) ///
+     (1.severity4 2.severity4 3.severity4 -> pain_hrs_n0, family(bernoulli) link(logit)) ///
+	 (1.severity4 2.severity4 3.severity4 -> hlphrs_0, family(bernoulli) link(logit)) ///
+	 (1.severity4 2.severity4 3.severity4 -> Util, ) ///
+	 (1.severity4 2.severity4 3.severity4 -> low_ses, ) ///
+	 (Util -> spend_med10_0 contact_27, family(bernoulli) link(logit)) ///
+ 	 (Util -> n_ip_admit_02, family(ordinal) link(logit)) ///
+     (low_ses -> spend_med10_0 no_hs_deg medicaid_n0 fw_lowest_n0, family(bernoulli) link(logit)), /// 
+      latent(Util low_ses ) nocapslatent
+estat eform    
+
+H="****OTHER"
+
+
+
+
+H="factor analyses of SMI & Comorbities"
+*** Program to use factor analytic techniques to identify patterns or key variables in the
+* serious illness variables and the groups of comorbidities
+***************************************************************************************
+*************************************************************************************** 
+
+* because variables are binary we use a matrix of tetrachoric correlations (Uebersax 2000)
+* tetrachoric correlations are generally larger in absolute value than pearson correlations
+* smi_hiv_ind_n0 smi_als_ind_n0 removed n<=5;  
+* smi_hip_ind_n0 n=65 creates negative <-1 loadings
+* smi_helper_ind_n0 & adl_impair_core_n0  duplicate each other keep adl_impair_core_n0  
+tetrachoric smi_dem_ind_n0 smi_cancer_ind_n0 smi_esrd_ind_n0 smi_chf_ind_n0 smi_copd_ind_n0 ///
+  smi_diab_compl_ind_n0 smi_liver_ind_n0 smi_nh_ind_n0 adl_impair_core_n0 home_oxygen_n0 ///
+  ind_ed_op_or_ip_12m_n0 ind_em_ur_adm_12m_n0 ind_hosp_adm_12m_n0, notable posdef
+matrix a = r(corr)
+matrix symeigen eigenvectors eigenvalues  = a
+matrix list eigenvalues  // 3 factors with eigenvalues > 1.0
+
+factormat a, n(6324) ipf factor(3)
+rotate, normalize
+
+* create a dx of all BUT dementia & copd 
+gen smi_other_dx=0
+   replace smi_other_dx=1 if smi_cancer_ind_n0==1 | smi_esrd_ind_n0==1 | smi_chf_ind_n0==1 | ///
+           smi_diab_compl_ind_n0==1 | smi_liver_ind_n0==1
+
+tetrachoric smi_other_dx smi_dem_ind_n0 smi_copd_ind_n0 smi_nh_ind_n0 adl_impair_core_n0 ///
+  home_oxygen_n0 ind_ed_op_or_ip_12m_n0 ind_em_ur_adm_12m_n0 ind_hosp_adm_12m_n0, notable posdef
+matrix b = r(corr)
+matrix symeigen eigenvectors eigenvalues  = b
+matrix list eigenvalues  // 2 factors with eigenvalues > 1.0
+
+factormat b, n(6324) ipf factor(3)
+rotate, normalize
+factormat b, n(6324) ipf factor(2)
+rotate, normalize
+
+
+* remove smi_other_dx since communality low
+tetrachoric smi_dem_ind_n0 smi_copd_ind_n0 smi_nh_ind_n0 adl_impair_core_n0 home_oxygen_n0  ///
+  ind_ed_op_or_ip_12m_n0 ind_em_ur_adm_12m_n0 ind_hosp_adm_12m_n0, notable posdef
+matrix c = r(corr)
+matrix symeigen eigenvectors eigenvalues  = c
+matrix list eigenvalues  // 2 factors with eigenvalues > 1.0
+
+factormat c, n(6324) ipf factor(3)
+rotate, normalize
+factormat c, n(6324) ipf factor(2)
+rotate, normalize
+factormat c, n(6324) ipf factor(1)
+rotate, normalize
+
+
+
+
+
+tetrachoric  comorb_1_0_1yr_n0 comorb_2_0_1yr_n0 comorb_3_0_1yr_n0 comorb_4_0_1yr_n0 ///
+comorb_5_0_1yr_n0 comorb_6_0_1yr_n0 comorb_7_0_1yr_n0 comorb_8_0_1yr_n0 ///
+comorb_9_0_1yr_n0 comorb_10_0_1yr_n0 comorb_11_0_1yr_n0 comorb_12_0_1yr_n0 ///
+comorb_13_0_1yr_n0 comorb_14_0_1yr_n0 comorb_15_0_1yr_n0 comorb_16_0_1yr_n0 ///
+comorb_17_0_1yr_n0 comorb_18_0_1yr_n0 comorb_19_0_1yr_n0 comorb_20_0_1yr_n0 ///
+comorb_21_0_1yr_n0 comorb_22_0_1yr_n0 comorb_23_0_1yr_n0 comorb_24_0_1yr_n0 ///
+comorb_25_0_1yr_n0 comorb_26_0_1yr_n0 comorb_27_0_1yr_n0 comorb_28_0_1yr_n0 ///
+comorb_29_0_1yr_n0 comorb_30_0_1yr_n0 comorb_31_0_1yr_n0 comorb_32_0_1yr_n0 ///
+comorb_33_0_1yr_n0 comorb_34_0_1yr_n0, notable posdef 
+matrix q = r(corr)
+matrix symeigen eigenvectors eigenvalues  = q
+matrix list eigenvalues  // 9 factors with eigenvalues > 1.0
+
+factormat q, n(6324) ipf factor(9)
+rotate, normalize
+factormat q, n(6324) ipf factor(8)
+factormat q, n(6324) ipf factor(7)
+factormat q, n(6324) ipf factor(6)
+
+
+
+tetrachoric  cc_1_ami_1yr_n0 cc_2_alzh_1yr_n0 cc_3_alzhdmta_1yr_n0 cc_4_atrialfb_1yr_n0  ///
+  cc_5_cataract_1yr_n0 cc_6_chrnkidn_1yr_n0 cc_7_copd_1yr_n0 cc_8_chf_1yr_n0  ///
+  cc_9_diabetes_1yr_n0 cc_10_glaucoma_1yr_n0 cc_11_hipfrac_1yr_n0  ///
+  cc_12_ischmcht_1yr_n0 cc_13_depressn_1yr_n0 cc_14_osteoprs_1yr_n0  ///
+  cc_15_ra_oa_1yr_n0 cc_16_strketia_1yr_n0 cc_17_cncrbrst_1yr_n0  ///
+  cc_18_cncrclrc_1yr_n0 cc_19_cncrprst_1yr_n0 cc_20_cncrlung_1yr_n0  ///
+  cc_21_cncrendm_1yr_n0, notable posdef 
+matrix q = r(corr)
+matrix symeigen eigenvectors eigenvalues  = q
+matrix list eigenvalues  // 9 factors with eigenvalues > 1.0
+
+factormat q, n(6324) ipf factor(9)
+rotate, normalize
+
+
+* FA of Charlson comorbidities
+* remove HIV/AIDS n=5 causing neg loading
+charls_12_0_1yr_n0
+tetrachoric charls_1_0_1yr_n0 charls_2_0_1yr_n0 charls_3_0_1yr_n0 charls_4_0_1yr_n0  /// 
+  charls_5_0_1yr_n0 charls_6_0_1yr_n0 charls_7_0_1yr_n0 charls_8_0_1yr_n0 charls_9_0_1yr_n0 ///
+  charls_10_0_1yr_n0 charls_11_0_1yr_n0  charls_13_0_1yr_n0 ///
+  charls_14_0_1yr_n0 charls_15_0_1yr_n0 charls_16_0_1yr_n0 , notable posdef
+matrix e = r(corr)
+matrix symeigen eigenvectors eigenvalues  = e
+matrix list eigenvalues  // 4 factors with eigenvalues > 1.0
+
+factormat e, n(6324) ipf factor(5)
+rotate, normalize
+factormat e, n(6324) ipf factor(6)
+factormat d, n(6324) ipf factor(4)
+
+
+
+* FA for comorbidities and CC
+tab2 comorb_1_0_1yr_n0 charls_2_0_1yr_n0
+tab2 comorb_1_0_1yr_n0 cc_8_chf_1yr_n0
+tab2 charls_2_0_1yr_n0 cc_8_chf_1yr_n0
+* comorb_33_0_1yr_n0 cc_5_cataract_1yr_n0
+* el_ge4_comorb_1yr_n0 cc_2_alzh_1yr_n0 cc_3_alzhdmta_1yr_n0 cc_1_ami_1yr_n0 ///
+* cc_12_ischmcht_1yr_n0 cc_17_cncrbrst_1yr_n0  ///
+* cc_18_cncrclrc_1yr_n0 cc_19_cncrprst_1yr_n0 cc_20_cncrlung_1yr_n0  ///
+* cc_21_cncrendm_1yr_n0
+tetrachoric el_ge3_comorb_1yr_n0 comorb_1_0_1yr_n0 comorb_2_0_1yr_n0 ///
+  comorb_3_0_1yr_n0 comorb_4_0_1yr_n0 comorb_5_0_1yr_n0 comorb_6_0_1yr_n0 ///
+  comorb_7_0_1yr_n0 comorb_8_0_1yr_n0 comorb_9_0_1yr_n0 comorb_10_0_1yr_n0 ///
+  comorb_11_0_1yr_n0 comorb_12_0_1yr_n0 comorb_13_0_1yr_n0 comorb_14_0_1yr_n0 ///
+  comorb_15_0_1yr_n0 comorb_16_0_1yr_n0 comorb_17_0_1yr_n0 comorb_18_0_1yr_n0 ///
+  comorb_19_0_1yr_n0 comorb_20_0_1yr_n0 comorb_21_0_1yr_n0 comorb_22_0_1yr_n0 ///
+  comorb_23_0_1yr_n0 comorb_24_0_1yr_n0 comorb_25_0_1yr_n0 comorb_26_0_1yr_n0 ///
+  comorb_27_0_1yr_n0 comorb_28_0_1yr_n0 comorb_29_0_1yr_n0 comorb_30_0_1yr_n0 ///
+  comorb_31_0_1yr_n0 comorb_32_0_1yr_n0 comorb_34_0_1yr_n0 ///
+  charls_index_wt_3 charls_1_0_1yr_n0 charls_2_0_1yr_n0 charls_3_0_1yr_n0 ///
+  charls_4_0_1yr_n0 charls_5_0_1yr_n0 charls_6_0_1yr_n0 charls_7_0_1yr_n0 ///
+  charls_8_0_1yr_n0 charls_9_0_1yr_n0 charls_10_0_1yr_n0 charls_11_0_1yr_n0 ///
+  charls_13_0_1yr_n0 charls_14_0_1yr_n0 charls_15_0_1yr_n0 charls_16_0_1yr_n0 ///
+  cc2_ge4_comorb_1yr_n0 cc_ami_isch_1yr_n0  ///
+  cc_alzheim_1yr_n0  cc_4_atrialfb_1yr_n0  ///
+  cc_5_cataract_1yr_n0 cc_6_chrnkidn_1yr_n0 cc_7_copd_1yr_n0 cc_8_chf_1yr_n0  ///
+  cc_9_diabetes_1yr_n0 cc_10_glaucoma_1yr_n0 cc_11_hipfrac_1yr_n0  ///
+  cc_13_depressn_1yr_n0 cc_14_osteoprs_1yr_n0 cc_15_ra_oa_1yr_n0 ///
+  cc_16_strketia_1yr_n0 cc_cncr_chronic_1yr_n0  , notable posdef
+matrix o = r(corr)
+matrix symeigen eigenvectors eigenvalues  = o
+matrix list eigenvalues  // 18 factors with eigenvalues > 1.0
+
+factormat o, n(6324) ipf factor(18)
+rotate, normalize

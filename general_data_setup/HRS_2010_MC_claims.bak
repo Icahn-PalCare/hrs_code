@@ -1,0 +1,505 @@
+= V4 Outline MultiLine NoSorting TabWidth=30
+
+H="Initial processing of MC claims"
+/*Processes Medicare claims received in November 2013
+
+Creates combined year files for 2000-2010 claims for use in other projects
+
+Code based on that in the oop_mc_outline.otl file
+
+Combined 2000-2010 files are saved here:
+E:\data\cms_DUA_25000_2010
+
+Files processed but HRS_BID_19 variable needs to be checked
+when the new xwalk file is received from HRS (should be a new
+version in the restricted dataset)
+
+Note that there was an error in the original 2009 and 2010 medpar files
+received from MedRIC. New files were received in Feb 2014 and these
+are replaced in the combined 2000-2010 files created here*/
+
+libname medi_raw 'E:\data\cms_DUA_25000_2010\received20131120\1998-2010_Provider_Distribution_HRS005';
+
+libname m_rawnew 'E:\data\cms_DUA_25000_2010\received20140218\2009-2010_MP_HRS005 - Mount Sinai 24548';
+
+libname medi_wk 'E:\data\cms_DUA_25000_2010';
+
+
+libname m2008 'C:\data\cms_DUA_25000';
+libname xw2008 'E:\data\hrs_restricted_2010\20131104_received\Medicare\Xref2008\distro';
+
+
+
+H="Denominator DN file processing"
+/*process individual year denominator files into single file with
+2000-2010 data*/
+
+data medi_wk.dn_2000_2010;
+set  medi_raw.dn_2000 medi_raw.dn_2001 medi_raw.dn_2002 medi_raw.dn_2003 
+medi_raw.dn_2004 medi_raw.dn_2005 medi_raw.dn_2006 medi_raw.dn_2007 
+medi_raw.dn_2008 medi_raw.dn_2009 medi_raw.dn_2010;
+year=2000+RFRNC_YR;
+bid_n=substr(trim(left(BID_HRS_19)),2,9)+0;
+BID=bid_n;
+
+/************************************************************************
+*************************************************************************
+Clean birth_date, death_date in date format from denominator file
+*************************************************************************
+************************************************************************/
+
+/*note we can't use dob dod from CMS denominator file since a lot of them are missing,they should come from restricted file*/
+if substr(trim(left(DEATH_DT)),1,1)~="0"  then do;
+death_year=substr(trim(left(DEATH_DT)),1,4)+0;
+death_month=substr(trim(left(DEATH_DT)),5,2)+0;
+death_day=substr(trim(left(DEATH_DT)),7,2)+0;
+death_date=mdy(death_month,death_day,death_year);
+end;
+if substr(trim(left(BENE_DOB)),1,1)~="0"  then do;
+birth_year=substr(trim(left(BENE_DOB)),1,4)+0;
+birth_month=substr(trim(left(BENE_DOB)),5,2)+0;
+birth_day=substr(trim(left(BENE_DOB)),7,2)+0;
+birth_date=mdy(birth_month,birth_day,birth_year);
+end;
+run;
+
+
+
+H="Medpar MP file processing"
+/************************************************************************
+*************************************************************************
+Medpar 2000-2010 files
+Starts with individual year files mp_2000, etc. saved in 
+E:\data\cms_DUA_25000_2010\received20131120\1998-2010_Provider_Distribution_HRS005
+
+2009 and 2010 files were replaced Feb 2014 with new versions saved:
+E:\data\cms_DUA_25000_2010\received20140218\2009-2010_MP_HRS005 - Mount Sinai 24548
+*************************************************************************
+************************************************************************/
+
+/************************************************************************
+*************************************************************************
+Medpar 2000-2010 - processing steps
+*************************************************************************
+************************************************************************/
+%let source=mp;
+*/prints first 10 rows of mp_2000 file, just select variables listed below;
+proc sql outobs=10;
+select BID_HRS_19, ADMSNDT,DSCHRGDT,loscnt from medi_raw.&source._2000;
+quit;
+
+*creates merged medpar file 2000-2010 years;
+data medi_wk.&source._2000_2010;
+set medi_raw.&source._2000 medi_raw.&source._2001 medi_raw.&source._2002 medi_raw.&source._2003 medi_raw.&source._2004 medi_raw.&source._2005 medi_raw.&source._2006 medi_raw.&source._2007 medi_raw.&source._2008
+m_rawnew.&source._2009 m_rawnew.&source._2010 ;
+*formats dates for admission and discharge;
+admit_date=datejul(ADMSNDT);
+if substr(trim(left(DSCHRGDT)),1,1) in ("1","2") then do;
+disch_date=datejul(DSCHRGDT);
+end;
+
+admit_year=year(admit_date);
+
+*calculate discharge date if null from admit date and los;
+if disch_date=. then disch_date=admit_date+loscnt;
+*format ID in this medpar file to match xwalk file;
+bid_n=substr(trim(left(BID_HRS_19)),2,9)+0;
+disch_year=year(disch_date);
+
+run;
+
+*Check for and remove dupicates;
+proc sort data=medi_wk.&source._2000_2010 out=temp2  nodupkey;
+by BID_n admit_date disch_date pmt_amt;
+run;
+
+/*create table bid of just observations that had multiple observations
+that match on id, admit date and discharge date
+They have different payment amounts though b/c of previous step*/
+proc sql;
+create table bid as
+select BID_n,admit_date, disch_date,count(*)
+from medi_wk.&source._2000_2010 group by
+BID_n,admit_date, disch_date having count(*)>1;
+
+*prints list of observations where match on id, admit date and disch date;
+select BID_n,admit_date, disch_date from medi_wk.&source._2000_2010
+where bid_n in (select bid_n from bid)
+;
+quit;
+
+* Variable list:
+MSNDT ADMSNDT CHAR Documentation 
+MEDPAR_ADMSN_DT: MEDPAR Admission Date 
+DSCHRGDT DSCHRGDT CHAR Documentation 
+MEDPAR_DSCHRG_DT: MEDPAR Discharge Date 
+loscnt;
+
+*identify observatons where discharge year is null - no observations identified;
+proc sql outobs=10;
+select BID_HRS_19, ADMSNDT,DSCHRGDT,loscnt from medi_wk.&source._2000_2010 where 
+disch_year=.;
+quit;
+*frequency table of admit and disch year vars;
+proc freq data=medi_wk.&source._2000_2010;
+table admit_year disch_year;
+run;
+
+
+H="Inpatient IP file processing"
+/************************************************************************
+*************************************************************************
+Inpatient 2000-2010 files *************************************************************************
+************************************************************************/
+
+*print first 10 observations from ip 2000 file;
+%let source=ip;
+proc sql outobs=10;
+select BID_HRS_19, FROM_DT,thru_DT,pmt_amt,PRCDRDT1,PRCDRDT2 from medi_raw.&source._2000;
+quit;
+
+proc sql outobs=10;
+select BID_HRS_19, FROM_DT,thru_DT,pmt_amt,PRCDRDT1,PRCDRDT2 from medi_raw.&source._2010;
+quit;
+
+*create ip merged file of 2000-2010 years;
+data medi_wk.&source._2000_2010;
+set medi_raw.&source._2000 medi_raw.&source._2001 medi_raw.&source._2002
+ medi_raw.&source._2003 medi_raw.&source._2004 medi_raw.&source._2005 medi_raw.&source._2006 medi_raw.&source._2007 medi_raw.&source._2008 medi_raw.&source._2009  medi_raw.&source._2010;
+*create clean admit and discharge date variables;
+admit_date=mdy(substr(trim(left(FROM_DT)),5,2),substr(trim(left(FROM_DT)),7,2),substr(trim(left(FROM_DT)),1,4));
+disch_date=mdy(substr(trim(left(thru_DT)),5,2),substr(trim(left(thru_DT)),7,2),substr(trim(left(thru_DT)),1,4));
+
+admit_year=year(admit_date);
+
+*format ID number;
+bid_n=substr(trim(left(BID_HRS_19)),2,9)+0;
+if SGMT_NUM=1;
+run;
+
+/**************************************************************/
+/*The rest of these sorting steps create temp datasets to perform
+checks of the code, do not need to run them when doing final analysis
+*/
+/**************************************************************/
+
+*Check for and remove dupicates;
+proc sort data=medi_wk.&source._2000_2010 out=temp2  nodupkey;
+by BID_HRS_19 admit_date disch_date pmt_amt;
+run;
+
+/*create table bid of just observations that had multiple observations
+that match on id, admit date and discharge date
+They have different payment amounts though b/c of previous step*/
+proc sql;
+create table bid as
+select bid_n,admit_date, disch_date,count(*)
+from medi_wk.&source._2000_2010 group by
+BID_n,admit_date, disch_date having count(*)>1;
+
+quit;
+
+proc sql;
+create table temp3 as
+select * from medi_wk.&source._2000_2010
+where bid_n in (select bid_n from bid) group by bid_n,admit_date having count(*)>1 order by BID_n,admit_date, disch_date;
+
+quit;
+
+H="Skilled nursing facility SNF file processing"
+/************************************************************************
+*************************************************************************
+SNF 2000-2010 files *************************************************************************
+************************************************************************/
+
+*print first 10 observations from snf 2000 file;
+%let source=sn;
+proc sql outobs=10;
+select BID_HRS_19, FROM_DT,thru_DT,pmt_amt from medi_raw.&source._2000;
+quit;
+
+proc sql outobs=10;
+select BID_HRS_19, FROM_DT,thru_DT,pmt_amt from medi_raw.&source._2010;
+quit;
+
+*create snf merged file of 2000-2010 years;
+data medi_wk.&source._2000_2010;
+set medi_raw.&source._2000 medi_raw.&source._2001 medi_raw.&source._2002
+ medi_raw.&source._2003 medi_raw.&source._2004 medi_raw.&source._2005 medi_raw.&source._2006 medi_raw.&source._2007 medi_raw.&source._2008 medi_raw.&source._2009  medi_raw.&source._2010;
+*create clean admit and discharge date variables;
+admit_date=mdy(substr(trim(left(FROM_DT)),5,2),substr(trim(left(FROM_DT)),7,2),substr(trim(left(FROM_DT)),1,4));
+disch_date=mdy(substr(trim(left(thru_DT)),5,2),substr(trim(left(thru_DT)),7,2),substr(trim(left(thru_DT)),1,4));
+
+admit_year=year(admit_date);
+
+*format ID number;
+bid_n=substr(trim(left(BID_HRS_19)),2,9)+0;
+if SGMT_NUM=1;
+run;
+
+/**************************************************************/
+/*The rest of these sorting steps create temp datasets to perform
+checks of the code, do not need to run them when doing final analysis
+*/
+/**************************************************************/
+
+*Check for and remove dupicates;
+proc sort data=medi_wk.&source._2000_2010 out=temp2  nodupkey;
+by BID_HRS_19 admit_date disch_date pmt_amt;
+run;
+
+/*create table bid of just observations that had multiple observations
+that match on id, admit date and discharge date
+They have different payment amounts though b/c of previous step*/
+proc sql;
+create table bid as
+select bid_n,admit_date, disch_date,count(*)
+from medi_wk.&source._2000_2010 group by
+BID_n,admit_date, disch_date having count(*)>1;
+
+quit;
+
+proc sql;
+create table temp3 as
+select * from medi_wk.&source._2000_2010
+where bid_n in (select bid_n from bid) group by bid_n,admit_date having count(*)>1 order by BID_n,admit_date, disch_date;
+
+quit;
+
+H="Outpatient claims OP file processing"
+/************************************************************************
+*************************************************************************
+Outpatient 2000-2010 files *************************************************************************
+************************************************************************/
+
+*print first 10 observations from op 2000 file;
+%let source=op;
+proc sql outobs=10;
+select BID_HRS_19, FROM_DT,thru_DT,pmt_amt from medi_raw.&source._2000;
+quit;
+
+*create op merged file of 2000-2010 years;
+data medi_wk.&source._2000_2010;
+set medi_raw.&source._2000 medi_raw.&source._2001 medi_raw.&source._2002
+ medi_raw.&source._2003 medi_raw.&source._2004 medi_raw.&source._2005 medi_raw.&source._2006 medi_raw.&source._2007 medi_raw.&source._2008 medi_raw.&source._2009  medi_raw.&source._2010;
+*create clean admit and discharge date variables;
+admit_date=mdy(substr(trim(left(FROM_DT)),5,2),substr(trim(left(FROM_DT)),7,2),substr(trim(left(FROM_DT)),1,4));
+disch_date=mdy(substr(trim(left(thru_DT)),5,2),substr(trim(left(thru_DT)),7,2),substr(trim(left(thru_DT)),1,4));
+
+admit_year=year(admit_date);
+
+*format ID number;
+bid_n=substr(trim(left(BID_HRS_19)),2,9)+0;
+if SGMT_NUM=1;
+run;
+
+/**************************************************************/
+/*The rest of these sorting steps create temp datasets to perform
+checks of the code, do not need to run them when doing final analysis
+
+The dataset is so big that SAS crashes when doing all these
+sort and temp dataset steps*/
+/**************************************************************/
+
+*Check for and remove dupicates;
+proc sort data=medi_wk.&source._2000_2010 out=temp2  nodupkey;
+by BID_HRS_19 admit_date disch_date pmt_amt;
+run;
+
+/*create table bid of just observations that had multiple observations
+that match on id, admit date and discharge date
+They have different payment amounts though b/c of previous step*/
+proc sql;
+create table bid as
+select bid_n,admit_date, disch_date,count(*)
+from medi_wk.&source._2000_2010 group by
+BID_n,admit_date, disch_date having count(*)>1;
+
+quit;
+
+proc sql;
+create table temp3 as
+select * from medi_wk.&source._2000_2010
+where bid_n in (select bid_n from bid) group by bid_n,admit_date having count(*)>1 order by BID_n,admit_date, disch_date;
+
+quit;
+
+H="Carrier claims PB file processing"
+/************************************************************************
+*************************************************************************
+Carrier (pb) 2000-2010 files 
+These claims datasets are very large so the 2000-2010 file created only
+has the variables needed in order to get the total claims charges and
+dx codes
+This is different from the other merged claims datasets created here
+*************************************************************************
+************************************************************************/
+
+
+%let source=pb;
+proc sql outobs=10;
+select BID_HRS_19, FROM_DT,thru_DT,pmt_amt from medi_raw.&source._2000;
+quit;
+
+*create individual years files with just variables that are needed;
+%macro yrs(yr=);
+data medi_wk.&source._&yr.temp;
+set medi_raw.&source._&yr (keep=BID_HRS_19 FROM_DT thru_DT pmt_amt SGMT_NUM PDGNS_CD PDVRSNCD DGNS_CD1-DGNS_CD12 DVRSCD1-DVRSCD12 REC_LVL);
+run;
+%mend;
+
+%yrs(yr=2000);
+%yrs(yr=2001);
+%yrs(yr=2002);
+%yrs(yr=2003);
+%yrs(yr=2004);
+%yrs(yr=2005);
+%yrs(yr=2006);
+%yrs(yr=2007);
+%yrs(yr=2008);
+%yrs(yr=2009);
+%yrs(yr=2010);
+
+
+*create combined years file;
+*Note this is different from other combined files;
+data medi_wk.&source._2000_2010;
+set medi_wk.&source._2000temp medi_wk.&source._2001temp 
+medi_wk.&source._2002temp medi_wk.&source._2003temp 
+medi_wk.&source._2004temp medi_wk.&source._2005temp 
+medi_wk.&source._2006temp medi_wk.&source._2007temp 
+medi_wk.&source._2008temp medi_wk.&source._2009temp 
+medi_wk.&source._2010temp ;
+
+*create clean admit date, discharge date and admit year vars;
+admit_date=mdy(substr(trim(left(FROM_DT)),5,2),substr(trim(left(FROM_DT)),7,2),substr(trim(left(FROM_DT)),1,4));
+disch_date=mdy(substr(trim(left(thru_DT)),5,2),substr(trim(left(thru_DT)),7,2),substr(trim(left(thru_DT)),1,4));
+
+admit_year=year(admit_date);
+
+*format ID variable;
+bid_n=substr(trim(left(BID_HRS_19)),2,9)+0;
+if SGMT_NUM=1;
+run;
+
+
+
+
+H="Home health HH file processing"
+/************************************************************************
+*************************************************************************
+Home health (hh) 2000-2010 files *************************************************************************
+************************************************************************/
+
+%let source=hh;
+proc sql outobs=10;
+select BID_HRS_19, FROM_DT,thru_DT,pmt_amt from medi_raw.&source._2000;
+quit;
+
+*create combined 2000-2010 data file;
+data medi_wk.&source._2000_2010;
+set medi_raw.&source._2000 medi_raw.&source._2001 medi_raw.&source._2002
+medi_raw.&source._2003 medi_raw.&source._2004 medi_raw.&source._2005 medi_raw.&source._2006 medi_raw.&source._2007 medi_raw.&source._2008  medi_raw.&source._2009 medi_raw.&source._2010;
+
+*clean admit and discharge date and admit year variables;
+admit_date=mdy(substr(trim(left(FROM_DT)),5,2),substr(trim(left(FROM_DT)),7,2),substr(trim(left(FROM_DT)),1,4));
+disch_date=mdy(substr(trim(left(thru_DT)),5,2),substr(trim(left(thru_DT)),7,2),substr(trim(left(thru_DT)),1,4));
+
+admit_year=year(admit_date);
+
+*format ID variable;
+bid_n=substr(trim(left(BID_HRS_19)),2,9)+0;
+if SGMT_NUM=1;
+run;
+
+H="Durable medical equipment DM file processing"
+/*
+Durable medical equipment (DM) medicare claim records clean up
+*/
+
+%let source=dm;
+proc sql outobs=10;
+select BID_HRS_19, FROM_DT,thru_DT,pmt_amt from medi_raw.&source._2000;
+quit;
+
+*create combined 2000-2010 data file;
+data medi_wk.&source._2000_2010;
+set medi_raw.&source._2000 medi_raw.&source._2001 medi_raw.&source._2002
+ medi_raw.&source._2003 medi_raw.&source._2004 medi_raw.&source._2005 medi_raw.&source._2006 medi_raw.&source._2007 medi_raw.&source._2008
+ medi_raw.&source._2009 medi_raw.&source._2010;
+
+*clean admit date, discharge date and admit year variables;
+admit_date=mdy(substr(trim(left(FROM_DT)),5,2),substr(trim(left(FROM_DT)),7,2),substr(trim(left(FROM_DT)),1,4));
+disch_date=mdy(substr(trim(left(thru_DT)),5,2),substr(trim(left(thru_DT)),7,2),substr(trim(left(thru_DT)),1,4));
+
+admit_year=year(admit_date);
+disch_year=year(disch_date);
+
+*Format ID variable;
+bid_n=substr(trim(left(BID_HRS_19)),2,9)+0;
+if SGMT_NUM=1;
+run;
+
+*Check for and remove duplicates;
+proc sort data=medi_wk.&source._2000_2010 out=temp2  nodupkey;
+by BID_HRS_19 admit_date disch_date pmt_amt;
+run;
+
+proc sql outobs=10;
+select distinct SGMT_CNT,count(*) from medi_wk.&source._2000_2010 group by SGMT_CNT;
+quit;
+
+* Find observations with null for discharge year;
+proc sql outobs=10;
+select BID_HRS_19, admit_date,disch_date  from medi_wk.&source._2000_2010 where 
+disch_year=.;
+quit;
+* Table of discharge year and admit year;
+proc freq;
+table admit_year disch_year;
+run;
+
+H="Hospice HS file processing"
+/* Hospice (HS) medicare claim records clean up*/
+
+%let source=hs;
+proc sql outobs=10;
+select BID_HRS_19, FROM_DT,thru_DT,pmt_amt from medi_raw.&source._2000;
+quit;
+
+*create combined 2000-2010 data file;
+data medi_wk.&source._2000_2010;
+set medi_raw.&source._2000 medi_raw.&source._2001 medi_raw.&source._2002 medi_raw.&source._2003 medi_raw.&source._2004 medi_raw.&source._2005 medi_raw.&source._2006 medi_raw.&source._2007 medi_raw.&source._2008 medi_raw.&source._2009 medi_raw.&source._2010 ;
+
+*clean admit date, discharge date and admit year variables;
+admit_date=mdy(substr(trim(left(FROM_DT)),5,2),substr(trim(left(FROM_DT)),7,2),substr(trim(left(FROM_DT)),1,4));
+disch_date=mdy(substr(trim(left(thru_DT)),5,2),substr(trim(left(thru_DT)),7,2),substr(trim(left(thru_DT)),1,4));
+
+admit_year=year(admit_date);
+disch_year=year(disch_date);
+
+
+*Format ID variable;
+bid_n=substr(trim(left(BID_HRS_19)),2,9)+0;
+if SGMT_NUM=1;
+run;
+
+*Check for and remove duplicates;
+proc sort data=medi_wk.&source._2000_2010 out=temp2  nodupkey;
+by BID_HRS_19 admit_date disch_date pmt_amt;
+run;
+
+proc sql outobs=10;
+select distinct SGMT_CNT,count(*) from medi_wk.&source._2000_2010 group by SGMT_CNT;
+quit;
+
+
+* Find observations with null for discharge year;
+proc sql outobs=10;
+select BID_HRS_19, admit_date ,disch_date from medi_wk.&source._2000_2010 where 
+disch_year=.;
+quit;
+* Table of discharge year and admit year;
+proc freq data=medi_wk.&source._2000_2010;
+table admit_year disch_year;
+run;

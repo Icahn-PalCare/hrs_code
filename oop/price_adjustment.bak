@@ -1,0 +1,425 @@
+= V4 Outline MultiLine NoSorting TabWidth=30
+
+H="Runs price adjustment on raw medicare claims files"
+*for all but medpar 2009 and 2010;
+libname inpath 'E:\data\cms_DUA_25000_2010\received20131120\1998-2010_Provider_Distribution_HRS005';
+
+*for medpar 2009 and 2010;
+libname in_mp910 'E:\data\cms_DUA_25000_2010\received20140218\2009-2010_MP_HRS005 - Mount Sinai 24548';
+
+libname outpath 'E:\data\hrs_oop_2010\int_data\std_prices';
+
+libname denom 'E:\data\hrs_oop_2010\int_data\std_prices\denom';
+
+/*add wage index reference folder, need to find data files*/
+libname wind
+
+H="Denominator file set up"
+/*add hrr, hsa, state from dartmouth xwalk file to individual year denominator files 
+based on beneficiary zip code*/
+
+/*formats for age group and medicare status codes*/
+proc format;
+value AgeGrp
+0='0: <65'
+1='1: 65-69'
+2='2: 70-74'
+3='3: 75-79'
+4='4: 80-84'
+5='5: 85-99'
+6='6: over 99';
+value $msc  
+'10'='10 Aged w/o ESRD'
+'11'='11 Aged w/ ESRD'
+'20'='20 Disabled w/o ESRD'
+'21'='21 Disabled w/ ESRD'
+'31'='31 ESRD only';run; 
+
+/*read in excel hrr-zip xwalks for each year*/
+%macro imphrr;
+%do i=0 %to 10;
+	%if &i<10 %then %do;
+		%let sec_string=0&i.;
+	%end;
+
+	%if &i>9%then%do;
+		%let sec_string=&i;
+	%end;
+	proc import
+		datafile="H:\OOP\data\HRR_ZIP_xwalk\ziphsahrr&sec_string..xls"
+		out=ziphsahrr&sec_string. dbms=xls replace;
+	run;
+%end;
+%mend imphrr;
+
+%imphrr;
+
+/*merge into denominator files by zip code*/
+%macro addhrr;
+
+%do i=0 %to 10
+
+	%if &i<10 %then %do;
+		%let yr=0&i.;
+		%let yrxx=200&i.;
+	%end;
+
+	%if &i>9%then%do;
+		%let yr=&i;
+		%let yrxx=20&i.;
+	%end;
+
+/*get clean 5 digit numeric zip*/
+data dn_&yr._1;
+set inpath.dn_&yrxx.;
+zip_5=substr(bene_zip,1,5);
+zip_n=zip_5+0;
+run;
+
+	proc sql;
+	create table denom.dn_&yrxx. as select a.*,b.hrrnum as hrr,b.hsanum as hsa
+	from dn_&yr._1 a left join
+	ziphsahrr&yr b
+	on a.zip_n=b.zipcode&yr;
+	quit;
+
+%end;
+%mend addhrr;
+
+%addhrr;
+
+/*set age category, entitlement, ffs medicare*/
+%macro ffs;
+
+%do i=0 %to 10
+
+	%if &i<10 %then %do;
+		%let yr=0&i.;
+		%let yrxx=200&i.;
+	%end;
+
+	%if &i>9%then%do;
+		%let yr=&i;
+		%let yrxx=20&i.;
+	%end;
+	
+	data denom.dn_&yrxx._1  (keep=BID_HRS_19 Age Age5 AgeEnd Sex Race State Zipcode hsa hrr HMO 
+		notPartAB Medicare65plusFFS MS_CD);
+		length HRR 3. HSA 5. notPartAB HMO Age Age5 3.;
+	set denom.dn_&yrxx.
+		(keep=BID_HRS_19 BENE_ZIP sex race BENE_DOB DEATH_DT BUYIN HMOIND MS_CD 	 
+		%if 2008>=&yrxx.>=2009 %then %do;
+			flag20 fivepct 
+		%end;
+		%if &yrxx.=2010 %then %do;
+			flag20 STRCTFLG
+		%end;
+		/*%if &yrxx.=2011 %then %do;   **commented out, no 2011 claims in our dataset**
+			flag20 flag5
+		%end;*/
+		);
+
+	/*create individual variables for each month for buy in and hmo status*/
+	%do m=1 %to 12;
+	hmo&m.=substr(HMOIND12,&m.,1);
+	entitl&m.=substr(BUYIN12,&m.,1);
+	%end;
+
+	array h{*} $ hmo1-hmo12;
+	array e{*} $ entitl1-entitl12;
+
+	*delete all deceased in prior years;
+	if DEATH_DT~=. and year(DEATH_DT)<&yrxx. then delete;
+
+	*age and entitlement;
+	if BENE_DOB~=. then do;
+   		Age=int(("1jan&yrxx."D-BENE_DOB)/365.25);
+	    	Age5=input(put(age,age5n.),2.);
+   	 	AgeEnd=int(&yrxx.-year(BENE_DOB));
+	end;
+
+	HMO=0;
+	notPartAB=0;
+
+/(if age = 65 in denominator year, check status from 65th bday on*/
+if AgeEnd=65 and "1jan&yrxx."D<=DEATH_DT<="31dec&yrxx."D then do;
+ 	   month_birth=month(BENE_DOB);
+ 	   month_dead=month(DEATH_DT);
+    	do i=month_birth to month_dead;
+      		if h{i} in ('1','2','A','B','C') then HMO=1;
+      		if e{i} not in ('3','C') then notPartAB=1;
+    		end;
+	   end;
+	else if AgeEnd=65 and (DEATH_DT=. or (DEATH_DT^=. and year(DEATH_DT)>&yrxx.)) then do;
+    		month_birth=month(BENE_DOB);
+    		do i=BENE_DOB to 12;
+      			if h{i} in ('1','2','A','B','C') then hmo=1;
+     	 		if e{i} not in ('3','C') then notPartAB=1;
+    		end;
+	  end;
+/*if age>65 at year end, check year until die*/
+else if AgeEnd>65 and "1jan&yrxx."D<=DEATH_DT<="31dec&yrxx."D then do;
+    month_dead=month(DEATH_DT);
+    do i=1 to month_dead;
+      if h{i} in ('1','2','A','B','C') then hmo=1;
+      if e{i} not in ('3','C') then notPartAB=1;
+    end;
+end;
+else if AgeEnd>65 and (DEATH_DT=. or (DEATH_DT^=. and year(DEATH_DT)>&yrxx.)) then do;
+   do i=1 to 12;
+      if h{i} in ('1','2','A','B','C') then hmo=1;
+      if e{i} not in ('3','C') then notPartAB=1;
+    end;
+end;
+/*if age < 65 */
+else if AgeEnd<65 and "1jan&yrxx."D<=DEATH_DT<="31dec&yrxx."D then do;
+    month_dead=month(DEATH_DT);
+    do i=1 to month_dead;
+      if h{i} in ('1','2','A','B','C') then hmo=1;
+      if e{i} not in ('3','C') then notPartAB=1;
+    end;
+end;
+else if AgeEnd<65 and (DEATH_DT=. or (DEATH_DT^=. and year(DEATH_DT)>&yrxx.)) then do;
+   do i=1 to 12;
+      if h{i} in ('1','2','A','B','C') then hmo=1;
+      if e{i} not in ('3','C') then notPartAB=1;
+    end;
+end;
+
+
+*geography;
+zipnum=(input(zipcode,5.))*1;
+HSA=input(put(zipnum,ZHSA&DatasetYr.F.),5.);
+HRR=input(put(hsa,hsahrrf.), 5.);
+
+attrib State length=$2 label='State (derived from Bene Mailing Zipcode, Denom file)';
+State=zipstate(zipcode);*use SAS function first; 
+if State='' then State=put(hsa,hsast.);*then as backup, use HSA (which came from Bene zip);
+
+*filter flag;
+attrib Medicare65plusFFS length=3 label='Medicare Beneficiary FFS: 1=age of 65-99, No HMO, PartAB, USA HRR only';
+Medicare65plusFFS=0;
+if 1<=Age5<=5 /*age 65 to 99*/
+& notPartAB^=1
+& hmo^=1
+& hrr>0 /*USA only*/
+then Medicare65plusFFS=1;
+
+format age5 agegrp. msc $msc.;
+
+*labels;
+label 
+hrr='Beneficiary HRR' 
+hsa='Beneficiary HSA'  
+sex="1=male/2=Female"
+Age="Age at the beginning of the year"
+Age5="Age in 5 categories at the beginning of the year"
+notPartAB="non-entitlemt for PartAB in any month from jan/month turn 65 to month or death/dec"
+hmo="HMO indicator for any month from the month turn 65/jan to the month of death/dec";
+
+	run;
+
+	%end;
+
+%mend ffs;
+
+var notes: age5 created?
+BENE_ZIP
+HSA, HRR, HMO, notPartAB,Medicare65plusFFS, msc (medicare status code MS_CD) - all created
+
+hmo1-hmo12 entitl1-entitl12
+
+H="Part a - medpar inpatient"
+/*for adjusting Part a claims from medpar
+
+From Standardized Prices project code TDI.std.PTA.sas
+
+A few notes:
+1. FFS medicare determination is done later, so omitted here
+2. Variable names changed to match our HRS Claims dataset
+3. Need to run denominator file setup in previous section prior to running this code
+4. Need to set up formats prior to running this or it won't work!*/
+
+%macro Hospital
+(SourceYr/*4 digit year*/
+,msdrgFmtYr=08
+,Nobs=max
+,DenomFile=denom.dn_&SourceYr.
+);
+
+****************;
+*macro variables;
+****************;
+options obs=&Nobs;
+
+%let DatasetYr=%substr(&SourceYr,3,2);
+
+%let nyear=%eval(&SourceYr+1);
+%let nyr=%substr(&nyear,3,2);
+%put nyr &nyr;
+
+%let pyear=%eval(&SourceYr-1);
+%let pyr=%substr(&pyear,3,2);
+%put pyr &pyr;
+
+*************************;
+*sort claims by benefic id, admit date and disch date;
+*sort hospital type macro;
+*************************;
+%macro order(type);
+	proc sort data=&type.&DatasetYr;
+	by BID_HRS_19 ADMSNDT DSCHRGDT; run;
+	proc contents data=&type.&DatasetYr;
+%mend order;
+
+***********************************;
+*get Part A (InPatient) from Medpar;
+***********************************;
+data ptainput_&DataSetYr. ;
+set indir&DatasetYr..medpar&SourceYr.
+(keep=BID_HRS_19 PROVIDER SSLSSNF pmt_amt passthru clm_id ADMSNDT DSCHRGDT drg_cd DSCHRGCD DSTNTNCD
+	PRVNUM3 spclunit loscnt DRGPRICE OUTLRAMT ime_amt DISP_SHR rename=(clm_id=ClaimIndex));
+/*not sure if claim ID can stay in here, don't think I have unique claim ID's can assign if needed*/
+
+*Provider Type (because 22% of Medpar claims had missing provider type, use provider number group);
+if prvnum3='0' and SSLSSNF='S' and spclunit=' ' and loscnt<=365 then prov_type='ACH';*Acute Care Hospital;
+else if substr(PROVIDER,3,2) in ('13') then prov_type = 'CAH';*Critical Access Hospital;
+else if substr(PROVIDER,3,2) in ('20') then prov_type = 'LTC';*Long-Term Care Hospital;
+else if substr(PROVIDER,3,2) in ('30') then prov_type = 'REH';*Rehab Hospital;
+else if substr(PROVIDER,3,2) in ('19') then prov_type = 'RNH';*Religious nonmedical health institution;
+else if substr(PROVIDER,3,2) in ('33') then prov_type = 'CHL';*Children Hospital;
+else if substr(PROVIDER,3,2) in ('40','41') then prov_type = 'PSY';*Psychiatric Hosptial; 
+else if substr(PROVIDER,3,2) in ('50','51','52','53','54','55','56','57','58','59','60','61','62','63','64') 
+	then prov_type='SNF';*Skilled Nursing Facility;
+else if prov_type=' ' and spclunit in ('U','W','Y','Z') then prov_type='SWN';*Swing Bed Hospital;
+else if prov_type=' ' and SSLSSNF='N' then prov_type='SNF';*Skilled Nursing Facility;
+else prov_type='OTH';*Other;
+
+*Change Swing Beds (in critical access hospitals) to SNF - Feb 16, 2010;
+%if &SourceYr>=2006 %then %do;
+	if prov_type='SWN' & spclunit='Z' & substr(PROVIDER,3,2)='03' then prov_type='SNF';
+%end;
+
+label prov_type='Hospital Provider Type (TDI definition)';
+
+retain 
+/*conv_fac_98 4100???? conv_fac_99*/ 4100 conv_fac_00 4100 conv_fac_01 4194 conv_fac_02 4309 conv_fac_03 4427 conv_fac_04 4390 conv_fac_05 4555 conv_fac_06 4733 
+conv_fac_07 4878 conv_fac_08 4893 conv_fac_09 5124.56 conv_fac_10 5223.14 /*conv_fac_11 5164.11 conv_fac_12 5209.74 conv_fac_13 5348.76*/;
+
+call symput('convFactor',conv_fac_&DatasetYr.);
+
+*drg;
+*Sept 3, 2009;
+*DRG older version;
+%if &SourceYr<= 2006 %then %do;
+	if month(DSCHRGDT)<10 then DRGdollar=conv_fac_&DatasetYr.*put(drg_cd,drg&DatasetYr.rw.);
+	else drgdollar=conv_fac_&nyr.*put(drg_cd,drg&nyr.rw.);
+%end;
+*DRG Transition Year;
+%if &SourceYr= 2007 %then %do;
+	if month(DSCHRGDT)<10 then DRGdollar=conv_fac_&DatasetYr.*put(drg_cd,drg&DatasetYr.rw.);
+	else drgdollar=conv_fac_&nyr.*put(drg_cd,msdrg&msdrgFmtyr.rw.);
+%end;
+*new MSDRG;
+%if &SourceYr>= 2008 %then %do;
+	if month(DSCHRGDT)<10 then DRGdollar=conv_fac_&DatasetYr.*put(drg_cd,msdrg&DatasetYr.rw.);
+	else drgdollar=conv_fac_&nyr.*put(drg_cd,msdrg&nyr.rw.);
+%end;
+label DRGDollar="DRG Dollar &SourceYr conversion factor*DRG_CD";
+
+*los;
+if loscnt=. then loscnt=DSCHRGDT-ADMSNDT+1;
+if .<loscnt<=0 then loscnt=1;
+label loscnt='MEDPAR LOS (if missing, DischargeDt - AdmissionDt + 1)';
+
+if loscnt>365 then CheckLOS=1;
+else checklos=0;
+label checklos='Check LOS>365';
+
+*2 Sept 2009, per Dan;
+pmt_amt=sum(pmt_amt,passthru);
+label pmt_amt='pmt_amt+passthru (TDI modified)';
+run;
+
+*check;
+proc freq data=ptainput_&DatasetYr;
+table prov_type*checklos;run;
+
+*************************;
+*Combine Part A and Denom;
+*************************; 
+/*note this will filter beneficiaries based on the content 
+  of denominator file, e.g., exclude under 65, no hmo, etc.*/
+proc sql;
+create table pta_&DataSetYr. as 
+select distinct a.* ,b.hrr,b.hsa,b.STATE_CD as state,b.zip_n as zipcode 
+  ,1*input(put(hsa,hsamsaf.),4.) as MSA label='Beneficiary MSA' 
+from ptainput_&DataSetYr. a join &DenomFile. b
+on a.BID_HRS_19=b.BID_HRS_19
+order by a.provider;
+
+*******************************;
+*Add MSA/County to Part A/Denom;
+*******************************;
+data pta_&DatasetYr;
+merge
+	pta_&DataSetYr. (in=a) 
+	wind&DatasetYr..hosp_msa&DataSetYr. (keep=provider ssacounty msa rename=(ssacounty=ssacounty&DataSetYr. msa=msa&DatasetYr))
+	wind&DatasetYr..hosp_msa&pyr (keep=provider ssacounty msa rename=(ssacounty=ssacounty&pyr msa=msa&pyr))
+	wind&DatasetYr..hosp_msa&nyr (keep=provider ssacounty msa rename=(ssacounty=ssacounty&nyr msa=msa&nyr));
+by provider;
+
+if a=1;
+
+length SSACounty_prov $5.;
+SSACounty_prov=coalescec(ssacounty&DatasetYr,ssacounty&pyr,ssacounty&nyr);*use current year county if present, if not then last year, then next year;
+
+if msa&DataSetYr. not in (0,.) then MSA_prov=msa&DatasetYr;
+else
+if msa&DataSetYr. in (0,.) and msa&pyr not in (0,.) then msa_prov=msa&pyr;
+else
+if msa&DataSetYr. in (0,.) and msa&pyr in (0,.) and msa&nyr not in (0,.) then msa_prov=msa&nyr;
+
+label msa_prov='Provider MSA' ssacounty_prov='Provider SSA County';
+
+drop msa&DataSetYr. msa&pyr msa&nyr ssacounty&DataSetYr. ssacounty&pyr ssacounty&nyr;
+
+id=1;
+
+if loscnt>365 then loscnt=365;run;
+
+
+
+H="Notes, questions"
+I think I need some format files from Dartmouth
+Ones I've found so far are:
+
+
+************************************************************************
+*** Part A (medpar) file questions *************
+************************************************************************
+From Part A
+drg&DatasetYr.rw. - for 2000-2010 years
+msdrg&DatasetYr.rw.
+
+Not sure about finding the provider, msa, county crosswalk 
+wind&DatasetYr..hosp_msa&DataSetYr. 
+	wind&DatasetYr..hosp_msa&pyr
+	wind&DatasetYr..hosp_msa&nyr
+
+************************************************************************
+*** Denominator file questions *************
+************************************************************************
+From denominator file:
+Format needed:
+hsamsaf.
+hsahrrf
+ZHSA&DatasetYr.F. (for years 2000-2010)
+
+Formats referenced in denominator file are:
+xwalks.zip2hsa xwalks.hsahrr xwalks.agefmts
+where xwalks path = '/general_resources/xwalks'
+
+Also, in the denominator file, are hrr, hsa, state the hrr , hsa numbers? What about state?
+I have crosswalk from Dartmouth Atlas website of zip, hsa, hrr, can I just use that?
+

@@ -1,0 +1,303 @@
+This codebook file documents the decisions made when coding the
+data cleaning and imputations for the dataset created in
+the file oop_mc_2010_2yr.txt along with a summary of the
+sections in the outline text file
+
+General project description:
+Tabulate out of pocket costs, medicare paid costs and impute additional
+nursing home costs and replacement costs of informal, unpaid, caregivers
+in the last 2 and 5 years of life.
+Original datasets include the HRS surveys (2002-2010 exit interviews,
+1998-2008 core interviews, and the restricted dataset received in Nov. 2013),
+the oopme_final.dta dataset recieved in July 2013,
+and the helpers_hours.dta dataset received in May 2014, and
+HRS linked Medicare claims 2000-2010.
+
+********************************************************
+**Pull exit and restricted interviews and mc xwalk id**
+********************************************************
+Begin with the cleaned exit (decedent) interview dataset (cleaned in
+HRS_Processing.txt)
+Link in the decedent's Medicare crosswalk id to the claims and
+relevant information (dob, dod, zip code) from the HRS restricted dataset
+Variables from the exit interview have suffix _x
+Variables from the restricted dataset have suffix _e
+
+Key decisions made:
+Zip code brought in for each decedent is the zip code from the exit interview
+(presumbably the decedent's zip code at time of death). For 2 observations,
+exit wave zip was missing and the zip code from the previous wave was used.
+
+********************************************************
+**Pull core interviews**
+********************************************************
+Begin with cleaned core interview dataset (again cleaned in HRS_Processing.txt)
+and gets datasets of the interviews 1, 2 and 3 waves before death (referred
+to as the n1, n2 and n3 interviews)
+The n3 dataset is limited to R's level of education variable since
+that question was only populated from 2004 and earlier in the core interviews
+(it is asked of new R's each wave, but only backfilled from the 1st interview
+through the 2004 wave)
+
+The n1 and n2 core interviews are then supplmented with the predicted
+probability of dementia from the dataset "Dementia Predicted Probabilities Files
+v 1.0" from the Researcher Contributions HRS downloads section
+
+Dementia probablities are only calculated for interviews where
+the respondant age is 70 or older at the time of the interview
+
+********************************************************
+**Merge HRS interview dataset, get n1, n2, restr, exit, mc xw**
+********************************************************
+First, renames variables in each of the core +dementia probability
+datasets to have _n1, _n2 or _n3 suffix so can track which interview
+they came from upon merging into single dataset
+
+Adds the n1, n2 and n3 variables to the exit/restricted/crosswalk dataset
+
+********************************************************
+**Set up denominator file data, check vs interview dataset,
+keep age ge 67 at death**
+********************************************************
+The Medicare claims denominator file contains general information
+about each beneficiary (gender, race, etc) as well as their Medicare
+status (whether they receive parts A+B medicare, whether they
+use an HMO plan) that are used to determine sample elgibility
+
+Denominator file is sorted and a dataset saved that keeps only the
+last year for which each beneficiary has an entry
+
+The HRS interview dataset is saved limiting it to just those
+decedents that were age=67+ at time of death
+Age at time of death is calculated from the restricted dataset
+only at this point, using the death date and birth date from HRS
+
+A pared down dataset is created limited to those decedents with
+Medicare crosswalks and age 67+ at death, this is the initial
+step in getting down to the sample used in the analysis
+
+********************************************************
+**Check to see if medicare and no hmo for 2 and 5 years
+before death**
+********************************************************
+Uses the claims denominator file to create two sets of indicator variables
+part_ab_2y / part_ab_5y - Indicator =1 if Medicare Parts A&B 2,5 years before death
+hmo_2y / hmo_5y - Indicator =1 if HMO 2,5 years before death
+So to be included in the sample, part_ab_xy==1 & hmo_xy==0
+
+Variables are missing if denominator file information is not available
+for the full 2 or 5 year period before death (in many cases this is because we
+only have claims starting in 2000)
+
+********************************************************
+**Initial set up of OOP dataset (create id, drop unneeded vars)**
+********************************************************
+Imports oop and helper datasets into sas (received as Stata files)
+Creates the id variable (hhid+pn)
+Drops variables not needed for the analysis
+Replaces missing values for OOP spending and helper counts with zero's
+Merges the helper and oop datasets by id (oop_int.oop_helper data file saved)
+Adds indicator for missing helper information for observations
+with no helper data
+
+********************************************************
+**Accounting for missing nh nights, part 1**
+********************************************************
+Starts with oop/helper dataset
+Brings in exact interview dates from the restricted file (exit interview
+dates are set to the date of death, not the actual exit interview date)
+Calculates SNF nights, both Medicare paid (los_snf_paid_by_mc_ivw ) and total
+days regardless if Medicare paid (snf_stay_all_ivw ) during the time between
+interviews from the medpar claims list
+For stays that span interviews, stay length is truncated to only
+included days within the time window of interest
+
+Compares the self reported number of nursing home nights from the OOP dataset
+(as estimated from the HRS interviews) (sr_nh_nights) to the total number of nights
+from the claims (snf_stay_all_ivw). Whichever is greater is the total number of
+nursing home nights attributed to that interview time period (nh_nights)
+
+Determines observations where there are nursing home nights that aren't paid by
+Medicare (nights = nh_ni_not_mc, indicator = nh_pmt_imp)
+
+********************************************************
+**Missing nh nights, part 2, assign prices**
+********************************************************
+Bring in supplemental data:
+1. Average state private room nursing home nightly rate from the 
+2010 MetLife Market Survey of Long-Term Care Costs
+2. State Medicaid nursing home nightly rate from various sources
+See the data in the subfolder \nh_costs_by_state for details
+3. Private home health aide hourly rate from MetLife survey
+   (used for helper replacement cost imputations)
+
+Medicaid rates are inflated to 2010 dollars
+These prices are merged in by the state reported in the interview time period
+from the restricted dataset (so a single R can have more than one set of prices
+if they move between waves)
+State is imputed if missing, using the response from additional waves
+
+Number of nights covered by the reported OOP spending NH category (NH_OOP) are imputed
+using either the private price or Medicaid price. If Medicaid coverage (md_cov) is missing,
+then the Medicaid price is used. oop_nh_nights = NH_OOP/price
+If the calculated OOP nights are more than the total nights (nh_nights) either from
+the survey or claims, then the OOP nights are capped at the balance of total nights - Medicare nights
+(Indicator of capped OOP nights = oop_nh_nights_adj)
+
+Any remaining nights not either paid by Medicare or accounted for in OOP spending
+are assigned to variable other_nh_nights
+
+Remaining nights are either assigned the Medicaid price or Private payer price
+to get imputed nursing home payments
+(nh_cost_medicaid and nh_cost_private)
+
+So components used to impute total NH costs are:
+nh_OOP nh_cost_medicaid nh_cost_private
+These are at the interview level, so they just span the time period
+that is between successive interviews, they will get added to span the 2 or 5 year
+period with the rest of the OOP data in the "OOP spending totals 24,60 months..."
+heading section
+
+********************************************************
+**Accounting for informal home care**
+********************************************************
+In helper dataset, helpers in the _p, _d, _m categories
+are included (and imputed where missing) in the helper_OOP category
+So here, we only impute additional costs for the unpaid helpers in the
+_u and _s categories  (other unpaid and spouse)
+
+The variables hlphrs_s and hlphrs_u are hours/month helped (across
+all helpers in the n_ count variables)
+
+So cost per month is imputed by multiplying hourly rate * number of hours
+Capped at $15,000/month following methodology in the OOP dataset imputation
+for paid helper costs
+
+Calculates OOP cost per month - helper_OOP_per_mo - for interview periods
+that span more than 4 months because helper costs will be adjusted (original
+helper_OOP attributed spending for 4 months of help only where the interview time periods
+are longer. We will instead use the average of the current interview monthly amount and previous
+interview montly amount to better account for people needing continuous care)
+
+So, if no helper in the previous interview, then helper cost / month is assigned
+for 4 months prior to the interview date only
+If helper is present the previous interview, 4 months prior to current interview
+are assigned at the current cost/month and then the remaining months in the interview
+period are assigned the average cost/month between the current and previous interviews
+
+So final variables are hh_s_cost_ivw, hh_u_cost_ivw and helper_OOP
+where helper_OOP has been adjusted to account for continuous care throughout the 
+interview time period
+
+********************************************************
+**Get OOP data for exit, n1, n2 and n3 cores**
+********************************************************
+
+********************************************************
+**Link in wage index by patient zip code**
+********************************************************
+Matches wage index by zip code from exit interview year. If no associated
+wage index by zip code, then match by state code, agan from exit year.
+
+Saves to a Stata dataset for the next steps
+
+********************************************************
+**Adjust for wage index and calculate total Medicare spending**
+********************************************************
+Adjusts Medicare 2 and 5 year spending category totals by the wage index
+Adjustment done by regression to normalize means so mean before
+adjustment is equal to mean after
+
+Calculates total spending before and after wage index adjustment
+
+********************************************************
+********************************************************
+********************************************************
+**Created Variables**
+********************************************************
+
+
+
+********************************************************
+**Merge mc spending into oop file
+********************************************************
+Merges the interview + OOP dataset with the Medicare totals
+Observations with missing wage index have wage index set to 1
+in this version of the MC totals so the wage index adjusted
+Medicare costs are not missing
+
+********************************************************
+**Table with sample size 2 and 5yr lookbacks
+********************************************************
+Defines original sample with full 2 year information
+Age > 67 at death
+With Medicare xwalk, full insurance info last 2 years of life,
+fee for service Medicare and full OOP data
+Drops observations that don't meet 2 year criteria, tabulates
+n observations that also meet 5 year criteria
+Creates table "2-oop_sample.rtf"
+
+********************************************************
+**Look at dementia samples
+********************************************************
+
+Creates tables in "oop_dem_initial_tables.rtf"
+
+********************************************************
+**Create new variables for disease groups,demo char
+********************************************************
+Adjusts HRR DA level EOL spending for inflation and the wage index
+
+Adjusts Medicare spending categories for the wage index
+
+********************************************************
+**Mutually exclusive comparison groups
+********************************************************
+
+********************************************************
+**Quintiles work, check DA vs HRS
+********************************************************
+
+********************************************************
+**25%, middle, 75% split - check DA vs HRS
+********************************************************
+
+
+********************************************************
+**Adjust spending categories by age,sex,race
+********************************************************
+Creates quartile and quintile variables based on the inflation and wage index
+adjusted Dartmouth 2 year EOL HRR level spending
+Adjusts 2 year and 5 year spending variables for age, sex and race - variables
+prefixed by adj_
+Does second round of adjustments adding in ever smoked cigarettes, 
+ADL status from exit, count of comorbidities and education level as
+a comparison - variables prefixed by jadj_
+Pulls select survey question responses (insurance coverage, net worth,
+marital status) at approximately 5 years and 2 years before death
+Selects the interview nearest to those times so can be different
+interviews for different R's
+
+This saves the 5 year sample version of the dataset for the rest
+of the analyses / tables that follow in the code
+
+********************************************************
+**Break out 5 year EOL Spending by HRR quintiles
+********************************************************
+
+
+********************************************************
+**Quintile spending 5 yr EOL adjusted - not WI adjusted
+********************************************************
+
+********************************************************
+**Quintiles spending, wage index, age,sex,race adj
+********************************************************
+
+********************************************************
+**Quartile spending, 5yr wi, EOL adjusted
+********************************************************
+
+********************************************************
+**Quartile spending, 2yr wi, EOL adjusted
+********************************************************

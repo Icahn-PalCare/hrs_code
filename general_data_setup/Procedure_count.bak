@@ -1,0 +1,311 @@
+= V4 Outline MultiLine NoSorting TabWidth=30
+
+H="Identify frequency of procedures from ip and op claims"
+/*refer to emails from Amy from July 24, 2014 for description
+
+-	use claims data from HRS, without restrictions for length of ffs coverage and non-hmo, but presumably reflecting ffs beneficiaries for the most part; 
+-	examine all claims from 1/1/08 - 12/31/10 without regard to timing of interview 
+-	assess total frequency of each code and the number of unique Rs with any occurrence
+-	if possible, distinguish those from inpatient vs outpt claims (I think they will all be found within inpatient, even if it is an "ambulatory" procedure)
+
+*/
+
+
+libname medi 'E:\data\cms_DUA_25000_2010';
+libname pro_cnt 'E:\data\procedure_counts_icd';
+
+
+
+H="First pass through IP claims"
+
+/*get IP claims*/
+data ip_1;
+set medi.mp_2000_2010(where=(trim(left(SSLSSNF))~="N"));
+format admit_date date9. ;
+if '01JAN2008'd<=admit_date<='31DEC2010'd;
+run;
+
+/*drop variables we don't need*/
+data ip_2;
+set ip_1 (keep=BID_hrs_19
+PRCDR_CD01-PRCDR_CD25
+TYPE_ADM PRCDR_DT01-PRCDR_DT25
+DSCHRGCD LOSCNT DSTNTNCD admit_date disch_date);
+run;
+
+data ip_proc_long(keep=BID_hrs_19 TYPE_ADM procedure procedure_date 
+	DSTNTNCD admit_date disch_date);
+set ip_2;
+array list PRCDR_CD01-PRCDR_CD25;
+array date PRCDR_DT01-PRCDR_DT25;
+do over list;
+if list~="" then do;
+procedure=list;
+if date="0000000" then date="";
+procedure_date=datejul(date);
+output;
+end;
+end;
+format procedure_date date10.;
+run;
+
+/*identify procedures in the list of ICD-9 codes from Amy 7/24/14 */
+data ip_meet;
+set ip_proc_long;
+if length(compress(procedure))>3 then do;
+
+if compress(procedure)+0 in (0050, 0051, 0052, 0053, 0054, 3794) then surgery_meet=1;
+
+end;
+/*only keep observations in work.ip_meet that meet criteria*/
+if surgery_meet then output;
+
+run;
+
+proc freq; table procedure; run;
+
+proc sql;
+select count(distinct BID_hrs_19) from ip_meet;
+quit;
+
+H="OP claims"
+/*get OP claims*/
+data op_1;
+set medi.op_2000_2010;
+format admit_date date9. ;
+if '01JAN2008'd<=admit_date<='31DEC2010'd;
+run;
+
+proc freq data=op_1; table rec_lvl; run;
+
+proc contents data=op_1; run;
+
+data op_2;
+set op_1(keep=bid_hrs_19 admit_date disch_date
+ HCPSCD01-HCPSCD45 PDGNS_CD PRCDRCD1-PRCDRCD9 PRCDRCD10-PRCDRCD25 
+ PRCDRDT1-PRCDRDT9 PRCDRDT10-PRCDRDT25 PVRSCD1-PVRSCD9 PVRSCD10-PVRSCD25 );
+run;
+
+proc freq data=op_2; table PRCDRCD1; run;
+
+/*check through icd-9 procedure codes*/
+data op_proc_long(keep=bid_hrs_19 procedure procedure_date admit_date disch_date version);
+set op_2;
+array list PRCDRCD1-PRCDRCD9 PRCDRCD10-PRCDRCD25;
+array date PRCDRDT1-PRCDRDT9 PRCDRDT10-PRCDRDT25;
+array vers PVRSCD1-PVRSCD9 PVRSCD10-PVRSCD25;
+do over list;
+if list~="" then do;
+procedure=list;
+procedure_date=datejul(date);
+version=vers;
+output;
+end;
+end;
+format procedure_date date10.;
+run;
+proc freq; table version; run;
+
+/*identify procedures in the list of ICD-9 codes from Amy 7/24/14 */
+data op_meet;
+set op_proc_long;
+if length(compress(procedure))>3 then do;
+
+if compress(procedure)+0 in (0050, 0051, 0052, 0053, 0054, 3794) then surgery_meet=1;
+
+end;
+/*only keep observations in work.op_meet that meet criteria*/
+if surgery_meet then output;
+
+run;
+proc freq; table procedure; run;
+
+data op_cpt_long(keep=bid_hrs_19 cpt admit_date disch_date );
+set op_2;
+array list HCPSCD01-HCPSCD45;
+do over list;
+if list~="" then do;
+cpt=list;
+output;
+end;
+end;
+run;
+
+data op_cpt_meet;
+set op_cpt_long;
+if length(compress(cpt))>4 then do;
+
+if compress(cpt)+0 in (33216, 33217, 33218, 33220, 33223, 33240, 33241, 33249) then surgery_meet=1;
+
+end;
+/*only keep observations in work.oop_cpt_meet that meet criteria*/
+if surgery_meet then output;
+
+run;
+
+proc freq; table cpt; run;
+
+/*merge the procedure and cpt code lists for the op claims*/
+data op_combined;
+set op_meet op_cpt_meet;
+op_ind=1;
+run;
+
+proc freq; table procedure cpt; run;
+
+proc sql;
+select count(distinct bid_hrs_19) from op_combined;
+quit;
+
+H="Merge OP and IP counts"
+data count_1;
+set ip_meet_2 op_combined;
+drop DSTNTNCD TYPE_ADM admit_date disch_date procedure_date surgery_meet version;
+run;
+
+proc sort by BID_HRS_19; run;
+
+data pro_cnt.count_2;
+set count_1;
+if op_ind=. then op_ind=0;
+if ip_ind=. then ip_ind=0;
+if op_ind=1 then clm_type = 1;
+if ip_ind=1 then clm_type = 2;
+label clm_type="Claim type 1=OP 2=IP";
+run;
+
+proc freq; table clm_type; run;
+
+proc freq; table procedure*clm_type cpt*clm_type; run;
+
+/*export to Stata to get counts in tables*/
+proc export data=pro_cnt.count_2
+outfile="E:\data\procedure_counts_icd\count_2.dta" replace;
+run;
+
+
+H="Stata - get counts into tables"
+capture log close
+clear all
+set more off
+
+local datapath E:\data\procedure_counts_icd
+cd `datapath'
+
+log using counts_procedures_log.txt, text replace
+
+use count_2.dta
+********************************************************
+//first get counts of each code
+destring procedure, gen(procedure2)
+destring cpt, gen(cpt2)
+tab procedure2 clm_type, missing matcell(pro)
+return list
+local rows=r(r)-1
+
+mat list pro
+
+mat freq=J(12,2,.)
+
+forvalues i=1(1)`rows'{
+mat freq[`i',1]=pro[`i',1]
+mat freq[`i',2]=pro[`i',2]
+}
+
+tab cpt2 clm_type, missing matcell(cpt)
+local rows2=r(r)-1 + `rows'
+mat list cpt
+
+forvalues i=6(1)`rows2'{
+mat freq[`i',1]=cpt[`i'-5,1]
+mat freq[`i',2]=cpt[`i'-5,2]
+}
+
+mat colnames freq="Outpatient" "Inpatient"
+mat rownames freq="0050" "0051" "0053" "0054" "3794" "33216" ///
+"33217" "33220" "33223" "33240" "33241" "33249"
+
+mat list freq
+
+frmttable using `datapath'\pro_counts_tables, statmat(freq) ///
+title("Frequencies of individual CPT and Procedure Codes") ///
+sdec(0) replace
+********************************************************
+//get count of unique R's with any procedure
+sort bid_hrs_19
+
+by bid_hrs_19: gen n1=_n
+by bid_hrs_19: gen n2=_N
+
+keep if n1==n2
+tab n1, missing matcell(cnt)
+
+mat r=J(4,1,.)
+
+mat r[1,1]=r(N) //unique r's any count of codes
+forvalues i=2(1)4{
+mat r[`i',1]=cnt[`i'-1,1]
+}
+
+mat rownames r="Total unique R's" "With 1 procedure" "2 procedures" "3 procedures"
+
+mat list r
+
+frmttable using `datapath'\pro_counts_tables, statmat(r) ///
+title("Count of unique R's with procedures identified") ///
+ctitle("","n") sdec(0) addtable
+
+********************************************************
+log close
+
+
+H="notes"
+Ok, great. Let's do it in the simplest way (so correct me if this is not it):
+
+-	use claims data from HRS, without restrictions for length of ffs coverage and non-hmo, but presumably reflecting ffs beneficiaries for the most part; 
+-	examine all claims from 1/1/08 - 12/31/10 without regard to timing of interview 
+-	assess total frequency of each code and the number of unique Rs with any occurrence
+-	if possible, distinguish those from inpatient vs outpt claims (I think they will all be found within inpatient, even if it is an "ambulatory" procedure)
+
+And no big rush- any time in the next couple of weeks would be fine.
+Thank you!!
+
+From: Gorges, Rebecca 
+Sent: Thursday, July 24, 2014 9:27 AM
+To: Kelley, Amy
+Subject: RE: question
+
+Hi Amy,
+
+This shouldn't take too long. I'd guess a couple of hours at the most. Would you want just a count of unique respondents that had any occurrence of one of these procedures, or a more detailed look counting how many occurrences per R. 
+
+Would it be related to an interview (so the usual check for ffs Medicare some period before or after and then look at specific time periods?) or simply the presence of the procedure? Linking to interviews would add some time, but we have the basic code written to do it so I'd think it would still take less than a day.
+
+Rebecca
+
+From: Kelley, Amy 
+Sent: Thursday, July 24, 2014 9:19 AM
+To: Gorges, Rebecca
+Subject: question
+
+Hi Rebecca,
+Could you tell me how much trouble it would be to find the prevalence of the following procedure codes in our HRS sample?  If it's easiest, it could be just over 1-2 years of claims.  If this would take a significant amount of time than we can just forget it.
+Thank you!
+Amy
+
+Inpatient:  Any claim ICD-9 procedure code of:
+"	00.50 -- Implantation of cardiac resynchronization pacemaker without mention of defibrillation, total system [crt-p]
+"	00.51 -- Implantation of cardiac resynchronization defibrillator, total system [crt-d]
+"	00.52 -- Implantation or replacement of transvenous lead [electrode] into left ventricular coronary venous system
+"	00.53 -- Implantation or replacement of cardiac resynchronization pacemaker pulse generator only [crt-p]
+"	00.54 -- Implantation or replacement of cardiac resynchronization defibrillator pulse generator device only [crt-d]
+"	37.94 -- Implantation or replacement of automatic cardioverter/defibrillator, total system [aicd]
+
+Outpatient: any of the ICD-9 procedure codes above
+OR CPT procedure codes: 
+"	33216 (single), 33217 (dual, Insertion Transvenous electrode ICD)
+"	33218 (single), 33220 (dual, repair Transvenous electrode ICD or pacer)
+"	33223 -- pocket revision ICD
+"	33240, 33241 (Replacement / removal generator)
+"	33249 (Initial system placement)
+

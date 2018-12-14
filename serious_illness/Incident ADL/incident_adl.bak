@@ -1,0 +1,1605 @@
+= V4 Outline MultiLine NoSorting TabWidth=30
+
+H="Incident ADL impairment"
+start with the Criteria A dataset from the main serious illness project:
+E:\data\serious_ill\final_data\n0_n1_p1_p2_x_criteria_a_death_propensity.dta
+
+-add live alone
+generate livealone_n0=.
+replace livealone_n0=1 if hhm_n0==0 & resspouse_n0==0
+replace livealone_n0=0 if hhm_n0>0 | nhres_n0==1 | resspouse_n0==1
+label variable livealone_n0 "Live Alone in Community n0"
+
+-pull monthly expenditures--can adapt from spouse claims comparison code at:
+E:\hrs_code\spouse\spouse_claims_comparison
+
+-get predicted dementia status here:
+E:\data\hrs_public_2012\dementia\pdem_withvarnames_ebl
+
+-rand family is here:
+"E:\data\hrs_public_2012\rand2012\family\family_r_clean_98_10.dta"
+
+H="Pullings Claims"
+libname proj_int 'C:\Users\rahmao03\Documents\Do-Files';
+
+/*2000-2012 medicare claims*/
+libname medi 'E:\data\cms_DUA_24548_2012';
+
+
+proc import datafile="E:\data\serious_ill\final_data\ivwdates.dta" out=cdates replace; run;
+
+
+data proj_int.index1 (keep = c_ivw_year_n0 index_date bid_hrs_21 id);
+set cdates (rename=(c_ivw_date_n0=index_date bid_hrs=bid_hrs_21));
+format index_date date9.;
+run;
+
+
+/*macro to get claims after death
+saves datasets for each claim type / time window to the spo_mc_i directory*/
+%macro claims(days_start=,days_aft_index=,source=,suf=);
+
+/*claims fully within x time of death date*/
+
+proc sql;
+create table &source._meet_1 as select a.*,b.index_date,b.id 
+from medi.&source._2000_2012 a inner join
+proj_int.index1 b
+on trim(left(a.bid_hrs_21))=trim(left(b.bid_hrs_21))
+and &days_start<=a.admit_date - b.index_date<=&days_aft_index ;
+quit;
+
+/*claims that start earlier than index date but continue after it*/
+proc sql;
+create table &source._meet_2 as select a.*,b.index_date,b.id 
+from medi.&source._2000_2012 a inner join
+proj_int.index1 b
+on trim(left(a.bid_hrs_21))=trim(left(b.bid_hrs_21))
+and a.admit_date<b.index_date
+and &days_start<=a.disch_date - b.index_date;
+quit;
+
+data proj_int.&source._meet_&suf. (keep=bid_hrs_21 admit_date disch_date pmt_amt passthru SSLSSNF index_date id type_adm er_amt RVCNTR01-RVCNTR45);
+set &source._meet_1 &source._meet_2;
+format disch_date date9.;
+format admit_date date9.;
+run;
+%mend;
+
+/*24m after death*/
+%claims(days_start=0,days_aft_index=730,source=hh,suf=p24m); /*home health*/
+%claims(days_start=0,days_aft_index=730,source=hs,suf=p24m); /*hospice*/
+%claims(days_start=0,days_aft_index=730,source=dm,suf=p24m); /*dme*/
+%claims(days_start=0,days_aft_index=730,source=op,suf=p24m); /*outpatient*/
+%claims(days_start=0,days_aft_index=730,source=pb,suf=p24m); /*carrier*/
+%claims(days_start=0,days_aft_index=730,source=mp,suf=p24m); /*medpar*/
+
+
+/* Flagging ED visits in outpatient claims */
+data proj_int.op_meet_p24m;
+set proj_int.op_meet_p24m;
+ed_vis=0;
+array list RVCNTR01-RVCNTR45;
+do over list;
+	if list >= 450 and list < 460 and ed_vis=0 then  
+	ed_vis = 1;
+	end;
+run;
+
+
+/* Flagging ED visits from medpar file */
+
+data proj_int.mp_meet_p24m;
+set proj_int.mp_meet_p24m;
+ed_vis = 0;
+IF er_amt > 0 then ed_vis = 1;
+*pmt_amt=pmt_amt+passthru;
+run;
+
+data proj_int.snf_meet_p24m;
+set proj_int.mp_meet_p24m;
+where SSLSSNF = "N";
+run;
+
+data proj_int.ip_meet_p24m;
+set proj_int.mp_meet_p24m;
+where SSLSSNF = "S" or SSLSSNF = "L";
+run;
+/*
+
+data proj_int.ed_meet_p24m; *(drop = passthru pmt_amt);
+set proj_int.mp_meet_p24m;
+where er_amt > 0;
+run;
+
+
+data proj_int.ed_meet_p24m;
+set proj_int.ed_meet_p24m (rename=(er_amt = pmt_amt));
+run;
+
+data proj_int.ed_meet_p24m (drop = ed_op);
+set proj_int.ed_meet_p24m ed2;
+run;
+
+
+
+data proj_int.ip_meet_p24m;
+set proj_int.ip_meet_p24m;
+where er_amt = 0;
+run;
+
+*/
+
+/****************************************************************/
+/*all claims, time periods after R's death********************/
+/****************************************************************/
+
+%macro mp_claims_p(days_start=,days_aft_index=,source=,name=);
+
+*first get claims lists for the specific claims type, snf or ip;
+data &source._meet;
+set proj_int.&source._meet_p24m;
+win_end_dt=index_date+&days_aft_index;
+win_start_dt=index_date+&days_start;
+format admit_date disch_date win_end_dt win_start_dt date9.;
+run;
+
+/*identify claims where entire claim is within the x months after death*/
+data &source._meet_1;
+set &source._meet;
+if win_start_dt<admit_date<=win_end_dt and
+	win_start_dt<disch_date<=win_end_dt;
+run;
+
+/*identify claims where start before window but end during window*/
+data &source._meet_2;
+set &source._meet;
+if win_start_dt>=admit_date and
+	win_start_dt<disch_date<=win_end_dt;
+run;
+
+/*identify fraction of claims to be attributed to period after death
+by just using the fraction of time that was included in the time window*/
+data &source._meet_3;
+set &source._meet_2;
+pct_xm=(disch_date-win_start_dt)/(disch_date-admit_date+1);
+array list pmt_amt passthru;
+do over list;
+if list=. then list=0;
+/*scale the partial claims by the time within the x month period*/
+list=list*pct_xm;
+end;
+run;
+
+/*claims where start within window but end after window*/
+data &source._meet_4;
+set &source._meet;
+if win_start_dt<admit_date<=win_end_dt and
+	disch_date>win_end_dt ;
+run;
+
+/*again fraction to attribute to window*/
+data &source._meet_5;
+set &source._meet_4;
+pct_xm=(win_end_dt-admit_date+1)/(disch_date-admit_date+1);
+array list pmt_amt passthru;
+do over list;
+if list=. then list=0;
+/*scale the partial claims by the time within the x month period*/
+list=list*pct_xm;
+end;
+run;
+
+/*claims where start before window but end after window*/
+data &source._meet_6;
+set &source._meet;
+if win_start_dt>=admit_date and
+	disch_date>win_end_dt ;
+run;
+
+/*again fraction to attribute to window*/
+data &source._meet_7;
+set &source._meet_6;
+pct_xm=(win_end_dt -win_start_dt)/(disch_date-admit_date+1);
+array list pmt_amt passthru;
+do over list;
+if list=. then list=0;
+/*scale the partial claims by the time within the x month period*/
+list=list*pct_xm;
+end;
+run;
+/*merge claims into single dataset, adjust for inflation*/
+data &source._cost;
+set &source._meet_1 &source._meet_3 &source._meet_5 &source._meet_7;
+array list pmt_amt passthru;
+do over list;
+if list=. then list=0;
+end;
+
+if year(admit_date)>=2012 then rate=1;
+if year(admit_date)=2011 then rate=1.03902;
+if year(admit_date)=2010 then rate=1.07086;
+if year(admit_date)=2009 then rate=1.10835;
+if year(admit_date)=2008 then rate=1.1439;
+if year(admit_date)=2007 then rate=1.1923;
+if year(admit_date)=2006 then rate=1.25586;
+if year(admit_date)=2005 then rate=1.30783;
+if year(admit_date)=2004 then rate=1.37027;
+if year(admit_date)=2003 then rate=1.43908;
+if year(admit_date)=2002 then rate=1.50337;
+if year(admit_date)=2001 then rate=1.57963;
+if year(admit_date)=2000 then rate=1.65519;
+if year(admit_date)<=1999 then rate=1.72641;
+
+&source._paid_by_mc=rate*(pmt_amt+passthru);
+run;
+
+*calculates total of mc charges for the claim type by hrs bid;
+proc sql;
+create table &source._pay as select distinct bid_hrs_21,id,index_date,
+sum(&source._paid_by_mc) as &source._paid_by_mc 
+from &source._cost group by bid_hrs_21,id,index_date;
+quit;
+
+/*merge into a full bid list of those s's with ffs mc at death*/
+proc sql;
+create table &source._&name. as select 
+a.bid_hrs_21,a.id,a.index_date,coalesce(b.&source._paid_by_mc,0) as &source._paid_by_mc_&name.
+from proj_int.index1 a
+left join
+ &source._pay b
+ on trim(left(a.bid_hrs_21))=trim(left(b.bid_hrs_21)) and a.id=b.id and a.index_date=b.index_date;
+ quit;
+
+proc sort data=&source._&name.; by bid_hrs_21 id index_date; run;
+
+%mend;
+
+
+
+
+/****************************************************************/
+/*all claims, time periods after R's death********************/
+/****************************************************************/
+%macro claims_p(days_start=,days_aft_index=,source=,name=);
+
+*first get claims lists for the specific claims type, snf or ip;
+data &source._meet;
+set proj_int.&source._meet_p24m;
+win_end_dt=index_date+&days_aft_index;
+win_start_dt=index_date+&days_start;
+format admit_date disch_date win_end_dt win_start_dt date9.;
+run;
+
+/*identify claims where entire claim is within the x months after death*/
+data proj_int.&source._meet&name.;
+set &source._meet;
+if win_start_dt<admit_date<=win_end_dt;
+run;
+
+
+/*adjust for inflation*/
+data &source._cost;
+set proj_int.&source._meet&name.;
+array list pmt_amt;
+do over list;
+if list=. then list=0;
+end;
+
+if year(admit_date)>=2012 then rate=1;
+if year(admit_date)=2011 then rate=1.03902;
+if year(admit_date)=2010 then rate=1.07086;
+if year(admit_date)=2009 then rate=1.10835;
+if year(admit_date)=2008 then rate=1.1439;
+if year(admit_date)=2007 then rate=1.1923;
+if year(admit_date)=2006 then rate=1.25586;
+if year(admit_date)=2005 then rate=1.30783;
+if year(admit_date)=2004 then rate=1.37027;
+if year(admit_date)=2003 then rate=1.43908;
+if year(admit_date)=2002 then rate=1.50337;
+if year(admit_date)=2001 then rate=1.57963;
+if year(admit_date)=2000 then rate=1.65519;
+if year(admit_date)<=1999 then rate=1.72641;
+
+&source._paid_by_mc=rate*(pmt_amt);
+run;
+
+*calculates total of mc charges for the claim type by hrs bid;
+proc sql;
+create table &source._pay as select distinct bid_hrs_21,id,index_date,
+sum(&source._paid_by_mc) as &source._paid_by_mc 
+from &source._cost group by bid_hrs_21,id,index_date;
+quit;
+
+/*merge into a full bid list of those s's with ffs mc at death*/
+proc sql;
+create table &source._&name. as select 
+a.bid_hrs_21,a.id,a.index_date,coalesce(b.&source._paid_by_mc,0) as &source._paid_by_mc_&name.
+from proj_int.index1 a
+left join
+ &source._pay b
+ on trim(left(a.bid_hrs_21))=trim(left(b.bid_hrs_21)) and a.id=b.id and a.index_date=b.index_date;
+ quit;
+
+proc sort data=&source._&name.; by bid_hrs_21 id index_date; run;
+
+%mend;
+
+%macro days_nesting();
+
+%do i=1 %to 24 ;
+
+
+%mp_claims_p(days_start=floor((&i.-1)*30.417),days_aft_index=floor(&i.*30.417), source=snf,  name=m&i.p);
+%mp_claims_p(days_start=floor((&i.-1)*30.417),days_aft_index=floor(&i.*30.417), source=ip,  name=m&i.p);
+%claims_p(days_start=floor((&i.-1)*30.417),days_aft_index=floor(&i.*30.417), source=op,  name=m&i.p);
+%claims_p(days_start=floor((&i.-1)*30.417),days_aft_index=floor(&i.*30.417), source=pb,  name=m&i.p);
+%claims_p(days_start=floor((&i.-1)*30.417),days_aft_index=floor(&i.*30.417), source=hh,  name=m&i.p);
+%claims_p(days_start=floor((&i.-1)*30.417),days_aft_index=floor(&i.*30.417), source=hs,  name=m&i.p);
+%claims_p(days_start=floor((&i.-1)*30.417),days_aft_index=floor(&i.*30.417), source=dm,  name=m&i.p);
+
+
+%end;
+%mend;
+
+%days_nesting();
+
+%macro claims_all(source=,);
+data &source._all_1;
+set &source._m1p;
+run;
+
+
+%do i=2 %to 24 ;
+%let l=%eval(&i-1);
+data &source._all_&i.;
+merge &source._all_&l. &source._m&i.p;
+by bid_hrs_21 id index_date;
+run;
+%end;
+
+data &source._all;
+set &source._all_24;
+run;
+
+%mend;
+
+%claims_all(source=snf);
+%claims_all(source=ip);
+%claims_all(source=hh);
+%claims_all(source=op);
+%claims_all(source=hs);
+%claims_all(source=dm)
+%claims_all(source=pb);
+
+
+data adl_claims;
+merge snf_all ip_all hh_all op_all hs_all dm_all pb_all;
+by bid_hrs_21 id index_date;
+run;
+
+data proj_int.adl_claims;
+set adl_claims (rename=(bid_hrs_21 = bid_hrs index_date = c_ivw_date_n0));
+run;
+
+proc export data=proj_int.adl_claims outfile="E:\data\serious_ill\final_data\adl_claims1.dta" replace; run;
+
+H="Variable Creation"
+generate livealone_n0=.
+replace livealone_n0=1 if hhm_n0==0 & resspouse_n0==0
+replace livealone_n0=0 if hhm_n0>0 | nhres_n0==1 | resspouse_n0==1
+label variable livealone_n0 "Live Alone in Community n0"
+
+gen ed_p12m_n0 = ed_paid_by_mc_m1p
+label variable ed_p12m_n0 "1 year post index date ED expenditure"
+gen snf_p12m_n0 = snf_paid_by_mc_m1p
+label variable snf_p12m_n0 "1 year post index date SNF expenditure"
+gen ip_p12m_n0 = ip_paid_by_mc_m1p
+label variable ip_p12m_n0 "1 year post index date INP expenditure"
+gen hh_p12m_n0 = hh_paid_by_mc_m1p
+label variable hh_p12m_n0 "1 year post index date HH expenditure"
+gen op_p12m_n0 = op_paid_by_mc_m1p
+label variable op_p12m_n0 "1 year post index date OP expenditure"
+gen dm_p12m_n0 = dm_paid_by_mc_m1p
+label variable dm_p12m_n0 "1 year post index date DME expenditure"
+gen hs_p12m_n0 = hs_paid_by_mc_m1p
+label variable hs_p12m_n0 "1 year post index date Hospice expenditure"
+
+
+/* Wage adjustment */
+local i = 1
+while `i' < 25 {
+replace snf_paid_by_mc_m`i'p = snf_paid_by_mc_m`i'p / wage_index_2012_2_n0
+replace ip_paid_by_mc_m`i'p = ip_paid_by_mc_m`i'p / wage_index_2012_2_n0
+replace hh_paid_by_mc_m`i'p = hh_paid_by_mc_m`i'p / wage_index_2012_2_n0 
+replace op_paid_by_mc_m`i'p = op_paid_by_mc_m`i'p / wage_index_2012_2_n0 
+replace dm_paid_by_mc_m`i'p = dm_paid_by_mc_m`i'p / wage_index_2012_2_n0 
+replace hs_paid_by_mc_m`i'p = hs_paid_by_mc_m`i'p / wage_index_2012_2_n0 
+replace pb_paid_by_mc_m`i'p = pb_paid_by_mc_m`i'p / wage_index_2012_2_n0
+local ++i
+}
+
+/* 1 year post ivw */
+
+gen snf_p12m_n0 = snf_paid_by_mc_m1p
+label variable snf_p12m_n0 "1 year post index date SNF expenditure WI"
+gen ip_p12m_n0 = ip_paid_by_mc_m1p
+label variable ip_p12m_n0 "1 year post index date INP expenditure WI"
+gen hh_p12m_n0 = hh_paid_by_mc_m1p
+label variable hh_p12m_n0 "1 year post index date HH expenditure WI"
+gen op_p12m_n0 = op_paid_by_mc_m1p
+label variable op_p12m_n0 "1 year post index date OP expenditure WI"
+gen dm_p12m_n0 = dm_paid_by_mc_m1p
+label variable dm_p12m_n0 "1 year post index date DME expenditure WI"
+gen hs_p12m_n0 = hs_paid_by_mc_m1p
+label variable hs_p12m_n0 "1 year post index date Hospice expenditure WI"
+gen pb_p12m_n0 = pb_paid_by_mc_m1p
+label variable pb_p12m_n0 "1 year post index date Carrier expenditure WI"
+
+local i = 2
+while `i' < 13 {
+replace snf_p12m_n0 = snf_p12m_n0 + snf_paid_by_mc_m`i'p
+replace ip_p12m_n0 = ip_p12m_n0 + ip_paid_by_mc_m`i'p
+replace hh_p12m_n0 = hh_p12m_n0 + hh_paid_by_mc_m`i'p
+replace op_p12m_n0 = op_p12m_n0 + op_paid_by_mc_m`i'p
+replace dm_p12m_n0 = dm_p12m_n0 + dm_paid_by_mc_m`i'p
+replace hs_p12m_n0 = hs_p12m_n0 + hs_paid_by_mc_m`i'p
+local ++i
+}
+
+gen tot_p12m_n0 = snf_p12m_n0 + ip_p12m_n0 + hh_p12m_n0 + op_p12m_n0 + dm_p12m_n0 + hs_p12m_n0 + pb_p12m_n0
+
+
+/* 24 months after the interview in 3 month intervals */
+
+gen snf_p3m_n0 = snf_paid_by_mc_m1p
+label variable snf_p3m_n0 "3 month post index date SNF expenditure WI"
+gen ip_p3m_n0 = ip_paid_by_mc_m1p
+label variable ip_p3m_n0 "3 month  post index date INP expenditure WI"
+gen hh_p3m_n0 = hh_paid_by_mc_m1p
+label variable hh_p3m_n0 "3 month  post index date HH expenditure WI"
+gen op_p3m_n0 = op_paid_by_mc_m1p
+label variable op_p3m_n0 "3 month  post index date OP expenditure WI"
+gen dm_p3m_n0 = dm_paid_by_mc_m1p
+label variable dm_p3m_n0 "3 month  post index date DME expenditure WI"
+gen hs_p3m_n0 = hs_paid_by_mc_m1p
+label variable hs_p3m_n0 "3 month  post index date Hospice expenditure WI"
+gen pb_p3m_n0 = pb_paid_by_mc_m1p
+label variable pb_p3m_n0 "3 month  post index date Carrier expenditure WI"
+
+
+local i = 2
+while `i' < 4 {
+replace snf_p3m_n0 = snf_p3m_n0 + snf_paid_by_mc_m`i'p
+replace ip_p3m_n0 = ip_p3m_n0 + ip_paid_by_mc_m`i'p
+replace hh_p3m_n0 = hh_p3m_n0 + hh_paid_by_mc_m`i'p
+replace op_p3m_n0 = op_p3m_n0 + op_paid_by_mc_m`i'p
+replace dm_p3m_n0 = dm_p3m_n0 + dm_paid_by_mc_m`i'p
+replace hs_p3m_n0 = hs_p3m_n0 + hs_paid_by_mc_m`i'p
+local ++i
+}
+		   
+
+
+gen snf_p6m_n0 = snf_paid_by_mc_m1p
+label variable snf_p6m_n0 "6 month post index date SNF expenditure WI"
+gen ip_p6m_n0 = ip_paid_by_mc_m1p
+label variable ip_p6m_n0 "6 month  post index date INP expenditure WI"
+gen hh_p6m_n0 = hh_paid_by_mc_m1p
+label variable hh_p6m_n0 "6 month  post index date HH expenditure WI"
+gen op_p6m_n0 = op_paid_by_mc_m1p
+label variable op_p6m_n0 "6 month  post index date OP expenditure WI"
+gen dm_p6m_n0 = dm_paid_by_mc_m1p
+label variable dm_p6m_n0 "6 month  post index date DME expenditure WI"
+gen hs_p6m_n0 = hs_paid_by_mc_m1p
+label variable hs_p6m_n0 "6 month  post index date Hospice expenditure WI"
+gen pb_p6m_n0 = pb_paid_by_mc_m1p
+label variable pb_p6m_n0 "6 month  post index date Carrier expenditure WI"
+
+local i = 2
+while `i' < 7 {
+replace snf_p6m_n0 = snf_p6m_n0 + snf_paid_by_mc_m`i'p
+replace ip_p6m_n0 = ip_p6m_n0 + ip_paid_by_mc_m`i'p
+replace hh_p6m_n0 = hh_p6m_n0 + hh_paid_by_mc_m`i'p
+replace op_p6m_n0 = op_p6m_n0 + op_paid_by_mc_m`i'p
+replace dm_p6m_n0 = dm_p6m_n0 + dm_paid_by_mc_m`i'p
+replace hs_p6m_n0 = hs_p6m_n0 + hs_paid_by_mc_m`i'p
+local ++i
+           }
+
+
+gen snf_p9m_n0 = snf_paid_by_mc_m1p
+label variable snf_p9m_n0 "9 month post index date SNF expenditure WI"
+gen ip_p9m_n0 = ip_paid_by_mc_m1p
+label variable ip_p9m_n0 "9 month  post index date INP expenditure WI"
+gen hh_p9m_n0 = hh_paid_by_mc_m1p
+label variable hh_p9m_n0 "9 month  post index date HH expenditure WI"
+gen op_p9m_n0 = op_paid_by_mc_m1p
+label variable op_p9m_n0 "9 month  post index date OP expenditure WI"
+gen dm_p9m_n0 = dm_paid_by_mc_m1p
+label variable dm_p9m_n0 "9 month  post index date DME expenditure WI"
+gen hs_p9m_n0 = hs_paid_by_mc_m1p
+label variable hs_p9m_n0 "9 month  post index date Hospice expenditure WI"
+gen pb_p9m_n0 = pb_paid_by_mc_m1p
+label variable pb_p9m_n0 "9 month  post index date Carrier expenditure WI"
+
+
+local i = 2
+while `i' < 10 {
+replace snf_p9m_n0 = snf_p9m_n0 + snf_paid_by_mc_m`i'p
+replace ip_p9m_n0 = ip_p9m_n0 + ip_paid_by_mc_m`i'p
+replace hh_p9m_n0 = hh_p9m_n0 + hh_paid_by_mc_m`i'p
+replace op_p9m_n0 = op_p9m_n0 + op_paid_by_mc_m`i'p
+replace dm_p9m_n0 = dm_p9m_n0 + dm_paid_by_mc_m`i'p
+replace hs_p9m_n0 = hs_p9m_n0 + hs_paid_by_mc_m`i'p
+local ++i
+           }
+
+
+gen snf_p15m_n0 = snf_paid_by_mc_m1p
+label variable snf_p15m_n0 "15 month post index date SNF expenditure WI"
+gen ip_p15m_n0 = ip_paid_by_mc_m1p
+label variable ip_p15m_n0 "15 month  post index date INP expenditure WI"
+gen hh_p15m_n0 = hh_paid_by_mc_m1p
+label variable hh_p15m_n0 "15 month  post index date HH expenditure WI"
+gen op_p15m_n0 = op_paid_by_mc_m1p
+label variable op_p15m_n0 "15 month  post index date OP expenditure WI"
+gen dm_p15m_n0 = dm_paid_by_mc_m1p
+label variable dm_p15m_n0 "15 month  post index date DME expenditure WI"
+gen hs_p15m_n0 = hs_paid_by_mc_m1p
+label variable hs_p15m_n0 "15 month  post index date Hospice expenditure WI"
+gen pb_p15m_n0 = pb_paid_by_mc_m1p
+label variable pb_p15m_n0 "15 month  post index date Carrier expenditure WI"
+
+
+local i = 2
+while `i' < 16 {
+replace snf_p15m_n0 = snf_p15m_n0 + snf_paid_by_mc_m`i'p
+replace ip_p15m_n0 = ip_p15m_n0 + ip_paid_by_mc_m`i'p
+replace hh_p15m_n0 = hh_p15m_n0 + hh_paid_by_mc_m`i'p
+replace op_p15m_n0 = op_p15m_n0 + op_paid_by_mc_m`i'p
+replace dm_p15m_n0 = dm_p15m_n0 + dm_paid_by_mc_m`i'p
+replace hs_p15m_n0 = hs_p15m_n0 + hs_paid_by_mc_m`i'p
+local ++i
+           }
+
+
+gen snf_p18m_n0 = snf_paid_by_mc_m1p
+label variable snf_p18m_n0 "18 month post index date SNF expenditure WI"
+gen ip_p18m_n0 = ip_paid_by_mc_m1p
+label variable ip_p18m_n0 "18 month  post index date INP expenditure WI"
+gen hh_p18m_n0 = hh_paid_by_mc_m1p
+label variable hh_p18m_n0 "18 month  post index date HH expenditure WI"
+gen op_p18m_n0 = op_paid_by_mc_m1p
+label variable op_p18m_n0 "18 month  post index date OP expenditure WI"
+gen dm_p18m_n0 = dm_paid_by_mc_m1p
+label variable dm_p18m_n0 "18 month  post index date DME expenditure WI"
+gen hs_p18m_n0 = hs_paid_by_mc_m1p
+label variable hs_p18m_n0 "18 month  post index date Hospice expenditure WI"
+gen pb_p18m_n0 = pb_paid_by_mc_m1p
+label variable pb_p18m_n0 "18 month  post index date Carrier expenditure WI"
+
+
+local i = 2
+while `i' < 19 {
+replace snf_p15m_n0 = snf_p15m_n0 + snf_paid_by_mc_m`i'p
+replace ip_p15m_n0 = ip_p15m_n0 + ip_paid_by_mc_m`i'p
+replace hh_p15m_n0 = hh_p15m_n0 + hh_paid_by_mc_m`i'p
+replace op_p15m_n0 = op_p15m_n0 + op_paid_by_mc_m`i'p
+replace dm_p15m_n0 = dm_p15m_n0 + dm_paid_by_mc_m`i'p
+replace hs_p15m_n0 = hs_p15m_n0 + hs_paid_by_mc_m`i'p
+local ++i
+           }
+
+
+gen snf_p21m_n0 = snf_paid_by_mc_m1p
+label variable snf_p21m_n0 "21 month post index date SNF expenditure WI"
+gen ip_p21m_n0 = ip_paid_by_mc_m1p
+label variable ip_p21m_n0 "21 month  post index date INP expenditure WI"
+gen hh_p21m_n0 = hh_paid_by_mc_m1p
+label variable hh_p21m_n0 "21 month  post index date HH expenditure WI"
+gen op_p21m_n0 = op_paid_by_mc_m1p
+label variable op_p21m_n0 "21 month  post index date OP expenditure WI"
+gen dm_p21m_n0 = dm_paid_by_mc_m1p
+label variable dm_p21m_n0 "21 month  post index date DME expenditure WI"
+gen hs_p21m_n0 = hs_paid_by_mc_m1p
+label variable hs_p21m_n0 "21 month  post index date Hospice expenditure WI"
+gen pb_p21m_n0 = pb_paid_by_mc_m1p
+label variable pb_p21m_n0 "21 month  post index date Carrier expenditure WI"
+
+
+local i = 2
+while `i' < 22 {
+replace snf_p21m_n0 = snf_p21m_n0 + snf_paid_by_mc_m`i'p
+replace ip_p21m_n0 = ip_p21m_n0 + ip_paid_by_mc_m`i'p
+replace hh_p21m_n0 = hh_p21m_n0 + hh_paid_by_mc_m`i'p
+replace op_p21m_n0 = op_p21m_n0 + op_paid_by_mc_m`i'p
+replace dm_p21m_n0 = dm_p21m_n0 + dm_paid_by_mc_m`i'p
+replace hs_p21m_n0 = hs_p21m_n0 + hs_paid_by_mc_m`i'p
+local ++i
+           }
+
+
+
+gen snf_p24m_n0 = snf_paid_by_mc_m1p
+label variable snf_p24m_n0 "24 month post index date SNF expenditure WI"
+gen ip_p24m_n0 = ip_paid_by_mc_m1p
+label variable ip_p24m_n0 "24 month  post index date INP expenditure WI"
+gen hh_p24m_n0 = hh_paid_by_mc_m1p
+label variable hh_p24m_n0 "24 month  post index date HH expenditure WI"
+gen op_p24m_n0 = op_paid_by_mc_m1p
+label variable op_p24m_n0 "24 month  post index date OP expenditure WI"
+gen dm_p24m_n0 = dm_paid_by_mc_m1p
+label variable dm_p24m_n0 "24 month  post index date DME expenditure WI"
+gen hs_p24m_n0 = hs_paid_by_mc_m1p
+label variable hs_p24m_n0 "24 month  post index date Hospice expenditure WI"
+gen pb_p24m_n0 = pb_paid_by_mc_m1p
+label variable pb_p24m_n0 "24 month  post index date Carrier expenditure WI"
+
+
+
+local i = 2
+while `i' < 25 {
+replace snf_p24m_n0 = snf_p24m_n0 + snf_paid_by_mc_m`i'p
+replace ip_p24m_n0 = ip_p24m_n0 + ip_paid_by_mc_m`i'p
+replace hh_p24m_n0 = hh_p24m_n0 + hh_paid_by_mc_m`i'p
+replace op_p24m_n0 = op_p24m_n0 + op_paid_by_mc_m`i'p
+replace dm_p24m_n0 = dm_p24m_n0 + dm_paid_by_mc_m`i'p
+replace hs_p24m_n0 = hs_p24m_n0 + hs_paid_by_mc_m`i'p
+local ++i
+           }
+
+
+
+save "E:\data\serious_ill\final_data\adl_merged_expenditures.dta", replace
+
+
+H="table 1"
+capture log close
+
+local datapath E:\data\serious_ill\final_data\
+local logpath E:\data\serious_ill\logs\
+use "E:\data\serious_ill\final_data\adl_merged_expenditures.dta", clear
+keep if adl_independent_core_n1==1 & nhres_n0==0
+
+gen household=hhm_n0+1+resspouse_n0
+gen group1=1
+gen group3=!livealone_n0
+gen group2=livealone_n0
+gen group4=hhm_n0>0 if !missing(hhm_n0)
+gen group5=resspouse_n0==1
+gen group6=resspouse_n0==1 & hhm_n0==0
+gen group7=resspouse_n0==1 & hhm_n0>0
+gen group8=!livealone_n0 & !resspouse_n0
+label var household "Total household members"
+local cvars1 age_at_core_n0
+local cvars2  household networth_adj2012_n0
+*rename pdeath1* pdeath*
+local ivars1 female re_white re_black re_hisp married_n0
+local ivars2 educ_level_lt_hs  medigap_n0 medicaid_n0 champus_n0 nhres_n0 srh_pf_n0 ///
+likely_normal likely_cind likely_dem kid_nearby_ind ///
+smi_dem_ind_n0 smi_cancer_ind_n0 smi_esrd_ind_n0 smi_chf_ind_n0 ///
+smi_copd_ind_n0 smi_diab_compl_ind_n0 smi_liver_ind_n0 smi_hip_ind_n0 ///
+el_ge3_comorb_1yr_n0 ser_med_illness_n0 adl_impair_core_n0 smi_and_adl_n0 ///
+criteria_a_n0 criteria_b_n0 criteria_c_n0 ///
+ind_em_ur_adm_12m_n0 eol_spending_low eol_spending_mid eol_spending_high
+
+local coutcomes tot_paid_by_mc_12m_wi_n0 ip_paid_by_mc_12m_wi_n0 n_hospd_p12m_n0 ed_p12m_n0 /// 
+snf_p12m_n0 ip_p12m_n0 hh_p12m_n0 op_p12m_n0 dm_p12m_n0 hs_p12m_n0 n_f n_i
+local ioutcomes ind_hosp_adm_p12m_n0 mult_ip_adm_p12m_n0 mult_ed_vis_p12m_n0 ind_icu_vis_p12m_n0 ///
+hs_admit_p12m_n0 core_to_dod_1yr_n0 loc_hosp_x 
+
+local rn : word count  `cvars1' `cvars2' `ivars1' `ivars2' 1 `coutcomes' 1 `ioutcomes'  1
+
+foreach x in `cvars1' `cvars2' `ivars1' `ivars2' {
+*drop if `x'==.
+}
+
+local tablereplace replace
+*foreach timethrough in 1 2 {
+mat tab1=J(`rn',6,.)
+mat stars=J(`rn',6,0)
+local r=1
+local c=1
+forvalues i=1/3 {
+	foreach round in 1 2 {
+		foreach x of local cvars`round' {
+			qui sum `x' if group`i'==1 
+			mat tab1[`r',`c']=r(mean)
+			if `i'>1 & `i'!=2 {
+				qui ttest `x' if group`i'==1 | group2==1, by(livealone_n0)
+				mat stars[`r',`c']=(r(p)<.01) + (r(p)<.05)
+}
+			local r=`r'+1
+}
+		foreach x of local ivars`round' {
+			qui sum `x' if group`i'==1
+			mat tab1[`r',`c']=r(mean)*100
+			if `i'>1 & `i'!=2 {
+				qui tab `x' livealone_n0 if group`i'==1 | group2==1, chi2
+				mat stars[`r',`c']=(r(p)<.01) + (r(p)<.05)
+}
+			local r=`r'+1
+}
+}
+	local r=`r'+1
+
+	
+	foreach x of local coutcomes {
+		qui sum `x' if group`i'==1,d
+		mat tab1[`r',`c']=r(mean)
+		if `i'>1 & `i'!=2 {
+			qui ttest `x' if group`i'==1 | group2==1, by(livealone_n0)
+			mat stars[`r',`c']=(r(p)<.01) + (r(p)<.05)
+}
+		local r=`r'+1
+		if "`x'"=="tot_paid_by_mc_12m_wi_n0" {
+			qui sum `x' if group`i'==1,d
+			mat tab1[`r',`c']=r(p50)
+			local r=`r'+1
+}
+}
+	foreach x of local ioutcomes {
+		qui sum `x' if group`i'==1
+		mat tab1[`r',`c']=r(mean)*100
+		if `i'>1 & `i'!=2 {
+			qui tab `x' livealone_n0 if group`i'==1 | group2==1, chi2
+			mat stars[`r',`c']=(r(p)<.01) + (r(p)<.05)
+}
+		local r=`r'+1
+}
+	sum female if group`i'==1
+	mat tab1[`r',`c']=r(N)
+	local r=1
+	local c=`c'+1
+}
+
+mat rownames tab1=`cvars1' `ivars1' `cvars2' `ivars2' "Outcome Measures Over 1 Year" ///
+tot_paid_by_mc_12m_wi_n0 "Median" ip_paid_by_mc_12m_wi_n0 n_hospd_p12m_n0 ed_p12m_n0 ///
+snf_p12m_n0 ip_p12m_n0 hh_p12m_n0 op_p12m_n0 dm_p12m_n0 hs_p12m_n0 n_f n_i `ioutcomes' N
+
+
+
+frmttable using "`logpath'incident_adl_tablev2.doc", `tablereplace' statmat(tab1) ///
+ title("Sample Characteristics by live alone status") ///
+ ctitles("" "Full Sample" "Lives alone" "Does not live alone") ///
+ sdec(1) annotate(stars) asymbol(*,*) ///
+ varlabels
+*keep if nhres_n0==0
+local tablereplace addtable
+
+mat tab1=J(`rn',6,.)
+mat stars=J(`rn',6,0)
+local r=1
+local c=1
+foreach i in 2 4 5  {
+	foreach round in 1 2 {
+		foreach x of local cvars`round' {
+			qui sum `x' if group`i'==1 
+			mat tab1[`r',`c']=r(mean)
+			if `i'>1 & `i'!=2 {
+				qui ttest `x' if group`i'==1 | group2==1, by(livealone_n0)
+				mat stars[`r',`c']=(r(p)<.01) + (r(p)<.05)
+}
+			local r=`r'+1
+}
+		foreach x of local ivars`round' {
+			qui sum `x' if group`i'==1
+			mat tab1[`r',`c']=r(mean)*100
+			if `i'>1 & `i'!=2 {
+				qui tab `x' livealone_n0 if group`i'==1 | group2==1, chi2
+				mat stars[`r',`c']=(r(p)<.01) + (r(p)<.05)
+}
+			local r=`r'+1
+}
+}
+	local r=`r'+1
+
+	
+	foreach x of local coutcomes {
+		qui sum `x' if group`i'==1,d
+		mat tab1[`r',`c']=r(mean)
+		if `i'>1 & `i'!=2 {
+			qui ttest `x' if group`i'==1 | group2==1, by(livealone_n0)
+			mat stars[`r',`c']=(r(p)<.01) + (r(p)<.05)
+}
+		local r=`r'+1
+		if "`x'"=="tot_paid_by_mc_12m_wi_n0" {
+			qui sum `x' if group`i'==1,d
+			mat tab1[`r',`c']=r(p50)
+			local r=`r'+1
+}
+}
+	foreach x of local ioutcomes {
+		qui sum `x' if group`i'==1
+		mat tab1[`r',`c']=r(mean)*100
+		if `i'>1 & `i'!=2 {
+			qui tab `x' livealone_n0 if group`i'==1 | group2==1, chi2
+			mat stars[`r',`c']=(r(p)<.01) + (r(p)<.05)
+}
+		local r=`r'+1
+}
+	sum female if group`i'==1
+	mat tab1[`r',`c']=r(N)
+	local r=1
+	local c=`c'+1
+}
+
+mat rownames tab1=`cvars1' `ivars1' `cvars2' `ivars2' "Outcome Measures Over 1 Year" ///
+tot_paid_by_mc_12m_wi_n0 "Median" ip_paid_by_mc_12m_wi_n0 n_hospd_p12m_n0 ed_p12m_n0 ///
+snf_p12m_n0 ip_p12m_n0 hh_p12m_n0 op_p12m_n0 dm_p12m_n0 hs_p12m_n0 n_f n_i `ioutcomes' N
+
+
+
+frmttable using "`logpath'incident_adl_tablev2.doc", `tablereplace' statmat(tab1) ///
+ title("Sample Characteristics by live alone status") ///
+ ctitles("" "Lives alone" "Lives w/ other than spouse" ///
+ "Lives w/ spouse") note(Living w/ spouse and others are not mutually exclusive) ///
+ sdec(1) annotate(stars) asymbol(*,*) ///
+ varlabels
+
+ mat tab1=J(`rn',6,.)
+mat stars=J(`rn',6,0)
+local r=1
+local c=1
+foreach i in 2 6 7 8  {
+	foreach round in 1 2 {
+		foreach x of local cvars`round' {
+			qui sum `x' if group`i'==1 
+			mat tab1[`r',`c']=r(mean)
+			if `i'>1 & `i'!=2 {
+				qui ttest `x' if group`i'==1 | group2==1, by(livealone_n0)
+				mat stars[`r',`c']=(r(p)<.01) + (r(p)<.05)
+}
+			local r=`r'+1
+}
+		foreach x of local ivars`round' {
+			qui sum `x' if group`i'==1
+			mat tab1[`r',`c']=r(mean)*100
+			if `i'>1 & `i'!=2 {
+				qui tab `x' livealone_n0 if group`i'==1 | group2==1, chi2
+				mat stars[`r',`c']=(r(p)<.01) + (r(p)<.05)
+}
+			local r=`r'+1
+}
+}
+	local r=`r'+1
+
+	
+	foreach x of local coutcomes {
+		qui sum `x' if group`i'==1,d
+		mat tab1[`r',`c']=r(mean)
+		if `i'>1 & `i'!=2 {
+			qui ttest `x' if group`i'==1 | group2==1, by(livealone_n0)
+			mat stars[`r',`c']=(r(p)<.01) + (r(p)<.05)
+}
+		local r=`r'+1
+		if "`x'"=="tot_paid_by_mc_12m_wi_n0" {
+			qui sum `x' if group`i'==1,d
+			mat tab1[`r',`c']=r(p50)
+			local r=`r'+1
+}
+}
+	foreach x of local ioutcomes {
+		qui sum `x' if group`i'==1
+		mat tab1[`r',`c']=r(mean)*100
+		if `i'>1 & `i'!=2 {
+			qui tab `x' livealone_n0 if group`i'==1 | group2==1, chi2
+			mat stars[`r',`c']=(r(p)<.01) + (r(p)<.05)
+}
+		local r=`r'+1
+}
+	sum female if group`i'==1
+	mat tab1[`r',`c']=r(N)
+	local r=1
+	local c=`c'+1
+}
+
+mat rownames tab1=`cvars1' `ivars1' `cvars2' `ivars2' "Outcome Measures Over 1 Year" ///
+tot_paid_by_mc_12m_wi_n0 "Median" ip_paid_by_mc_12m_wi_n0 n_hospd_p12m_n0 ed_p12m_n0 ///
+snf_p12m_n0 ip_p12m_n0 hh_p12m_n0 op_p12m_n0 dm_p12m_n0 hs_p12m_n0 n_f n_i `ioutcomes' N
+
+
+
+frmttable using "`logpath'incident_adl_tablev2.doc", `tablereplace' statmat(tab1) ///
+ title("Sample Characteristics by live alone status") ///
+ ctitles("" "Lives alone" "Lives only w/ spouse" "Lives w/ spouse & others" ///
+ "Lives only w/ not spouse") ///
+ sdec(1) annotate(stars) asymbol(*,*) ///
+ varlabels
+
+
+H="adjusted and unadjusted regressions"
+capture log close
+
+local datapath E:\data\serious_ill\final_data\
+local logpath E:\data\serious_ill\logs\
+use "E:\data\serious_ill\final_data\adl_merged_expenditures.dta", clear
+keep if adl_independent_core_n1==1 & nhres_n0==0
+
+gen household=hhm_n0+1+resspouse_n0
+gen group1=1
+gen group3=!livealone_n0
+gen group2=livealone_n0
+gen group4=hhm_n0>0 if !missing(hhm_n0)
+gen group5=resspouse_n0==1
+gen group6=resspouse_n0==1 & hhm_n0==0
+gen group7=resspouse_n0==1 & hhm_n0>0
+gen group8=!livealone_n0 & !resspouse_n0
+label var household "Total household members"
+local cvars1 age_at_core_n0
+local cvars2  household networth_adj2012_n0 adl_index_core_n0
+gen race=re_black==1 
+replace race=2 if re_hisp==1
+replace race=3 if missing(race)
+label define race 0 "Other" 1 "Black" 2 "Hispanic" 
+label values race race
+*rename pdeath1* pdeath*
+label var group4 "Live w/ other than spouse"
+gen living_sit_cat=livealone_n0==1
+replace living_sit=2 if group6==1
+replace living_sit=3 if group7==1
+replace living_sit=4 if group8==1
+label var likely_dem "Likely demented"
+label define living_sit_cat 1 "Lives alone" 2 "Lives w/ spouse only" 3 "Spouse & others" ///
+4 "Only non-spouse"
+label values living_sit living_sit_cat
+local ivars1 female/* re_white re_black re_hisp*/ married_n0
+local ivars2 educ_level_lt_hs medicaid_n0 champus_n0 srh_pf_n0 ///
+likely_dem smi_dem_ind_n0 kid_nearby_ind 
+local livvars livealone_n0 resspouse_n0 group4
+local coutcomes tot_paid_by_mc_12m_wi_n0 ip_paid_by_mc_12m_wi_n0 n_hospd_p12m_n0 ed_p12m_n0 /// 
+snf_p12m_n0 ip_p12m_n0 hh_p12m_n0 op_p12m_n0 dm_p12m_n0 hs_p12m_n0 n_f n_i
+local ioutcomes ind_hosp_adm_p12m_n0 mult_ip_adm_p12m_n0 mult_ed_vis_p12m_n0 ind_icu_vis_p12m_n0 ///
+hs_admit_p12m_n0 core_to_dod_1yr_n0 loc_hosp_x 
+
+
+local mvars  smi_dem_ind_n0 smi_cancer_ind_n0 smi_esrd_ind_n0 ///
+smi_chf_ind_n0 smi_copd_ind_n0 smi_diab_compl_ind_n0 ///
+smi_liver_ind_n0  smi_hip_ind_n0 /*smi_nh_ind_n0*/ ///
+srh_pf_n0 adl_impair_core_n0 hlphrs_i_group el_ge3_comorb_1yr_n0
+local nvars age_at_core_n0 female re_black re_hisp ///notwhite ///
+hs_deg_ind nw_lowest_n0 ///
+religvimp_n0 rel_nb_n0 married_n0 smi_nh_ind_n0 ///
+medicaid_n0 champus_n0 medigap_n0
+
+local rn : word count `cvars1' `cvars2' `ivars1' `ivars2'   `livvars'
+mat tab1=J(`rn'+7,8,.)
+mat stars=J(`rn'+7,8,0)
+local r=1
+local c=1
+foreach y in "0,1" /*0 1*/ {
+	foreach x in `cvars1' `cvars2' `ivars1' `ivars2' {
+		qui glm tot_paid_by_mc_12m_wi_n0 `x' if inlist(livealone_n0,`y'), fam(gamma) link(log) eform
+		mat beta=e(b)
+		mat tab1[`r',`c']=exp(beta[1,1])
+		mat p=r(table)
+		mat tab1[`r',`c'+1]=p[4,1]
+		mat stars[`r',`c']=(p[4,1]<.05) + (p[4,1]<.01)
+		local r=`r'+1
+}
+
+	glm tot_paid_by_mc_12m_wi_n0 i.eol_spending_3_cat if inlist(livealone_n0,`y'), fam(gamma) link(log) eform
+	mat p=r(table)
+	mat tab1[`r',`c']=p[1,2]
+	mat tab1[`r'+1,`c']=p[1,3]
+	mat tab1[`r',`c'+1]=p[4,2]
+	mat tab1[`r'+1,`c'+1]=p[4,3]
+	local r=`r'+2
+	glm tot_paid_by_mc_12m_wi_n0 i.race if inlist(livealone_n0,`y'), fam(gamma) link(log) eform
+	mat p=r(table)
+	mat tab1[`r',`c']=p[1,2]
+	mat tab1[`r'+1,`c']=p[1,3]
+	mat tab1[`r',`c'+1]=p[4,2]
+	mat tab1[`r'+1,`c'+1]=p[4,3]	
+	mat stars[`r',`c']=(p[4,2]<.05) + (p[4,2]<.01)
+	mat stars[`r'+1,`c']=(p[4,3]<.05) + (p[4,3]<.01)
+	local r=`r'+2
+	foreach x in `livvars' {
+		qui glm tot_paid_by_mc_12m_wi_n0 `x' if inlist(livealone_n0,`y'), fam(gamma) link(log) eform
+		mat beta=e(b)
+		mat tab1[`r',`c']=exp(beta[1,1])
+		mat p=r(table)
+		mat tab1[`r',`c'+1]=p[4,1]
+		mat stars[`r',`c']=(p[4,1]<.05) + (p[4,1]<.01)
+		local r=`r'+1
+}	
+	
+	glm tot_paid_by_mc_12m_wi_n0 i.living_sit_cat if inlist(livealone_n0,`y'), fam(gamma) link(log) eform
+	mat p=r(table)
+	mat tab1[`r',`c']=p[1,2]
+	mat tab1[`r'+1,`c']=p[1,3]
+	mat tab1[`r'+2,`c']=p[1,4]
+	mat tab1[`r',`c'+1]=p[4,2]
+	mat tab1[`r'+1,`c'+1]=p[4,3]
+	mat tab1[`r'+2,`c'+1]=p[4,4]
+	mat stars[`r',`c']=(p[4,2]<.05) + (p[4,2]<.01)
+	mat stars[`r'+1,`c']=(p[4,3]<.05) + (p[4,3]<.01)
+	mat stars[`r'+2,`c']=(p[4,4]<.05) + (p[4,4]<.01)
+	local c=`c'+2
+	local r=1
+}
+
+foreach yr in 1 2 {
+foreach y in "0,1" /*0 1*/ {
+	foreach x in `cvars1' `cvars2' `ivars1' `ivars2' {
+		qui logit core_to_dod_`yr'yr_n0 `x' if inlist(livealone_n0,`y'), or
+		mat beta=e(b)
+		mat tab1[`r',`c']=exp(beta[1,1])
+		mat p=r(table)
+		mat tab1[`r',`c'+1]=p[4,1]
+		mat stars[`r',`c']=(p[4,1]<.05) + (p[4,1]<.01)		
+		local r=`r'+1
+}
+
+	logit core_to_dod_`yr'yr_n0 i.eol_spending_3_cat if inlist(livealone_n0,`y'), or
+	mat p=r(table)
+	mat tab1[`r',`c']=p[1,2]
+	mat tab1[`r'+1,`c']=p[1,3]
+	mat tab1[`r',`c'+1]=p[4,2]
+	mat tab1[`r'+1,`c'+1]=p[4,3]
+	mat stars[`r',`c']=(p[4,2]<.05) + (p[4,2]<.01)
+	mat stars[`r'+1,`c']=(p[4,3]<.05) + (p[4,3]<.01)
+	local r=`r'+2
+	logit core_to_dod_`yr'yr_n0 i.race if inlist(livealone_n0,`y'), or
+	mat p=r(table)
+	mat tab1[`r',`c']=p[1,2]
+	mat tab1[`r'+1,`c']=p[1,3]
+	mat tab1[`r',`c'+1]=p[4,2]
+	mat tab1[`r'+1,`c'+1]=p[4,3]	
+	mat stars[`r',`c']=(p[4,2]<.05) + (p[4,2]<.01)
+	mat stars[`r'+1,`c']=(p[4,3]<.05) + (p[4,3]<.01)
+	local r=`r'+2
+	foreach x in `livvars' {
+		qui logit core_to_dod_`yr'yr_n0 `x' if inlist(livealone_n0,`y'), or
+		mat beta=e(b)
+		mat tab1[`r',`c']=exp(beta[1,1])
+		mat p=r(table)
+		mat tab1[`r',`c'+1]=p[4,1]
+		mat stars[`r',`c']=(p[4,1]<.05) + (p[4,1]<.01)
+		local r=`r'+1
+}	
+	
+	logit core_to_dod_`yr'yr_n0 i.living_sit_cat if inlist(livealone_n0,`y'), or
+	mat p=r(table)
+	mat tab1[`r',`c']=p[1,2]
+	mat tab1[`r'+1,`c']=p[1,3]
+	mat tab1[`r'+2,`c']=p[1,4]
+	mat tab1[`r',`c'+1]=p[4,2]
+	mat tab1[`r'+1,`c'+1]=p[4,3]
+	mat tab1[`r'+2,`c'+1]=p[4,4]
+	mat stars[`r',`c']=(p[4,2]<.05) + (p[4,2]<.01)
+	mat stars[`r'+1,`c']=(p[4,3]<.05) + (p[4,3]<.01)
+	mat stars[`r'+2,`c']=(p[4,4]<.05) + (p[4,4]<.01)
+	local c=`c'+2
+	local r=1
+}
+}
+mat rownames tab1=`cvars1' `cvars2' `ivars1' `ivars2'  eol_spending_mid ///
+eol_spending_high Black Hispanic `livvars' "Lives w/ spouse only" "Spouse & others" "Only non-spouse"
+
+frmttable using `logpath'\adl_adjusted_unadjusted, statmat(tab1) ///
+ctitles("" "Spending" "1yr mortality" "2yr mortality") ///
+title("Unadjusted regressions, 12m spending & Mortality") ///
+note("Living arrangements run independently (livealone/with spouse/others) and as categorical with livealone as base(mutually exclusive groups)" ///
+"All spending models are glm with family gamma and link log, exponentiated coefficients" ///
+"Total Medicare spending WI adjusted 2012$" ///
+"Mortality logits, odds ratios reported") ///
+ sdec(3) varlabels replace substat(1) annotate(stars) asymbol(*,**)
+
+local regvars c.age_at_core_n0/*##c.age_at_core_n0##c.age_at_core_n0*/ female re_black re_hisp ///
+educ_level_lt_hs medicaid_n0 likely_dem ///
+adl_index_core_n0 
+glm tot_paid_by_mc_12m_wi_n0 i.livealone_n0 `regvars', link(log) fam(gamma) eform
+qui outreg, varlabels stats(e_b p)
+logit core_to_dod_1yr_n0 i.livealone_n0 `regvars', or
+qui outreg, varlabels merge stats(e_b p)
+logit core_to_dod_2yr_n0 i.livealone_n0 `regvars', or
+qui outreg using `logpath'\adl_adjusted_unadjusted, addtable merge stats(e_b p) varlabels
+
+glm tot_paid_by_mc_12m_wi_n0 i.living_sit `regvars', link(log) fam(gamma)
+qui outreg, varlabels stats(e_b p)
+logit core_to_dod_1yr_n0 i.living_sit `regvars', or 
+qui outreg, varlabels merge stats(e_b p)
+logit core_to_dod_2yr_n0 i.living_sit `regvars', or
+qui outreg using `logpath'\adl_adjusted_unadjusted, stats(e_b p) addtable merge varlabels ///
+note("Living_sit_cat 1-livealone 2-spouse only 3-spouse+others 4-only not-spouse")
+
+
+outreg, clear
+foreach x in ip snf pb hh hs dm op {
+label var `x'_paid_by_mc_12m_wi_n0 "`x'"
+glm `x'_paid_by_mc_12m_wi_n0 i.livealone_n0 `regvars', link(log) fam(gamma)
+outreg, merge varlabels stats(e_b p)
+}
+qui outreg using `logpath'\adl_adjusted_unadjusted, stats(e_b p) addtable replay varlabels
+
+outreg, clear
+foreach x in ip snf pb hh hs dm op {
+glm `x'_paid_by_mc_12m_wi_n0 i.living_sit `regvars', link(log) fam(gamma)
+outreg, merge varlabels stats(e_b p)
+}
+qui outreg using `logpath'\adl_adjusted_unadjusted, stats(e_b p) addtable replay varlabels ///
+note("Living_sit_cat 1-livealone 2-spouse only 3-spouse+others 4-only not-spouse")
+
+gen ind_nh=snf_paid_by_mc_12m_wi_n0>0 //| nhres_p1==1
+gen ind_ed=ind_ed_op_p12m_n0==1 | ind_ed_adm_p12m_n0==1
+gen ind_hs=hs_paid_by_mc_12m_wi_n0>0
+outreg, clear
+foreach x in ind_hosp_adm_p12m_n0 ind_nh ind_ed ind_hs {
+logit `x' i.livealone_n0 `regvars'
+outreg, merge varlabels stats(e_b p)
+}
+qui outreg using `logpath'\adl_adjusted_unadjusted, stats(e_b p) addtable replay varlabels ///
+note(Nursing home status from presence of SNF claim 12m after n0 ivw or NH residency reported at p1)
+
+
+outreg, clear
+foreach x in ind_hosp_adm_p12m_n0 ind_nh ind_ed ind_hs {
+logit `x' i.living_sit `regvars'
+outreg, merge varlabels stats(e_b p)
+}
+qui outreg using `logpath'\adl_adjusted_unadjusted, stats(e_b p) addtable replay varlabels
+
+
+
+
+H="Difficulty rather than Help"
+clear all
+set more off
+capture log close
+
+local logpath "E:\data\serious_ill\logs\"
+local datapath "E:\data\serious_ill\int_data"
+
+cd `datapath'
+
+use "E:\data\hrs_cleaned\core_00_to_12" if core_year<2012
+egen adl_index_diff=rowtotal(adl_diff*)
+egen adl_diff_miss=rowmiss(adl_diff*)
+gen adl_impair_diff=adl_index_diff>0 
+replace adl_impair_diff=. if adl_impair_diff==0 & adl_diff_miss>0
+
+sort id core_year
+by id: keep if adl_impair_diff==1 & adl_impair_diff[_n-1]==0
+by id: keep if _n==1 
+drop if nhres==1
+merge 1:m core_year id using ivws_crit_1, ///
+keep(match) gen(ivwmerge)
+drop hhidpn
+destring id, gen(hhidpn)
+drop ivw_meet*
+duplicates drop
+merge 1:1 id core_year using "E:\data\hrs_public_2012\dementia\pdem_withvarnames_ebl", ///
+keep(match master) gen(demmerge)
+merge 1:1 hhid pn core_year using "E:\data\hrs_public_2012\rand2012\family\family_r_clean_98_10.dta", ///
+keep(match master) gen(fammerge)
+gen year=core_year
+merge 1:1 hhid pn year using "E:\data\hrs_oop_2010\received_data\2012\helper_hours_2012.dta", ///
+keep(match master) gen(hlpyrmerge)
+merge m:1 id using "E:\data\hrs_cleaned\death_date_2012", keep(match master) gen(deathmerge)
+
+replace death_date=death_all
+replace core_to_dod_1yr=death_date-c_ivw_date<=365
+gen core_to_dod_2yr=death_date-c_ivw_date<=730
+gen household=hhm+1+resspouse
+gen livealone=household==1
+
+drop if nhres==1
+gen group1=1
+gen group3=!livealone
+gen group2=livealone
+gen group4=hhm>0 if !missing(hhm)
+gen group5=resspouse==1
+gen group6=resspouse==1 & hhm==0
+gen group7=resspouse==1 & hhm>0
+gen group8=!livealone & !resspouse
+gen ind_h_i=n_i>0 if !missing(n_i)
+label var ind_h_i "Indicator any informal help"
+label var household "Total household members"
+local cvars1 age_at_core
+local cvars2  household networth_adj2012 n_i
+*rename pdeath1* pdeath*
+gen re_white=white & !hisp_eth
+gen re_black=black & !hisp_eth
+gen re_hisp=hisp_eth
+gen educ_level_lt_hs=degree<2
+local ivars1 female re_white re_black re_hisp married kid_nearby_ind 
+local ivars2 ind_h_i educ_level_lt_hs  medigap medicaid champus nhres srh_pf ///
+likely_normal likely_cind likely_dem ///
+smi_dem_ind smi_cancer_ind smi_esrd_ind smi_chf_ind ///
+smi_copd_ind smi_diab_compl_ind smi_liver_ind smi_hip_ind ///
+el_ge3_comorb_1yr ser_med_illness adl_impair_core smi_and_adl ///
+criteria_a criteria_b criteria_c ///
+//eol_spending_low eol_spending_mid eol_spending_high
+
+local coutcomes tot_paid_by_mc_12m_wi tot_paid_by_mc_24m_wi ///
+ip_paid_by_mc_12m_wi n_hospd_p12m  /// 
+snf_paid_by_mc_12m_wi hh_paid_by_mc_12m_wi op_paid_by_mc_12m_wi ///
+dm_paid_by_mc_12m_wi hs_paid_by_mc_12m_wi
+local ioutcomes ind_hosp_adm_p12m /*mult_ip_adm_p12m mult_ed_vis_p12m ind_icu_vis_p12m*/ ///
+hs_admit_p12m core_to_dod_1yr core_to_dod_2yr 
+
+local rn : word count  `cvars1' `cvars2' `ivars1' `ivars2' 1 `coutcomes' 1 `ioutcomes'  1
+
+foreach x in `cvars1' `cvars2' `ivars1' `ivars2' {
+*drop if `x'==.
+}
+
+local tablereplace replace
+*foreach timethrough in 1 2 {
+mat tab1=J(`rn',6,.)
+mat stars=J(`rn',6,0)
+local r=1
+local c=1
+forvalues i=1/3 {
+	foreach round in 1 2 {
+		foreach x of local cvars`round' {
+			qui sum `x' if group`i'==1 
+			mat tab1[`r',`c']=r(mean)
+			if `i'>1 & `i'!=2 {
+				qui ttest `x' if group`i'==1 | group2==1, by(livealone)
+				mat stars[`r',`c']=(r(p)<.01) + (r(p)<.05)
+}
+			local r=`r'+1
+}
+		foreach x of local ivars`round' {
+			qui sum `x' if group`i'==1
+			mat tab1[`r',`c']=r(mean)*100
+			if `i'>1 & `i'!=2 {
+				qui tab `x' livealone if group`i'==1 | group2==1, chi2
+				mat stars[`r',`c']=(r(p)<.01) + (r(p)<.05)
+}
+			local r=`r'+1
+}
+}
+	local r=`r'+1
+
+	
+	foreach x of local coutcomes {
+		qui sum `x' if group`i'==1,d
+		mat tab1[`r',`c']=r(mean)
+		if `i'>1 & `i'!=2 {
+			qui ttest `x' if group`i'==1 | group2==1, by(livealone)
+			mat stars[`r',`c']=(r(p)<.01) + (r(p)<.05)
+}
+		local r=`r'+1
+		if "`x'"=="tot_paid_by_mc_12m_wi" {
+			qui sum `x' if group`i'==1,d
+			mat tab1[`r',`c']=r(p50)
+			local r=`r'+1
+}
+}
+	foreach x of local ioutcomes {
+		qui sum `x' if group`i'==1
+		mat tab1[`r',`c']=r(mean)*100
+		if `i'>1 & `i'!=2 {
+			qui tab `x' livealone if group`i'==1 | group2==1, chi2
+			mat stars[`r',`c']=(r(p)<.01) + (r(p)<.05)
+}
+		local r=`r'+1
+}
+	sum female if group`i'==1
+	mat tab1[`r',`c']=r(N)
+	local r=1
+	local c=`c'+1
+}
+
+mat rownames tab1=`cvars1' `ivars1' `cvars2' `ivars2' "Outcome Measures Over 1 Year" ///
+tot_paid_by_mc_12m_wi "Median" tot_paid_by_mc_24m_wi ip_paid_by_mc_12m_wi n_hospd_p12m ///
+snf_paid_by_mc_12m_wi hh_paid_by_mc_12m_wi ///
+op_paid_by_mc_12m_wi dm_paid_by_mc_12m_wi hs_paid_by_mc_12m_wi `ioutcomes' N
+
+
+
+frmttable using "`logpath'incident_adl_diff_chars.doc", `tablereplace' statmat(tab1) ///
+ title("Sample Characteristics by live alone status") ///
+ ctitles("" "Full Sample" "Lives alone" "Does not live alone") ///
+ sdec(1) annotate(stars) asymbol(*,*) ///
+ varlabels
+*keep if nhres==0
+local tablereplace addtable
+
+mat tab1=J(`rn',6,.)
+mat stars=J(`rn',6,0)
+local r=1
+local c=1
+foreach i in 2 4 5  {
+	foreach round in 1 2 {
+		foreach x of local cvars`round' {
+			qui sum `x' if group`i'==1 
+			mat tab1[`r',`c']=r(mean)
+			if `i'>1 & `i'!=2 {
+				qui ttest `x' if group`i'==1 | group2==1, by(livealone)
+				mat stars[`r',`c']=(r(p)<.01) + (r(p)<.05)
+}
+			local r=`r'+1
+}
+		foreach x of local ivars`round' {
+			qui sum `x' if group`i'==1
+			mat tab1[`r',`c']=r(mean)*100
+			if `i'>1 & `i'!=2 {
+				qui tab `x' livealone if group`i'==1 | group2==1, chi2
+				mat stars[`r',`c']=(r(p)<.01) + (r(p)<.05)
+}
+			local r=`r'+1
+}
+}
+	local r=`r'+1
+
+	
+	foreach x of local coutcomes {
+		qui sum `x' if group`i'==1,d
+		mat tab1[`r',`c']=r(mean)
+		if `i'>1 & `i'!=2 {
+			qui ttest `x' if group`i'==1 | group2==1, by(livealone)
+			mat stars[`r',`c']=(r(p)<.01) + (r(p)<.05)
+}
+		local r=`r'+1
+		if "`x'"=="tot_paid_by_mc_12m_wi" {
+			qui sum `x' if group`i'==1,d
+			mat tab1[`r',`c']=r(p50)
+			local r=`r'+1
+}
+}
+	foreach x of local ioutcomes {
+		qui sum `x' if group`i'==1
+		mat tab1[`r',`c']=r(mean)*100
+		if `i'>1 & `i'!=2 {
+			qui tab `x' livealone if group`i'==1 | group2==1, chi2
+			mat stars[`r',`c']=(r(p)<.01) + (r(p)<.05)
+}
+		local r=`r'+1
+}
+	sum female if group`i'==1
+	mat tab1[`r',`c']=r(N)
+	local r=1
+	local c=`c'+1
+}
+
+mat rownames tab1=`cvars1' `ivars1' `cvars2' `ivars2' "Outcome Measures Over 1 Year" ///
+tot_paid_by_mc_12m_wi "Median" tot_paid_by_mc_24m_wi ip_paid_by_mc_12m_wi n_hospd_p12m ///
+snf_paid_by_mc_12m_wi hh_paid_by_mc_12m_wi ///
+op_paid_by_mc_12m_wi dm_paid_by_mc_12m_wi hs_paid_by_mc_12m_wi `ioutcomes' N
+
+
+
+
+save adl_diff.dta, replace
+
+
+
+H="Difficulty regressions"
+capture log close
+
+local datapath E:\data\serious_ill\int_data\
+local logpath E:\data\serious_ill\logs\
+
+cd `datapath'
+use adl_diff, clear
+
+*gen household=hhm+1+resspouse
+/*gen group1=1
+gen group3=!livealone
+gen group2=livealone
+gen group4=hhm>0 if !missing(hhm)
+gen group5=resspouse==1
+gen group6=resspouse==1 & hhm==0
+gen group7=resspouse==1 & hhm>0
+gen group8=!livealone & !resspouse
+*/label var household "Total household members"
+local cvars1 age_at_core
+local cvars2  household networth_adj2012 adl_index_core
+gen race=re_black==1 
+replace race=2 if re_hisp==1
+replace race=3 if missing(race)
+label define race 0 "Other" 1 "Black" 2 "Hispanic" 
+label values race race
+*rename pdeath1* pdeath*
+label var group4 "Live w/ other than spouse"
+gen living_sit_cat=livealone==1
+replace living_sit=2 if group6==1
+replace living_sit=3 if group7==1
+replace living_sit=4 if group8==1
+label var likely_dem "Likely demented"
+label define living_sit_cat 1 "Lives alone" 2 "Lives w/ spouse only" 3 "Spouse & others" ///
+4 "Only non-spouse"
+label values living_sit living_sit_cat
+local ivars1 female/* re_white re_black re_hisp*/ married
+local ivars2 educ_level_lt_hs medicaid champus srh_pf ///
+likely_dem smi_dem_ind kid_nearby_ind 
+local livvars livealone resspouse group4
+local coutcomes tot_paid_by_mc_12m_wi ip_paid_by_mc_12m_wi n_hospd_p12m ed_p12m /// 
+snf_p12m ip_p12m hh_p12m op_p12m dm_p12m hs_p12m n_f n_i
+local ioutcomes ind_hosp_adm_p12m mult_ip_adm_p12m mult_ed_vis_p12m ind_icu_vis_p12m ///
+hs_admit_p12m core_to_dod_1yr loc_hosp_x 
+
+
+local mvars  smi_dem_ind smi_cancer_ind smi_esrd_ind ///
+smi_chf_ind smi_copd_ind smi_diab_compl_ind ///
+smi_liver_ind  smi_hip_ind /*smi_nh_ind*/ ///
+srh_pf adl_impair_core hlphrs_i_group el_ge3_comorb_1yr
+local nvars age_at_core female re_black re_hisp ///notwhite ///
+hs_deg_ind nw_lowest ///
+religvimp rel_nb married smi_nh_ind ///
+medicaid champus medigap
+log using `logpath'/adl_diff_regressions.txt, text replace
+local rn : word count `cvars1' `cvars2' `ivars1' `ivars2'   `livvars'
+mat tab1=J(`rn'+5,8,.)
+mat stars=J(`rn'+5,8,0)
+local r=1
+local c=1
+foreach y in "0,1" /*0 1*/ {
+	foreach x in `cvars1' `cvars2' `ivars1' `ivars2' {
+		qui glm tot_paid_by_mc_12m_wi `x' if inlist(livealone,`y'), fam(gamma) link(log) eform
+		mat beta=e(b)
+		mat tab1[`r',`c']=exp(beta[1,1])
+		mat p=r(table)
+		mat tab1[`r',`c'+1]=p[4,1]
+		mat stars[`r',`c']=(p[4,1]<.05) + (p[4,1]<.01)
+		local r=`r'+1
+}
+
+	/*glm tot_paid_by_mc_12m_wi /*i.eol_spending_3_cat*/ if inlist(livealone,`y'), fam(gamma) link(log) eform
+	mat p=r(table)
+	mat tab1[`r',`c']=p[1,2]
+	mat tab1[`r'+1,`c']=p[1,3]
+	mat tab1[`r',`c'+1]=p[4,2]
+	mat tab1[`r'+1,`c'+1]=p[4,3]
+	local r=`r'+2*/
+	glm tot_paid_by_mc_12m_wi i.race if inlist(livealone,`y'), fam(gamma) link(log) eform
+	mat p=r(table)
+	mat tab1[`r',`c']=p[1,2]
+	mat tab1[`r'+1,`c']=p[1,3]
+	mat tab1[`r',`c'+1]=p[4,2]
+	mat tab1[`r'+1,`c'+1]=p[4,3]	
+	mat stars[`r',`c']=(p[4,2]<.05) + (p[4,2]<.01)
+	mat stars[`r'+1,`c']=(p[4,3]<.05) + (p[4,3]<.01)
+	local r=`r'+2
+	foreach x in `livvars' {
+		qui glm tot_paid_by_mc_12m_wi `x' if inlist(livealone,`y'), fam(gamma) link(log) eform
+		mat beta=e(b)
+		mat tab1[`r',`c']=exp(beta[1,1])
+		mat p=r(table)
+		mat tab1[`r',`c'+1]=p[4,1]
+		mat stars[`r',`c']=(p[4,1]<.05) + (p[4,1]<.01)
+		local r=`r'+1
+}	
+	
+	glm tot_paid_by_mc_12m_wi i.living_sit_cat if inlist(livealone,`y'), fam(gamma) link(log) eform
+	mat p=r(table)
+	mat tab1[`r',`c']=p[1,2]
+	mat tab1[`r'+1,`c']=p[1,3]
+	mat tab1[`r'+2,`c']=p[1,4]
+	mat tab1[`r',`c'+1]=p[4,2]
+	mat tab1[`r'+1,`c'+1]=p[4,3]
+	mat tab1[`r'+2,`c'+1]=p[4,4]
+	mat stars[`r',`c']=(p[4,2]<.05) + (p[4,2]<.01)
+	mat stars[`r'+1,`c']=(p[4,3]<.05) + (p[4,3]<.01)
+	mat stars[`r'+2,`c']=(p[4,4]<.05) + (p[4,4]<.01)
+	local c=`c'+2
+	local r=1
+}
+
+foreach yr in 1 2 {
+foreach y in "0,1" /*0 1*/ {
+	foreach x in `cvars1' `cvars2' `ivars1' `ivars2' {
+		qui logit core_to_dod_`yr'yr `x' if inlist(livealone,`y'), or
+		mat beta=e(b)
+		mat tab1[`r',`c']=exp(beta[1,1])
+		mat p=r(table)
+		mat tab1[`r',`c'+1]=p[4,1]
+		mat stars[`r',`c']=(p[4,1]<.05) + (p[4,1]<.01)		
+		local r=`r'+1
+}
+
+	/*logit core_to_dod_`yr'yr /*i.eol_spending_3_cat*/ if inlist(livealone,`y'), or
+	mat p=r(table)
+	mat tab1[`r',`c']=p[1,2]
+	mat tab1[`r'+1,`c']=p[1,3]
+	mat tab1[`r',`c'+1]=p[4,2]
+	mat tab1[`r'+1,`c'+1]=p[4,3]
+	mat stars[`r',`c']=(p[4,2]<.05) + (p[4,2]<.01)
+	mat stars[`r'+1,`c']=(p[4,3]<.05) + (p[4,3]<.01)
+	local r=`r'+2*/
+	logit core_to_dod_`yr'yr i.race if inlist(livealone,`y'), or
+	mat p=r(table)
+	mat tab1[`r',`c']=p[1,2]
+	mat tab1[`r'+1,`c']=p[1,3]
+	mat tab1[`r',`c'+1]=p[4,2]
+	mat tab1[`r'+1,`c'+1]=p[4,3]	
+	mat stars[`r',`c']=(p[4,2]<.05) + (p[4,2]<.01)
+	mat stars[`r'+1,`c']=(p[4,3]<.05) + (p[4,3]<.01)
+	local r=`r'+2
+	foreach x in `livvars' {
+		qui logit core_to_dod_`yr'yr `x' if inlist(livealone,`y'), or
+		mat beta=e(b)
+		mat tab1[`r',`c']=exp(beta[1,1])
+		mat p=r(table)
+		mat tab1[`r',`c'+1]=p[4,1]
+		mat stars[`r',`c']=(p[4,1]<.05) + (p[4,1]<.01)
+		local r=`r'+1
+}	
+	
+	logit core_to_dod_`yr'yr i.living_sit_cat if inlist(livealone,`y'), or
+	mat p=r(table)
+	mat tab1[`r',`c']=p[1,2]
+	mat tab1[`r'+1,`c']=p[1,3]
+	mat tab1[`r'+2,`c']=p[1,4]
+	mat tab1[`r',`c'+1]=p[4,2]
+	mat tab1[`r'+1,`c'+1]=p[4,3]
+	mat tab1[`r'+2,`c'+1]=p[4,4]
+	mat stars[`r',`c']=(p[4,2]<.05) + (p[4,2]<.01)
+	mat stars[`r'+1,`c']=(p[4,3]<.05) + (p[4,3]<.01)
+	mat stars[`r'+2,`c']=(p[4,4]<.05) + (p[4,4]<.01)
+	local c=`c'+2
+	local r=1
+}
+}
+mat rownames tab1=`cvars1' `cvars2' `ivars1' `ivars2'  /*eol_spending_mid ///
+eol_spending_high*/ Black Hispanic `livvars' "Lives w/ spouse only" "Spouse & others" "Only non-spouse"
+
+frmttable using `logpath'\adl_diff_adjusted_unadjusted, statmat(tab1) ///
+ctitles("" "Spending" "1yr mortality" "2yr mortality") ///
+title("Unadjusted regressions, 12m spending & Mortality") ///
+note("Living arrangements run independently (livealone/with spouse/others) and as categorical with livealone as base(mutually exclusive groups)" ///
+"All spending models are glm with family gamma and link log, exponentiated coefficients" ///
+"Total Medicare spending WI adjusted 2012$" ///
+"Mortality logits, odds ratios reported") ///
+ sdec(3) varlabels replace substat(1) annotate(stars) asymbol(*,**)
+
+local regvars c.age_at_core/*##c.age_at_core##c.age_at_core*/ female re_black re_hisp ///
+educ_level_lt_hs medicaid likely_dem ///
+adl_index_core 
+glm tot_paid_by_mc_12m_wi i.livealone `regvars', link(log) fam(gamma) eform
+qui outreg, varlabels stats(e_b p)
+logit core_to_dod_1yr i.livealone `regvars', or
+qui outreg, varlabels merge stats(e_b p)
+logit core_to_dod_2yr i.livealone `regvars', or
+qui outreg using `logpath'\adl_diff_adjusted_unadjusted, addtable merge stats(e_b p) varlabels
+
+glm tot_paid_by_mc_12m_wi i.living_sit `regvars', link(log) fam(gamma)
+qui outreg, varlabels stats(e_b p)
+logit core_to_dod_1yr i.living_sit `regvars', or 
+qui outreg, varlabels merge stats(e_b p)
+logit core_to_dod_2yr i.living_sit `regvars', or
+qui outreg using `logpath'\adl_diff_adjusted_unadjusted, stats(e_b p) addtable merge varlabels ///
+note("Living_sit_cat 1-livealone 2-spouse only 3-spouse+others 4-only not-spouse")
+
+
+outreg, clear
+foreach x in ip snf pb hh hs dm op {
+label var `x'_paid_by_mc_12m_wi "`x'"
+glm `x'_paid_by_mc_12m_wi i.livealone `regvars', link(log) fam(gamma)
+outreg, merge varlabels stats(e_b p)
+}
+qui outreg using `logpath'\adl_diff_adjusted_unadjusted, stats(e_b p) addtable replay varlabels
+
+/*outreg, clear
+foreach x in ip snf pb hh hs dm op {
+glm `x'_paid_by_mc_12m_wi i.living_sit `regvars', link(log) fam(gamma)
+outreg, merge varlabels stats(e_b p)
+}
+qui outreg using `logpath'\adl_diff_adjusted_unadjusted, stats(e_b p) addtable replay varlabels ///
+note("Living_sit_cat 1-livealone 2-spouse only 3-spouse+others 4-only not-spouse")
+*/
+gen ind_nh=snf_paid_by_mc_12m_wi>0 //| nhres_p1==1
+gen ind_ed=ind_ed_op_p12m==1 | ind_ed_adm_p12m==1
+gen ind_hs=hs_paid_by_mc_12m_wi>0
+outreg, clear
+foreach x in ind_hosp_adm_p12m ind_nh ind_ed ind_hs {
+logit `x' i.livealone `regvars'
+outreg, merge varlabels stats(e_b p)
+}
+qui outreg using `logpath'\adl_diff_adjusted_unadjusted, stats(e_b p) addtable replay varlabels ///
+note(Nursing home status from presence of SNF claim 12m after n0 ivw or NH residency reported at p1)
+
+/*
+outreg, clear
+foreach x in ind_hosp_adm_p12m ind_nh ind_ed ind_hs {
+logit `x' i.living_sit `regvars'
+outreg, merge varlabels stats(e_b p)
+}
+qui outreg using `logpath'\adl_diff_adjusted_unadjusted, stats(e_b p) addtable replay varlabels
+
+

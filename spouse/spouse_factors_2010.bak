@@ -1,0 +1,4074 @@
+= V4 Outline MultiLine NoSorting TabWidth=30
+
+H="Spousal factors and hospice use"
+Starts with dataset created for the spousal depression outcomes project
+created in the file spouse_2012.txt
+This ds is created in the "Create additional variables" tab of spouse_2012.txt
+
+Defines a different sample though, since p1 interview is not required of the spouse
+
+Aim is to look at spousal factors that affect a decedents decision
+to enroll in hospice
+
+
+H="Define sample"
+/*This switches to Stata using data dataset exported in previous section*/
+
+/*Full decedent sample (2002-2012 exit interviews) is restricted to:
+1. DOD 2000-2011 because of NDI dataset time span
+2. Decedents with n1 core interview
+3. With medicare xwalk id
+4. With FFS medicare last 6 months of life
+5. Married at time of death
+6. With spouse n1 interview
+7. At least 1 chronic condition, excluding glaucoma and cataracts
+8. Not accidents, homicide, suicide as cause of death
+*/
+
+capture log close
+
+clear all
+set more off
+
+//Amy's PC
+local logpath E:\data\spouse_factors\logs
+local rawdatapath E:\data\spouse\final_data
+local projdatapath E:\data\spouse_factors
+
+log using "`logpath'\1-HRS_Spouse_factors_sample.txt", text replace
+
+use `rawdatapath'\spouse_data_full.dta
+
+//set matrix for sample size determination table
+mat deced_core=J(9,3,.)
+
+//all decedents from 2002-2012 exit interviews
+sum r_exit_year_x, detail
+mat deced_core[1,1]=r(N)
+
+//Death date 2000-2011 because we only have ndi information thru 2011
+gen r_death_year=year(r_death_date)
+tab r_death_year, missing
+
+gen r_ind_dod_00_12=(1999<r_death_year & r_death_year<2012 & r_death_year!=.)
+tab r_death_year r_ind_dod_00_12, missing
+la var r_ind_dod_00_12 "R DOD 2000 to 2011, 1=yes"
+li r_death_date_e r_claims_dod r_xwalk_yes if r_death_year<1999
+
+//decedents death date 2000-2011
+sum r_exit_year_x if r_ind_dod_00_12==1, detail
+mat deced_core[2,1]=r(N)
+
+//check of married decedents
+tab r_married_x r_married_or_part_v2_x , missing
+
+gen n1core_ind=.
+replace n1core_ind=0 if  r_core_year_n1==.
+replace n1core_ind=1 if  r_core_year_n1!=.
+tab n1core_ind, missing
+
+//decedents with n1 core interview
+sum r_exit_year_x if r_ind_dod_00_12==1 & n1core_ind==1, detail
+mat deced_core[3,1]=r(N)
+
+//decedents with n1 core + xwalk
+sum r_exit_year_x if r_ind_dod_00_12==1 & n1core_ind==1 & r_xwalk_yes==1, detail
+mat deced_core[4,1]=r(N)
+
+//with ffs mc last 6 months of life
+//have parst a and b coverage and no hmo
+gen byte ins_ind=.
+replace ins_ind=1 if r_part_ab_6m==1 & r_hmo_d_6m==0
+replace ins_ind=0 if r_part_ab_6m!=1 | r_hmo_d_6m!=0
+tab ins_ind, missing
+
+//decedents with n1 core + xwalk + ffs mc last 6 months of life
+sum r_exit_year_x if r_ind_dod_00_12==1 & n1core_ind==1 & r_xwalk_yes==1 & ins_ind==1, detail
+mat deced_core[5,1]=r(N)
+
+//decedents with n1 core + xwalk + married or partnered
+sum r_exit_year_x if r_ind_dod_00_12==1 & n1core_ind==1 & r_xwalk_yes==1 & ins_ind==1 &  r_married_or_part_v2_x==1, detail
+mat deced_core[6,1]=r(N)
+
+//have spouse n1 interview
+gen byte sn1core_ind=.
+replace sn1core_ind=0 if s_core_year_n1==.
+replace sn1core_ind=1 if s_core_year_n1!=.
+tab sn1core_ind, missing
+
+//decedents with n1 core + xwalk + married + spouse p1 and n1 interview
+sum r_exit_year_x if r_ind_dod_00_12==1 & n1core_ind==1 & r_xwalk_yes==1 & ins_ind==1 &  r_married_or_part_v2_x==1 & sn1core_ind==1, detail
+mat deced_core[7,1]=r(N)
+
+//no comorbidities (Elixhauser)
+gen byte no_el_comorb_12m = .
+replace no_el_comorb_12m =1 if comorb_all_0d_n12m==0
+replace no_el_comorb_12m =0 if (comorb_all_0d_n12m>0 & comorb_all_0d_n12m!=.)
+la var no_el_comorb_12m "Ind. for no Elix comorb 12m before death"
+tab no_el_comorb_12m , missing
+
+//what about no chronic conditions?
+gen cc_all_count_12m = cc_1_ami_n12mn0 + cc_2_alzh_n12mn0 + cc_3_alzhdmta_n12mn0 + ///
+cc_4_atrialfb_n12mn0 + cc_5_cataract_n12mn0 + cc_6_chrnkidn_n12mn0 + ///
+cc_7_copd_n12mn0 + cc_8_chf_n12mn0 + cc_9_diabetes_n12mn0 + cc_10_glaucoma_n12mn0 + ///
+cc_11_hipfrac_n12mn0 + cc_12_ischmcht_n12mn0 + cc_13_depressn_n12mn0 + ///
+cc_14_osteoprs_n12mn0 + cc_15_ra_oa_n12mn0 + cc_16_strketia_n12mn0 + ///
+cc_17_cncrbrst_n12mn0 + cc_18_cncrclrc_n12mn0 + cc_19_cncrprst_n12mn0 + ///
+cc_20_cncrlung_n12mn0 + cc_21_cncrendm_n12mn0
+
+tab cc_all_count_12m, missing
+
+//cc's excluding cataract and glaucoma
+gen cc_all_count_12m_2 = cc_1_ami_n12mn0 + cc_2_alzh_n12mn0 + cc_3_alzhdmta_n12mn0 + ///
+cc_4_atrialfb_n12mn0 + /*cc_5_cataract_n12mn0 +*/ cc_6_chrnkidn_n12mn0 + ///
+cc_7_copd_n12mn0 + cc_8_chf_n12mn0 + cc_9_diabetes_n12mn0 + /*cc_10_glaucoma_n12mn0 +*/ ///
+cc_11_hipfrac_n12mn0 + cc_12_ischmcht_n12mn0 + cc_13_depressn_n12mn0 + ///
+cc_14_osteoprs_n12mn0 + cc_15_ra_oa_n12mn0 + cc_16_strketia_n12mn0 + ///
+cc_17_cncrbrst_n12mn0 + cc_18_cncrclrc_n12mn0 + cc_19_cncrprst_n12mn0 + ///
+cc_20_cncrlung_n12mn0 + cc_21_cncrendm_n12mn0
+
+tab cc_all_count_12m_2, missing
+
+tab cc_all_count_12m cc_all_count_12m_2, missing
+
+gen byte no_cc_12m = .
+replace no_cc_12m =1 if cc_all_count_12m ==0
+replace no_cc_12m =0 if (cc_all_count_12m >0 & cc_all_count_12m !=.)
+la var no_cc_12m "Ind. for no Chronic conditions 12m before death"
+tab no_cc_12m , missing
+
+gen byte no_cc_12m_excl_cataract = .
+replace no_cc_12m_excl_cataract =1 if cc_all_count_12m_2==0
+replace no_cc_12m_excl_cataract =0 if (cc_all_count_12m_2>0 & cc_all_count_12m_2!=.)
+la var no_cc_12m_excl_cataract "Ind. for no Chronic conditions 12m before death"
+tab no_cc_12m_excl_cataract , missing
+
+
+//cell using elixhauser
+//decedents with n1 core + xwalk + married + spouse n1 interview
+sum r_exit_year_x if r_ind_dod_00_12==1 & n1core_ind==1 & r_xwalk_yes==1 & ins_ind==1 &  r_married_or_part_v2_x==1 & /// 
+sn1core_ind==1 & no_el_comorb_12m==0, detail
+mat deced_core[8,1]=r(N)
+
+//cell using chronic conditions
+//decedents with n1 core + xwalk + married + spouse n1 interview
+sum r_exit_year_x if r_ind_dod_00_12==1 & n1core_ind==1 & r_xwalk_yes==1 & ins_ind==1 &  r_married_or_part_v2_x==1 & /// 
+sn1core_ind==1 & no_cc_12m==0, detail
+mat deced_core[8,2]=r(N)
+
+//cell using chronic conditions, v2 excluding cataract and glaucoma
+//decedents with n1 core + xwalk + married + spouse n1 interview
+sum r_exit_year_x if r_ind_dod_00_12==1 & n1core_ind==1 & r_xwalk_yes==1 & ins_ind==1 &  r_married_or_part_v2_x==1 & /// 
+sn1core_ind==1 & no_cc_12m_excl_cataract==0, detail
+mat deced_core[8,3]=r(N)
+
+
+//cause of death = Accidents, Suicide, Homicide (var = 12)
+tab r_cause_death_12_n_e, missing
+replace r_cause_death_12_n_e=. if r_cause_death_12_n_e==14
+gen byte accident_cause_death = .
+replace accident_cause_death =1 if r_cause_death_12_n_e==12
+replace accident_cause_death =0 if (r_cause_death_12_n_e!=12 & r_cause_death_12_n_e!=.)
+la var accident_cause_death "Cause of death = accidents, suicide, homicide"
+tab accident_cause_death , missing
+tab accident_cause_death if r_exit_year_x==2012, missing
+
+
+//using elixhauser
+//decedents with n1 core + xwalk + married + spouse n1 interview 
+sum r_exit_year_x if r_ind_dod_00_12==1 & n1core_ind==1 & r_xwalk_yes==1 & ins_ind==1 &  r_married_or_part_v2_x==1 & /// 
+sn1core_ind==1 & no_el_comorb_12m==0 & accident_cause_death==0, detail
+mat deced_core[9,1]=r(N)
+
+//using ccs
+//decedents with n1 core + xwalk + married + spouse n1 interview 
+sum r_exit_year_x if r_ind_dod_00_12==1 & n1core_ind==1 & r_xwalk_yes==1 & ins_ind==1 &  r_married_or_part_v2_x==1 & /// 
+sn1core_ind==1 & no_cc_12m==0 & accident_cause_death==0, detail
+mat deced_core[9,2]=r(N)
+
+//using ccs v2
+//decedents with n1 core + xwalk + married + spouse n1 interview 
+sum r_exit_year_x if r_ind_dod_00_12==1 & n1core_ind==1 & r_xwalk_yes==1 & ins_ind==1 &  r_married_or_part_v2_x==1 & /// 
+sn1core_ind==1 & no_cc_12m_excl_cataract==0 & accident_cause_death==0, detail
+mat deced_core[9,3]=r(N)
+
+/*
+//full n1 p1 cesd interview?
+gen byte cesd_miss_n1 = 0
+replace cesd_miss_n1 =1 if s_cesd_tot_n1==.
+gen byte cesd_miss_p1 = 0
+replace cesd_miss_p1 =1 if s_cesd_tot_p1==.
+tab cesd_miss_n1 cesd_miss_p1 , missing
+gen byte cesd_miss_n1_p1 = 0
+replace cesd_miss_n1_p1 =1 if cesd_miss_n1==1 | cesd_miss_p1 ==1
+la var cesd_miss_n1_p1 "CESD missing either n1 or p1"
+tab cesd_miss_n1_p1 , missing
+
+//using elixhauser
+//decedents with n1 core + xwalk + married + spouse p1 interview + p1 > 90 days post death
+sum r_exit_year_x if n1core_ind==1 & r_xwalk_yes==1 & ins_ind==1 &  r_married_or_part_v2_x==1 & /// 
+sp1core_ind==1 & sn1core_ind==1 & p1_wi_90d==0 & no_el_comorb_12m==0 & accident_cause_death==0 & cesd_miss_n1_p1==0, detail
+mat deced_core[11,1]=r(N)
+
+//using ccs
+//decedents with n1 core + xwalk + married + spouse p1 interview + p1 > 90 days post death
+sum r_exit_year_x if n1core_ind==1 & r_xwalk_yes==1 & ins_ind==1 &  r_married_or_part_v2_x==1 & /// 
+sp1core_ind==1 & sn1core_ind==1 & p1_wi_90d==0 & no_cc_12m==0 & accident_cause_death==0 & cesd_miss_n1_p1==0, detail
+mat deced_core[11,2]=r(N)
+
+//using ccs v2
+//decedents with n1 core + xwalk + married + spouse p1 interview + p1 > 90 days post death
+sum r_exit_year_x if n1core_ind==1 & r_xwalk_yes==1 & ins_ind==1 &  r_married_or_part_v2_x==1 & /// 
+sp1core_ind==1 & sn1core_ind==1 & p1_wi_90d==0 & no_cc_12m_excl_cataract==0 & accident_cause_death==0 & cesd_miss_n1_p1==0, detail
+mat deced_core[11,3]=r(N)
+*/
+
+mat list deced_core
+	
+frmttable using `logpath'\1_2012_sample_est , statmat(deced_core) ///
+	title("2012 sample size estimate - requiring an n1 core interview") ///
+	ctitle("","Elix - n","CCs - n", "CC, no cataract, glaucoma") ///
+	rtitle("All decedents from exit interviews" \ "With date of death 2000-2011" \ "With n1 core interview" \ ///
+	"With mc xwalk id" \ "With FFS mc last 6 months of life" \ "Married or partnered at time of death" \ ///
+	"Spouse n1 core interview" \ "No comorb 12m before death" \ ///
+	"Accidents, Suicide, Homicide = cause of death") ///
+	sdec(0) replace
+
+
+tab r_exit_year_x if r_ind_dod_00_12==1 & n1core_ind==1 & r_xwalk_yes==1 & ins_ind==1 & r_married_or_part_v2_x==1 & sn1core_ind==1
+
+/*drop observations not in the sample*/
+drop if  r_ind_dod_00_12!=1
+drop if n1core_ind==0
+drop if r_xwalk_yes==0
+drop if ins_ind==0 
+drop if r_married_or_part_v2_x==0 
+drop if sn1core_ind==0
+drop if no_cc_12m_excl_cataract~=0
+drop if accident_cause_death~=0
+
+tab r_exit_year_x r_core_year_n1
+
+la def r_cause_death_12_n_e 1 "Infectious disease" 2 "HIV/AIDS" ///
+3 "Cardiovascular disease" 4 "Chronic lower respiratory disease" ///
+5 "Other Respiratory disease" 6 "Diabetes" 7 "Alzheimers Disease" ///
+9 "Neoplasms" 10 "Kidney Disease (not infectious)" ///
+11 "Liver, Gallbladder, Stomach and/or Intestinal disease" ///
+12 "Accidents, Suicide, Homicide" 13 "Other"
+
+la val r_cause_death_12_n_e r_cause_death_12_n_e
+tab r_cause_death_12_n_e, missing
+/*35% missing cause of death in 2012 exit interviews because 2012 new file not
+released by HRS as of June 2015*/
+tab r_cause_death_12_n_e if r_exit_year_x==2012, missing
+tab r_cause_death_12_n_e if r_exit_year_x==2010, missing
+
+save `projdatapath'\spouse_factors_data_sample.dta, replace
+
+log close
+
+
+
+H="Create additional variables"
+capture log close
+
+clear all
+set more off
+
+//Amy's PC
+local logpath E:\data\spouse_factors\logs
+local projdatapath E:\data\spouse_factors
+
+log using "`logpath'\2-HRS_Spouse_factors_newvars.txt", text replace
+
+use `projdatapath'\spouse_factors_data_sample.dta
+
+//female indicator based on tracker file, not exit as in 2010 dataset
+tab r_female r_female_x , missing
+tab s_female s_female_x , missing
+
+la var s_female "Gender"
+la def fem 0 "Male" 1 "Female"
+la val s_female r_female fem
+tab r_female, missing
+tab s_female, missing
+
+**************************************************************
+//Education variables
+**************************************************************
+
+//code r-education variable using education from tracker file (via restr. ds)
+tab r_degree_e r_educ_n1, missing
+label variable r_degree_e "R's Eduction, Highest Level, from Tracker file"
+label define r_degree_e 0 "No degree" 1 "GED" 2 "High School" 3 "2yr college degree" ///
+  4 "4yr College degree" ///
+      5 "Master degree" 6"Professional degree" 9 "degree unknown/some college", modify
+label values r_degree_e r_degree_e 
+tab r_degree_e, missing
+
+tab r_degree_e, gen(r_ed_ind)
+la var r_ed_ind1 "R No degree" 
+la var r_ed_ind2 "R GED" 
+la var r_ed_ind3 "R HS degree" 
+la var r_ed_ind4 "R 2yr college deg." 
+la var r_ed_ind5 "R 4yr college deg." 
+la var r_ed_ind6 "R Masters deg." 
+la var r_ed_ind7 "R Professional deg."
+//la var r_ed_ind8 "Unknown degree / some college"
+
+//create r hs degree variable
+tab r_degree_e r_hseduc , missing
+la var r_hseduc "R HS Degree, from tracker, 1=yes"
+
+//create r education, 3 categories (match 3cat R/S dyad variable below
+gen r_educ_3cat=0 if r_degree_e==0
+replace r_educ_3cat=1 if inlist(r_degree_e,1,2)
+replace r_educ_3cat=2 if inlist(r_degree_e,3,4,5,6,9)
+la var r_educ_3cat "Decedent 3 category education"
+la def r_educ_3cat 0 "LT HS degree" 1 "HS Degree" 2 "GT HS degree"
+la val r_educ_3cat r_educ_3cat 
+tab r_educ_3cat, gen(r_educ_3cat)
+
+//code s-education variable from tracker file
+label variable s_degree_e "S's Eduction, Highest Level, from Tracker file"
+label values s_degree_e r_degree_e 
+tab s_degree_e, missing
+
+tab s_degree_e, gen(s_ed_ind)
+la var s_ed_ind1 "S No degree" 
+la var s_ed_ind2 "S GED" 
+la var s_ed_ind3 "S HS degree" 
+la var s_ed_ind4 "S 2yr college deg." 
+la var s_ed_ind5 "S 4yr college deg." 
+la var s_ed_ind6 "S Masters deg." 
+la var s_ed_ind7 "S Professional deg."
+
+//create s hs degree variable
+tab s_degree_e s_hseduc , missing
+la var s_hseduc "S HS Degree, from tracker, 1=yes"
+
+//create s education, 3 categories (match 3cat R/S dyad variable below
+gen s_educ_3cat=0 if s_degree_e==0
+replace s_educ_3cat=1 if inlist(s_degree_e,1,2)
+replace s_educ_3cat=2 if inlist(s_degree_e,3,4,5,6,9)
+la var s_educ_3cat "Spouse 3 category education"
+la val s_educ_3cat r_educ_3cat 
+tab s_educ_3cat, gen(s_educ_3cat)
+
+**********************************************************************
+//Difference in s / r education levels
+**********************************************************************
+tab r_degree_e s_degree_e, missing
+
+gen byte r_s_educ_hs_diff = 0 if r_hseduc==s_hseduc
+replace r_s_educ_hs_diff = 1 if r_hseduc~=s_hseduc
+replace r_s_educ_hs_diff = . if r_hseduc==. | s_hseduc==.
+la var r_s_educ_hs_diff "One has HS degree, other does not"
+tab r_s_educ_hs_diff, missing
+
+gen r_4ycol=1 if inlist(r_degree_e,4,5,6)
+replace r_4ycol=0 if inlist(r_degree_e,0,1,2,3,9)
+tab r_degree_e r_4ycol, missing
+gen s_4ycol=1 if inlist(s_degree_e,4,5,6)
+replace s_4ycol=0 if inlist(s_degree_e,0,1,2,3,9)
+tab s_degree_e s_4ycol, missing
+
+gen byte r_s_educ_col_diff = 0 if r_4ycol==s_4ycol
+replace r_s_educ_col_diff = 1 if r_4ycol~=s_4ycol
+replace r_s_educ_col_diff = . if r_4ycol==. | s_4ycol==.
+la var r_s_educ_col_diff "One has 4yr College deg, one does not"
+tab r_s_educ_col_diff, missing
+
+//create variable for hs diff, spouse has deg, r does not
+gen byte educ_s_hs_r_no = 0 if r_hseduc~=0 | s_hseduc~=1
+replace educ_s_hs_r_no = 1 if r_hseduc==0 & s_hseduc==1
+replace educ_s_hs_r_no = . if r_hseduc==. | s_hseduc==.
+la var educ_s_hs_r_no "S has HS degree, R does not"
+tab educ_s_hs_r_no, missing
+
+//create education differences categorical variable
+gen s_r_educ_cat = .
+replace s_r_educ_cat = 0 if r_hseduc==0 & s_hseduc==0 //both less than high school
+replace s_r_educ_cat = 1 if r_hseduc==0 & inlist(s_degree_e,1,2,3) //spouse high school, r no
+replace s_r_educ_cat = 2 if inlist(r_degree_e,1,2,3) & s_hseduc==0 //r high school, s no
+replace s_r_educ_cat = 3 if inlist(r_degree_e,1,2,3) & inlist(s_degree_e,1,2,3) //both high school
+replace s_r_educ_cat = 4 if r_4ycol==0 & s_4ycol==1 //spouse 4y college, r less
+replace s_r_educ_cat = 5 if r_4ycol==1 & s_4ycol==0 //r college, s less
+replace s_r_educ_cat = 6 if r_4ycol==1 & s_4ycol==1 //both college
+la var s_r_educ_cat "R S Education Level Categorical"
+la def educ_cat 0 "R&S < HS Degree" 1 "S HS, R less" 2"R HS, S less" ///
+3"R&S High school degree" 4"S College, R less" 5"R College, S less" 6"R&S - College"
+la val s_r_educ_cat educ_cat
+tab s_r_educ_cat , missing
+
+tab s_r_educ_cat , gen(s_r_ed_ind)
+la var s_r_ed_ind1 "R&S < HS Degree" 
+la var s_r_ed_ind2 "S HS, R less" 
+la var s_r_ed_ind3 "R HS, S less" 
+la var s_r_ed_ind4 "R&S High school degree" 
+la var s_r_ed_ind5 "S College, R less" 
+la var s_r_ed_ind6 "R College, S less" 
+la var s_r_ed_ind7 "R&S - College"
+
+gen s_r_educ_3cat = .
+replace s_r_educ_3cat = 1 if inlist(s_r_educ_cat,0,3,6)
+replace s_r_educ_3cat = 2 if inlist(s_r_educ_cat,1,4) //s higher educ
+replace s_r_educ_3cat = 3 if inlist(s_r_educ_cat,2,5) //r higher educ
+la var s_r_educ_3cat "Dyad Education Level, 3 categories"
+la def s_r_educ_3cat 1 "R,S Same educ level" 2 "S more educ than R" 3 "S less educ than R"
+la val s_r_educ_3cat s_r_educ_3cat 
+tab s_r_educ_3cat , missing
+
+//gen indicators for the three categories
+tab s_r_educ_3cat, gen(ind_s_r_educ)
+la var ind_s_r_educ1 "R,S Same educ level"
+la var ind_s_r_educ2 "S more educ than R"
+la var ind_s_r_educ3 "S less educ than R"
+
+gen s_r_educ_5cat = .
+replace s_r_educ_5cat =5 if s_r_educ_cat==6
+replace s_r_educ_5cat =4 if inlist(s_r_educ_cat,4,5)
+replace s_r_educ_5cat =3 if s_r_educ_cat==3
+replace s_r_educ_5cat =2 if inlist(s_r_educ_cat,1,2)
+replace s_r_educ_5cat =1 if s_r_educ_cat==0
+la var s_r_educ_5cat "Dyad Education Level, 5 categories"
+la def s_r_educ_5cat 5 "R,S College" 4 "R or S college, other lower" 3 "R,S High school" ///
+	2 "R or S high school, other lower" 1 "R,S less than HS"
+la val s_r_educ_5cat s_r_educ_5cat 
+tab s_r_educ_5cat , missing
+
+**********************************************************************
+//Spouse / Respondant age difference variables
+**********************************************************************
+//create age categorical variables for s and r
+gen r_age_cat=.
+replace r_age_cat = 1 if  r_age<75
+replace r_age_cat = 2 if  r_age>=75 & r_age<85
+replace r_age_cat = 3 if  r_age>=85 & r_age!=.
+la var r_age_cat "R Age at death - categorical"
+
+//generate indicators for r age categories
+tab r_age_cat, gen(ind_r_age_cat)
+la var ind_r_age_cat1 "R age 65-74"
+la var ind_r_age_cat2 "R age 75-84"
+la var ind_r_age_cat3 "R age 85+"
+
+gen s_age_cat=.
+replace s_age_cat = 1 if  s_age<75
+replace s_age_cat = 2 if  s_age>=75 & s_age<85
+replace s_age_cat = 3 if  s_age>=85 & s_age!=.
+la var s_age_cat "S Age at R's death - categorical"
+
+la def age_cat 1 "Less than 75" 2 "75-84" 3 "85+"
+la val r_age_cat s_age_cat age_cat
+
+tab r_age_cat, missing
+tab s_age_cat, missing
+
+tab s_age_cat, gen(ind_s_age_cat)
+la var ind_s_age_cat1 "S age 65-74"
+la var ind_s_age_cat2 "S age 75-84"
+la var ind_s_age_cat3 "S age 85+"
+
+tab r_age_cat s_age_cat, missing
+
+//create dyad s and r age variable
+gen r_s_age_cat = .
+replace r_s_age_cat = 1 if r_age_cat==1 & s_age_cat==1 
+replace r_s_age_cat = 2 if r_age_cat==2 & s_age_cat==1 
+replace r_s_age_cat = 3 if r_age_cat==3 & s_age_cat==1 
+replace r_s_age_cat = 4 if r_age_cat==1 & s_age_cat==2 
+replace r_s_age_cat = 5 if r_age_cat==2 & s_age_cat==2 
+replace r_s_age_cat = 6 if r_age_cat==3 & s_age_cat==2 
+replace r_s_age_cat = 7 if r_age_cat==1 & s_age_cat==3 
+replace r_s_age_cat = 8 if r_age_cat==2 & s_age_cat==3 
+replace r_s_age_cat = 9 if r_age_cat==3 & s_age_cat==3 
+la var r_s_age_cat "R and S age, categorical variable"
+la def r_s_age_cat 1 "R&S lt 75" 2 "R 75-84, S  lt 75" 3 "R 85+, S lt 75" ///
+4 "R<75, S 75-84" 5 "R&S 75-84" 6 "R 85+, S 75-84" ///
+7 "R<75, S 85+" 8 "R 75-84, S 85+" 9 "R&S 85+"
+la val r_s_age_cat r_s_age_cat 
+tab r_s_age_cat, missing
+
+gen r_s_age_2cat = 0
+replace r_s_age_2cat = 1 if inlist(r_s_age_cat,1,5,9)
+replace r_s_age_2cat = . if r_s_age_cat==.
+la var r_s_age_2cat "R and S age, same"
+la def r_s_age_2cat 1 "R&S in same age category (<75, 75-84, 85+)" 0 "R&S different age"
+la val r_s_age_2cat r_s_age_2cat 
+tab r_s_age_2cat , missing
+
+gen r_s_age_3cat = .
+replace r_s_age_3cat = 1 if r_s_age_2cat==1
+replace r_s_age_3cat = 2 if inlist(r_s_age_cat,4,7,8)
+replace r_s_age_3cat = 3 if inlist(r_s_age_cat,2,3,6)
+la var r_s_age_3cat "R and S age comparison, 3 categories"
+la def r_s_age_3cat 1 "R&S in same age category (<75, 75-84, 85+)" 2 "S older" 3 "S Younger"
+la val r_s_age_3cat r_s_age_3cat 
+tab r_s_age_3cat , missing
+
+//create indicators for categories
+tab r_s_age_3cat, gen(ind_r_s_age)
+la var ind_r_s_age1 "R&S in same age category (<75, 75-84, 85+)"
+la var ind_r_s_age2 "S older" 
+la var ind_r_s_age3 "S Younger"
+
+gen r_s_age_5cat = .
+replace r_s_age_5cat = 5 if r_s_age_cat==9
+replace r_s_age_5cat = 4 if inlist(r_s_age_cat,3,6,7,8)
+replace r_s_age_5cat = 3 if r_s_age_cat==5
+replace r_s_age_5cat = 2 if inlist(r_s_age_cat,2,4)
+replace r_s_age_5cat = 1 if r_s_age_cat==1
+la var r_s_age_5cat "R and S age comparison, 5 categories"
+la def r_s_age_5cat 5 "R&S 85+" 4 "R or S 85+, other younger" 3 "R&S 75-84" ///
+	2 "R or S 75-84, other younger" 1 "R&S less than 75"
+la val r_s_age_5cat r_s_age_5cat 
+tab r_s_age_5cat , missing
+
+//Difference in s / r age
+gen r_s_age_diff = abs(s_age - r_age)
+tab r_s_age_diff, missing 
+
+gen byte r_s_age_wi_5yrs = 0
+replace r_s_age_wi_5yrs = 1 if (r_s_age_diff<6) & r_s_age_diff!=.
+replace r_s_age_wi_5yrs = . if r_s_age_diff==.
+tab r_s_age_wi_5yrs , missing
+
+gen byte r_s_age_6_10yrs = 0
+replace r_s_age_6_10yrs = 1 if (r_s_age_diff>5)&(r_s_age_diff<11)& r_s_age_diff!=.
+replace r_s_age_6_10yrs = . if r_s_age_diff==.
+tab r_s_age_6_10yrs , missing
+
+gen byte r_s_age_gt10yr_diff = 0
+replace r_s_age_gt10yr_diff = 1 if (r_s_age_diff>10)& r_s_age_diff!=.
+replace r_s_age_gt10yr_diff = . if r_s_age_diff==.
+tab r_s_age_gt10yr_diff , missing
+
+//categorical varaible
+gen r_s_age_diff_cat = .
+replace r_s_age_diff_cat = 1 if r_s_age_wi_5yrs==1
+replace r_s_age_diff_cat = 2 if r_s_age_6_10yrs==1
+replace r_s_age_diff_cat = 3 if r_s_age_gt10yr_diff==1
+la def agediff 1 "S/R age within 5 years" 2"S/R age diff 6-10 years" 3"S/R age diff gt 10 years"
+la val r_s_age_diff_cat agediff
+tab r_s_age_diff_cat, missing
+
+//Look at older spouses now
+gen s_yrs_older = s_age - r_age
+tab s_yrs_older, missing
+
+gen byte s_older_1yr = .
+replace s_older_1yr = 1 if s_yrs_older >=1 & s_yrs_older!=.
+replace s_older_1yr = 0 if s_yrs_older < 1 & s_yrs_older!=.
+la var s_older_1yr "Spouse Older than R"
+tab s_older_1yr, missing
+
+gen byte s_older_5yrs = .
+replace s_older_5yrs = 1 if s_yrs_older >=5 & s_yrs_older!=.
+replace s_older_5yrs = 0 if s_yrs_older < 5
+la var s_older_5yrs "Spouse 5 or more years older than R"
+tab s_older_5yrs, missing
+
+gen byte s_older_10yrs = .
+replace s_older_10yrs = 1 if s_yrs_older >=10 & s_yrs_older!=.
+replace s_older_10yrs = 0 if s_yrs_older < 10
+la var s_older_10yrs "Spouse 10 or more years older than R"
+tab s_older_10yrs, missing
+
+gen byte s_younger_10yrs = .
+replace s_younger_10yrs = 1 if s_yrs_older <=-10 & s_yrs_older!=.
+replace s_younger_10yrs = 0 if s_yrs_older > -10 & s_yrs_older!=.
+la var s_younger_10yrs "Spouse 10 or more years younger than R"
+tab s_younger_10yrs , missing
+
+**********************************************************************
+//Spouse / Respondant race/ethnicity difference variables
+**********************************************************************
+tab r_race_e r_hisp_eth_e, missing
+//gen race_categorical variable including hispanic
+foreach g in r s {
+gen `g'_race_cat = 0 if `g'_white_e==1 & `g'_hisp_eth_e==0
+replace `g'_race_cat = 1 if `g'_black_e==1 & `g'_hisp_eth_e==0
+replace `g'_race_cat = 2 if `g'_hisp_eth_e==1
+replace `g'_race_cat = 3 if `g'_other_na_api_race_e==1 & `g'_hisp_eth_e==0
+tab `g'_race_cat, missing
+tab `g'_race_cat `g'_white_e, missing
+tab `g'_race_cat `g'_black_e, missing
+tab `g'_race_cat `g'_hisp_eth_e, missing
+tab `g'_race_cat `g'_other_na_api_race_e, missing
+la var `g'_race_cat "`g' race, categorical"
+}
+
+la def race_cat 0 "White, non-Hispanic" 1 "Black, non-Hispanic" ///
+2 "Hispanic" 3 "Other race, non-Hispanic"
+la val r_race_cat s_race_cat race_cat
+tab r_race_cat, missing
+tab s_race_cat, missing
+
+foreach g in r s {
+tab `g'_race_cat, gen(`g'_race_cat)
+}
+
+tab s_race_cat1 r_race_cat1, missing
+
+gen byte s_white_r_no = .
+replace s_white_r_no=1 if s_race_cat1 ==1 & r_race_cat1==0
+replace s_white_r_no=0 if s_race_cat1 ==0 & r_race_cat1!=.
+replace s_white_r_no=0 if s_race_cat1 ==1 & r_race_cat1==1
+la var s_white_r_no "Spouse = white, r = no"
+tab s_white_r_no, missing
+
+**********************************************************************
+//Other variable cleaning
+**********************************************************************
+//create dichotomous vars for comorbidity index categories
+gen byte s_hrs_comorb_none_n1 = .
+replace s_hrs_comorb_none_n1=1 if s_comor_c_hrs_n1==0
+replace s_hrs_comorb_none_n1=0 if s_comor_c_hrs_n1!=0 & s_comor_c_hrs_n1!=.
+la var s_hrs_comorb_none_n1 "Comorbidity index ind - none"
+
+gen byte s_hrs_comorb_mild_n1 = .
+replace s_hrs_comorb_mild_n1 =1 if s_comor_c_hrs_n1==1
+replace s_hrs_comorb_mild_n1 =0 if s_comor_c_hrs_n1!=1 & s_comor_c_hrs_n1!=.
+la var s_hrs_comorb_mild_n1 "Comorbidity index ind - mild 1-3"
+
+gen byte s_hrs_comorb_mod_n1 = .
+replace s_hrs_comorb_mod_n1=1 if s_comor_c_hrs_n1==2
+replace s_hrs_comorb_mod_n1=0 if s_comor_c_hrs_n1!=2 & s_comor_c_hrs_n1!=.
+la var s_hrs_comorb_mod_n1 "Comorbidity index ind - moderate 4-6"
+
+gen byte s_hrs_comorb_sev_n1 = .
+replace s_hrs_comorb_sev_n1=1 if s_comor_c_hrs_n1==3
+replace s_hrs_comorb_sev_n1=0 if s_comor_c_hrs_n1!=3 & s_comor_c_hrs_n1!=.
+la var s_hrs_comorb_sev_n1 "Comorbidity index ind - severe 7+"
+
+tab s_hrs_comorb_none_n1, missing
+tab s_hrs_comorb_mild_n1, missing
+tab s_hrs_comorb_mod_n1, missing
+tab s_hrs_comorb_sev_n1, missing
+
+la def comor_c 0 "None" 1 "Mild (1-3)" 2 "Moderate (4-6)" 3 "Severe (7+)"
+la val s_comor_c_hrs_p1 s_comor_c_hrs_n1 comor_c
+
+//for obs with severe, lump in with moderate category since only 1 obs
+tab s_comor_in_hrs_n1 s_comor_c_hrs_n1, missing
+replace s_hrs_comorb_mod_n1=1 if s_hrs_comorb_sev_n1==1
+
+//label spouse shr poor/fair variable
+la def srhfp 0 "SRH Good, VG, or Exc" 1 "SRH Fair or Poor"
+la val s_srh_pf_p1 srhfp
+
+//adl indicator for needing assitance
+foreach i in s r {
+gen `i'_adl_impair_n1 = 0 if  `i'_adl_independent_core_n1 == 1
+replace `i'_adl_impair_n1 = 1 if `i'_adl_independent_core_n1 == 0
+la var `i'_adl_impair_n1 "`i' ADL impairment n1"
+tab `i'_adl_impair_n1 `i'_adl_independent_core_n1, missing
+
+//iadl indicator for needing assitance
+gen `i'_iadl_impair_n1 = 0 if  `i'_iadl_independent_core_n1 == 1
+replace `i'_iadl_impair_n1 = 1 if `i'_iadl_independent_core_n1 == 0
+la var `i'_iadl_impair_n1 "`i' IADL impairment n1"
+tab `i'_iadl_impair_n1 `i'_iadl_independent_core_n1, missing
+}
+
+//create a variable for more than 1 ADL impairment
+gen s_adl_imp_gt1_n1 = 1 if s_adl_index_core_n1>1 & s_adl_index_core_n1!=.
+replace s_adl_imp_gt1_n1 = 0 if s_adl_index_core_n1<=1 & s_adl_index_core_n1!=.
+tab s_adl_index_core_n1 s_adl_imp_gt1_n1 , missing
+
+gen s_iadl_imp_gt1_n1 = 1 if s_iadl_ind_core_n1>1 & s_iadl_ind_core_n1!=.
+replace s_iadl_imp_gt1_n1 = 0 if s_iadl_ind_core_n1<=1 & s_iadl_ind_core_n1!=.
+tab s_iadl_ind_core_n1 s_iadl_imp_gt1_n1 , missing
+
+//spouse adls - changes between core interviews
+tab s_adl_stable_ind_n1n2, missing
+tab s_adl_stable_partial_n1n2, missing
+tab s_adl_stable_severe_n1n2, missing
+tab s_adl_change_i_m_n1n2, missing
+tab s_adl_change_i_s_n1n2, missing
+tab s_adl_change_m_s_n1n2 , missing
+tab s_adl_improved_n1n2, missing
+
+*******************************************************************
+//r & s adl / iadl difficulty reported (different from other variables that are needs help)
+*******************************************************************
+********************************************
+********************************************
+foreach i in s r {
+
+egen `i'_adl_diff_index_core_n1 = rowtotal(`i'_adl_diff_dr_n1 `i'_adl_diff_wk_n1 `i'_adl_diff_bh_n1  ///
+ `i'_adl_diff_e_n1 `i'_adl_diff_tx_n1 `i'_adl_diff_t_n1)
+label var `i'_adl_diff_index_core_n1 "`i' Index of Difficulty with ADLs - core"
+tab `i'_adl_diff_index_core_n1, missing 
+
+egen `i'_adl_diff_missing = rowmiss(`i'_adl_diff_dr_n1 `i'_adl_diff_wk_n1 `i'_adl_diff_bh_n1  ///
+ `i'_adl_diff_e_n1 `i'_adl_diff_tx_n1 `i'_adl_diff_t_n1)
+tab `i'_adl_diff_missing , missing
+ 
+generate `i'_adl_diff_cat_core_n1 = .
+replace `i'_adl_diff_cat_core_n1 = 0 if (`i'_adl_diff_index_core_n1 ==0)
+replace `i'_adl_diff_cat_core_n1 = 1 if inlist(`i'_adl_diff_index_core_n1,1,2,3)
+replace `i'_adl_diff_cat_core_n1 = 2 if inlist(`i'_adl_diff_index_core_n1,4,5,6)
+//set to missing if index=0 but no adl questions were answered 
+replace `i'_adl_diff_cat_core_n1 = . if `i'_adl_diff_index_core_n1 ==0 & `i'_adl_diff_missing==6
+label var `i'_adl_diff_cat_core_n1 "`i' Difficulty with ADLs, Categorical"
+label define `i'_adl_diff_cat_core_n1 0 "Independent" 1 "Partial Dependence" 2 "Severe Dependence", modify
+label values `i'_adl_diff_cat_core_n1 `i'_adl_diff_cat_core_n1 
+tab `i'_adl_diff_cat_core_n1, missing 
+
+//Create dummy variables for ADL Categories
+gen byte `i'_adl_diff_independent_core_n1 = .
+replace `i'_adl_diff_independent_core_n1 = 1 if (`i'_adl_diff_cat_core_n1==0)
+replace `i'_adl_diff_independent_core_n1 = 0 if inlist(`i'_adl_diff_cat_core_n1,1,2)
+label var `i'_adl_diff_independent_core_n1 "`i' Independent for Difficulty with ADLs"
+
+//adl indicator for needing assitance
+gen `i'_adl_diff_impair_n1 = 0 if  `i'_adl_diff_independent_core_n1 == 1
+replace `i'_adl_diff_impair_n1 = 1 if `i'_adl_diff_independent_core_n1 == 0
+la var `i'_adl_diff_impair_n1 "`i' ADL Difficulty n1"
+tab `i'_adl_diff_impair_n1 `i'_adl_diff_independent_core_n1 , missing
+
+********************************************
+egen `i'_iadl_diff_ind_core_n1= rowtotal(`i'_iadl_diff_mp_n1 `i'_iadl_diff_gr_n1 `i'_iadl_diff_ph_n1 ///
+ `i'_iadl_diff_rx_n1 `i'_iadl_diff_m_n1)
+label var `i'_iadl_diff_ind_core_n1 "`i' Index of Difficulty with IADLs"
+tab `i'_iadl_diff_ind_core_n1, missing 
+
+egen `i'_iadl_diff_missing = rowmiss(`i'_iadl_diff_mp_n1 `i'_iadl_diff_gr_n1 `i'_iadl_diff_ph_n1 ///
+ `i'_iadl_diff_rx_n1 `i'_iadl_diff_m_n1)
+tab `i'_iadl_diff_missing , missing
+
+generate `i'_iadl_diff_cat_core_n1 = .
+replace `i'_iadl_diff_cat_core_n1 = 0 if `i'_iadl_diff_ind_core_n1==0
+replace `i'_iadl_diff_cat_core_n1 = 1 if inlist(`i'_iadl_diff_ind_core_n1,1,2,3)
+replace `i'_iadl_diff_cat_core_n1 = 2 if inlist(`i'_iadl_diff_ind_core_n1,4,5)
+//set to missing if index=0 but no iadl questions were answered
+replace `i'_iadl_diff_cat_core_n1 = . if `i'_iadl_diff_ind_core_n1 ==0 & `i'_iadl_diff_missing==5
+label var `i'_iadl_diff_cat_core_n1 "`i' Difficulty with IADLs, Categorical"
+label define `i'_iadl_diff_cat_core_n1 0 "Independent" 1 "Partial Dependence" 2 "Severe Dependence", modify
+label values `i'_iadl_diff_cat_core_n1 `i'_iadl_diff_cat_core_n1 
+tab `i'_iadl_diff_cat_core_n1 , missing 
+
+**Create dummy variables for IADL Categories
+generate `i'_iadl_diff_independent_core_n1 = .
+replace `i'_iadl_diff_independent_core_n1 = 1 if (`i'_iadl_diff_cat_core_n1==0)
+replace `i'_iadl_diff_independent_core_n1 = 0 if ((`i'_iadl_diff_cat_core_n1 == 1)|(`i'_iadl_diff_cat_core_n1 == 2))
+label var `i'_iadl_diff_independent_core_n1 "`i' Independent for Difficulty with IADLs"
+tab `i'_iadl_diff_independent_core_n1, missing
+
+//iadl indicator for needing assitance
+gen `i'_iadl_diff_impair_n1 = 0 if  `i'_iadl_diff_independent_core_n1 == 1
+replace `i'_iadl_diff_impair_n1 = 1 if `i'_iadl_diff_independent_core_n1 == 0
+la var `i'_iadl_diff_impair_n1 "`i' IADL Difficulty n1"
+tab `i'_iadl_diff_impair_n1 `i'_iadl_diff_independent_core_n1 , missing
+}
+
+********************************************
+//cesd score n1 (mostly proxy ivws are missing)
+tab s_cesd_tot_n1 s_proxy_core_n1 , missing
+
+//indicator for hospice use 12 months preceeding death
+gen byte r_hs_12m = .
+replace r_hs_12m = 1 if hs_los_12m != 0 & hs_los_12m != .
+replace r_hs_12m = 0 if hs_los_12m == 0 
+la var r_hs_12m "Indicator hospice use last 12 months of life"
+la def hospice 0 "No hospice use" 1 "Hospice use"
+la val r_hs_12m hospice 
+tab r_hs_12m, missing
+
+//hospital based hospice indicator
+rename hs_hospital_based_12m r_hs_hospital_based_12m
+tab r_hs_hospital_based_12m, missing
+tab r_hs_hospital_based_12m if r_hs_12m==1, missing
+
+//additional value labels added for spouse new variables
+la def help_hours 0 "None" 1 "lt 100 hours" 2 "101-200 hours" 3 "gt 200 hours", replace
+la val s_help_friends_hours_n1 s_help_friends_hours_p1 help_hours
+
+la def soc_visit_cat 0 "None or almost never" 1 "Less than 1xper week" ///
+2 "Between 1x per day up to 1x per week" 3 "At least 1x per day"
+la val s_soc_visit_cat_n1 s_soc_visit_cat_n2 soc_visit_cat
+
+//set to 0 if in nursing home
+tab r_hh_worker_n1 r_nhres_n1, missing
+replace r_hh_worker_n1 = 0 if r_nhres_n1==1
+tab r_hh_worker_n1 , missing
+
+*******************************************************************
+//spouse tics score categories
+*******************************************************************
+//spouse n1 0-35 scale tics score
+tab s_tics_tot_n1, missing
+
+gen s_tics_cat_n1 = .
+replace s_tics_cat_n1 = 1 if (s_tics_tot_n1 > 8 & s_tics_tot_n1 ~=.)
+replace s_tics_cat_n1 = 2 if (s_tics_tot_n1 >= 5 & s_tics_tot_n1 <= 8)
+replace s_tics_cat_n1 = 3 if (s_tics_tot_n1 <= 4 & s_tics_tot_n1 ~=.)
+la var s_tics_cat_n1 "S n1 TICS - categorical"
+la def tics_cat 1 "9-35 Normal" 2 "5-8 MCI" 3 "0-4 Demented"
+la val s_tics_cat_n1 tics_cat
+tab s_tics_cat_n1 , missing
+tab s_tics_cat_n1 s_proxy_core_n1, missing
+
+gen s_tics_normal_n1 = 0
+replace s_tics_normal_n1=1 if s_tics_cat_n1==1
+gen s_tics_mci_n1 = 0
+replace s_tics_mci_n1 =1 if s_tics_cat_n1==2
+gen s_tics_dem_n1 = 0
+replace s_tics_dem_n1 =1 if s_tics_cat_n1==3
+gen s_tics_miss_n1 = 0
+replace s_tics_miss_n1 =1 if s_tics_cat_n1==.
+la var s_tics_normal_n1 "S n1 TICS - Normal (9-35)"
+la var s_tics_mci_n1 "S n1 TICS - MCI (5-8)"
+la var s_tics_dem_n1 "S n1 TICS - Demented (0-4)"
+la var s_tics_miss_n1 "S n1 TICS - Missing"
+
+***************************************************************************
+//indicator for 7+ days of hospice use (vs 0 days)
+tab r_hs_12m, missing
+gen r_hs_ge7d=1 if hs_los_12m>=7 & hs_los_12m~=.
+replace r_hs_ge7d=0 if hs_los_12m==0 & hs_los_12m~=.
+la var r_hs_ge7d "Hospice use 7+ days (vs 0 days)"
+tab  hs_los_12m r_hs_ge7d, missing
+
+//indicator for 7+ days vs 1-6 days (0 days is missing)
+gen r_hs_7vs_1to6=1 if r_hs_ge7d==1
+replace r_hs_7vs_1to6=0 if 0<hs_los_12m & hs_los_12m<7
+la var r_hs_7vs_1to6 "Hospice users 7+ days (vs 1-6 days)"
+tab hs_los_12m r_hs_7vs_1to6, missing
+
+//indicator for 3+ days vs 1-2 days (0 days is missing)
+gen r_hs_3vs_1to2=1 if hs_los_12m>2 & hs_los_12m~=.
+replace r_hs_3vs_1to2=0 if 0<hs_los_12m & hs_los_12m<3
+la var r_hs_3vs_1to2 "Hospice users 3+ days (vs 1-2 days)"
+tab hs_los_12m r_hs_3vs_1to2, missing
+
+//indicator for 3+ days vs 0 days
+tab r_hs_12m, missing
+gen r_hs_ge3d=1 if hs_los_12m>=3 & hs_los_12m~=.
+replace r_hs_ge3d=0 if hs_los_12m==0 & hs_los_12m~=.
+la var r_hs_ge3d "Hospice use 3+ days (vs 0 days)"
+tab  hs_los_12m r_hs_ge3d, missing
+
+
+***************************************************************************
+//interview timing spouse n1 to r's death
+gen s_days_n1_core_dead =  r_death_date_e - s_c_ivw_date_n1 
+label var s_days_n1_core_dead "Days from S n1 interview to R's death"
+gen s_months_n1_core_dead = s_days_n1_core_dead/30.5
+label var s_months_n1_core_dead "Months from S n1 interview to R's death"
+sum s_months_n1_core_dead, detail
+
+//categorical spouse primary helper, duration
+tab r_adl_sp_helper_x r_iadl_sp_helper_x, missing
+gen r_s_help_dur_cat = 0 if r_adl_sp_helper_x==0 & r_iadl_sp_helper_x==0
+replace r_s_help_dur_cat = 1 if r_adl_sp_helper_x==1 | r_iadl_sp_helper_x==1
+replace r_s_help_dur_cat = 2 if (r_adl_sp_helper_x==1 | r_iadl_sp_helper_x==1) ///
+ & ( r_adl_sp_helper_n1==1 | r_iadl_sp_helper_n1==1)
+la def help 0 "S not primary helper x" 1 "S primary helper x only" 2 "S primary helper x+n1"
+la val r_s_help_dur_cat help
+tab r_s_help_dur_cat, missing
+
+tab r_s_help_dur_cat, gen(r_s_help_dur_ind)
+
+la var r_s_help_dur_ind1 "S not prim helper exit"
+la var r_s_help_dur_ind2 "S prim helper exit only"
+la var r_s_help_dur_ind3 "S prim helper exit and n1"
+
+***************************************************************************
+save `projdatapath'\spouse_factors_data_sample_v1.dta, replace
+
+***************************************************************************
+***************************************************************************
+//check missingness all variables
+***************************************************************************
+***************************************************************************
+clear all
+
+use `projdatapath'/spouse_factors_data_sample_v1.dta ///
+ if (no_cc_12m_excl_cataract==0 &accident_cause_death==0)
+
+local svars s_age /*s_older_1yr s_older_5yrs*/ s_older_10yrs s_female ///
+s_white_e s_white_r_no s_hseduc educ_s_hs_r_no ///
+s_medicaid_n1 s_srh_pf_n1 s_smoke_curr_n1 s_ever_drink_n1 s_n_drinks_3m_n1  ///
+s_vig_phy_act_n1 s_hrs_comorb_mild_n1 ///
+s_hrs_comorb_mod_n1 s_cancer_hrs_n1 ///
+s_lung_hrs_n1 s_heart_hrs_n1 s_chf_hrs_n1 s_stroke_hrs_n1 ///
+s_memory_hrs_n1 s_htn_hrs_n1 s_dm_hrs_n1 s_cesd_tot_ge3_n1 ///
+s_psych_overall_hrs_n1 s_help_friends_n1 s_help_friends_hours_n1  ///
+s_friend_n1 s_soc_visit_n1 s_soc_visit_cat_n1 ///
+r_adl_sp_helper_n1 r_adl_oth_helper_n1 r_adl_helper_count_n1 /// 
+r_iadl_sp_helper_n1 r_iadl_oth_helper_n1 r_iadl_helper_count_n1 ///
+s_adl_stable_ind_n1n2 ///
+s_adl_stable_partial_n1n2 s_adl_stable_severe_n1n2 s_adl_change_i_m_n1n2 ///
+s_adl_change_m_s_n1n2 s_adl_change_i_s_n1n2 
+
+//decedent variables, regional controls
+//omitted adl change n1n2 variable = stable, independent
+local rvars r_age r_medicaid_n1 r_nhres_n1 r_hh_worker_n1 r_nhres_x r_advdir_x  ///
+r_adl_stable_partial_n1n2 r_adl_stable_severe_n1n2 r_adl_change_i_m_n1n2 ///
+r_adl_change_m_s_n1n2 r_adl_change_i_s_n1n2 cc_3_alzhdmta_n12mn0 ///
+cc_6_chrnkidn_n12mn0 cc_12_ischmcht_n12mn0 cc_8_chf_n12mn0 ///
+cc_9_diabetes_n12mn0 cc_7_copd_n12mn0 cc_16_strketia_n12mn0 ///
+cc_cncr_chronic_n12mn0 cc_4_atrialfb_n12mn0 cc_11_hipfrac_n12mn0 ///
+cc_13_depressn_n12mn0 cc_14_osteoprs_n12mn0 cc_15_ra_oa_n12mn0 hci_index hospital_beds specialists	
+
+foreach v of varlist `svars' `dvars' {
+tab `v', missing
+}
+
+//check of questions re eol decisionmaking for this sample
+label define decmaker 0 "N/A No EOL care decision made" 1 "Patient" ///
+      2 "Spouse or Partner" 3 "Exit Interview Proxy"  ///
+      4 "Child/Child-in-law/Grandchild" 5 "Other Relative" 6 "Friend" ///
+      7 "Physician/Health Care Provider" 8 "Minister/Rabbi/Priest" ///
+      9 "Other" 10 "Don't Know/Refused", modify
+label values r_decmaker_x decmaker
+
+//decision had to be made
+tab r_eoldec_x, missing
+tab r_eoldec_x r_hs_12m, missing
+
+//if decision had to be made, who was primary decisionmaker?
+tab r_decmaker_x if r_eoldec_x==1, missing
+
+label define proxy_exit 0 "Proxy=Not-spouse" 1 "Proxy=spouse", modify
+label values r_proxy_exit_x proxy_exit
+
+tab r_decmaker_x r_proxy_exit_x if r_eoldec_x==1, missing
+
+//could patient particiapte?
+tab r_capacity_x if r_eoldec_x==1, missing
+
+tab r_decmaker_x r_capacity_x if r_eoldec_x==1, missing
+
+tab r_married_x r_married_or_part_v2_x , missing
+
+tab r_female s_female, missing
+
+***************************************************************************
+////look at sample hospice use, excluding those with no chronic conditions or 
+////cause of death accident, suicide or homicide or missing
+***************************************************************************
+
+mat tab2=J(8,4,.)
+
+tab r_exit_year, missing //get overall sample n
+mat tab2[1,1]=r(N)
+
+tab r_hs_12m, missing
+sum r_hs_12m
+mat tab2[2,1]=r(mean)*r(N) //n
+mat tab2[2,2]=r(mean)*100 //%
+
+//of those that used hospice, what is % hospital based
+sum r_hs_hospital_based_12m if r_hs_12m==1
+mat tab2[3,1]=r(mean)*r(N) //n
+mat tab2[3,2]=r(mean)*100 //%
+
+//of those that used hospice, what is LOS in last year of life?
+local r = 4
+sum hs_los_12m if r_hs_12m==1, detail
+mat tab2[`r',1]=r(mean)
+mat tab2[`r',2]=r(min)
+mat tab2[`r',3]=r(max)
+mat tab2[`r',4]=r(p50)
+
+//used hospice 1-6 days only
+sum r_exit_year_x if r_hs_ge7d==.
+mat tab2[5,1]=r(N)
+
+//used hospice 7+ days
+sum r_hs_ge7d
+mat tab2[6,1]=r(mean)*r(N) //n
+mat tab2[6,2]=r(mean)*100 //%
+
+//of those that used hospice 7+ days,  what is % hospital based
+sum r_hs_hospital_based_12m if r_hs_ge7d==1
+mat tab2[7,1]=r(mean)*r(N) //n
+mat tab2[7,2]=r(mean)*100 //%
+
+//of those that used hospice, what is LOS in last year of life?
+local r = 8
+sum hs_los_12m if r_hs_ge7d==1, detail
+mat tab2[`r',1]=r(mean)
+mat tab2[`r',2]=r(min)
+mat tab2[`r',3]=r(max)
+mat tab2[`r',4]=r(p50)
+
+frmttable using `logpath'\2_sample_hospice_use , statmat(tab2) ///
+	title("Hospice use, spouse factors sample" \ ///
+	"Excludes observations with no chronic conditions, missing cause of death, or" \ ///
+	"accident, homicide or suicide cause of death") ///
+	rtitle("N" \ "Used Hospice 1+ days in last year of life n, %" \ ///
+	"Of those that used hospice 1+ day, hospital based hospice, n,%" \ ///
+	"Of those that used hospice 1+ day, LOS mean, min, max, median" \ ///
+	"Used Hospice 1-6 days, dropped from sample for next rows" \ ///
+	"Used Hospice 7+ days in last year of life n, %" \ ///
+	"Of those that used hospice 7+ day, hospital based hospice, n,%" \ ///
+	"Of those that used hospice 7+ day, LOS mean, min, max, median" ) ///
+	note("7+ days vs 0 days (dropping 1-6 days hospice use observations") ///
+	sdec(1) landscape replace
+
+
+***************************************************************************
+log close
+
+
+H="Create means table of Spouse Characteristics"
+/*This Stata code outputs univariate comparison tables comparing the hospice
+use group vs non-hospice use group to the file logs\spofactors_initial_tables.doc
+*/
+
+
+capture log close
+
+clear all
+set more off
+
+//Amy's PC
+local logpath E:\data\spouse_factors\logs
+local projdatapath E:\data\spouse_factors
+
+log using "`logpath'\4-HRS_Spouse_sum_stats_tables.txt", text replace
+
+cd `projdatapath'
+
+use spouse_factors_data_sample_v1.dta
+
+******************************************************************
+******************************************************************
+//create a table of decedent characteristics
+******************************************************************
+******************************************************************
+
+local t1vars r_medicaid_n1 r_imprelig_vimp_n1 r_rel_nb_n1 r_nhres_n1 ///
+r_nhres_x r_hh_worker_n1 r_advdir_x ///
+r_dexp_x r_adl_stable_ind_n1n2 ///
+r_adl_stable_partial_n1n2 r_adl_stable_severe_n1n2 r_adl_change_i_m_n1n2 ///
+r_adl_change_m_s_n1n2 r_adl_change_i_s_n1n2 ///
+r_adl_impair_n1 r_iadl_impair_n1 r_adl_diff_impair_n1 r_iadl_diff_impair_n1
+
+local t2vars  cc_3_alzhdmta_n12mn0 ///
+cc_6_chrnkidn_n12mn0 cc_12_ischmcht_n12mn0 cc_8_chf_n12mn0 ///
+cc_9_diabetes_n12mn0 cc_7_copd_n12mn0 cc_16_strketia_n12mn0 ///
+cc_cncr_chronic_n12mn0 cc_4_atrialfb_n12mn0 cc_11_hipfrac_n12mn0 ///
+cc_13_depressn_n12mn0 cc_14_osteoprs_n12mn0 cc_15_ra_oa_n12mn0 urban_ind
+
+sum r_age, detail
+
+gen byte non_hosp=.
+replace non_hosp=1 if r_hs_12m==0
+replace non_hosp=0 if r_hs_12m==1
+tab non_hosp r_hs_12m, missing
+
+mat demo=J(48,3,.)
+
+//first row, n of hospice users and non-users
+tab r_hs_12m, missing matcell(d1)
+mat demo[1,1]=d1[2,1] //non-hospice n
+mat demo[1,2]=d1[1,1] //hospice users n
+
+local j=1
+foreach h in r_hs_12m non_hosp {
+sum r_age if `h'==1, detail //age
+mat demo[2,`j']=r(mean)
+mat demo[3,`j']=r(sd)
+sum r_female if `h'==1, detail //female
+mat demo[4,`j']=r(mean)*100
+sum r_white_e if `h'==1, detail //non-hispanic, white
+mat demo[5,`j']=r(mean)*100
+sum r_hseduc if `h'==1, detail //hs education+
+mat demo[6,`j']=r(mean)*100
+sum r_networth_adj2012_n1 if `h'==1, detail //net worth
+mat demo[7,`j']=r(mean)
+mat demo[8,`j']=r(sd)
+local i=9
+foreach v in `t1vars' {
+	sum `v' if `h'==1, detail 
+	mat demo[`i',`j']=r(mean)*100
+	local i=`i'+1 //populates rows 9-26
+	}
+sum comorb_all_0d_n12m if `h'==1, detail //count of cc's
+mat demo[27,`j']=r(mean)
+mat demo[28,`j']=r(sd)
+local i = 29
+foreach v in `t2vars' {
+	sum `v' if `h'==1, detail 
+	mat demo[`i',`j']=r(mean)*100
+	local i=`i'+1 //populates rows 29-42
+	}
+local r=43
+sum hospital_beds if `h'==1, detail //hospital beds
+mat demo[`r',`j']=r(mean)
+mat demo[`r'+1,`j']=r(sd)
+sum specialists if `h'==1, detail //medical specialists
+mat demo[`r'+2,`j']=r(mean)
+mat demo[`r'+3,`j']=r(sd)
+sum hci_index if `h'==1, detail //hci index
+mat demo[`r'+4,`j']=r(mean)
+mat demo[`r'+5,`j']=r(sd)
+local j=`j'+1
+}
+
+//pvalues
+ttest r_age, by(r_hs_12m)
+mat demo[2,3]=r(p) //p value from t-test
+local j=4
+foreach v in r_female r_white_e r_hseduc{
+tab r_hs_12m `v' , row chi
+mat demo[`j',3]=r(p) //p value from chisq test
+local j = `j'+1 //rows 4-6
+}
+ttest r_networth_adj2012_n1, by(r_hs_12m)
+mat demo[7,3]=r(p) //p value from t-test
+local j=9
+foreach v in `t1vars' {
+	tab r_hs_12m `v', row chi 
+	mat demo[`j',3]=r(p)
+	local j=`j'+1 //populates rows 9-26
+	}
+ttest comorb_all_0d_n12m, by(r_hs_12m)
+mat demo[27,3]=r(p) //p value from t-test
+local j=29
+foreach v in `t2vars' {
+	tab r_hs_12m `v', row chi 
+	mat demo[`j',3]=r(p)
+	local j=`j'+1 //populates rows 29-42
+	}
+local r=43
+ttest hospital_beds, by(r_hs_12m)
+mat demo[`r',3]=r(p) //p value from t-test
+ttest specialists, by(r_hs_12m)
+mat demo[`r'+2,3]=r(p) //p value from t-test
+ttest hci_index, by(r_hs_12m)
+mat demo[`r'+4,3]=r(p) //p value from t-test
+
+mat rownames demo ="Sample n" "Age at death, years, mean" "SD" "Female, %" "Race, Non-Hispanic White, %" ///
+"Education, High School Grad" "Net worth, 2012US$, mean" "SD" "Medicaid, %" ///
+"Religion very important n1, %" "Relatives nearby n1,%" ///
+"Nursing home resident n1, %" "Nursing home resident exit" "R HH Worker n1" "Advanced directives" ///
+"Death expected by family" "Stable, Indep in ADLs n2 to n1" ///
+"Stable, Moderate 1-3 ADL" "Stable, Severe 4-6 ADL" ///
+"Declined, Indep to Moderate" "Declined, Moderate to Severe" ///
+"Declined, Independent to Severe" "ADL Impaired (receives help) n1" ///
+"IADL Impaired n1" "ADL Difficulty n1" "IADL Difficulty n1" ///
+"Count of chronic cond, mean" "SD" "Alzheimers/Dementia" "Chronic Kidney Disease" ///
+"Ischemic Heart Disease" "Congestive Heart Failure" "Diabetes" "COPD" ///
+"Stroke or TIA" "Cancer" "Atrial Fibrillation" "Hip Fracture" "Depression" "Osteoporosis" ///
+"Arthritis" "Urban residence" "Hosp beds per 10,000 res, mean" "SD" ///
+"Specialists per 100,000, mean" "SD" "HCI index, mean" "SD"
+
+mat list demo
+
+frmttable using `logpath'\3_spofactors_initial_tables, statmat(demo) ///
+title("Decedent characteristics, Spousal Factors Sample") ///
+ctitle("","Hospice users","Non-hospice users","P-value") ///
+sdec(2,2,3) replace
+
+******************************************************************
+******************************************************************
+//create a table of spouse characteristics
+******************************************************************
+******************************************************************
+
+local sdemovar1 s_older_1yr s_older_5yrs s_older_10yrs s_female ///
+s_white_e s_white_r_no s_hseduc educ_s_hs_r_no ///
+s_medicaid_n1 s_srh_pf_n1 s_smoke_curr_n1 s_alcohol_mis_n1 ///
+s_vig_phy_act_n1 s_hrs_comorb_none_n1 s_hrs_comorb_mild_n1 ///
+s_hrs_comorb_mod_n1 s_hrs_comorb_sev_n1 s_cancer_hrs_n1 ///
+s_lung_hrs_n1 s_heart_hrs_n1 s_chf_hrs_n1 s_stroke_hrs_n1 ///
+s_memory_hrs_n1 s_htn_hrs_n1 s_dm_hrs_n1 s_psych_hrs_n1 
+
+local sdemovar2 s_cesd_tot_ge3_n1 s_adl_stable_ind_n1n2 ///
+s_adl_stable_partial_n1n2 s_adl_stable_severe_n1n2 s_adl_change_i_m_n1n2 ///
+s_adl_change_m_s_n1n2 s_adl_change_i_s_n1n2 s_adl_impair_n1 s_iadl_impair_n1 ///
+s_adl_imp_gt1_n1 s_iadl_imp_gt1_n1 
+
+local sdemovar3 s_tics_normal_n1 s_tics_mci_n1 ///
+s_tics_dem_n1 s_tics_miss_n1 r_s_help_dur_ind1 r_s_help_dur_ind2 r_s_help_dur_ind3 
+
+mat sdemo=J(50,3,.)
+
+//first row, n of hospice and non-hospice
+tab r_hs_12m, missing matcell(sd1)
+mat sdemo[1,1]=sd1[2,1] //non-hospice n
+mat sdemo[1,2]=sd1[1,1] //hospice users n
+
+local j=1
+foreach h in r_hs_12m non_hosp {
+sum s_age if `h'==1, detail //age
+mat sdemo[2,`j']=r(mean)
+mat sdemo[3,`j']=r(sd)
+
+sum s_months_n1_core_dead  if `h'==1, detail //months ivw to death
+mat sdemo[4,`j']=r(mean)
+mat sdemo[5,`j']=r(sd)
+
+local i=6
+foreach v in `sdemovar1' {
+	sum `v' if `h'==1, detail 
+	mat sdemo[`i',`j']=r(mean)*100
+	local i=`i'+1 //populates rows 6-31
+	}
+sum s_cesd_tot_n1 if `h'==1, detail //cesd score n1
+mat sdemo[32,`j']=r(mean)
+
+local i=33
+foreach v in `sdemovar2' `sdemovar3' {
+	sum `v' if `h'==1, detail 
+	mat sdemo[`i',`j']=r(mean)*100
+	local i=`i'+1 //populates rows 33-50
+	}
+local j=`j'+1
+}
+
+//p-values
+ttest s_age, by(r_hs_12m)
+mat sdemo[2,3]=r(p)
+ttest s_months_n1_core_dead, by(r_hs_12m)
+mat sdemo[4,3]=r(p)
+
+local i=6
+foreach v in `sdemovar1' {
+	tab r_hs_12m `v', row chi2
+	mat sdemo[`i',3]=r(p)
+	local i=`i'+1 //populates rows 6-31
+	}
+ttest s_cesd_tot_n1, by(r_hs_12m) //cesd score n1
+mat sdemo[32,3]=r(p)
+
+local i=33
+foreach v in `sdemovar2' {
+	tab r_hs_12m `v', row chi2 
+	mat sdemo[`i',3]=r(p)
+	local i=`i'+1 //populates row 33-43
+}
+
+//p values where categorical, not binary, variables
+tab s_tics_cat_n1 r_hs_12m , missing chi2
+mat sdemo[44,3]=r(p)
+tab r_s_help_dur_cat r_hs_12m , chi2
+mat sdemo[48,3]=r(p)
+
+mat rownames sdemo ="Sample size n" "Age at r's death, mean" "SD" ///
+"Months n1 ivw to R death, mean" "SD" "S Older than R" ///
+"S 5+ years older than R" "S 10+ yrs older than R" "Female" "Non-Hispanic White" ///
+"S Non-Hispanic White, R not" ///
+"Education, High school grad" "S has HS deg, R does not" "Medicaid" "SRH poor or fair" ///
+"Currently smoker" "Alcohol mis-use" "Vigorous physical activity" ///
+"Comorbidity index - none" "Mild (1-3)" "Moderate (4-6)" "Severe (7+)" ///
+"Cancer" "Lung disease" "Heart disease" "CHF" "Stroke" "Memory disease" ///
+"Hypertension" "Diabetes" "Psychological problems" ///
+"CESD-D raw score n1, mean" "Clinical depression pre death" ///
+"S ADL Independ, stable n1,n2" "S ADL Partial Dep, stable n1,n2" ///
+"S ADL Severe Depen, stable n1,n2" "S ADL Ind n2 to Partial Dep n1" ///
+"S ADL Part to Sev Dep n2 to n1" "S ADL Ind n2 to Severe Dep n1" ///
+"S ADL Impaired n1" "S IADL Impaired n1" "Help received 2+ ADLs n1" "S Help received 2+ ADLs n1" ///
+"S TICS Normal (9-35) n1" "S TICS MCI (5-8) n1" "S TICS Demented (0-4) n1" ///
+"S TICS Missing n1" "S not primary helper exit" "S primary helper exit only" ///
+"S primary helper exit + n1"
+
+mat list sdemo
+
+frmttable using `logpath'\3_spofactors_initial_tables, statmat(sdemo) ///
+title("Spouse characteristics, Spousal factors sample") ///
+ctitle("","Hospice users","Non-hospice users","P-value") ///
+sdec(2,2,3) addtable
+
+******************************************************************
+******************************************************************
+//R,S Dyad variables for age and education
+******************************************************************
+******************************************************************
+mat sp_dyad_vars=J(36,5,.)
+
+//first row, n for hospice and non-hospice
+tab r_hs_12m, missing matcell(sd3)
+mat sp_dyad_vars[1,1]=sd3[2,1] //hospice users n
+mat sp_dyad_vars[1,3]=sd3[1,1] //non-hospice n
+
+local j=1
+foreach h in r_hs_12m non_hosp {
+	tab s_r_educ_cat if `h'==1, missing matcell(dv1)
+		local r=1
+		forvalues k=2/8{
+			mat sp_dyad_vars[`k',`j']=dv1[`r',1] //var=0 n
+			mat sp_dyad_vars[`k',`j'+1]=dv1[`r',1]/r(N) *100 //pct
+			local r=`r'+1
+			}
+	tab s_r_educ_3cat if `h'==1, missing matcell(dv2)
+		local r=1
+		forvalues k=9/11{
+			mat sp_dyad_vars[`k',`j']=dv2[`r',1] //var=1 n
+			mat sp_dyad_vars[`k',`j'+1]=dv2[`r',1]/r(N) *100 //pct
+			local r=`r'+1
+			}
+	tab s_r_educ_5cat if `h'==1, missing matcell(dv3)
+		local r=1
+		forvalues k=12/16{
+			mat sp_dyad_vars[`k',`j']=dv3[`r',1] //var=1 n
+			mat sp_dyad_vars[`k',`j'+1]=dv3[`r',1]/r(N) *100 //pct
+			local r=`r'+1
+			}
+	tab r_s_age_cat if `h'==1, missing matcell(dv4)
+		local r=1
+		forvalues k=17/25{
+			mat sp_dyad_vars[`k',`j']=dv4[`r',1] //var=1 n
+			mat sp_dyad_vars[`k',`j'+1]=dv4[`r',1]/r(N) *100 //pct
+			local r=`r'+1
+			}
+	tab r_s_age_2cat if `h'==1, missing matcell(dv5)
+		local r=1
+		forvalues k=26/27{
+			mat sp_dyad_vars[`k',`j']=dv5[`r',1] //var=1 n
+			mat sp_dyad_vars[`k',`j'+1]=dv5[`r',1]/r(N) *100 //pct
+			local r=`r'+1
+			}
+	tab r_s_age_3cat if `h'==1, missing matcell(dv6)
+		local r=1
+		forvalues k=28/30{
+			mat sp_dyad_vars[`k',`j']=dv6[`r',1] //var=1 n
+			mat sp_dyad_vars[`k',`j'+1]=dv6[`r',1]/r(N) *100 //pct
+			local r=`r'+1
+			}
+	tab r_s_age_5cat if `h'==1, missing matcell(dv7)
+		local r=1
+		forvalues k=31/35{
+			mat sp_dyad_vars[`k',`j']=dv7[`r',1] //var=1 n
+			mat sp_dyad_vars[`k',`j'+1]=dv7[`r',1]/r(N) *100 //pct
+			local r=`r'+1
+	}
+	local k=36
+	tab s_younger_10yrs  if `h'==1, missing matcell(dv8)
+		mat sp_dyad_vars[`k',`j']=dv8[2,1] //var=1 n
+		mat sp_dyad_vars[`k',`j'+1]=dv8[2,1]/r(N) *100 //pct
+	local j=`j'+2
+	}
+
+//P values	
+tab s_r_educ_cat r_hs_12m , chi2
+mat sp_dyad_vars[2,5]=r(p)
+tab s_r_educ_3cat r_hs_12m , chi2
+mat sp_dyad_vars[9,5]=r(p)
+tab s_r_educ_5cat r_hs_12m , chi2
+mat sp_dyad_vars[12,5]=r(p)
+tab r_s_age_cat r_hs_12m , chi2
+mat sp_dyad_vars[17,5]=r(p)
+tab r_s_age_2cat r_hs_12m , chi2
+mat sp_dyad_vars[26,5]=r(p)
+tab r_s_age_3cat r_hs_12m , chi2
+mat sp_dyad_vars[28,5]=r(p)
+tab r_s_age_5cat r_hs_12m , chi2
+mat sp_dyad_vars[31,5]=r(p)
+tab s_younger_10yrs  r_hs_12m , chi2
+mat sp_dyad_vars[36,5]=r(p)
+
+mat rownames sp_dyad_vars="Overall N" "R&S < HS Degree" "S HS, R less" "R HS, S less" ///
+"R&S High school degree" "S College, R less" "R College, S less" "R&S - College" ///
+"R&S Same educ level" "S more educ than R" "S less educ than R" ///
+"R&S less than HS" "R or S high school, other lower"  "R&S High school" ///
+"R or S college, other lower"  "R&S College" ///
+"R&S lt 75" "R 75-84, S  lt 75" "R 85+, S lt 75" ///
+"R<75, S 75-84" "R&S 75-84" "R 85+, S 75-84" ///
+"R<75, S 85+" "R 75-84, S 85+" "R&S 85+" ///
+"R&S different age" "R&S in same age category" ///
+"R&S in same age category" "S older" "S Younger" ///
+"R&S less than 75" "R or S 75-84, other younger" "R&S 75-84" ///
+"R or S 85+, other younger" "R&S 85+" ///
+"S 10+ yrs younger than R"
+
+mat list sp_dyad_vars
+
+frmttable using `logpath'\3_spofactors_initial_tables, statmat(sp_dyad_vars) ///
+title("R&S Dyad Education and Age Variables, Spousal factors sample") ///
+ctitle("","Hospice users","Pct","Non-hospice users","Pct","P-value") ///
+sdec(0,2,0,2,3) addtable
+
+
+
+******************************************************************
+******************************************************************
+//Additional spouse table of new variables re. 
+//depressive symptoms
+//note !!last time I manually added in total n for categorical variables!!!
+******************************************************************
+******************************************************************
+local spdepr1 s_psych_hrs_n1 s_psych_treat_n1 s_psych_med_n1 ///
+s_psych_overall_hrs_n1 s_ever_drink_n1 
+
+local spdepr1a s_alcohol_mis_n1 s_vig_phy_act_n1 s_help_friends_n1  
+
+local spdepr2 s_friend_n1 s_soc_visit_n1
+
+local spdepr3 r_adl_sp_helper_n1 r_adl_oth_helper_n1 /// 
+
+local spdepr4 r_iadl_sp_helper_n1 r_iadl_oth_helper_n1 
+
+mat sp_new_vars=J(26,5,.)
+
+//first row, n for hospice and non-hospice
+tab r_hs_12m, missing matcell(sd2)
+mat sp_new_vars[1,1]=sd2[2,1] //hospice users n
+mat sp_new_vars[1,3]=sd2[1,1] //non-hospice n
+
+local j=1
+foreach h in r_hs_12m non_hosp {
+local i=2
+foreach v in `spdepr1' {
+	sum `v' if `h'==1, detail 
+	mat sp_new_vars[`i',`j']=r(N)
+	mat sp_new_vars[`i',`j'+1]=r(mean)*100
+	local i=`i'+1 //populates rows 2-6 (5)
+	}
+sum s_n_drinks_3m_n1  if `h'==1, detail 	
+	mat sp_new_vars[7,`j']=r(N)
+	mat sp_new_vars[7,`j'+1]=r(mean)
+local i=8
+foreach v in `spdepr1a' {
+	sum `v' if `h'==1, detail 
+	mat sp_new_vars[`i',`j']=r(N)
+	mat sp_new_vars[`i',`j'+1]=r(mean)*100
+	local i=`i'+1 //populates rows 8-10 (3)
+	}	
+tab s_help_friends_hours_n1 if `h'==1, missing matcell(nv1)
+local r=1
+forvalues k=11/14{
+	mat sp_new_vars[`k',`j']=nv1[`r',1] //var=0 n
+	mat sp_new_vars[`k',`j'+1]=nv1[`r',1]/r(N) *100 //pct
+	local r=`r'+1
+}
+local i=15
+foreach v in `spdepr2' {
+	sum `v' if `h'==1, detail 
+	mat sp_new_vars[`i',`j']=r(N)
+	mat sp_new_vars[`i',`j'+1]=r(mean)*100
+	local i=`i'+1 //populates rows 15-16 (2)
+	}
+tab s_soc_visit_cat_n1 if `h'==1, missing matcell(nv3)
+local r=1
+forvalues k=17/20{
+	mat sp_new_vars[`k',`j']=nv3[`r',1] //var=0 n
+	mat sp_new_vars[`k',`j'+1]=nv3[`r',1]/r(N) *100 //pct
+	local r=`r'+1
+}
+local i=21
+foreach v in `spdepr3' {
+	sum `v' if `h'==1, detail 
+	mat sp_new_vars[`i',`j']=r(N)
+	mat sp_new_vars[`i',`j'+1]=r(mean)*100
+	local i=`i'+1 //populates rows 21-22 (2)
+	}
+sum r_adl_helper_count_n1  if `h'==1, detail 	
+	mat sp_new_vars[23,`j']=r(N)
+	mat sp_new_vars[23,`j'+1]=r(mean)
+
+local i=24
+foreach v in `spdepr4' {
+	sum `v' if `h'==1, detail 
+	mat sp_new_vars[`i',`j']=r(N)
+	mat sp_new_vars[`i',`j'+1]=r(mean)*100
+	local i=`i'+1 //populates rows 24-25 (2)
+	}
+sum r_iadl_helper_count_n1  if `h'==1, detail 	
+	mat sp_new_vars[26,`j']=r(N)
+	mat sp_new_vars[26,`j'+1]=r(mean)
+
+local j=`j'+2
+}
+
+//pvalues
+local i=2
+foreach v in `spdepr1' {
+	tab r_hs_12m `v', row chi
+	mat sp_new_vars[`i',5]=r(p)
+	local i=`i'+1 //rows 2-6 (5)
+}
+
+ttest s_n_drinks_3m_n1, by(r_hs_12m)
+mat sp_new_vars[7,5]=r(p) //p value from t-test
+
+local i=8
+foreach v in `spdepr1a' {
+	tab r_hs_12m `v', row chi
+	mat sp_new_vars[`i',5]=r(p)
+	local i=`i'+1 //rows 8-10 (3)
+}
+
+tab  s_help_friends_hours_n1 r_hs_12m, chi2
+mat sp_new_vars[11,5]=r(p)
+
+local i=15
+foreach v in `spdepr2' {
+	tab r_hs_12m `v', row chi
+	mat sp_new_vars[`i',5]=r(p)
+	local i=`i'+1 //rows 15-16 (2)
+}
+
+tab s_soc_visit_cat_n1 r_hs_12m, chi2
+mat sp_new_vars[17,5]=r(p)
+
+local i=21
+foreach v in `spdepr3' {
+	tab r_hs_12m `v', row chi
+	mat sp_new_vars[`i',5]=r(p)
+	local i=`i'+1 //rows 21-22 (2)
+}
+ttest r_adl_helper_count_n1, by(r_hs_12m)
+mat sp_new_vars[23,5]=r(p) //p value from t-test
+
+local i=24
+foreach v in `spdepr4' {
+	tab r_hs_12m `v', row chi
+	mat sp_new_vars[`i',5]=r(p)
+	local i=`i'+1 //rows 24-25 (2)
+}	
+
+ttest r_iadl_helper_count_n1, by(r_hs_12m)
+mat sp_new_vars[26,5]=r(p) //p value from t-test
+
+	
+mat rownames sp_new_vars ="Sample size n" "S Psychiatric Condition n1" /// 
+"S Psychiatric Treatment n1" "S Psychiatric Medication n1" ///
+"S Psychiatric Overall Ind n1" "S Ever drink n1" "S Number drinks n1"  ///
+"S Alcohol misuse n1" "S Vig Physical Act n1" "S Help Friends n1" ///
+"S Help friends=none n1" "S Help friends=<100 hours n1" "S Help friends=101-200 hours n1" ///
+"S Help friends=gt 200 hours n1" "S Friends nearby n1" "S Social visits n1" ///
+"S Visits=none or almost never n1" "S Visits <1/week n1" "S Visits <1/day n1" ///
+"S Visits gt 1/day n1" "R ADL Helper = S n1" "R ADL Helper = Other n1" ///
+"R Count ADL Helpers n1 (mean)" "R IADL Helper = S n1" "R IADL Helper = Other n1" ///
+"R Count IADL Helpers n1 (mean)"  
+
+mat list sp_new_vars
+
+frmttable using `logpath'\3_spofactors_initial_tables, statmat(sp_new_vars) ///
+title("Additional variables, spousal factors sample") ///
+ctitle("","N - hospice", "Mean, %","N - non-hospice", "Mean, %", "P-value") ///
+note("P values from chi squared statistics") ///
+sdec(0,2,0,2,3) addtable
+
+
+
+
+
+log close
+
+
+H="Table 1 - Means tables, select variables only"
+/*This Stata code outputs univariate comparison tables comparing the hospice
+use group vs non-hospice use group to the file logs\4a_spofactors_univ_compar_tables.doc
+
+Same sample as previous section, just fewer variables listed in the tables
+as we start to focus in on the analysis, Tables set up matching Table 1 in manuscript June 2015
+
+Univariate comparison for both overall sample and split by gender
+
+Also creates tables of look at education dyad variables, both overall sample
+and split by gender
+
+Note 2012 exit year have disproportionate number dropped because of missing cause of death
+for deaths after 2011 
+
+Runs Table 1,2 multiple times to check univariate comparison with multiple hospice
+use definitions:
+1. 1+ day hospice use vs 0 days
+2. 7+ days hospice use vs 0 days (omit 1-6 days)
+3. 7+ days vs 1-6 days (limited to hospice users)
+4. 3+ days vs 0 days (omit 1-2 days)
+5. 3+ days vs 1-2 days (limited to hospice users)
+*/
+
+
+capture log close
+
+clear all
+set more off
+
+//Amy's PC
+local logpath E:\data\spouse_factors\logs
+local projdatapath E:\data\spouse_factors
+
+log using "`logpath'\4a-HRS_Spouse_univ_compar_select_vars.txt", text replace
+
+cd `projdatapath'
+
+use spouse_factors_data_sample_v1.dta 
+*******************************************************************
+tab r_race_cat, missing
+tab s_race_cat, missing
+
+tab r_advdir_x r_dexp_x , missing
+
+//categorical spouse primary helper, duration
+tab r_s_help_dur_ind1, missing
+tab r_s_help_dur_ind2, missing 
+tab r_s_help_dur_ind3, missing
+
+*******************************************************************
+local rvars1 r_female r_imprelig_vimp_n1 r_rel_nb_n1 r_nhres_n1 r_advdir_x ///
+ r_dexp_x r_adl_diff_impair_n1 r_iadl_diff_impair_n1
+
+local rvars2 cc_3_alzhdmta_n12mn0 ///
+cc_6_chrnkidn_n12mn0 cc_12_ischmcht_n12mn0 cc_8_chf_n12mn0 ///
+cc_9_diabetes_n12mn0 cc_7_copd_n12mn0 cc_16_strketia_n12mn0 ///
+cc_cncr_chronic_n12mn0 cc_4_atrialfb_n12mn0 cc_11_hipfrac_n12mn0 ///
+cc_13_depressn_n12mn0 cc_14_osteoprs_n12mn0 cc_15_ra_oa_n12mn0 urban_ind
+
+local rvars3 ip_los_24m  hci_index hospital_beds specialists
+
+la var r_female "Female"
+
+la var r_imprelig_vimp_n1 "Religion very important"
+la var r_rel_nb_n1 "Relatives nearby"
+
+la var r_nhres_n1 "NH Resident"
+la var r_advdir_x "Adv directive"
+la var r_dexp_x "Death expected by family"
+la var r_adl_diff_impair_n1 "ADL Difficulty" 
+la var r_iadl_diff_impair_n1 "IADL Difficulty"
+
+la var cc_3_alzhdmta_n12mn0 "Alzheimers/Dementia" 
+la var cc_6_chrnkidn_n12mn0 "Chronic Kidney Disease"
+la var cc_12_ischmcht_n12mn0 "Ischemic Heart Disease"
+la var cc_8_chf_n12mn0 "Congestive Heart Failure"
+la var cc_9_diabetes_n12mn0 "Diabetes"
+la var cc_7_copd_n12mn0 "COPD"
+la var cc_16_strketia_n12mn0 "Stroke or TIA"
+la var cc_cncr_chronic_n12mn0 "Cancer"
+la var cc_4_atrialfb_n12mn0 "Atrial Fibrillation"
+la var cc_11_hipfrac_n12mn0 "Hip Fracture"
+la var cc_13_depressn_n12mn0 "Depression"
+la var cc_14_osteoprs_n12mn0 "Osteoporosis"
+la var cc_15_ra_oa_n12mn0 "Arthritis"
+la var urban_ind "Urban residence"
+
+la var ip_los_24m  "Hospital nights last 2yr of life"
+la var hci_index "Hospital care intensity index" 
+la var hospital_beds "Hospital beds/1000 res"
+la var specialists "Specialists/100,000 res"
+
+foreach hsi in r_hs_12m r_hs_ge7d r_hs_7vs_1to6 r_hs_ge3d r_hs_3vs_1to2 {
+mat resp=J(41,4,.)
+//col 1 = hospice users, col 2 = non-users, col 3 = p-values
+//col 4 = missing count of n's
+
+sum `hsi'
+local n_oa=r(N)
+display `n_oa'
+
+//cols 1,2
+local c = 1
+foreach h in 1 0{
+	local r = 1
+	sum r_age if `hsi'==`h', detail //age
+	mat resp[`r',`c']=r(mean)
+	mat resp[`r'+1,`c']=r(sd)
+
+	local r=`r'+2
+	tab r_nw_quart_n1 if `hsi'==`h', matcell(m_nw_quart)
+	local n_r_nw_quart_n1=r(N)
+		forvalues i=1/4{
+		mat resp[`r',`c']=m_nw_quart[`i',1]/`n_r_nw_quart_n1'*100
+		local r = `r'+1
+		}
+
+	tab r_educ_3cat if `hsi'==`h', matcell(m_r_educ_3cat)
+	local n_r_educ_3cat=r(N)	
+		forvalues i=1/3{
+		mat resp[`r',`c']=m_r_educ_3cat[`i',1]/`n_r_educ_3cat'*100
+		local r = `r'+1
+		}
+	
+	tab r_race_cat if `hsi'==`h', matcell(m_r_race_cat)
+	local n_r_race_cat=r(N)	
+		forvalues i=1/4{
+		mat resp[`r',`c']=m_r_race_cat[`i',1]/`n_r_race_cat'*100
+		local r = `r'+1
+		}
+	
+	foreach v in `rvars1'{
+		sum `v' if `hsi'==`h'
+		mat resp[`r',`c']=r(mean)*100
+		local r = `r'+1
+		}
+	
+	sum comorb_all_0d_n12m if `hsi'==`h', detail
+	mat resp[`r',`c']=r(mean)
+	mat resp[`r'+1,`c']=r(sd)
+	
+	local r = `r'+2
+	foreach v in `rvars2'{
+		sum `v' if `hsi'==`h'
+		mat resp[`r',`c']=r(mean)*100
+		local r = `r'+1
+		}
+
+	foreach v in `rvars3'{ //regional variables, continuous
+		sum `v' if `hsi'==`h'
+		mat resp[`r',`c']=r(mean)
+		local r = `r'+1
+		}
+	
+	local c = `c'+1
+}
+
+//col 3,4, p-values and missing values
+local c = 3
+local r = 1
+ttest r_age, by(`hsi')
+mat resp[`r',`c']=r(p)
+mat resp[`r',`c'+1]=`n_oa'-r(N_1)-r(N_2)
+local r = `r'+2
+
+tab `hsi' r_nw_quart_n1, row chi
+mat resp[`r',`c']=r(p)
+mat resp[`r',`c'+1]=`n_oa'-r(N)
+local r = `r'+4
+
+tab `hsi' r_educ_3cat , row chi
+	mat resp[`r',`c']=r(p)
+	mat resp[`r',`c'+1]=`n_oa'-r(N)
+local r = `r'+3
+
+tab `hsi' r_race_cat , row chi
+	mat resp[`r',`c']=r(p)
+	mat resp[`r',`c'+1]=`n_oa'-r(N)
+local r = `r'+4
+
+foreach v in `rvars1'{
+	tab `hsi' `v' , row chi
+	mat resp[`r',`c']=r(p)
+	mat resp[`r',`c'+1]=`n_oa'-r(N)
+	local r = `r'+1
+}
+
+ttest comorb_all_0d_n12m, by(`hsi')
+mat resp[`r',`c']=r(p)
+mat resp[`r',`c'+1]=`n_oa'-r(N_1)-r(N_2)
+local r = `r'+2
+
+foreach v in `rvars2'{
+	tab `hsi' `v' , row chi
+	mat resp[`r',`c']=r(p)
+	mat resp[`r',`c'+1]=`n_oa'-r(N)
+	local r = `r'+1
+}
+
+foreach v in `rvars3'{
+	ttest `v', by(`hsi')
+	mat resp[`r',`c']=r(p)
+	mat resp[`r',`c'+1]=`n_oa'-r(N_1)-r(N_2)
+	local r = `r'+1
+}
+
+mat rownames resp="Age at death, years, mean" "SD" "R net worth quartile 1, lowest" ///
+"R net worth quartile 2" "R net worth quartile 3" "R net worth quartile 4, highest" ///
+"R < HS Degree" "R HS Degree" "R > HS Degree" ///
+ "White, non-Hispanic" "Black, non-Hispanic" "Hispanic" ///
+"Other race, non-Hispanic" `rvars1' "Count comorbidities, mean" "SD" `rvars2' `rvars3'
+
+mat list resp
+
+frmttable, statmat(resp)  ///
+title("Decedent and Region characteristics, Spousal Factors Sample") ///
+ctitle("","Hospice users","Non-hospice users","","" \ ///
+"","%","%","P-value","n missing") ///
+varlabels ///
+note("Hospice use defined as `hsi'." \ ///
+"P value from chi-2 statistic for categorical variables and t-test for continuous variables." \ ///
+"Region level variables are at the HRR level, merged in by decedent zip code.") ///
+sdec(2,2,3,0) store(r_1)
+
+//last row - n's
+mat r_n=J(1,2,.)
+tab `hsi', missing matcell(d1)
+mat r_n[1,1]=d1[2,1] //hospice n
+mat r_n[1,2]=d1[1,1] //non-hospice users n
+mat rownames r_n="N"
+frmttable, statmat(r_n) store(r_n) sdec(0) ///
+ctitle("","Hospice users","Non-hospice users" \ ///
+"","%","%") 
+
+outreg using `logpath'\4a_spofactors_univ_compar_tables_`hsi',  ///
+replay(r_1) append(r_n) replace
+}
+
+*******************************************************************
+//spouse characteristics table
+local svars s_srh_pf_n1 s_cesd_tot_ge3_n1 ///
+s_adl_diff_impair_n1 s_iadl_diff_impair_n1 s_psych_overall_hrs_n1
+
+la var s_srh_pf_n1  "SRH Poor/fair"
+la var s_cesd_tot_ge3_n1 "CESD depressed"
+la var s_adl_diff_impair_n1 "ADL difficulty"
+la var s_iadl_diff_impair_n1 "IADL difficulty"
+la var s_psych_overall_hrs_n1 "Psych condition, any self report"
+
+tab s_adl_impair_n1 s_adl_diff_impair_n1, missing
+tab s_iadl_impair_n1 s_iadl_diff_impair_n1, missing
+
+tab s_comor_c_hrs_n1, missing
+tab s_comor_c_hrs_n1, nolabel
+replace s_comor_c_hrs_n1=2 if s_comor_c_hrs_n1==3
+
+//note s_adl_impair_n1 s_iadl_impair_n1 are from the questions
+//asking does S receive help with the adl / iadl tasks
+foreach hsi in r_hs_12m r_hs_ge7d  r_hs_7vs_1to6 r_hs_ge3d r_hs_3vs_1to2 {
+mat sp=J(22,4,.)
+//col 1 = hospice users, col 2 = non-users, col 3 = p-values
+//col 4 = missing count of n's
+
+sum `hsi'
+local n_oa=r(N)
+display 
+
+//cols 1,2
+local c = 1
+foreach h in 1 0{
+	local r = 1
+	
+	sum s_age if `hsi'==`h', detail //age
+	mat sp[`r',`c']=r(mean)
+	mat sp[`r'+1,`c']=r(sd)
+	local r = `r'+2
+	
+	tab r_s_age_3cat if `hsi'==`h', matcell(m_r_s_age_3cat)
+	local n_r_s_age_3cat=r(N)
+	tab s_educ_3cat if `hsi'==`h', matcell(m_s_educ_3cat)
+	local n_s_educ_3cat=r(N)	
+	tab s_r_educ_3cat if `hsi'==`h', matcell(m_s_r_educ_3cat)
+	local n_s_r_educ_3cat=r(N)	
+	tab s_comor_c_hrs_n1 if `hsi'==`h', matcell(m_s_comor_c_hrs_n1)
+	local n_s_comor_c_hrs_n1=r(N)	
+		forvalues i=1/3{
+		mat sp[`r',`c']=m_r_s_age_3cat[`i',1]/`n_r_s_age_3cat'*100
+		mat sp[`r'+3,`c']=m_s_educ_3cat[`i',1]/`n_s_educ_3cat'*100
+		mat sp[`r'+6,`c']=m_s_r_educ_3cat[`i',1]/`n_s_r_educ_3cat'*100
+		mat sp[`r'+9,`c']=m_s_comor_c_hrs_n1[`i',1]/`n_s_comor_c_hrs_n1'*100
+		local r = `r'+1
+		}
+
+		local r = `r'+9
+	foreach v in `svars'{
+		sum `v' if `hsi'==`h'
+		mat sp[`r',`c']=r(mean)*100
+		local r = `r'+1
+		}
+		
+	tab r_s_help_dur_cat if `hsi'==`h', matcell(m_r_s_help_dur_cat)
+		forvalues i=1/3{
+		mat sp[`r',`c']=m_r_s_help_dur_cat[`i',1]/r(N)*100
+		local r = `r'+1
+		}	
+
+	local c = `c'+1
+}
+
+//cols 3,4
+local c = 3
+local r = 1
+
+ttest r_age, by(`hsi')
+mat sp[`r',`c']=r(p)
+mat sp[`r',`c'+1]=`n_oa'-r(N_1)-r(N_2)
+local r = `r'+2
+
+foreach v in r_s_age_3cat s_educ_3cat s_r_educ_3cat s_comor_c_hrs_n1 {
+	tab `hsi' `v' , row chi
+	mat sp[`r',`c']=r(p)
+	mat sp[`r',`c'+1]=`n_oa'-r(N)
+	local r = `r'+3
+}
+
+foreach v in `svars'{
+	tab `hsi' `v' , row chi
+	mat sp[`r',`c']=r(p)
+	mat sp[`r',`c'+1]=`n_oa'-r(N)
+	local r = `r'+1
+}
+
+tab `hsi' r_s_help_dur_cat , row chi
+mat sp[`r',`c']=r(p)
+mat sp[`r',`c'+1]=`n_oa'-r(N)
+
+mat rownames sp="Age at death, mean" "SD" "Same age category" "Spouse older" ///
+"Spouse younger" "Education < HS" "HS degree" "> HS" "Same education category" ///
+"Spouse more education" "Spouse less education" ///
+ "HRS comorbidities=none" "Mild 1-3" "Moderate/Severe 4-7"  ///
+ `svars' "S not primary helper exit" "S primary helper exit only" ///
+ "S primary helper n1+exit" 
+
+mat list sp
+
+frmttable , statmat(sp)  ///
+title("Spouse characteristics, Spousal Factors Sample") ///
+ctitle("","Hospice users","Non-hospice users","","" \ ///
+"","%","%","P-value", "n missing") ///
+varlabels ///
+note("Hospice use defined as `hsi'." \ ///
+"P value from chi-2 statistic for categorical variables." \ ///
+"All variables are from are n1 interviews unless otherwise noted." \ ///
+"ADL / IADL Impairment and Difficulty defined as receiving help or having difficulty" \ ///
+"with at least 1 activity.") ///
+sdec(2,2,3,0) store(s_1)
+
+mat s_n=J(1,2,.)
+tab `hsi', missing matcell(d1)
+mat s_n[1,1]=d1[2,1] //hospice n
+mat s_n[1,2]=d1[1,1] //non-hospice users n
+mat rownames s_n="N"
+frmttable, statmat(s_n) store(s_n) sdec(0) ///
+ctitle("","Hospice users","Non-hospice users" \ ///
+"","%","%") 
+
+outreg using `logpath'\4a_spofactors_univ_compar_tables_`hsi',  ///
+replay(s_1) append(s_n) addtable
+}
+
+
+*******************************************************************
+//Now tables split by gender
+//sets up 2 matrices and then merges into single word table
+
+local rvars1 /*r_female*/ r_imprelig_vimp_n1 r_rel_nb_n1 r_nhres_n1 r_advdir_x ///
+ r_dexp_x r_adl_diff_impair_n1 r_iadl_diff_impair_n1
+
+mat resp_g1=J(41,3,.) //for decedent = female
+mat resp_g0=J(41,3,.) //decedent = male
+mat resp_g1_n=J(1,2,.) //for decedent = female
+mat resp_g0_n=J(1,2,.) //decedent = male
+
+//col 1 = hospice users, col 2 = non-users, col 3 = p-values
+
+foreach g in 1 0{
+	sum r_hs_12m if r_female==`g'
+	local n_oa_`g'=r(N)
+	display `n_oa_`g''
+	}
+
+
+foreach g in 1 0{
+//cols 1,2
+local c = 1
+foreach h in 1 0{
+	local r = 1
+	sum r_age if r_hs_12m==`h' & r_female==`g', detail //age
+	mat resp_g`g'[`r',`c']=r(mean)
+	mat resp_g`g'[`r'+1,`c']=r(sd)
+
+		local r=`r'+2
+	tab r_nw_quart_n1 if r_hs_12m==`h' & r_female==`g', matcell(m_nw_quart)
+	local n_r_nw_quart_n1=r(N)
+		forvalues i=1/4{
+		mat resp_g`g'[`r',`c']=m_nw_quart[`i',1]/`n_r_nw_quart_n1'*100
+		local r = `r'+1
+		}
+
+	tab r_educ_3cat if r_hs_12m==`h' & r_female==`g', matcell(m_r_educ_3cat)
+	local n_r_educ_3cat=r(N)	
+		forvalues i=1/3{
+		mat resp_g`g'[`r',`c']=m_r_educ_3cat[`i',1]/`n_r_educ_3cat'*100
+		local r = `r'+1
+		}
+	
+	tab r_race_cat if r_hs_12m==`h' & r_female==`g', matcell(m_r_race_cat)
+	local n_r_race_cat=r(N)	
+		forvalues i=1/4{
+		mat resp_g`g'[`r',`c']=m_r_race_cat[`i',1]/`n_r_race_cat'*100
+		local r = `r'+1
+		}
+	
+	foreach v in `rvars1'{
+		sum `v' if r_hs_12m==`h' & r_female==`g'
+		mat resp_g`g'[`r',`c']=r(mean)*100
+		local r = `r'+1
+		}
+
+	sum comorb_all_0d_n12m if r_hs_12m==`h' & r_female==`g', detail
+	mat resp_g`g'[`r',`c']=r(mean)
+	mat resp_g`g'[`r'+1,`c']=r(sd)
+	
+	local r = `r'+2
+	foreach v in `rvars2'{
+		sum `v' if r_hs_12m==`h' & r_female==`g'
+		mat resp_g`g'[`r',`c']=r(mean)*100
+		local r = `r'+1
+		}
+		
+	foreach v in `rvars3'{
+		sum `v' if r_hs_12m==`h' & r_female==`g'
+		mat resp_g`g'[`r',`c']=r(mean)
+		local r = `r'+1
+		}
+		
+	local c = `c'+1
+}
+
+//col 3 p-values 
+local c = 3
+local r = 1
+ttest r_age if r_female==`g', by(r_hs_12m)
+mat resp_g`g'[`r',`c']=r(p)
+local r = `r'+2
+
+tab r_hs_12m r_nw_quart_n1 if r_female==`g', row chi
+mat resp_g`g'[`r',`c']=r(p)
+local r = `r'+4
+
+tab r_hs_12m r_educ_3cat if r_female==`g', row chi
+	mat resp_g`g'[`r',`c']=r(p)
+local r = `r'+3
+
+tab r_hs_12m r_race_cat if r_female==`g', row chi
+	mat resp_g`g'[`r',`c']=r(p)
+local r = `r'+4
+
+foreach v in `rvars1'{
+	tab r_hs_12m `v' if r_female==`g', row chi
+	mat resp_g`g'[`r',`c']=r(p)
+	local r = `r'+1
+}
+
+ttest comorb_all_0d_n12m if r_female==`g', by(r_hs_12m)
+mat resp_g`g'[`r',`c']=r(p)
+
+local r = `r'+2
+foreach v in `rvars2'{
+	tab r_hs_12m `v' if r_female==`g', row chi
+	mat resp_g`g'[`r',`c']=r(p)
+	local r = `r'+1
+}
+
+foreach v in `rvars3'{
+	ttest `v' if r_female==`g', by(r_hs_12m)
+	mat resp_g`g'[`r',`c']=r(p)
+	local r = `r'+1
+}
+mat rownames resp_g`g'="Age at death, years, mean" "SD" "R net worth quartile 1, lowest" ///
+"R net worth quartile 2" "R net worth quartile 3" "R net worth quartile 4, highest" ///
+"R < HS Degree" "R HS Degree" "R > HS Degree" ///
+ "White, non-Hispanic" "Black, non-Hispanic" "Hispanic" ///
+"Other race, non-Hispanic" `rvars1' "Count comorbidities, mean" "SD" `rvars2' `rvars3'
+
+mat list resp_g`g'
+
+//last row - n's
+tab r_hs_12m if r_female==`g', missing matcell(d1)
+mat resp_g`g'_n[1,1]=d1[2,1] //hospice n
+mat resp_g`g'_n[1,2]=d1[1,1] //non-hospice users n
+
+mat rownames resp_g`g'_n="N"
+frmttable, statmat(resp_g`g'_n) store(resp_g`g'_n) sdec(0)
+}
+
+frmttable , statmat(resp_g1) ///
+title("Decedent characteristics, Spousal Factors Sample, by Gender") ///
+ctitle("","R=Female","","" \"","Hospice users","Non-hospice users","" \ ///
+"","%","%","P-value") ///
+varlabels ///
+note("P value from chi-2 statistic for categorical variables and t-test for continuous variables.") ///
+sdec(2,2,3) store(gender) 
+
+outreg, replay(gender) append(resp_g1_n) store(gender2)
+
+frmttable , statmat(resp_g0) ///
+ctitle("","R=Male","","" \"","Hospice users","Non-hospice users","" \ ///
+"","%","%","P-value") ///
+varlabels ///
+sdec(2,2,3) store(gender3)
+
+outreg, replay(gender3) append(resp_g0_n) store(gender4)
+
+outreg using `logpath'\4a_spofactors_univ_compar_tables_r_hs_12m, ///
+replay(gender2) merge(gender4) addtable
+
+*******************************************************************
+//spouse characteristics table
+
+mat sp_g1=J(22,3,.)
+mat sp_g0=J(22,3,.)
+
+//col 1 = hospice users, col 2 = non-users, col 3 = p-values
+
+foreach g in 1 0{
+//cols 1,2
+local c = 1
+foreach h in 1 0{
+	local r = 1
+	
+	sum s_age if r_hs_12m==`h' & r_female==`g', detail //age
+	mat sp_g`g'[`r',`c']=r(mean)
+	mat sp_g`g'[`r'+1,`c']=r(sd)
+	local r = `r'+2
+
+	tab r_s_age_3cat if r_hs_12m==`h' & r_female==`g', matcell(m_r_s_age_3cat)
+	local n_r_s_age_3cat=r(N)
+	tab s_educ_3cat if r_hs_12m==`h' & r_female==`g', matcell(m_s_educ_3cat)
+	local n_s_educ_3cat=r(N)	
+	tab s_r_educ_3cat if r_hs_12m==`h' & r_female==`g', matcell(m_s_r_educ_3cat)
+	local n_s_r_educ_3cat=r(N)	
+	tab s_comor_c_hrs_n1 if r_hs_12m==`h' & r_female==`g', matcell(m_s_comor_c_hrs_n1)
+	local n_s_comor_c_hrs_n1=r(N)	
+		forvalues i=1/3{
+		mat sp_g`g'[`r',`c']=m_r_s_age_3cat[`i',1]/`n_r_s_age_3cat'*100
+		mat sp_g`g'[`r'+3,`c']=m_s_educ_3cat[`i',1]/`n_s_educ_3cat'*100
+		mat sp_g`g'[`r'+6,`c']=m_s_r_educ_3cat[`i',1]/`n_s_r_educ_3cat'*100
+		mat sp_g`g'[`r'+9,`c']=m_s_comor_c_hrs_n1[`i',1]/`n_s_comor_c_hrs_n1'*100
+		local r = `r'+1
+		}
+
+	local r = `r'+9
+
+	foreach v in `svars'{
+		sum `v' if r_hs_12m==`h' & r_female==`g'
+		mat sp_g`g'[`r',`c']=r(mean)*100
+		local r = `r'+1
+		}
+		
+	tab r_s_help_dur_cat if r_hs_12m==`h' & r_female==`g', matcell(m_r_s_help_dur_cat)
+		forvalues i=1/3{
+		mat sp_g`g'[`r',`c']=m_r_s_help_dur_cat[`i',1]/r(N)*100
+		local r = `r'+1
+		}
+
+	local c = `c'+1
+}
+
+//col 3
+local c = 3
+local r = 1
+
+ttest r_age if r_female==`g', by(r_hs_12m)
+mat sp_g`g'[`r',`c']=r(p)
+local r = `r'+2
+
+foreach v in r_s_age_3cat s_educ_3cat s_r_educ_3cat s_comor_c_hrs_n1 {
+	tab r_hs_12m `v' if r_female==`g', row chi
+	mat sp_g`g'[`r',`c']=r(p)
+	local r = `r'+3
+}
+
+foreach v in `svars'{
+	tab r_hs_12m `v' if r_female==`g', row chi
+	mat sp_g`g'[`r',`c']=r(p)
+	local r = `r'+1
+}
+
+tab r_hs_12m r_s_help_dur_cat if r_female==`g', row chi
+mat sp_g`g'[`r',`c']=r(p)
+
+mat rownames sp_g`g'="Age at death, mean" "SD" "Same age category" "Spouse older" ///
+"Spouse younger" "Education < HS" "HS degree" "> HS" "Same education category" ///
+"Spouse more education" "Spouse less education" ///
+ "HRS comorbidities=none" "Mild 1-3" "Moderate/Severe 4-7"  ///
+ `svars' "S not primary helper exit" "S primary helper exit only" ///
+ "S primary helper n1+exit"
+
+mat list sp_g`g'
+}
+
+frmttable , statmat(sp_g1) ///
+title("Spouse characteristics, Spousal Factors Sample, by Gender") ///
+ctitle("","R=Female","","" \ "","Hospice users","Non-hospice users","" \ ///
+"","%","%","P-value") ///
+varlabels ///
+note("P value from chi-2 statistic for categorical variables." \ ///
+"All variables are from are n1 interviews unless otherwise noted." \ ///
+"ADL / IADL Impairment and Difficulty defined as receiving help or having difficulty" \ ///
+"with at least 1 activity.") ///
+sdec(2,2,3) store(gender_a)
+
+outreg, replay(gender_a) append(resp_g1_n) store(gender_b)
+
+frmttable , statmat(sp_g0) ///
+ctitle("","R=Male","","" \ "","Hospice users","Non-hospice users","" \ ///
+"","%","%","P-value") ///
+varlabels ///
+sdec(2,2,3) store(gender_c) 
+
+outreg, replay(gender_c) append(resp_g0_n) store(gender_d)
+
+outreg using `logpath'\4a_spofactors_univ_compar_tables_r_hs_12m , ///
+replay(gender_b) merge(gender_d) addtable
+
+*******************************************************************
+//adding a table looking at the education variables
+//both dyad variable and r education level
+
+la var r_hseduc "R HS Degree or higher"
+
+mat tab5=J(1,5,.)
+
+forvalues i=1/7{
+local c = 1	
+	foreach h in 1 0{
+		sum s_r_ed_ind`i' if r_hs_12m==`h'
+		mat tab5[1,`c']=r(mean)*r(N) //n
+		mat tab5[1,`c'+1]=r(mean)*100 //pct
+		local c = `c'+2	
+	}
+	//get pvalue
+	tab s_r_ed_ind`i' r_hs_12m, chi2
+	mat tab5[1,5]=r(p)
+	
+	mat rownames tab5=s_r_ed_ind`i'
+	frmttable, statmat(tab5) append(tab5_1) store(tab5_1) sdec(0,2,0,2,3) varlabels
+}
+foreach r in r s{
+forvalues i=1/7{
+local c = 1	
+	foreach h in 1 0{
+		sum `r'_ed_ind`i' if r_hs_12m==`h'
+		mat tab5[1,`c']=r(mean)*r(N) //n
+		mat tab5[1,`c'+1]=r(mean)*100 //pct
+		local c = `c'+2	
+	}
+	//get pvalue
+	tab `r'_ed_ind`i' r_hs_12m, chi2
+	mat tab5[1,5]=r(p)
+	
+	mat rownames tab5=`r'_ed_ind`i'
+	frmttable, statmat(tab5) append(tab5_1) store(tab5_1) sdec(0,2,0,2,3) varlabels
+}
+
+//add row for hs+ binary variable
+local c = 1	
+	foreach h in 1 0{
+		sum `r'_hseduc if r_hs_12m==`h'
+		mat tab5[1,`c']=r(mean)*r(N) //n
+		mat tab5[1,`c'+1]=r(mean)*100 //pct
+		local c = `c'+2	
+	}
+//get pvalue
+tab `r'_hseduc r_hs_12m, chi2
+mat tab5[1,5]=r(p)
+	
+mat rownames tab5=`r'_hseduc
+frmttable, statmat(tab5) append(tab5_1) store(tab5_1) sdec(0,2,0,2,3) varlabels
+}
+tab s_r_educ_cat
+local samp_n=r(N)
+
+mat tab5_n=J(1,4,.)
+tab r_hs_12m if s_r_educ_cat~=., matcell(n5)
+mat tab5_n[1,1]=n5[2,1]
+mat tab5_n[1,3]=n5[1,1]
+
+mat rownames tab5_n = "N"
+
+frmttable, statmat(tab5_n) store(tab5_n) sdec(0)
+
+outreg using `logpath'\4a_spofactors_univ_compar_tables_r_hs_12m , /// 
+replay(tab5_n) append(tab5_1) ///
+title("Education levels for dyad, R & S, sample N=`samp_n'") ///
+ctitles("","Hospice users", "" , "No hospice use" , "" \ ///
+	"","N","%","N","%","P-value") ///
+note("n=4 of full sample n=1329 missing either s or r education information") ///
+addtable
+*******************************************************************
+//same table, split by gender - decedent = male 
+frmttable, clear(tab5_1)
+mat tab5_m=J(1,5,.)
+
+forvalues i=1/7{
+local c = 1	
+	foreach h in 1 0{
+		sum s_r_ed_ind`i' if r_hs_12m==`h' & r_female==0
+		mat tab5_m[1,`c']=r(mean)*r(N) //n
+		mat tab5_m[1,`c'+1]=r(mean)*100 //pct
+		local c = `c'+2	
+	}
+	//get pvalue
+	tab s_r_ed_ind`i' r_hs_12m if r_female==0, chi2
+	mat tab5_m[1,5]=r(p)
+	
+	mat rownames tab5_m=s_r_ed_ind`i'
+	frmttable, statmat(tab5_m) append(tab5_1) store(tab5_1) sdec(0,2,0,2,3) varlabels
+}
+foreach r in r s{
+forvalues i=1/7{
+local c = 1	
+	foreach h in 1 0{
+		sum `r'_ed_ind`i' if r_hs_12m==`h' & r_female==0
+		mat tab5[1,`c']=r(mean)*r(N) //n
+		mat tab5[1,`c'+1]=r(mean)*100 //pct
+		local c = `c'+2	
+	}
+	//get pvalue
+	tab `r'_ed_ind`i' r_hs_12m if r_female==0, chi2
+	mat tab5[1,5]=r(p)
+	
+	mat rownames tab5=`r'_ed_ind`i'
+	frmttable, statmat(tab5) append(tab5_1) store(tab5_1) sdec(0,2,0,2,3) varlabels
+}
+
+//add row for hs+ binary variable
+local c = 1	
+	foreach h in 1 0{
+		sum `r'_hseduc if r_hs_12m==`h' & r_female==0
+		mat tab5[1,`c']=r(mean)*r(N) //n
+		mat tab5[1,`c'+1]=r(mean)*100 //pct
+		local c = `c'+2	
+	}
+//get pvalue
+tab `r'_hseduc r_hs_12m if r_female==0, chi2
+mat tab5[1,5]=r(p)
+	
+mat rownames tab5=`r'_hseduc
+frmttable, statmat(tab5) append(tab5_1) store(tab5_1) sdec(0,2,0,2,3) varlabels
+}
+tab s_r_educ_cat if r_female==0 
+local samp_n=r(N)
+
+mat tab5_n_m=J(1,4,.)
+tab r_hs_12m if s_r_educ_cat~=. & r_female==0, matcell(n5)
+mat tab5_n_m[1,1]=n5[2,1]
+mat tab5_n_m[1,3]=n5[1,1]
+
+mat rownames tab5_n_m = "N"
+
+frmttable, statmat(tab5_n_m) store(tab5_n) sdec(0)
+
+outreg using `logpath'\4a_spofactors_univ_compar_tables_r_hs_12m , /// 
+replay(tab5_n) append(tab5_1) ///
+title("Education levels, Decedent = Male, sample N=`samp_n'") ///
+ctitles("","Hospice users", "" , "No hospice use" , "" \ ///
+	"","N","%","N","%","P-value") ///
+addtable
+
+*******************************************************************
+frmttable, clear(tab5_1)
+mat tab5_f=J(1,5,.)
+
+forvalues i=1/7{
+local c = 1	
+	foreach h in 1 0{
+		sum s_r_ed_ind`i' if r_hs_12m==`h' & r_female==1
+		mat tab5_f[1,`c']=r(mean)*r(N) //n
+		mat tab5_f[1,`c'+1]=r(mean)*100 //pct
+		local c = `c'+2	
+	}
+	//get pvalue
+	tab s_r_ed_ind`i' r_hs_12m if r_female==1, chi2
+	mat tab5_f[1,5]=r(p)
+	
+	mat rownames tab5_f=s_r_ed_ind`i'
+	frmttable, statmat(tab5_f) append(tab5_1) store(tab5_1) sdec(0,2,0,2,3) varlabels
+}
+foreach r in r s{
+forvalues i=1/7{
+local c = 1	
+	foreach h in 1 0{
+		sum `r'_ed_ind`i' if r_hs_12m==`h' & r_female==1
+		mat tab5[1,`c']=r(mean)*r(N) //n
+		mat tab5[1,`c'+1]=r(mean)*100 //pct
+		local c = `c'+2	
+	}
+	//get pvalue
+	tab `r'_ed_ind`i' r_hs_12m if r_female==1, chi2
+	mat tab5[1,5]=r(p)
+	
+	mat rownames tab5=`r'_ed_ind`i'
+	frmttable, statmat(tab5) append(tab5_1) store(tab5_1) sdec(0,2,0,2,3) varlabels
+}
+
+//add row for hs+ binary variable
+local c = 1	
+	foreach h in 1 0{
+		sum `r'_hseduc if r_hs_12m==`h' & r_female==1
+		mat tab5[1,`c']=r(mean)*r(N) //n
+		mat tab5[1,`c'+1]=r(mean)*100 //pct
+		local c = `c'+2	
+	}
+//get pvalue
+tab `r'_hseduc r_hs_12m if r_female==1, chi2
+mat tab5[1,5]=r(p)
+	
+mat rownames tab5=`r'_hseduc
+frmttable, statmat(tab5) append(tab5_1) store(tab5_1) sdec(0,2,0,2,3) varlabels
+}
+tab s_r_educ_cat if r_female==1
+local samp_n=r(N)
+
+mat tab5_n_f=J(1,4,.)
+tab r_hs_12m if s_r_educ_cat~=. & r_female==1, matcell(n5)
+mat tab5_n_f[1,1]=n5[2,1]
+mat tab5_n_f[1,3]=n5[1,1]
+
+mat rownames tab5_n_f = "N"
+
+frmttable, statmat(tab5_n_f) store(tab5_n) sdec(0)
+
+outreg using `logpath'\4a_spofactors_univ_compar_tables_r_hs_12m , /// 
+replay(tab5_n) append(tab5_1) ///
+title("Education levels for dyad, Decedent = Female, sample N=`samp_n'") ///
+ctitles("","Hospice users", "" , "No hospice use" , "" \ ///
+	"","N","%","N","%","P-value") ///
+addtable
+*******************************************************************
+log close
+
+
+H="Check correlation among variables"
+/*want to check correlation between variables we will use in the models*/
+
+capture log close
+
+clear all
+set more off
+
+//Amy's PC
+local logpath E:\data\spouse_factors\logs
+local projdatapath E:\data\spouse_factors
+
+log using "`logpath'\4b-HRS_Spouse_check_correlation.txt", text replace
+
+cd `projdatapath'
+
+use spouse_factors_data_sample_v1.dta
+
+*************************************************************************************
+local xvars r_s_age_3cat r_age_cat s_r_educ_3cat r_hseduc ///
+s_srh_pf_n1 s_hrs_comorb_mild_n1 s_hrs_comorb_mod_n1 ///
+s_psych_hrs_n1 r_female r_white_e r_nhres_n1 ///
+r_advdir_x r_dexp_x comorb_all_0d_n12m cc_3_alzhdmta_n12mn0 ///
+cc_6_chrnkidn_n12mn0 cc_12_ischmcht_n12mn0 cc_8_chf_n12mn0 ///
+cc_9_diabetes_n12mn0 cc_7_copd_n12mn0 cc_16_strketia_n12mn0 ///
+cc_cncr_chronic_n12mn0 cc_4_atrialfb_n12mn0 cc_11_hipfrac_n12mn0 ///
+cc_13_depressn_n12mn0 cc_14_osteoprs_n12mn0 cc_15_ra_oa_n12mn0 urban_ind ///
+hci_index hospital_beds specialists ///
+s_cesd_tot_ge3_n1 s_adl_impair_n1 r_s_help_dur_cat 
+
+la var r_hseduc "R HS degree"
+la var r_female "Female"
+la var r_white_e "White"
+la var r_nhres_n1 "NH Resident"
+la var r_advdir_x "Adv directive"
+la var r_dexp_x "Death expected"
+
+la var cc_3_alzhdmta_n12mn0 "Alzheimers/Dementia" 
+la var cc_6_chrnkidn_n12mn0 "Chronic Kidney Disease"
+la var cc_12_ischmcht_n12mn0 "Ischemic Heart Disease"
+la var cc_8_chf_n12mn0 "Congestive Heart Failure"
+la var cc_9_diabetes_n12mn0 "Diabetes"
+la var cc_7_copd_n12mn0 "COPD"
+la var cc_16_strketia_n12mn0 "Stroke or TIA"
+la var cc_cncr_chronic_n12mn0 "Cancer"
+la var cc_4_atrialfb_n12mn0 "Atrial Fibrillation"
+la var cc_11_hipfrac_n12mn0 "Hip Fracture"
+la var cc_13_depressn_n12mn0 "Depression"
+la var cc_14_osteoprs_n12mn0 "Osteoporosis"
+la var cc_15_ra_oa_n12mn0 "Arthritis"
+
+la var urban_ind "Urban residence"
+
+la var ip_los_24m  "Hospital nights last 2yr of life"
+la var hci_index "Hospital care intensity index" 
+la var hospital_beds "Hospital beds/1000 res"
+la var specialists "Specialists/100,000 res"
+
+la var s_srh_pf_n1  "SRH Poor/fair"
+la var s_psych_hrs_n1 "Psychiatric condition" 
+la var s_cesd_tot_ge3_n1 "CESD depressed"
+la var s_adl_impair_n1 "ADL impair"
+la var s_iadl_impair_n1 "IADL impair"
+
+la var s_adl_diff_impair_n1 "ADL difficulty"
+la var s_iadl_diff_impair_n1 "IADL difficulty"
+la var r_adl_sp_helper_n1 "Primary ADL helper n1"
+la var r_iadl_sp_helper_n1 "Primary IADL helper n1"
+la var r_adl_sp_helper_x "Primary ADL helper x"
+la var r_iadl_sp_helper_x "Primary IADL helper x"
+
+pwcorr `xvars',star(10) sig
+
+pwcorr r_hseduc r_networth_adj2012_n1 r_nw_quart_n1 
+
+pwcorr s_age r_age
+pwcorr s_white_e r_white_e
+pwcorr s_female r_female
+pwcorr s_hseduc r_hseduc 
+tab s_degree_e
+pwcorr s_degree_e r_degree_e
+
+//check variable list from presentation analysis with new vars added June 2015
+//original variable list from presentation
+local xvars1 ind_s_r_educ2 ind_s_r_educ3 r_hseduc ///
+r_nw_lowest_n1 r_nw_midlow_n1 r_nw_midhigh_n1 ///
+s_srh_pf_n1 s_hrs_comorb_mild_n1 s_hrs_comorb_mod_n1 ///
+ ind_r_age_cat2 ind_r_age_cat3 r_female r_white_e r_nhres_n1 ///
+r_advdir_x cc_6_chrnkidn_n12mn0 cc_12_ischmcht_n12mn0 cc_8_chf_n12mn0 ///
+cc_9_diabetes_n12mn0 cc_7_copd_n12mn0 cc_cncr_chronic_n12mn0  ///
+cc_13_depressn_n12mn0 cc_14_osteoprs_n12mn0  specialists	
+
+foreach v in `xvars1' {
+pwcorr `v' r_dexp_x r_s_help_dur_ind1 r_s_help_dur_ind2 r_s_help_dur_ind3 ,star(10) sig
+}
+
+*************************************************************************************
+log close
+
+
+H="Table - Overall sample characteristics"
+/*get table of overall sample characteristics for the sample*/
+
+capture log close
+
+clear all
+set more off
+
+//Amy's PC
+local logpath E:\data\spouse_factors\logs
+local projdatapath E:\data\spouse_factors
+
+log using "`logpath'\4c-spouse_factors_sample_char.txt", text replace
+
+cd `projdatapath'
+
+use spouse_factors_data_sample_v1.dta
+*******************************************************************************
+//r variables
+local rvars1 r_hseduc r_ed_ind1 r_ed_ind2 r_ed_ind3 r_ed_ind4 r_ed_ind5 r_ed_ind6 r_ed_ind7 ///
+r_nw_lowest_n1 r_nw_midlow_n1 r_nw_midhigh_n1 r_nw_highest_n1 ///
+ r_female r_white_e  r_black_e  r_hisp_eth_e r_other_na_api_race_e r_nhres_n1 ///
+r_advdir_x r_dexp_x cc_3_alzhdmta_n12mn0 ///
+cc_6_chrnkidn_n12mn0 cc_12_ischmcht_n12mn0 cc_8_chf_n12mn0 ///
+cc_9_diabetes_n12mn0 cc_7_copd_n12mn0 cc_16_strketia_n12mn0 ///
+cc_cncr_chronic_n12mn0 cc_4_atrialfb_n12mn0 cc_11_hipfrac_n12mn0 ///
+cc_13_depressn_n12mn0 cc_14_osteoprs_n12mn0 cc_15_ra_oa_n12mn0 urban_ind
+
+local rvars2 r_age comorb_all_0d_n12m ip_los_24m hci_index ///
+hospital_beds specialists s_age s_months_n1_core_dead
+
+la var r_hseduc "R HS degree, n (%)"
+la var r_ed_ind1 "R No degree, n (%)" 
+la var r_ed_ind2 "R GED, n (%)" 
+la var r_ed_ind3 "R HS degree, n (%)" 
+la var r_ed_ind4 "R 2yr college deg., n (%)" 
+la var r_ed_ind5 "R 4yr college deg., n (%)" 
+la var r_ed_ind6 "R Masters deg., n (%)" 
+la var r_ed_ind7 "R Professional deg., n (%)"
+
+la var r_nw_lowest_n1 "R net worth, 1st (lowest) quartile, n (%)"
+la var r_nw_midlow_n1 "R net worth, 2nd quartile, n (%)"
+la var r_nw_midhigh_n1 "R net worth, 3rd quartile, n (%)"
+la var r_nw_highest_n1 "R net worth, 4th (highest) quartile, n (%)"
+
+la var r_female "Female, n (%)"
+la var r_white_e "White, non-Hispanic, n (%)"
+la var r_black_e "Black, non-Hispanic, n (%)"
+la var r_hisp_eth_e "Hispanic, n (%)"
+la var r_other_na_api_race_e "Other race, non-Hispanic, n (%)"
+
+la var r_nhres_n1 "NH Resident, n (%)"
+la var r_advdir_x "Adv directive, n (%)"
+la var r_dexp_x "Death expected, n (%)"
+
+la var cc_3_alzhdmta_n12mn0 "Alzheimers/Dementia, n (%)" 
+la var cc_6_chrnkidn_n12mn0 "Chronic Kidney Disease, n (%)"
+la var cc_12_ischmcht_n12mn0 "Ischemic Heart Disease, n (%)"
+la var cc_8_chf_n12mn0 "Congestive Heart Failure, n (%)"
+la var cc_9_diabetes_n12mn0 "Diabetes, n (%)"
+la var cc_7_copd_n12mn0 "COPD, n (%)"
+la var cc_16_strketia_n12mn0 "Stroke or TIA, n (%)"
+la var cc_cncr_chronic_n12mn0 "Cancer, n (%)"
+la var cc_4_atrialfb_n12mn0 "Atrial Fibrillation, n (%)"
+la var cc_11_hipfrac_n12mn0 "Hip Fracture, n (%)"
+la var cc_13_depressn_n12mn0 "Depression, n (%)"
+la var cc_14_osteoprs_n12mn0 "Osteoporosis, n (%)"
+la var cc_15_ra_oa_n12mn0 "Arthritis, n (%)"
+la var urban_ind "Urban residence, n (%)"
+
+la var r_age "Age at death, years, mean (SD)"
+la var comorb_all_0d_n12m "Count chronic cond, mean (SD)"
+la var ip_los_24m  "Hospital nights last 2yr of life, mean (SD)"
+la var hci_index "Hospital care intensity index, mean (SD)" 
+la var hospital_beds "Hospital beds/1000 res, mean (SD)"
+la var specialists "Specialists/100,000 res, mean (SD)"
+la var s_age "S age at R's death, years, mean (SD)"
+la var s_months_n1_core_dead "Time S ivw to R death, months, mean (SD)"
+*******************************************************************************
+//s variables
+local svars s_srh_pf_n1  ///
+s_psych_hrs_n1 s_cesd_tot_ge3_n1 s_adl_impair_n1 s_iadl_impair_n1 ///
+ s_adl_diff_impair_n1 s_iadl_diff_impair_n1 s_hrs_comorb_mild_n1 s_hrs_comorb_mod_n1 ///
+ r_s_help_dur_ind1 r_s_help_dur_ind2 r_s_help_dur_ind3 
+
+la var s_srh_pf_n1  "S SRH Poor/fair, n (%)"
+la var s_psych_hrs_n1 "S Psychiatric condition, n (%)" 
+la var s_cesd_tot_ge3_n1 "S CESD depressed, n (%)"
+la var s_adl_impair_n1 "S ADL impair, n (%)"
+la var s_iadl_impair_n1 "S IADL impair, n (%)"
+la var s_adl_diff_impair_n1 "S ADL difficulty, n (%)"
+la var s_iadl_diff_impair_n1 "S IADL difficulty, n (%)" 
+la var s_hrs_comorb_mild_n1 "S Comorbidities mild 1-3, n (%)"
+la var s_hrs_comorb_mod_n1 "S Comorb. moderate 4-6, n (%)"
+
+la var r_s_help_dur_ind1 "S not prim helper exit, n (%)"
+la var r_s_help_dur_ind2 "S prim helper exit only, n (%)"
+la var r_s_help_dur_ind3 "S prim helper exit and n1, n (%)"
+
+//r&s education variables
+tab s_r_educ_3cat, gen(s_r_ed3_ind)
+la var s_r_ed3_ind1 "R & S same education level, n (%)"
+la var s_r_ed3_ind2 "R & S more education, n (%)"
+la var s_r_ed3_ind3 "R & S less education, n (%)"
+
+la var s_r_ed_ind1 "R&S < HS Degree, n (%)" 
+la var s_r_ed_ind2 "S HS, R less, n (%)" 
+la var s_r_ed_ind3 "R HS, S less, n (%)" 
+la var s_r_ed_ind4 "R&S High school degree, n (%)" 
+la var s_r_ed_ind5 "S College, R less, n (%)" 
+la var s_r_ed_ind6 "R College, S less, n (%)" 
+la var s_r_ed_ind7 "R&S - College, n (%)"
+
+*******************************************************************************
+//create the table
+mat t=J(1,2,.)
+
+foreach v in `rvars1'{
+	sum `v', detail
+	mat t[1,1]=r(mean)*r(N) //n
+	mat t[1,2]=r(mean)*100 //percent
+	
+	mat rownames t=`v'
+	
+	frmttable, statmat(t) append(t1) store(t1) varlabels sdec(0,2)
+	}
+
+foreach v in `rvars2'{
+	sum `v', detail
+	mat t[1,1]=r(mean) //mean
+	mat t[1,2]=r(sd) //sd
+	
+	mat rownames t=`v'
+	
+	frmttable, statmat(t) append(t1) store(t1) varlabels sdec(2)
+	}
+
+	foreach v in `svars'{
+	sum `v', detail
+	mat t[1,1]=r(mean)*r(N) //n
+	mat t[1,2]=r(mean)*100 //percent
+	
+	mat rownames t=`v'
+	
+	frmttable, statmat(t) append(t1) store(t1) varlabels sdec(0,2)
+	}
+	
+forvalues i=1/3{
+	sum s_r_ed3_ind`i', detail
+	mat t[1,1]=r(mean)*r(N) //n
+	mat t[1,2]=r(mean)*100 //percent
+
+	mat rownames t=s_r_ed3_ind`i'
+	
+	frmttable, statmat(t) append(t1) store(t1) varlabels sdec(0,2)
+	}
+
+forvalues i=1/7{
+	sum s_r_ed_ind`i', detail
+	mat t[1,1]=r(mean)*r(N) //n
+	mat t[1,2]=r(mean)*100 //percent
+
+	mat rownames t=s_r_ed_ind`i'
+	
+	frmttable, statmat(t) append(t1) store(t1) varlabels sdec(0,2)
+}
+
+sum r_exit_year_x
+local samp_n=r(N)
+
+outreg using "`logpath'/4c_sample_char", ///
+replay(t1) replace ///
+title("Spouse factors sample characteristics, n=`samp_n'")
+
+*******************************************************************************
+log close
+
+
+H="Table - additional details for presentation"
+/*additional tables for presentation
+
+4/23/15 - This includes Table 2 in the draft, the log contains p-values reported in the text*/
+
+capture log close
+
+clear all
+set more off
+
+//Amy's PC
+local logpath E:\data\spouse_factors\logs
+local projdatapath E:\data\spouse_factors
+
+log using "`logpath'\4d_more_tables_spouse_factors.txt", text replace
+
+cd `projdatapath'
+
+use spouse_factors_data_sample_v1.dta 
+*******************************************************************
+la var r_ed_ind1 "R No degree" 
+la var r_ed_ind2 "R GED" 
+la var r_ed_ind3 "R HS degree" 
+la var r_ed_ind4 "R 2yr college deg." 
+la var r_ed_ind5 "R 4yr college deg." 
+la var r_ed_ind6 "R Masters deg." 
+la var r_ed_ind7 "R Professional deg."
+
+tab r_degree_e r_educ_3cat
+tab s_degree_e s_educ_3cat
+
+*******************************************************************
+//Table 2 - percent hospice use by r/s education levels
+//rows show different hospice use definitions
+
+mat t1=J(16,6,.)
+
+local r = 1
+forvalues i = 0/2{
+	foreach v in r_hs_12m r_hs_ge7d r_hs_7vs_1to6 r_hs_ge3d r_hs_3vs_1to2 {
+		sum `v' if r_educ_3cat==`i' & s_educ_3cat==0
+		mat t1[`r',1]=r(N)
+		mat t1[`r',2]=r(mean)*100
+		local r=`r'+1
+	}
+}
+
+local r = 1
+forvalues i = 0/2{
+	foreach v in r_hs_12m r_hs_ge7d r_hs_7vs_1to6 r_hs_ge3d r_hs_3vs_1to2 {
+		sum `v' if r_educ_3cat==`i' & s_educ_3cat==1
+		mat t1[`r',3]=r(N)
+		mat t1[`r',4]=r(mean)*100
+		local r=`r'+1
+	}
+}
+
+local r = 1	
+forvalues i = 0/2{
+	foreach v in r_hs_12m r_hs_ge7d r_hs_7vs_1to6 r_hs_ge3d r_hs_3vs_1to2 {
+		sum `v' if r_educ_3cat==`i' & s_educ_3cat==2
+		mat t1[`r',5]=r(N)
+		mat t1[`r',6]=r(mean)*100
+		local r=`r'+1
+	}
+}
+
+frmttable using `logpath'\4d_more_tables, ///
+statmat(t1) replace ///
+title("Percent hospice use by R and S education levels") ///
+ctitles("","Spouse","","" \ "Decedent","< HS educ","","HS educ","",">HS educ","" \ ///
+"","n","%","n","%","n","%") ///
+rtitles("< HS educ 1+d"\"< HS educ 7+d"\"< HS educ 7+d vs 1-6"\"< HS educ 3+d"\"< HS educ 3+d vs 1-2"\ ///
+"HS educ 1+d"\"HS educ 7+d"\"HS educ 7+d vs 1-6"\"HS educ 3+d"\"HS educ 3+d vs 1-2"\ ///
+"> HS educ 1+d"\"> HS educ 7+d"\"> HS educ 7+d vs 1-6"\"> HS educ 3+d"\"> HS educ 3+d vs 1-2")
+
+//p-values for numbers in this table
+//for R less than HS degree, does spouse education level matter?
+tab r_hs_12m s_educ_3cat if r_educ_3cat==1, chi2
+
+//for R=HS degree, S LT HS Degree less hospice use than S HS degree
+tab r_hs_12m s_educ_3cat if r_educ_3cat==2 & inlist(s_educ_3cat,1,2), chi2
+
+//for R>HS Degree, S LT HS vs S GT HS
+tab r_hs_12m s_educ_3cat if r_educ_3cat==3 & inlist(s_educ_3cat,1,3), chi2
+
+
+*******************************************************************
+
+//table percent hospice use by r/s age levels
+
+mat t1=J(3,3,.)
+
+forvalues i = 1/3{
+sum r_hs_12m if r_age_cat==`i' & s_age_cat==1
+mat t1[`i',1]=r(mean)*100
+}
+
+forvalues i = 1/3{
+sum r_hs_12m if r_age_cat==`i' & s_age_cat==2
+mat t1[`i',2]=r(mean)*100
+}
+
+forvalues i = 1/3{
+sum r_hs_12m if r_age_cat==`i' & s_age_cat==3
+mat t1[`i',3]=r(mean)*100
+}
+
+frmttable using `logpath'\4d_more_tables, ///
+statmat(t1) addtable ///
+title("Percent hospice use by R and S age at R's death") ///
+ctitles("","Spouse","","" \ "Decedent","<75","75-84","85+") ///
+rtitles("< 75"\"75-84"\"85+")
+
+
+*******************************************************************
+//age differences hospice vs non hospice use
+tab s_age_cat r_hs_12m, missing
+
+mat t2=J(3,3,.)
+
+tab s_age_cat if r_hs_12m==1, matcell(m_s_age_cat)
+local n_s_age_cat=r(N)	
+
+forvalues i=1/3{
+	mat t2[`i',1]=m_s_age_cat[`i',1]/`n_s_age_cat'*100
+	}
+
+tab s_age_cat if r_hs_12m==0, matcell(m_s_age_cat)
+local n_s_age_cat=r(N)	
+
+forvalues i=1/3{
+	mat t2[`i',2]=m_s_age_cat[`i',1]/`n_s_age_cat'*100
+	}	
+	
+tab r_hs_12m s_age_cat, chi2
+mat t2[1,3]=r(p)
+
+mat list t2
+
+frmttable using `logpath'\4d_more_tables, ///
+statmat(t2) addtable ///
+title("Hospice use by Spouse age") ///
+ctitles("","Hospice Users","Non-hospice Users","" \ "","%","%","P-value") ///
+rtitles("Spouse age lt 75"\"S 75-84"\"S 85+")
+
+*******************************************************************
+//descriptive table, hospice use by dyad education variable (email request 4/30/15)
+//part 1, all dyads
+
+tab s_r_educ_3cat r_hs_12m,missing
+
+mat t3=J(7,3,.)
+local c = 1
+foreach i in 3 1 2{
+sum hs_los_12m if s_r_educ_3cat==`i', detail
+mat t3[1,`c']=r(N) //n
+mat t3[3,`c']=r(mean) //mean
+mat t3[4,`c']=r(sd) //sd
+mat t3[5,`c']=r(p50) //median
+mat t3[6,`c']=r(min) //min
+mat t3[7,`c']=r(max) //max
+//percent use hospice 1+ days
+sum r_hs_12m if s_r_educ_3cat==`i', detail
+mat t3[2,`c']=r(mean)*100
+local c = `c'+1
+}
+
+frmttable using `logpath'\4d_more_tables, ///
+statmat(t3) addtable ///
+title("Hospice use by Spouse-Decedent education, All Dyads") ///
+ctitles("","Spouse less education","Spouse same education","Spouse more education") ///
+rtitles("N"\"Percent use hospice 1+ days"\"Mean hospice days"\"SD"\ ///
+ "Median hospice days"\"Minimum hospice days"\"Max hospice days") ///
+sdec(0\2\2\2\0)
+
+//part 2, among hospice using dyads (1+ days)
+
+mat t3=J(6,3,.)
+local c = 1
+foreach i in 3 1 2{
+sum hs_los_12m if s_r_educ_3cat==`i' & r_hs_12m==1, detail
+mat t3[1,`c']=r(N) //n
+mat t3[2,`c']=r(mean) //mean
+mat t3[3,`c']=r(sd) //sd
+mat t3[4,`c']=r(p50) //median
+mat t3[5,`c']=r(min) //min
+mat t3[6,`c']=r(max) //max
+local c = `c'+1
+}
+
+frmttable using `logpath'\4d_more_tables, ///
+statmat(t3) addtable ///
+title("Hospice use by Spouse-Decedent education, Hospice using dyads only") ///
+ctitles("","Spouse less education","Spouse same education","Spouse more education") ///
+rtitles("N"\"Mean hospice days"\"SD"\"Median hospice days"\"Minimum hospice days"\"Max hospice days") ///
+sdec(0\2\2\0)
+*******************************************************************
+//place of death
+
+label define location 1  "Hospital" 2 "Nursing Home" 3 "Home" 4 "Hospice" ///
+      5 "Assisted Living/Retirement Home" 6 "Other/Don't Know "
+label values r_location_x location
+tab r_location_x, missing
+
+tab r_location_x r_hs_12m, missing
+
+*******************************************************************
+log close
+
+
+H="************************************"
+
+
+H="Analysis - manuscript June 2015"
+/*updates since presentation:
+1. 2012 interviews included
+2. Added r death expected, adl/iadl difficulty and s primary caregiver duration categories to analysis
+3. Education from tracker file degree variable, no longer from individual wave files
+
+outputs
+table to the file logs\20-HRS_Spouse_analysis_logit_v8.txt.doc
+
+runs 4 versions of analysis
+1. full sample
+2. remove subgroup that are hospital based hospice
+3. remove subgroup that are nursing home residents
+4. full sample, but split by gender
+*/
+
+*************
+capture log close
+
+clear all
+mata: mata clear
+set more off
+
+//Amy's PC
+local logpath E:\data\spouse_factors\logs
+local projdatapath E:\data\spouse_factors
+
+log using "`logpath'\20-HRS_Spouse_analysis_logit_v8.txt", text replace
+
+cd `projdatapath'
+
+use spouse_factors_data_sample_v1.dta
+
+//1 person has 7 comorbidities, lumped in with the moderate group
+// in the create new variables work
+tab s_comor_in_hrs_n1 s_comor_c_hrs_n1, missing
+tab s_comor_c_hrs_n1 s_hrs_comorb_mod_n1, missing
+
+//is hospice use correlated within regions?
+loneway r_hs_12m hrrnum
+
+//create indicator for r white race
+tab r_race_cat , missing
+gen r_white2=1 if r_race_cat==0
+replace r_white2=0 if inlist(r_race_cat,1,2,3)
+tab r_race_cat r_white2, missing
+
+//drop observations missing any of the covariates and then save ds to get
+//final tables for manuscript
+local xvars1 ind_s_r_educ2 ind_s_r_educ3 r_hseduc ///
+s_srh_pf_n1 r_s_help_dur_ind2 r_s_help_dur_ind3
+
+local xvars2 ind_r_age_cat2 ind_r_age_cat3 r_female r_white2 r_nhres_n1 ///
+r_advdir_x r_dexp_x r_adl_diff_impair_n1 r_iadl_diff_impair_n1 ///
+cc_6_chrnkidn_n12mn0 cc_12_ischmcht_n12mn0 cc_8_chf_n12mn0 ///
+cc_9_diabetes_n12mn0 cc_7_copd_n12mn0 cc_cncr_chronic_n12mn0  ///
+cc_13_depressn_n12mn0 cc_14_osteoprs_n12mn0  specialists	
+
+foreach v in `xvars1' `xvars2'{
+drop if `v'==.
+}
+
+tab r_hs_12m , missing
+
+save spouse_factors_data_sample_v1_nomiss.dta, replace
+
+*****************************************************************
+//run a model with just decedent and region characteristics
+local dvars_only ind_r_age_cat2 ind_r_age_cat3 r_hseduc ///
+r_female r_white2 r_nhres_n1 ///
+r_advdir_x r_dexp_x r_adl_diff_impair_n1 r_iadl_diff_impair_n1 ///
+cc_6_chrnkidn_n12mn0 cc_12_ischmcht_n12mn0 cc_8_chf_n12mn0 ///
+cc_9_diabetes_n12mn0 cc_7_copd_n12mn0 cc_cncr_chronic_n12mn0  ///
+cc_13_depressn_n12mn0 cc_14_osteoprs_n12mn0 specialists
+
+//assign variable names for table row names
+la var r_hseduc "R High School degree"
+la var r_female "R Female"
+la var r_white2 "R Non-Hispanic White/Caucasian" 
+la var r_adl_diff_impair_n1 "R ADL Difficulty"
+la var r_iadl_diff_impair_n1 "R IADL Difficulty"
+la var comorb_all_0d_n12m "R Count chronic conditions"
+la var hci_index "Hospital Care Intensity Index"
+la var hospital_beds "No. Hospital Beds/1000 residents"
+la var specialists "No. Specialists/100,000 residents"
+
+//loop through 3 samples
+gen fullsample=0
+rename r_hs_hospital_based_12m r_hs_hosp
+foreach v in fullsample r_hs_hosp r_nhres_n1 {
+preserve
+tab `v',missing
+drop if `v'==1 
+
+logit r_hs_12m `dvars_only' , or vce(cluster hrrnum)
+
+estat ic
+mat ic=r(S)
+local dof=ic[1,4]
+local aic=ic[1,5]
+local aic1:display %5.2f `aic'
+local bic=ic[1,6]
+local bic1:display %5.2f `bic'
+
+outreg, ///
+	stats(e_b e_ci p) nosubstat ///
+	title("Table 3 - Spousal and Decedent Factors of Hospice Enrollment" \ ///
+	"Sample defined by variable `v'" ) ///	
+	ctitles("" "(1) Decedent factors only" "" "" \ "" "OR" "95% CI" "P-value") ///
+	varlabels starlevels(10 5 1) summstat(r2_p \ ll \ N) ///
+	summtitles("Pseudo r-2" \ "Log likelihood" \ "N") ///
+	addrows("Degrees of Freedom AIC/BIC calc", "`dof'" \ ///
+	  "AIC", "`aic1'" \ "BIC", "`bic1'") ///
+	store(tab1) landscape
+
+*****************************************************************
+//Add spouse variables
+//this has both S SRH and S comorbidity category added
+// variable lists defined above
+la var s_srh_pf_n1 "S Self Rated health: Poor/Fair"
+la var s_hrs_comorb_mild_n1 "S Comorbidity - mild 1-3"
+la var s_hrs_comorb_mod_n1 "S Comorbidity - moderate 4-6" 
+
+*****************************************************************
+logit r_hs_12m `xvars1' `xvars2', or vce(cluster hrrnum)
+
+estat ic
+mat ic=r(S)
+local dof=ic[1,4]
+local aic=ic[1,5]
+local aic1:display %5.2f `aic'
+local bic=ic[1,6]
+local bic1:display %5.2f `bic'
+
+outreg , ///
+	stats(e_b e_ci p) nosubstat ///
+	ctitles("" "(2) Decedent and spouse factors" "" "" \ "" "OR" "95% CI" "P-value") ///
+	note("Base categories are spouse no comorbidities per HRS survey," \ ///
+	"S and R have same education level, and S not primary adl or iadl helper at death." \ ///
+	"Robust standard errors are clustered by HRR.") ///
+	varlabels starlevels(10 5 1)  summstat(r2_p \ ll \ N) ///
+	summtitles("Pseudo r-2" \ "Log likelihood" \ "N") ///
+	addrows("Degrees of Freedom AIC/BIC calc", "`dof'" \ ///
+	  "AIC", "`aic1'" \ "BIC", "`bic1'") ///
+	merge(tab1) landscape store(tab1_`v')
+restore
+}
+
+outreg using `logpath'/20-HRS_Spouse_analysis_logit_v8, ///
+replay(tab1_fullsample) replace
+
+outreg using `logpath'/20-HRS_Spouse_analysis_logit_v8, ///
+replay(tab1_r_hs_hosp) addtable
+
+outreg using `logpath'/20-HRS_Spouse_analysis_logit_v8, ///
+replay(tab1_r_nhres_n1) addtable
+
+*****************************************************************
+//Table 3, split by gender
+local xvars1 ind_s_r_educ2 ind_s_r_educ3 r_hseduc ///
+s_srh_pf_n1 r_s_help_dur_ind2 r_s_help_dur_ind3
+
+local xvars2_s ind_r_age_cat2 ind_r_age_cat3 r_white2 r_nhres_n1 ///
+r_advdir_x r_dexp_x r_adl_diff_impair_n1 r_iadl_diff_impair_n1 ///
+cc_6_chrnkidn_n12mn0 cc_12_ischmcht_n12mn0 cc_8_chf_n12mn0 ///
+cc_9_diabetes_n12mn0 cc_7_copd_n12mn0 cc_cncr_chronic_n12mn0  ///
+cc_13_depressn_n12mn0 cc_14_osteoprs_n12mn0  specialists	
+
+//First R=female
+logit r_hs_12m `xvars1' `xvars2_s' if r_female==1, or vce(cluster hrrnum)
+
+outreg , ///
+	stats(e_b e_ci p) nosubstat ///
+	title("Table 4 - Factors of Hospice Enrollment, Sample split by Gender") ///	
+	ctitles("" "(3) Decedent=Female" "" "" \ "" "OR" "95% CI" "P-value") ///
+	note("Base categories are spouse no comorbidities per HRS survey," \ ///
+	"S and R have same education level, and S not primary adl or iadl helper at death." \ ///
+	"Standard errors are clustered by HRR.") ///
+	varlabels starlevels(10 5 1)  summstat(N) ///
+	store(tab2) landscape
+*****************************************************************
+//2nd column R=Male
+logit r_hs_12m `xvars1' `xvars2_s' if r_female==0, or vce(cluster hrrnum)
+
+outreg using `logpath'/20-HRS_Spouse_analysis_logit_v8, ///
+	stats(e_b e_ci p) nosubstat ///
+	title("Table 4 - Factors of Hospice Enrollment, Sample split by Gender") ///	
+	ctitles("" "(4) Decedent=Male" "" "" \ "" "OR" "95% CI" "P-value") ///
+	note("Base categories are spouse no comorbidities per HRS survey," \ ///
+	"S and R have same education level, and S not primary adl or iadl helper at death." \ ///
+	"Robust standard errors are clustered by HRR.") ///
+	varlabels starlevels(10 5 1)  summstat(N) ///
+	merge(tab2) landscape addtable
+
+*****************************************************************
+log close
+
+
+H="Tables for manuscript June 2015"
+/*Sample limited to those with no missing data in multivariate model
+
+Creates tables for manuscript
+1. R / S / Region characteristics by hospice use
+2. R / S education by hospice use
+*/
+
+*************
+capture log close
+
+clear all
+set more off
+
+//Amy's PC
+local logpath E:\data\spouse_factors\logs
+local projdatapath E:\data\spouse_factors
+
+log using "`logpath'\21-HRS_Spouse_predictors_tables1and2.txt", text replace
+
+cd `projdatapath'
+
+use spouse_factors_data_sample_v1_nomiss.dta 
+*********************************************************************
+
+tab r_hs_12m , missing
+*********************************************************************
+*********************************************************************
+** Table 1, part 1, R and region characteristics
+*********************************************************************
+*********************************************************************
+local rvars1 r_hseduc r_female r_imprelig_vimp_n1 r_rel_nb_n1 r_nhres_n1 r_advdir_x ///
+ r_dexp_x r_adl_diff_impair_n1 r_iadl_diff_impair_n1
+
+local rvars2 cc_3_alzhdmta_n12mn0 ///
+cc_6_chrnkidn_n12mn0 cc_12_ischmcht_n12mn0 cc_8_chf_n12mn0 ///
+cc_9_diabetes_n12mn0 cc_7_copd_n12mn0 cc_16_strketia_n12mn0 ///
+cc_cncr_chronic_n12mn0 cc_4_atrialfb_n12mn0 cc_11_hipfrac_n12mn0 ///
+cc_13_depressn_n12mn0 cc_14_osteoprs_n12mn0 cc_15_ra_oa_n12mn0 urban_ind
+
+local rvars3 ip_los_24m  hci_index hospital_beds specialists
+
+la var r_hseduc "R HS degree+"
+la var r_female "Female"
+la var r_imprelig_vimp_n1 "Religion very important"
+la var r_rel_nb_n1 "Relatives nearby"
+
+la var r_nhres_n1 "NH Resident"
+la var r_advdir_x "Adv directive"
+la var r_dexp_x "Death expected by family"
+la var r_adl_diff_impair_n1 "ADL Difficulty" 
+la var r_iadl_diff_impair_n1 "IADL Difficulty"
+
+la var cc_3_alzhdmta_n12mn0 "Alzheimers/Dementia" 
+la var cc_6_chrnkidn_n12mn0 "Chronic Kidney Disease"
+la var cc_12_ischmcht_n12mn0 "Ischemic Heart Disease"
+la var cc_8_chf_n12mn0 "Congestive Heart Failure"
+la var cc_9_diabetes_n12mn0 "Diabetes"
+la var cc_7_copd_n12mn0 "COPD"
+la var cc_16_strketia_n12mn0 "Stroke or TIA"
+la var cc_cncr_chronic_n12mn0 "Cancer"
+la var cc_4_atrialfb_n12mn0 "Atrial Fibrillation"
+la var cc_11_hipfrac_n12mn0 "Hip Fracture"
+la var cc_13_depressn_n12mn0 "Depression"
+la var cc_14_osteoprs_n12mn0 "Osteoporosis"
+la var cc_15_ra_oa_n12mn0 "Arthritis"
+la var urban_ind "Urban residence"
+
+la var ip_los_24m  "Hospital nights last 2yr of life"
+la var hci_index "Hospital care intensity index" 
+la var hospital_beds "Hospital beds/1000 res"
+la var specialists "Specialists/100,000 res"
+
+mat resp=J(42,4,.)
+//col 1 = hospice users, col 2 = non-users, col 3 = p-values
+//col 4 = missing count of n's
+
+sum r_hs_12m 
+local n_oa=r(N)
+display `n_oa'
+
+//cols 1,2
+local c = 1
+foreach h in 1 0{
+	local r = 1
+	sum r_age if r_hs_12m==`h', detail //age
+	mat resp[`r',`c']=r(mean)
+	mat resp[`r'+1,`c']=r(sd)
+
+	local r=`r'+2
+	tab r_nw_quart_n1 if r_hs_12m==`h', matcell(m_nw_quart)
+	local n_r_nw_quart_n1=r(N)
+		forvalues i=1/4{
+		mat resp[`r',`c']=m_nw_quart[`i',1]/`n_r_nw_quart_n1'*100
+		local r = `r'+1
+		}
+
+	tab r_educ_3cat if r_hs_12m==`h', matcell(m_r_educ_3cat)
+	local n_r_educ_3cat=r(N)	
+		forvalues i=1/3{
+		mat resp[`r',`c']=m_r_educ_3cat[`i',1]/`n_r_educ_3cat'*100
+		local r = `r'+1
+		}
+	
+	tab r_race_cat if r_hs_12m==`h', matcell(m_r_race_cat)
+	local n_r_race_cat=r(N)	
+		forvalues i=1/4{
+		mat resp[`r',`c']=m_r_race_cat[`i',1]/`n_r_race_cat'*100
+		local r = `r'+1
+		}
+	
+	foreach v in `rvars1'{
+		sum `v' if r_hs_12m==`h'
+		mat resp[`r',`c']=r(mean)*100
+		local r = `r'+1
+		}
+	
+	sum comorb_all_0d_n12m if r_hs_12m==`h', detail
+	mat resp[`r',`c']=r(mean)
+	mat resp[`r'+1,`c']=r(sd)
+	
+	local r = `r'+2
+	foreach v in `rvars2'{
+		sum `v' if r_hs_12m==`h'
+		mat resp[`r',`c']=r(mean)*100
+		local r = `r'+1
+		}
+
+	foreach v in `rvars3'{ //regional variables, continuous
+		sum `v' if r_hs_12m==`h'
+		mat resp[`r',`c']=r(mean)
+		local r = `r'+1
+		}
+	
+	local c = `c'+1
+}
+
+//col 3,4, p-values and missing values
+local c = 3
+local r = 1
+ttest r_age, by(r_hs_12m)
+mat resp[`r',`c']=r(p)
+mat resp[`r',`c'+1]=`n_oa'-r(N_1)-r(N_2)
+local r = `r'+2
+
+tab r_hs_12m r_nw_quart_n1, row chi
+mat resp[`r',`c']=r(p)
+mat resp[`r',`c'+1]=`n_oa'-r(N)
+local r = `r'+4
+
+tab r_hs_12m r_educ_3cat , row chi
+	mat resp[`r',`c']=r(p)
+	mat resp[`r',`c'+1]=`n_oa'-r(N)
+local r = `r'+3
+
+tab r_hs_12m r_race_cat , row chi
+	mat resp[`r',`c']=r(p)
+	mat resp[`r',`c'+1]=`n_oa'-r(N)
+local r = `r'+4
+
+foreach v in `rvars1'{
+	tab r_hs_12m `v' , row chi
+	mat resp[`r',`c']=r(p)
+	mat resp[`r',`c'+1]=`n_oa'-r(N)
+	local r = `r'+1
+}
+
+ttest comorb_all_0d_n12m, by(r_hs_12m)
+mat resp[`r',`c']=r(p)
+mat resp[`r',`c'+1]=`n_oa'-r(N_1)-r(N_2)
+local r = `r'+2
+
+foreach v in `rvars2'{
+	tab r_hs_12m `v' , row chi
+	mat resp[`r',`c']=r(p)
+	mat resp[`r',`c'+1]=`n_oa'-r(N)
+	local r = `r'+1
+}
+
+foreach v in `rvars3'{
+	ttest `v', by(r_hs_12m)
+	mat resp[`r',`c']=r(p)
+	mat resp[`r',`c'+1]=`n_oa'-r(N_1)-r(N_2)
+	local r = `r'+1
+}
+
+mat rownames resp="Age at death, years, mean" "SD" "R net worth quartile 1, lowest" ///
+"R net worth quartile 2" "R net worth quartile 3" "R net worth quartile 4, highest" ///
+"R < HS Degree" "R HS Degree" "R > HS Degree" ///
+ "White, non-Hispanic" "Black, non-Hispanic" "Hispanic" ///
+"Other race, non-Hispanic" `rvars1' "Count comorbidities, mean" "SD" `rvars2' `rvars3'
+
+mat list resp
+
+frmttable, statmat(resp)  ///
+title("Decedent and Region characteristics, Spousal Factors Sample") ///
+ctitle("","Hospice users","Non-hospice users","","" \ ///
+"","%","%","P-value","n missing") ///
+varlabels ///
+note("Hospice use defined as 1+ days hospice use vs 0 days." \ ///
+"P value from chi-2 statistic for categorical variables and t-test for continuous variables." \ ///
+"Region level variables are at the HRR level, merged in by decedent zip code.") ///
+sdec(2,2,3,0) store(r_1)
+
+//last row - n's
+mat r_n=J(1,2,.)
+tab r_hs_12m, missing matcell(d1)
+mat r_n[1,1]=d1[2,1] //hospice n
+mat r_n[1,2]=d1[1,1] //non-hospice users n
+mat rownames r_n="N"
+frmttable, statmat(r_n) store(r_n) sdec(0) ///
+ctitle("","Hospice users","Non-hospice users" \ ///
+"","%","%") 
+
+outreg using `logpath'\21_spofactors_tables1and2,  ///
+replay(r_1) append(r_n) replace
+
+
+*******************************************************************
+*******************************************************************
+**Table 1, part 2 S characteristics
+*******************************************************************
+*******************************************************************
+local svars s_srh_pf_n1 s_cesd_tot_ge3_n1 ///
+s_adl_diff_impair_n1 s_iadl_diff_impair_n1 s_psych_overall_hrs_n1
+
+la var s_srh_pf_n1  "SRH Poor/fair"
+la var s_cesd_tot_ge3_n1 "CESD depressed"
+la var s_adl_diff_impair_n1 "ADL difficulty"
+la var s_iadl_diff_impair_n1 "IADL difficulty"
+la var s_psych_overall_hrs_n1 "Psych Cond overall"
+
+tab s_adl_impair_n1 s_adl_diff_impair_n1, missing
+tab s_iadl_impair_n1 s_iadl_diff_impair_n1, missing
+
+tab s_comor_c_hrs_n1, missing
+tab s_comor_c_hrs_n1, nolabel
+replace s_comor_c_hrs_n1=2 if s_comor_c_hrs_n1==3
+
+//note s_adl_impair_n1 s_iadl_impair_n1 are from the questions
+//asking does S receive help with the adl / iadl tasks
+mat sp=J(22,4,.)
+//col 1 = hospice users, col 2 = non-users, col 3 = p-values
+//col 4 = missing count of n's
+
+sum r_hs_12m
+local n_oa=r(N)
+display 
+
+//cols 1,2
+local c = 1
+foreach h in 1 0{
+	local r = 1
+	
+	sum s_age if r_hs_12m==`h', detail //age
+	mat sp[`r',`c']=r(mean)
+	mat sp[`r'+1,`c']=r(sd)
+	local r = `r'+2
+	
+	tab r_s_age_3cat if r_hs_12m==`h', matcell(m_r_s_age_3cat)
+	local n_r_s_age_3cat=r(N)
+	tab s_educ_3cat if r_hs_12m==`h', matcell(m_s_educ_3cat)
+	local n_s_educ_3cat=r(N)	
+	tab s_r_educ_3cat if r_hs_12m==`h', matcell(m_s_r_educ_3cat)
+	local n_s_r_educ_3cat=r(N)	
+	tab s_comor_c_hrs_n1 if r_hs_12m==`h', matcell(m_s_comor_c_hrs_n1)
+	local n_s_comor_c_hrs_n1=r(N)	
+		forvalues i=1/3{
+		mat sp[`r',`c']=m_r_s_age_3cat[`i',1]/`n_r_s_age_3cat'*100
+		mat sp[`r'+3,`c']=m_s_educ_3cat[`i',1]/`n_s_educ_3cat'*100
+		mat sp[`r'+6,`c']=m_s_r_educ_3cat[`i',1]/`n_s_r_educ_3cat'*100
+		mat sp[`r'+9,`c']=m_s_comor_c_hrs_n1[`i',1]/`n_s_comor_c_hrs_n1'*100
+		local r = `r'+1
+		}
+
+		local r = `r'+9
+	foreach v in `svars'{
+		sum `v' if r_hs_12m==`h'
+		mat sp[`r',`c']=r(mean)*100
+		local r = `r'+1
+		}
+		
+	tab r_s_help_dur_cat if r_hs_12m==`h', matcell(m_r_s_help_dur_cat)
+		forvalues i=1/3{
+		mat sp[`r',`c']=m_r_s_help_dur_cat[`i',1]/r(N)*100
+		local r = `r'+1
+		}	
+
+	local c = `c'+1
+}
+
+//cols 3,4
+local c = 3
+local r = 1
+
+ttest r_age, by(r_hs_12m)
+mat sp[`r',`c']=r(p)
+mat sp[`r',`c'+1]=`n_oa'-r(N_1)-r(N_2)
+local r = `r'+2
+
+foreach v in r_s_age_3cat s_educ_3cat s_r_educ_3cat s_comor_c_hrs_n1 {
+	tab r_hs_12m `v' , row chi
+	mat sp[`r',`c']=r(p)
+	mat sp[`r',`c'+1]=`n_oa'-r(N)
+	local r = `r'+3
+}
+
+foreach v in `svars'{
+	tab r_hs_12m `v' , row chi
+	mat sp[`r',`c']=r(p)
+	mat sp[`r',`c'+1]=`n_oa'-r(N)
+	local r = `r'+1
+}
+
+tab r_hs_12m r_s_help_dur_cat , row chi
+mat sp[`r',`c']=r(p)
+mat sp[`r',`c'+1]=`n_oa'-r(N)
+
+mat rownames sp="Age at death, mean" "SD" "Same age category" "Spouse older" ///
+"Spouse younger" "Education < HS" "HS degree" "> HS" "Same education category" ///
+"Spouse more education" "Spouse less education" ///
+ "HRS comorbidities=none" "Mild 1-3" "Moderate/Severe 4-7"  ///
+ `svars' "S not primary helper exit" "S primary helper exit only" ///
+ "S primary helper n1+exit" 
+
+mat list sp
+
+frmttable , statmat(sp)  ///
+title("Spouse characteristics, Spousal Factors Sample") ///
+ctitle("","Hospice users","Non-hospice users","","" \ ///
+"","%","%","P-value", "n missing") ///
+varlabels ///
+note("Hospice use defined as 1+ days hospice vs 0 days." \ ///
+"P value from chi-2 statistic for categorical variables." \ ///
+"All variables are from are n1 interviews unless otherwise noted." \ ///
+"ADL / IADL Impairment and Difficulty defined as receiving help or having difficulty" \ ///
+"with at least 1 activity.") ///
+sdec(2,2,3,0) store(s_1)
+
+mat s_n=J(1,2,.)
+tab r_hs_12m, missing matcell(d1)
+mat s_n[1,1]=d1[2,1] //hospice n
+mat s_n[1,2]=d1[1,1] //non-hospice users n
+mat rownames s_n="N"
+frmttable, statmat(s_n) store(s_n) sdec(0) ///
+ctitle("","Hospice users","Non-hospice users" \ ///
+"","%","%") 
+
+outreg using `logpath'\21_spofactors_tables1and2,  ///
+replay(s_1) append(s_n) addtable
+
+*******************************************************************
+*******************************************************************
+**Table 2, Education and Hospice use tabulation
+*******************************************************************
+*******************************************************************
+mat t1=J(3,6,.)
+
+local r = 1
+forvalues i = 0/2{
+		sum r_hs_12m if r_educ_3cat==`i' & s_educ_3cat==0
+		mat t1[`r',1]=r(N)
+		mat t1[`r',2]=r(mean)*100
+		local r=`r'+1
+	}
+
+
+local r = 1
+forvalues i = 0/2{
+		sum r_hs_12m if r_educ_3cat==`i' & s_educ_3cat==1
+		mat t1[`r',3]=r(N)
+		mat t1[`r',4]=r(mean)*100
+		local r=`r'+1
+}
+
+local r = 1	
+forvalues i = 0/2{
+		sum r_hs_12m if r_educ_3cat==`i' & s_educ_3cat==2
+		mat t1[`r',5]=r(N)
+		mat t1[`r',6]=r(mean)*100
+		local r=`r'+1
+}
+
+frmttable using `logpath'\21_spofactors_tables1and2, ///
+statmat(t1) addtable ///
+title("Percent hospice use by R and S education levels") ///
+ctitles("","Spouse","","" \ "Decedent","< HS educ","","HS educ","",">HS educ","" \ ///
+"","n","%","n","%","n","%") ///
+rtitles("< HS educ "\"HS educ "\"> HS educ ")
+
+//p-values for numbers in this table
+//for R less than HS degree, does spouse education level matter?
+tab r_hs_12m s_educ_3cat if r_educ_3cat==0, chi2
+
+//for R=HS degree, S LT HS Degree less hospice use than S HS degree
+tab r_hs_12m s_educ_3cat if r_educ_3cat==1 & inlist(s_educ_3cat,0,1), chi2
+
+//for R>HS Degree, S LT HS vs S GT HS
+tab r_hs_12m s_educ_3cat if r_educ_3cat==2 & inlist(s_educ_3cat,0,2), chi2
+
+//p-value test s chronic conditions groups by hs use
+tab r_hs_12m s_comor_c_hrs_n1, chi2
+tab r_hs_12m s_hrs_comorb_none_n1, chi2
+tab r_hs_12m s_hrs_comorb_mild_n1, chi2
+tab r_hs_12m s_hrs_comorb_mod_n1, chi2
+
+*********************************************************************
+log close
+
+
+H="overall sample char for manuscript June 2015"
+/*Sample limited to those with no missing data in multivariate model
+
+Creates tables for descriptive statistics in the text for the overall sample
+*/
+
+*************
+capture log close
+
+clear all
+set more off
+
+//Amy's PC
+local logpath E:\data\spouse_factors\logs
+local projdatapath E:\data\spouse_factors
+
+log using "`logpath'\21a-HRS_Spouse_predictors_fullsample_table.txt", text replace
+
+cd `projdatapath'
+
+use spouse_factors_data_sample_v1_nomiss.dta 
+*********************************************************************
+
+tab r_hs_12m , missing
+
+//r variables
+local rvars1 r_hseduc r_ed_ind1 r_ed_ind2 r_ed_ind3 r_ed_ind4 r_ed_ind5 r_ed_ind6 r_ed_ind7 ///
+r_nw_lowest_n1 r_nw_midlow_n1 r_nw_midhigh_n1 r_nw_highest_n1 ///
+ r_female r_white_e  r_black_e  r_hisp_eth_e r_other_na_api_race_e r_nhres_n1 ///
+r_advdir_x r_dexp_x cc_3_alzhdmta_n12mn0 ///
+cc_6_chrnkidn_n12mn0 cc_12_ischmcht_n12mn0 cc_8_chf_n12mn0 ///
+cc_9_diabetes_n12mn0 cc_7_copd_n12mn0 cc_16_strketia_n12mn0 ///
+cc_cncr_chronic_n12mn0 cc_4_atrialfb_n12mn0 cc_11_hipfrac_n12mn0 ///
+cc_13_depressn_n12mn0 cc_14_osteoprs_n12mn0 cc_15_ra_oa_n12mn0 urban_ind
+
+local rvars2 r_age comorb_all_0d_n12m ip_los_24m hci_index ///
+hospital_beds specialists s_age s_months_n1_core_dead
+
+la var r_hseduc "R HS degree, n (%)"
+la var r_ed_ind1 "R No degree, n (%)" 
+la var r_ed_ind2 "R GED, n (%)" 
+la var r_ed_ind3 "R HS degree, n (%)" 
+la var r_ed_ind4 "R 2yr college deg., n (%)" 
+la var r_ed_ind5 "R 4yr college deg., n (%)" 
+la var r_ed_ind6 "R Masters deg., n (%)" 
+la var r_ed_ind7 "R Professional deg., n (%)"
+
+la var r_nw_lowest_n1 "R net worth, 1st (lowest) quartile, n (%)"
+la var r_nw_midlow_n1 "R net worth, 2nd quartile, n (%)"
+la var r_nw_midhigh_n1 "R net worth, 3rd quartile, n (%)"
+la var r_nw_highest_n1 "R net worth, 4th (highest) quartile, n (%)"
+
+la var r_female "Female, n (%)"
+la var r_white_e "White, non-Hispanic, n (%)"
+la var r_black_e "Black, non-Hispanic, n (%)"
+la var r_hisp_eth_e "Hispanic, n (%)"
+la var r_other_na_api_race_e "Other race, non-Hispanic, n (%)"
+
+la var r_nhres_n1 "NH Resident, n (%)"
+la var r_advdir_x "Adv directive, n (%)"
+la var r_dexp_x "Death expected, n (%)"
+
+la var cc_3_alzhdmta_n12mn0 "Alzheimers/Dementia, n (%)" 
+la var cc_6_chrnkidn_n12mn0 "Chronic Kidney Disease, n (%)"
+la var cc_12_ischmcht_n12mn0 "Ischemic Heart Disease, n (%)"
+la var cc_8_chf_n12mn0 "Congestive Heart Failure, n (%)"
+la var cc_9_diabetes_n12mn0 "Diabetes, n (%)"
+la var cc_7_copd_n12mn0 "COPD, n (%)"
+la var cc_16_strketia_n12mn0 "Stroke or TIA, n (%)"
+la var cc_cncr_chronic_n12mn0 "Cancer, n (%)"
+la var cc_4_atrialfb_n12mn0 "Atrial Fibrillation, n (%)"
+la var cc_11_hipfrac_n12mn0 "Hip Fracture, n (%)"
+la var cc_13_depressn_n12mn0 "Depression, n (%)"
+la var cc_14_osteoprs_n12mn0 "Osteoporosis, n (%)"
+la var cc_15_ra_oa_n12mn0 "Arthritis, n (%)"
+la var urban_ind "Urban residence, n (%)"
+
+la var r_age "Age at death, years, mean (SD)"
+la var comorb_all_0d_n12m "Count chronic cond, mean (SD)"
+la var ip_los_24m  "Hospital nights last 2yr of life, mean (SD)"
+la var hci_index "Hospital care intensity index, mean (SD)" 
+la var hospital_beds "Hospital beds/1000 res, mean (SD)"
+la var specialists "Specialists/100,000 res, mean (SD)"
+la var s_age "S age at R's death, years, mean (SD)"
+la var s_months_n1_core_dead "Time S ivw to R death, months, mean (SD)"
+*******************************************************************************
+//s variables
+local svars s_hseduc s_srh_pf_n1  ///
+s_psych_hrs_n1 s_cesd_tot_ge3_n1 s_adl_impair_n1 s_iadl_impair_n1 ///
+ s_adl_diff_impair_n1 s_iadl_diff_impair_n1 s_hrs_comorb_mild_n1 s_hrs_comorb_mod_n1 ///
+ r_s_help_dur_ind1 r_s_help_dur_ind2 r_s_help_dur_ind3 
+
+la var s_hseduc "S HS degree, n (%)"
+la var s_srh_pf_n1  "S SRH Poor/fair, n (%)"
+la var s_psych_hrs_n1 "S Psychiatric condition, n (%)" 
+la var s_cesd_tot_ge3_n1 "S CESD depressed, n (%)"
+la var s_adl_impair_n1 "S ADL impair, n (%)"
+la var s_iadl_impair_n1 "S IADL impair, n (%)"
+la var s_adl_diff_impair_n1 "S ADL difficulty, n (%)"
+la var s_iadl_diff_impair_n1 "S IADL difficulty, n (%)" 
+la var s_hrs_comorb_mild_n1 "S Comorbidities mild 1-3, n (%)"
+la var s_hrs_comorb_mod_n1 "S Comorb. moderate 4-6, n (%)"
+
+la var r_s_help_dur_ind1 "S not prim helper exit, n (%)"
+la var r_s_help_dur_ind2 "S prim helper exit only, n (%)"
+la var r_s_help_dur_ind3 "S prim helper exit and n1, n (%)"
+
+//r&s education variables
+tab s_r_educ_3cat, gen(s_r_ed3_ind)
+la var s_r_ed3_ind1 "R & S same education level, n (%)"
+la var s_r_ed3_ind2 "R & S more education, n (%)"
+la var s_r_ed3_ind3 "R & S less education, n (%)"
+
+la var s_r_ed_ind1 "R&S < HS Degree, n (%)" 
+la var s_r_ed_ind2 "S HS, R less, n (%)" 
+la var s_r_ed_ind3 "R HS, S less, n (%)" 
+la var s_r_ed_ind4 "R&S High school degree, n (%)" 
+la var s_r_ed_ind5 "S College, R less, n (%)" 
+la var s_r_ed_ind6 "R College, S less, n (%)" 
+la var s_r_ed_ind7 "R&S - College, n (%)"
+
+*******************************************************************************
+//create the table
+mat t=J(1,2,.)
+
+foreach v in `rvars1'{
+	sum `v', detail
+	mat t[1,1]=r(mean)*r(N) //n
+	mat t[1,2]=r(mean)*100 //percent
+	
+	mat rownames t=`v'
+	
+	frmttable, statmat(t) append(t1) store(t1) varlabels sdec(0,2)
+	}
+
+foreach v in `rvars2'{
+	sum `v', detail
+	mat t[1,1]=r(mean) //mean
+	mat t[1,2]=r(sd) //sd
+	
+	mat rownames t=`v'
+	
+	frmttable, statmat(t) append(t1) store(t1) varlabels sdec(2)
+	}
+
+	foreach v in `svars'{
+	sum `v', detail
+	mat t[1,1]=r(mean)*r(N) //n
+	mat t[1,2]=r(mean)*100 //percent
+	
+	mat rownames t=`v'
+	
+	frmttable, statmat(t) append(t1) store(t1) varlabels sdec(0,2)
+	}
+	
+forvalues i=1/3{
+	sum s_r_ed3_ind`i', detail
+	mat t[1,1]=r(mean)*r(N) //n
+	mat t[1,2]=r(mean)*100 //percent
+
+	mat rownames t=s_r_ed3_ind`i'
+	
+	frmttable, statmat(t) append(t1) store(t1) varlabels sdec(0,2)
+	}
+
+forvalues i=1/7{
+	sum s_r_ed_ind`i', detail
+	mat t[1,1]=r(mean)*r(N) //n
+	mat t[1,2]=r(mean)*100 //percent
+
+	mat rownames t=s_r_ed_ind`i'
+	
+	frmttable, statmat(t) append(t1) store(t1) varlabels sdec(0,2)
+}
+
+sum r_exit_year_x
+local samp_n=r(N)
+
+outreg using "`logpath'/21a_sample_char", ///
+replay(t1) replace ///
+title("Spouse factors sample characteristics, n=`samp_n'")
+*******************************************************************************
+//for those that use hospice, what is the LOS
+sum hs_los_12m if r_hs_12m==1, detail
+
+*******************************************************************************
+log close
+
+
+H="Analysis, same as prev section but change hospice use criteria"
+*************
+/*Same model as manuscript 2015 analysis  but changing hospice use criteria variables
+
+Runs 4 versions:
+1. 7+ days hospice use vs 0 days (omit 1-6 days)
+2. 7+ days vs 1-6 days (limited to hospice users)
+3. 3+ days vs 0 days
+4. 3+ days vs 1-2 days (limited to hospice users)
+*/
+
+capture log close
+
+clear all
+set more off
+
+//Amy's PC
+local logpath E:\data\spouse_factors\logs
+local projdatapath E:\data\spouse_factors
+
+log using "`logpath'\22-Spouse_predictors_hospicedef.txt", text replace
+
+cd `projdatapath'
+
+use spouse_factors_data_sample_v1_nomiss.dta
+
+*****************************************************************
+//run a model with just decedent and region characteristics
+local dvars_only ind_r_age_cat2 ind_r_age_cat3 r_hseduc ///
+r_female r_white2 r_nhres_n1 ///
+r_advdir_x r_dexp_x r_adl_diff_impair_n1 r_iadl_diff_impair_n1 ///
+cc_6_chrnkidn_n12mn0 cc_12_ischmcht_n12mn0 cc_8_chf_n12mn0 ///
+cc_9_diabetes_n12mn0 cc_7_copd_n12mn0 cc_cncr_chronic_n12mn0  ///
+cc_13_depressn_n12mn0 cc_14_osteoprs_n12mn0 specialists
+
+//assign variable names for table row names
+la var r_hseduc "R High School degree"
+la var r_female "R Female"
+la var r_white2 "R Non-Hispanic White/Caucasian" 
+la var r_adl_diff_impair_n1 "R ADL Difficulty"
+la var r_iadl_diff_impair_n1 "R IADL Difficulty"
+la var comorb_all_0d_n12m "R Count chronic conditions"
+la var hci_index "Hospital Care Intensity Index"
+la var hospital_beds "No. Hospital Beds/1000 residents"
+la var specialists "No. Specialists/100,000 residents"
+
+foreach hsi in r_hs_ge7d r_hs_7vs_1to6 r_hs_ge3d r_hs_3vs_1to2 {
+
+logit `hsi' `dvars_only' , or vce(cluster hrrnum)
+
+estat ic
+mat ic=r(S)
+local dof=ic[1,4]
+local aic=ic[1,5]
+local aic1:display %5.2f `aic'
+local bic=ic[1,6]
+local bic1:display %5.2f `bic'
+
+outreg, ///
+	stats(e_b e_ci p) nosubstat ///
+	title("`hsi' days hospice use" \ ///
+	"Table 3 - Spousal and Decedent Factors of Hospice Enrollment") ///	
+	ctitles("" "(1) Decedent factors only" "" "" \ "" "OR" "95% CI" "P-value") ///
+	varlabels keep(`dvars_only') starlevels(10 5 1) summstat(r2_p \ ll \ N) ///
+	summtitles("Pseudo r-2" \ "Log likelihood" \ "N") ///
+	addrows("Degrees of Freedom AIC/BIC calc", "`dof'" \ ///
+	  "AIC", "`aic1'" \ "BIC", "`bic1'") ///
+	store(tab1) landscape
+
+*****************************************************************
+//Add spouse variables
+//this has both S SRH and S comorbidity category added
+local xvars1 ind_s_r_educ2 ind_s_r_educ3 r_hseduc ///
+s_srh_pf_n1 r_s_help_dur_ind2 r_s_help_dur_ind3
+
+local xvars2 ind_r_age_cat2 ind_r_age_cat3 r_female r_white2 r_nhres_n1 ///
+r_advdir_x r_dexp_x r_adl_diff_impair_n1 r_iadl_diff_impair_n1 ///
+cc_6_chrnkidn_n12mn0 cc_12_ischmcht_n12mn0 cc_8_chf_n12mn0 ///
+cc_9_diabetes_n12mn0 cc_7_copd_n12mn0 cc_cncr_chronic_n12mn0  ///
+cc_13_depressn_n12mn0 cc_14_osteoprs_n12mn0  specialists	
+
+la var s_srh_pf_n1 "S Self Rated health: Poor/Fair"
+la var s_hrs_comorb_mild_n1 "S Comorbidity - mild 1-3"
+la var s_hrs_comorb_mod_n1 "S Comorbidity - moderate 4-6" 
+
+*****************************************************************
+logit `hsi' `xvars1' `xvars2', or vce(cluster hrrnum)
+
+estat ic
+mat ic=r(S)
+local dof=ic[1,4]
+local aic=ic[1,5]
+local aic1:display %5.2f `aic'
+local bic=ic[1,6]
+local bic1:display %5.2f `bic'
+
+outreg using `logpath'/22-Spouse_predictors_hospicedef_`hsi', ///
+	stats(e_b e_ci p) nosubstat ///
+	ctitles("" "(2) Decedent and spouse factors" "" "" \ "" "OR" "95% CI" "P-value") ///
+	note("Base categories are spouse no comorbidities per HRS survey," \ ///
+	"and S and R have same education level." \ ///
+	"Robust standard errors are clustered by HRR.") ///
+	varlabels starlevels(10 5 1)  summstat(r2_p \ ll \ N) ///
+	summtitles("Pseudo r-2" \ "Log likelihood" \ "N") ///
+	addrows("Degrees of Freedom AIC/BIC calc", "`dof'" \ ///
+	  "AIC", "`aic1'" \ "BIC", "`bic1'") ///
+	merge(tab1) landscape replace
+}
+
+*****************************************************************
+log close
+
+
+H="***************************************"
+
+
+H="chi-squared tests for caregiving"
+use "E:\data\spouse_factors\spouse_factors_data_sample_v1_nomiss.dta", clear
+
+gen dif=hs_enrol_dt-s_c_ivw_date_n1
+
+local svars s_srh_pf_n1 s_psych_hrs_n1 s_cesd_tot_ge3_n1 s_adl_impair_n1 ///
+s_iadl_impair_n1 s_adl_diff_impair_n1 s_iadl_diff_impair_n1 s_hrs_comorb_mild_n1 ///
+ s_hrs_comorb_mod_n1 
+ 
+local cg r_s_help_dur_ind1 r_s_help_dur_ind2 r_s_help_dur_ind3 
+local rnum : word count `svars'
+local r=1
+local c=2
+mat schars=J(`rnum'*4,4,.)
+
+foreach x of local svars {
+	foreach x2 of local cg {
+		foreach i in 1 {
+			sum `x' if `x2'==`i'
+			mat schars[`r',`c']=r(mean)*100
+			mat schars[`r',`c'+1]=r(mean)*r(N)
+			local c=`c'+2
+}
+		tab `x' `x2', chi2
+		mat schars[`r',`c']=r(p)
+		local c=2 
+		local r=`r'+1
+}
+		local r=`r'+1
+} 
+
+forvalues i=1(4)36 {
+	mat schars[`i',1]==1
+}
+forvalues i=2(4)36 {
+	mat schars[`i',1]==2
+}
+forvalues i=3(4)36 {
+	mat schars[`i',1]==3
+}
+mat rownames schars= "s_srh_pf_n1" "_" "_" "_" "s_psych_hrs_n1" "_" "_" "_" ///
+"s_cesd_tot_ge3_n1" ///
+ "_" "_" "_" "s_adl_impair_n1" "_" "_" "_" "s_iadl_impair_n1" "_" ///
+ "_" "_" "s_adl_diff_impair_n1" ///
+"_" "_" "_" "s_iadl_diff_impair_n1" "_" "_" "_" "s_hrs_comorb_mild_n1" "_" "_" "_" ///
+"s_hrs_comorb_mod_n1" "_" "_"
+frmttable using "E:\data\spouse_factors\logs\caregiver_chisquareds.rtf", statmat(schars) ctitles("_" "Duration" "% Yes" "N Yes" "P") varlabels ///
+ sdec(0,2,0,3) note("All P Scores determined using chi2 tests" ///
+ "Duration of help: 1=not primary helper at exit 2=primary, exit only 3=primary exit and n1 ivw")
+
+
+foreach x of local cg {
+	tab s_hrs_comorb_none_n1 `x', chi2
+	}
+
+
+H="rerun mv analysis excl date conflicts and just cg"
+/*updates since presentation:
+1. 2012 interviews included
+2. Added r death expected, adl/iadl difficulty and s primary caregiver duration categories to analysis
+3. Education from tracker file degree variable, no longer from individual wave files
+
+outputs
+table to the file logs\20-HRS_Spouse_analysis_logit_v9.txt.doc
+
+runs 4 versions of analysis
+1. full sample
+2. remove subgroup that are hospital based hospice
+3. remove subgroup that are nursing home residents
+4. caregivers only
+4. full sample, but split by gender
+*/
+
+*************
+capture log close
+
+clear all
+mata: mata clear
+set more off
+
+//Amy's PC
+local logpath E:\data\spouse_factors\logs
+local projdatapath E:\data\spouse_factors
+
+log using "`logpath'\20-HRS_Spouse_analysis_logit_v9.txt", text replace
+
+cd `projdatapath'
+
+use spouse_factors_data_sample_v1.dta
+
+//1 person has 7 comorbidities, lumped in with the moderate group
+// in the create new variables work
+tab s_comor_in_hrs_n1 s_comor_c_hrs_n1, missing
+tab s_comor_c_hrs_n1 s_hrs_comorb_mod_n1, missing
+
+//is hospice use correlated within regions?
+loneway r_hs_12m hrrnum
+
+//create indicator for r white race
+tab r_race_cat , missing
+gen r_white2=1 if r_race_cat==0
+replace r_white2=0 if inlist(r_race_cat,1,2,3)
+tab r_race_cat r_white2, missing
+
+//drop observations missing any of the covariates and then save ds to get
+//final tables for manuscript
+local xvars1 ind_s_r_educ2 ind_s_r_educ3 r_hseduc ///
+s_srh_pf_n1 r_s_help_dur_ind2 r_s_help_dur_ind3
+
+local xvars2 ind_r_age_cat2 ind_r_age_cat3 r_female r_white2 r_nhres_n1 ///
+r_advdir_x r_dexp_x r_adl_diff_impair_n1 r_iadl_diff_impair_n1 ///
+cc_6_chrnkidn_n12mn0 cc_12_ischmcht_n12mn0 cc_8_chf_n12mn0 ///
+cc_9_diabetes_n12mn0 cc_7_copd_n12mn0 cc_cncr_chronic_n12mn0  ///
+cc_13_depressn_n12mn0 cc_14_osteoprs_n12mn0  specialists	
+
+foreach v in `xvars1' `xvars2'{
+drop if `v'==.
+}
+
+tab r_hs_12m , missing
+
+drop if hs_enrol_dt<=s_c_ivw_date_n1
+
+save spouse_factors_data_sample_v1_nomiss.dta, replace
+
+*****************************************************************
+//run a model with just decedent and region characteristics
+local dvars_only ind_r_age_cat2 ind_r_age_cat3 r_hseduc ///
+r_female r_white2 r_nhres_n1 ///
+r_advdir_x r_dexp_x r_adl_diff_impair_n1 r_iadl_diff_impair_n1 ///
+cc_6_chrnkidn_n12mn0 cc_12_ischmcht_n12mn0 cc_8_chf_n12mn0 ///
+cc_9_diabetes_n12mn0 cc_7_copd_n12mn0 cc_cncr_chronic_n12mn0  ///
+cc_13_depressn_n12mn0 cc_14_osteoprs_n12mn0 specialists
+
+//assign variable names for table row names
+la var r_hseduc "R High School degree"
+la var r_female "R Female"
+la var r_white2 "R Non-Hispanic White/Caucasian" 
+la var r_adl_diff_impair_n1 "R ADL Difficulty"
+la var r_iadl_diff_impair_n1 "R IADL Difficulty"
+la var comorb_all_0d_n12m "R Count chronic conditions"
+la var hci_index "Hospital Care Intensity Index"
+la var hospital_beds "No. Hospital Beds/1000 residents"
+la var specialists "No. Specialists/100,000 residents"
+
+//loop through 4 samples
+gen fullsample=0
+rename r_hs_hospital_based_12m r_hs_hosp
+foreach v in fullsample r_hs_hosp r_nhres_n1 r_s_help_dur_ind1 {
+preserve
+tab `v',missing
+drop if `v'==1 
+
+logit r_hs_12m `dvars_only' , or vce(cluster hrrnum)
+
+estat ic
+mat ic=r(S)
+local dof=ic[1,4]
+local aic=ic[1,5]
+local aic1:display %5.2f `aic'
+local bic=ic[1,6]
+local bic1:display %5.2f `bic'
+
+outreg, ///
+	stats(e_b e_ci p) nosubstat ///
+	title("Table 3 - Spousal and Decedent Factors of Hospice Enrollment" \ ///
+	"Sample defined by variable `v'" ) ///	
+	ctitles("" "(1) Decedent factors only" "" "" \ "" "OR" "95% CI" "P-value") ///
+	varlabels starlevels(10 5 1) summstat(r2_p \ ll \ N) ///
+	summtitles("Pseudo r-2" \ "Log likelihood" \ "N") ///
+	addrows("Degrees of Freedom AIC/BIC calc", "`dof'" \ ///
+	  "AIC", "`aic1'" \ "BIC", "`bic1'") ///
+	store(tab1) landscape
+
+*****************************************************************
+//Add spouse variables
+//this has both S SRH and S comorbidity category added
+// variable lists defined above
+la var s_srh_pf_n1 "S Self Rated health: Poor/Fair"
+la var s_hrs_comorb_mild_n1 "S Comorbidity - mild 1-3"
+la var s_hrs_comorb_mod_n1 "S Comorbidity - moderate 4-6" 
+
+*****************************************************************
+logit r_hs_12m `xvars1' `xvars2', or vce(cluster hrrnum)
+
+estat ic
+mat ic=r(S)
+local dof=ic[1,4]
+local aic=ic[1,5]
+local aic1:display %5.2f `aic'
+local bic=ic[1,6]
+local bic1:display %5.2f `bic'
+
+outreg , ///
+	stats(e_b e_ci p) nosubstat ///
+	ctitles("" "(2) Decedent and spouse factors" "" "" \ "" "OR" "95% CI" "P-value") ///
+	note("Base categories are spouse no comorbidities per HRS survey," \ ///
+	"S and R have same education level, and S not primary adl or iadl helper at death." \ ///
+	"Robust standard errors are clustered by HRR.") ///
+	varlabels starlevels(10 5 1)  summstat(r2_p \ ll \ N) ///
+	summtitles("Pseudo r-2" \ "Log likelihood" \ "N") ///
+	addrows("Degrees of Freedom AIC/BIC calc", "`dof'" \ ///
+	  "AIC", "`aic1'" \ "BIC", "`bic1'") ///
+	merge(tab1) landscape store(tab1_`v')
+restore
+}
+
+outreg using `logpath'/20-HRS_Spouse_analysis_logit_v9, ///
+replay(tab1_fullsample) replace
+
+outreg using `logpath'/20-HRS_Spouse_analysis_logit_v9, ///
+replay(tab1_r_hs_hosp) addtable
+
+outreg using `logpath'/20-HRS_Spouse_analysis_logit_v9, ///
+replay(tab1_r_nhres_n1) addtable
+
+outreg using `logpath'/20-HRS_Spouse_analysis_logit_v9, ///
+replay(tab1_r_s_help_dur_ind1) addtable
+*****************************************************************
+//Table 3, split by gender
+local xvars1 ind_s_r_educ2 ind_s_r_educ3 r_hseduc ///
+s_srh_pf_n1 r_s_help_dur_ind2 r_s_help_dur_ind3
+
+local xvars2_s ind_r_age_cat2 ind_r_age_cat3 r_white2 r_nhres_n1 ///
+r_advdir_x r_dexp_x r_adl_diff_impair_n1 r_iadl_diff_impair_n1 ///
+cc_6_chrnkidn_n12mn0 cc_12_ischmcht_n12mn0 cc_8_chf_n12mn0 ///
+cc_9_diabetes_n12mn0 cc_7_copd_n12mn0 cc_cncr_chronic_n12mn0  ///
+cc_13_depressn_n12mn0 cc_14_osteoprs_n12mn0  specialists	
+
+//First R=female
+logit r_hs_12m `xvars1' `xvars2_s' if r_female==1, or vce(cluster hrrnum)
+
+outreg , ///
+	stats(e_b e_ci p) nosubstat ///
+	title("Table 4 - Factors of Hospice Enrollment, Sample split by Gender") ///	
+	ctitles("" "(3) Decedent=Female" "" "" \ "" "OR" "95% CI" "P-value") ///
+	note("Base categories are spouse no comorbidities per HRS survey," \ ///
+	"S and R have same education level, and S not primary adl or iadl helper at death." \ ///
+	"Standard errors are clustered by HRR.") ///
+	varlabels starlevels(10 5 1)  summstat(N) ///
+	store(tab2) landscape
+*****************************************************************
+//2nd column R=Male
+logit r_hs_12m `xvars1' `xvars2_s' if r_female==0, or vce(cluster hrrnum)
+
+outreg using `logpath'/20-HRS_Spouse_analysis_logit_v9, ///
+	stats(e_b e_ci p) nosubstat ///
+	title("Table 4 - Factors of Hospice Enrollment, Sample split by Gender") ///	
+	ctitles("" "(4) Decedent=Male" "" "" \ "" "OR" "95% CI" "P-value") ///
+	note("Base categories are spouse no comorbidities per HRS survey," \ ///
+	"S and R have same education level, and S not primary adl or iadl helper at death." \ ///
+	"Robust standard errors are clustered by HRR.") ///
+	varlabels starlevels(10 5 1)  summstat(N) ///
+	merge(tab2) landscape addtable
+
+*****************************************************************
+log close

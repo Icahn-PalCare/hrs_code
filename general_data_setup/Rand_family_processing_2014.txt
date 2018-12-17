@@ -1,0 +1,390 @@
+= V4 Outline MultiLine NoSorting TabWidth=30
+
+H="Rand Family Data Processing"
+Rand Family Data Processing 
+
+
+starts with Rand family respondent-level and kid-respondent level datasets, last accessed 12/14/2018.
+
+Creates two long-format datasets:
+	respondent level: "E:\data\hrs_public_2012\rand2012\family\working\family_r_all.dta" 
+	kid-respondent level: "E:\data\hrs_public_2012\rand2012\family\working\family_k_all.dta" 
+
+Cleans respondent-level dataset and selects variables to input into general HRS processing:
+	final dataset: "E:\data\hrs_public_2012\rand2012\family\family_r_clean_98_10.dta"
+
+
+notes: 
+
+there is a 10% discrepancy between the number of co-resident children in the two variables that contain it, resdkn & lvnear
+
+dataset includes moved in/out variables, which will likely be dropped because we can pull the original question from the hrs
+
+possible extensions include pulling kid-specific data for resident children
+
+H="reshape long"
+/*Reshape long format.  Keep only those in wave. Gen core_year variable
+creates two datasets:
+	respondent level: "E:\data\hrs_public_2014\rand2014\family\working\family_r_all.dta" 
+	kid-respondent level: "E:\data\hrs_public_2014\rand2014\family\working\family_k_all.dta" 
+*/
+
+clear all
+set more off 
+
+local work E:\data\hrs_public_2014\rand2014\family\working 
+use "E:\data\hrs_public_2014\rand2014\family\StataSE\randhrsfamr1992_2014v1.dta", clear
+
+forvalues i=12(-1)1 {
+	foreach x in r s h {
+		rename `x'`i'* `x'_*`i'
+}
+}
+
+
+forvalues i=1/12 {
+	preserve
+	
+	keep hhidpn hhid pn rlink *`i'
+	rename *`i' *
+	gen wave=`i'
+	save "`work'\family_r_w_`i'", replace
+	restore
+}
+
+use `work'\family_r_w_1, clear
+
+forvalues i=2/12 {
+	append using `work'\family_r_w_`i'
+}
+
+keep if inw==1
+
+gen core_year=1992 if wave==1
+replace core_year=1994 if wave==2
+replace core_year=1996 if wave==3
+replace core_year=1998 if wave==4
+replace core_year=2000 if wave==5
+replace core_year=2002 if wave==6
+replace core_year=2004 if wave==7
+replace core_year=2006 if wave==8
+replace core_year=2008 if wave==9
+replace core_year=2010 if wave==10
+replace core_year=2012 if wave==11
+replace core_year=2014 if wave==12
+
+
+save `work'\family_r_all, replace
+
+use "E:\data\hrs_public_2014\rand2014\family\StataSE\randhrsfamk1992_2014v1.dta", clear
+
+forvalues i=12(-1)1 {
+	foreach x in k s kp h {
+		rename `x'`i'* `x'_*`i'
+}
+}
+
+
+
+forvalues i=1/12 {
+	preserve
+	
+	keep hhidpn link kidid *`i'
+	rename *`i' *
+	gen wave=`i'
+	save "`work'\family_k_w_`i'", replace
+	restore
+}
+
+use `work'\family_k_w_1, clear
+
+forvalues i=2/11 {
+	append using `work'\family_k_w_`i'
+}
+
+keep if inw==1
+
+gen core_year=1992 if wave==1
+replace core_year=1994 if wave==2
+replace core_year=1996 if wave==3
+replace core_year=1998 if wave==4
+replace core_year=2000 if wave==5
+replace core_year=2002 if wave==6
+replace core_year=2004 if wave==7
+replace core_year=2006 if wave==8
+replace core_year=2008 if wave==9
+replace core_year=2010 if wave==10
+replace core_year=2012 if wave==11
+replace core_year=2014 if wave==12
+
+
+save `work'\family_k_all, replace
+
+
+
+
+H="select, clean, create variables"
+/*drop observations that are out of scope or have bad linkage; clean and create new variables.
+note-as of now, only done for respondent-level database
+final database is "E:\data\hrs_public_2014\rand2014\family\family_r_clean_98_10.dta"*/
+
+
+set more off 
+
+local work E:\data\hrs_public_2014\rand2014\family\working 
+cd `work'
+
+use family_k_all, clear
+
+gen inccat=1 if k_inca<10000 |k_incbh<10000
+replace inccat=2 if inrange(k_inca,10000,35000) | inrange(k_incbh,10000,35000)
+replace inccat=3 if inrange(k_inca,35000.01,70000) |  inrange(k_incbh,35000.01,70000)
+replace inccat=4 if (k_inca>70000 & !missing(k_inca)) | (k_incbh>70000 & !missing(k_incbh))
+/*replace inccat=1 if core_year==1996 & k_incb==7
+replace inccat=2 if core_year==1996 & inlist(k_incb,6,8)
+replace inccat=3 if core_year==1996 & inlist(k_incb,4,5)
+replace inccat=4 if core_year==1996 & inrange(k_incb,1,3)*/
+*replace inccat=k_incb if missing(inccat)
+replace k_incb=. if core_year<1998
+
+replace k_incb=inccat if !missing(inccat)
+sort hhidpn kidid core_year
+by hhidpn kidid: carryforward k_inc* k_educ*, replace
+gsort hhidpn kidid -core_year
+by hhidpn kidid: carryforward k_inc* k_educ*, replace
+
+//keep only living children 18+ who are in scope
+drop if core_year<1998
+drop if k_agebg<18 
+drop if !k_alive | !link
+
+
+replace k_incb=. if missing(k_incb)
+tab k_incb,m
+
+/*gen some of same variables as from respondent-level file, but only for adult kids
+-co-resident adult kids, number any
+-w/in 10 miles, any
+transfers to and from, amount any
+help adls, iadls, finances, chores, healthcare costs
+moved in/out
+*/
+
+replace k_resd=1 if k_resd==2
+by hhidpn core_year, sort: egen num_resd_adult_kids=total(k_resd)
+gen resd_kid_adult_ind=num_resd_adult_kids>=1 if !missing(num_resd_adult_kids)
+by hhidpn core_year: egen kid_adult_nearby_ind=max(k_lv10mi)
+by hhidpn core_year: egen amt_transf_from_kid_adult=total(k_tcamt)
+by hhidpn core_year: egen transf_from_kid_adult_ind=max(k_tcany)
+by hhidpn core_year: egen help_adls_kid_adult=max(k_hlpadl)
+by hhidpn core_year: egen help_iadls_kid_adult=max(k_hlpiadl)
+by hhidpn core_year: egen kid_adult_hlphrs=total(k_hlphrs)
+by hhidpn core_year: egen ksp_hlphrs=total(kp_hlphrs)
+egen kid_adult_sp_hlphrs=rowtotal(kid_adult_hlphrs ksp_hlphrs)
+
+by hhidpn core_year: egen kid_adult_income_max=max(k_incb)
+by hhidpn core_year: egen kid_adult_income_min=min(k_incb)
+by hhidpn core_year: egen kid_adult_educ_max=max(k_educ)
+by hhidpn core_year: egen kid_adult_educ_min=min(k_educ)
+tab k_work, gen(wk)
+by hhidpn core_year: egen kid_adult_wk_full_ind=max(wk3)
+by hhidpn core_year: egen kid_adult_wk_part_ind=max(wk2)
+by hhidpn core_year: egen kid_adult_wk_no_ind=max(wk1)
+
+label define kid_adult_income 1 "<10K" 2 "10-35K" 3 "35-70K" 4 "35K+" 5 "70K+"
+label values kid_adult_income_min kid_adult_income
+label values kid_adult_income_max kid_adult_income
+
+label var kid_adult_income_max "Top income among adult children"
+label var kid_adult_income_min "Bottom income among adult children"
+label var kid_adult_educ_max "Top education among adult children"
+label var kid_adult_educ_min "Bottom education among adult children"
+label var kid_adult_wk_full "Any adult kids working full time"
+label var kid_adult_wk_part "Any adult kids working part time"
+label var kid_adult_wk_no "Any adult kids not working"
+label var resd_kid_adult "Lives with an adult child"
+label var num_resd_adult_kids "Number co-resident adult children"
+label var amt_transf "Total transfers from adult children"
+label var kid_adult_nearby "Any adult child w/in 10 miles"
+label var help_adls "Any help with ADLs from adult children"
+label var help_iadls "Any help with IADLs from adult children"
+label var kid_adult_hlphrs "Total hours of help from adult children"
+label var ksp_hlphrs "Total hours of help from spouses of adult children"
+label var kid_adult_sp_hlphrs "Total hours of help from adult children & spouses"
+label var transf_from_kid "Any transfers from adult children"
+
+keep hhidpn *kid* ksp_hlphrs core_year
+drop k_*  kidid kp_*
+
+local adultvars num_resd_adult_kids resd_kid_adult_ind kid_adult_nearby_ind ///
+amt_transf_from_kid_adult transf_from_kid_adult_ind help_adls_kid_adult ///
+help_iadls_kid_adult kid_adult_hlphrs ksp_hlphrs kid_adult_sp_hlphrs ///
+kid_adult_income_max kid_adult_income_min kid_adult_educ_max kid_adult_educ_min ///
+kid_adult_wk_full_ind kid_adult_wk_part_ind kid_adult_wk_no_ind
+
+duplicates drop
+tempfile t1
+save `t1'
+
+
+
+use family_r_all, clear
+
+
+//drop observations that are out of scope or have a cross-wave linkage problem
+//update 11/3/2016-no longer dropping for linkage issue
+drop if /*rlink==0 |*/ core_year<1998
+gen inscope=1
+
+//keep select variables
+local keepvars h_child h_lvnear h_resdkn r_hlpadlkn r_hlpiadlkn ///
+r_hlpfinkn r_hlpchrkn r_hlpfutkn r_hlpfutgn r_hltcstkn h_kdcarekn h_tcany ///
+h_tcntran h_tcamt h_fcany h_fcntran h_fcamt r_kdcarehr h_lv10mikn
+keep hhidpn hhid pn core_year rlink inscope `keepvars'
+
+foreach x of local keepvars {
+	replace `x'=. if inlist(`x',.c,.d,.d,.e,.f,.h,.k,.m,.r,.s)
+	tab `x',m
+}
+
+//number of kids; any kids indicator
+gen num_living_kids=h_child
+gen living_kids_ind=h_child>0 if h_child!=.
+
+label var num_living_kids "Number living, in-contact children"
+label var living_kids_ind "Any living, in-contact children"
+
+//number co-resident children; live with kids indicator
+//also have h_livnear, which has ~10% disagreement on co-residents
+gen num_resd_kids=h_resdkn
+gen resd_kid_ind=h_resdkn>0 if h_resdkn!=.
+gen kid_nearby_ind=h_lv10mikn>0 if !missing(h_lv10mikn)
+replace kid_nearby_ind=0 if living_kids_ind==0
+label var num_resd_kids "Number co-resident children"
+label var resd_kid_ind "Lives with at least one child"
+label var kid_nearby_ind "Kids living w/in 10 miles"
+//transfers, amount and ind, to and from children
+gen transf_to_kid_ind=h_tcany==1 if h_tcany!=.
+gen amt_transf_to_kid=h_tcamt
+gen transf_from_kid_ind=h_fcany==1 if h_fcany!=.
+gen amt_transf_from_kid=h_fcamt
+
+label var transf_to_kid_ind "Any transfers to children, $500+"
+label var amt_transf_to_kid "Amount transfers to children, any amt"
+label var transf_from_kid_ind "Any transfers from children, $500+"
+label var amt_transf_from_kid "Amount transfers from children, any amt"
+
+//help variables, adl, iadl, finances, chores & errands, healthcare, ///
+//future kids & grandkids
+gen help_adls_kids_ind=r_hlpadlkn>0 if r_hlpadlkn!=.
+gen help_iadls_kids_ind=r_hlpiadlkn>0 if r_hlpiadlkn!=.
+gen help_fin_kids_ind=r_hlpfinkn>0 if r_hlpfinkn!=.
+gen help_chores_kids_ind=r_hlpchrkn>0 if r_hlpchrkn!=.
+gen help_hcosts_kids_ind=r_hltcstkn>0 if r_hltcstkn!=.
+gen help_future_kids_ind=r_hlpfutkn>0 if r_hlpfutkn!=.
+gen help_future_gkids_ind=r_hlpfutgn>0 if r_hlpfutgn!=.
+
+label var help_adls "Children help with ADLs"
+label var help_iadls "Children help with IADLs"
+label var help_fin "Children help with Finances"
+label var help_chores "Children help with chores or errands"
+label var help_hcosts "Children help w/ HC costs"
+label var help_future_k "Children will help in future"
+label var help_future_gk "Grandkids will help in future"
+
+//kids receive 100+ hrs help from r and/or s with child care & r child care amt
+gen child_care_ind=r_kdcarehr>0 if r_kdcarehr!=.
+gen amt_child_care=r_kdcarehr
+label var child_care_ind "Children use R for child care"
+label var amt_child_care "Number hrs child care provided by R"
+drop `keepvars'
+
+local newvars num_living_kids living_kids_ind num_resd_kids resd_kid_ind ///
+transf_to_kid_ind amt_transf_to_kid transf_from_kid_ind amt_transf_from_kid ///
+help_adls_kids_ind help_iadls_kids_ind help_fin_kids_ind help_chores_kids_ind ///
+help_hcosts_kids_ind help_future_kids_ind help_future_gkids_ind child_care_ind ///
+amt_child_care kid_nearby_ind
+
+
+reshape wide inscope `newvars', i(hhidpn) j(core_year)
+
+
+forvalues i= 2000(2)2014 {
+	gen moved_in`i'=resd_kid_ind`=`i'-2'==0 & resd_kid_ind`i'==1 
+	replace moved_in`i'=. if resd_kid_ind`=`i'-2'==. | resd_kid_ind`i'==. ///
+	| resd_kid_ind`=`i'-2'==1
+	gen moved_out`i'=resd_kid_ind`=`i'-2'==1 & resd_kid_ind`i'==0
+	replace moved_out`i'=. if resd_kid_ind`=`i'-2'==. | resd_kid_ind`i'==. ///
+	| resd_kid_ind`=`i'-2'==0
+}
+
+reshape long inscope `newvars' moved_out moved_in, i(hhidpn) j(core_year)
+keep if inscope==1
+
+label var moved_in "Now lives with child; moved in since last ivw"
+label var moved_out "No longer lives with child; moved out"
+
+//8/23/17--add in the variables for adult kids
+merge 1:1 hhidpn core_year using `t1'
+
+foreach x of local adultvars {
+	replace `x'=0 if _m==1
+}
+gen id=hhid+pn
+*drop _m rlink hhid pn
+
+save "E:\data\hrs_public_2014\rand2014\family\family_r_clean_98_14.dta", replace
+
+
+H="descriptive statistics"
+//look at crosstabs, etc.
+
+
+set more off 
+
+cd "E:\data\hrs_public_2012\rand2012\family"
+
+use family_r_clean_98_10, clear
+
+local cfamvars num_living_kids num_resd_kids amt_transf_to_kid amt_transf_from
+
+local famvars num_living_kids living_kids_ind num_resd_kids resd_kid_ind ///
+moved_in moved_out transf_to_kid_ind amt_transf_to_kid transf_from_kid_ind ///
+amt_transf_from_kid help_adls_kids_ind help_iadls_kids_ind help_fin_kids_ind ///
+help_hcosts_kids_ind help_future_kids_ind help_future_gkids_ind child_care_ind
+
+local rn : word count `famvars' n
+
+mat fam=J(`rn',4,.)
+local r=1
+local c=1
+
+foreach x of local famvars {
+	sum `x' 
+	if inlist("`x'","num_living_kids", "num_resd_kids", "amt_transf_to_kid", ///
+	"amt_transf_from_kid") {
+		mat fam[`r',1]=r(mean)
+		mat fam[`r',2]=r(sd)
+}
+	else {
+		mat fam[`r',1]=r(mean)*100
+		mat fam[`r',2]=r(mean)*r(N)
+}	
+	sum core_year if `x'==.
+	mat fam[`r',3]=r(N)
+	mat fam[`r',4]=(r(N)/_N)*100
+	local r=`r'+1
+}
+
+sum core_year
+mat fam[`r',2]=r(N)
+mat fam[`r',3]=_N-r(N)
+
+
+mat rownames fam=`famvars' Total
+
+frmttable, statmat(fam) varlabels ctitles("" "Mean/%" "sd/N" "N missing" ///
+"% missing") title("Respondent-level kid variables, Rand") ///
+note("Data from Rand respondent-level family file with good cross-wave linkage, 1998-2010") ///
+sdec(2,0,0,2)
+

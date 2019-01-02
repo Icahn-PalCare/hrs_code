@@ -4765,7 +4765,7 @@ replace miss_core = 1 if id=="`x'"
 }
 
 drop obs gap diff
-gen year = core_year
+gen year = core_year // combines exit_year & core_year into a single variable
 
 * Merge with dementia dataset
 
@@ -4789,8 +4789,110 @@ replace no_core = 1 if id=="`x'"
 
 }
 
-
 * Data is currently in long form, with one row for exit and a row for each core
+
+save r01_b.dta, replace
+
+/****** Imputing core for people with a 4 year gap between ivws *******/
+
+use r01_b.dta, clear
+gsort id -year // year = combined core_year & exit_year
+by id: gen obs=_n
+
+cap drop nflag 
+gen nflag = obs - 1
+label var nflag "Interview type, 0 = exit, 1 = N1, etc."
+
+gen dem_cohort = 0
+label var dem_cohort "Probable Dementia at N1"
+levelsof id if dementia==1 & nflag==1, local(demlist)
+
+foreach x of local demlist {
+replace dem_cohort = 1 if id=="`x'"
+}
+
+gen core_4yr = index_year - core_year if obs==2
+/* 
+
+* Final R01 dataset requires everyone to have a core ivw within 4 (calendar) years of death
+* But their exit ivw may be further away. The date of exit is irrelevant for ivw spacing
+* so will use their date of death instead
+
+Funky stuff: People who have a core ivw after they have died
+keep if core_4yr < 0
+c_ivw_date > index_date */
+levelsof id if core_4yr>4 | core_4yr<0, local(nocore4yr)
+gen nocore4yr = .
+label var nocore4yr "No Core ivw within 4 years of death, to be dropped"
+
+foreach x of local nocore4yr {
+replace nocore4yr = 1 if id=="`x'"
+}
+
+gsort id -year
+by id: gen diff = year - year[_n-1] // -4 or higher denotes a gap year
+
+replace diff = -4 if diff<=-4 & obs==2 // for exit interviews more than 4 years away
+expand 2 if diff==-4, gen(imputed) 
+replace year = year + 2 if imputed==1 // imputed core interview
+
+drop if year > index_year & imputed==1 // dropping imputed cores after death
+drop if (index_year - c_ivw_year)<=2 & imputed==1 // dropping imputed cores if person died inbetween core and exit
+*keep if (index_year - c_ivw_year)==2 & imputed==1
+drop obs nflag
+
+gsort id -year
+by id: gen nflag = _n
+replace nflag = nflag - 1
+
+save r01_c.dta, replace
+
+/**************** GET OOP DATA ********************/
+
+use r01_c.dta, clear
+
+keep if nflag==0 
+keep id index_date index_year exit_year_exit year
+tempfile index
+save `index'
+
+use $ooppath\oopme_final_2014.dta, clear
+rename *, l
+gen id=hhid+pn
+
+merge m:1 id using "`index'", keepus(index_year index_date)
+keep if _m==3 // only keep oop data for people in cohort
+drop if total_oop==.
+
+* Imputing the missing interviews (gap years) for OOP and then append to original dataset
+preserve
+tempfile oop_mer
+save `oop_mer' // original dataset, no imputed cores
+restore 
+
+gsort id -year
+by id: gen obs=_n
+keep if obs<=6 // (N1 - N4 + baseline + extra ivw)
+by id: gen diff = year - year[_n-1] // -4 or higher denotes a gap year
+replace diff = -4 if diff<=-4 & obs==2 // recoding people with >4 gap between exit and N1 to be 4yrs
+
+expand 2 if diff==-4, gen(ooptag) //created imputed interview
+replace year = year + 2 if ooptag==1
+gsort id -year
+cap drop obs
+by id: gen obs=_n
+
+by id: gen total_imp_a = total_oop[_n+1] if ooptag==1
+by id: gen total_imp_b = (total_oop[_n+1] + total_oop[_n-1])/2 if ooptag==1
+
+label var ooptag "imputed oop"
+keep if ooptag==1 // keep only imputed cores and then append to original dataset
+tempfile imputed
+save `imputed'
+
+
+
+H="Experimental - data aggregation pt 2"
 
 
 H="Experimental - Sample derivation"
@@ -8969,4 +9071,10 @@ save "`fdpath'/burden_dementia_sample_long.dta", replace
 
 
 H="changelog"
+01/02/19 - Continued working on separating the Dataset construction from Sample Derivation. Omari
+
+12/31/18 - Worked on separating the Dataset construction from Sample Derivation. Omari
+
 12/20/18-finished update for 2015 claims and worked on 7-years.
+
+

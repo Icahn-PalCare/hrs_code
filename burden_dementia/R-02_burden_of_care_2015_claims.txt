@@ -4721,7 +4721,7 @@ gen age_lt_72 = 1 if age_at_death<72
 label var age_lt_72 "Age <72 at death, to be dropped"
 
 gen no_exit=1 if _m==1
-label var no_exit "Decedents with no exit ivw, to be dropped"
+label var no_exit "Decedents with no exit ivw 2002-14, to be dropped"
 drop if _m==2
 cap drop _m
 save r01_a.dta, replace
@@ -4748,7 +4748,7 @@ gen ivw_date = c_ivw_date
 
 * data is sorted in descending order by core year. I am carrying the date & year //
 * of the previous (chronologically) interview into the current row
-by id: gen next_ivw_date_old = ivw_date[_n+1]
+*by id: gen next_ivw_date_old = ivw_date[_n+1]
 by id: gen next_ivw_year = core_year[_n+1]
 
 by id: gen diff = core_year - core_year[_n-1] // -4 or higher denotes a gap year
@@ -4858,6 +4858,7 @@ by id: gen diff = year_ci - year_ci[_n-1] // -4 or higher denotes a gap year
 replace diff = -4 if diff<=-3 & obs==2 & nocore4yr==. & no_exit==. // imputing an interview between N1 & death if N1>=3yrs prior to death
 expand 2 if diff==-4, gen(imputed) 
 replace year = year + 2 if imputed==1 // imputed core interview
+label var imputed "Has imputed core interview"
 
 drop if year > index_year & imputed==1 // dropping imputed cores after death
 drop if (index_year - c_ivw_year)<=2 & imputed==1 // dropping imputed cores if person died inbetween core and exit
@@ -4976,8 +4977,8 @@ use r01_d.dta, clear
 
 *dropping the people missing consecutive cores before merging with helper data
 
-keep if miss_core==. & no_exit==. // keep only people not missing consecutive cores
-keep id index_date index_year exit_year_exit year imputed
+keep if miss_core==. & no_exit==. // keep only people not missing consecutive cores and have an exit
+keep id index_date index_year exit_year_exit year imputed nflag
 tempfile index
 save `index'
 
@@ -4997,67 +4998,35 @@ replace hlphrs_`x' = 0 if hlphrs_`x'==.
 
 merge m:1 id year using "`index'"
 drop if _m==1
-*keep if _m==3 // only keep helper data for people in cohort
-*drop _m
 
-*tempfile hlp_mer
-*save `hlp_mer'
 
-*merge 1:1 id year using "`index'", keepus(id exit_year_exit year)
-
-* Imputing 0 helper hours for exit interviews with no helper data 
+* Imputing 0 helper hours for interviews with no helper data 
 replace ivw_type = 2 if exit_year_exit==year //_m==2
 foreach x in i u s k {
 replace hlphrs_`x' = 0 if _m==2
 }
-cap drop _m
-
-gsort id -year
-by id: gen obs=_n
-by id: gen diff = year - year[_n-1] // -4 or higher denotes a gap year
-replace diff = -4 if diff<=-4 & obs==2 // replacing obs where gap between exit and N1 was >4yrs
-expand 2 if diff==-4, gen(hlptag)
-
-replace year = year + 2 if hlptag==1
-replace hlptag=1 if _m==2 // flagging imputed helper hrs at exit
-cap drop obs
+*cap drop _m
 
 gsort id -year
 by id: gen obs=_n
 * Imputations, Method A (Carry forward) and Method B (Ave prior and later ivws to fill gap)
-by id: gen hlphrs_i_a = hlphrs_i[_n+1] if hlptag==1
-by id: gen hlphrs_i_b = (hlphrs_i[_n+1] + hlphrs_i[_n-1])/2 if hlptag==1 // if there is no _n+1 then this returns missing
 
+foreach x in i u s k {
 
-label var hlptag "imputed hlp hrs"
+*by id: gen hlphrs_`x'_a = hlphrs_`x'[_n+1] if imputed==1
+by id: gen hlphrs_`x'_b = (hlphrs_`x'[_n+1] + hlphrs_`x'[_n-1])/2 if imputed==1 // if there is no _n+1 then this returns missing
 
-gen hlp_exit = 1 if hlptag==1 & _m==2
-label var hlp_exit "hlp exit imputed"
-replace hlptag = 0 if _m==2
+}
+
 preserve
-keep if hlptag==1 
-
-tempfile hlp
-save `hlp'
-
-
-use "`hlp_mer'", clear
-
-append using "`hlp'"
-cap drop _m
-
-drop if inx==1
-
-
+drop if ivw_type==2
 tempfile help
 save `help'
 restore 
 
-keep if inx==1
+keep if ivw_type==2
 
-gen nflag = 0
-
-foreach x of varlist hlphrs_i* {
+foreach x of varlist hlphrs_* {
 
 rename `x' `x'_exit
 }
@@ -5065,481 +5034,71 @@ rename `x' `x'_exit
 tempfile hlp_exit 
 save `hlp_exit'
 
-
 use r01_d.dta, clear
 cap drop _m
-merge 1:1 id year using "`help'", keepus(hlphrs_i* hlptag hlp_exit)
-*merge 1:1 id year using "`help'", keepus(hlphrs_i* hlptag)
+merge 1:1 id nflag using "`help'", keepus(hlphrs_*)
 drop if _m==2
 
 cap drop _m
 
-merge 1:1 id nflag using "`hlp_exit'", keepus(hlphrs_i* hlptag hlp_exit) update
+merge 1:1 id nflag using "`hlp_exit'", keepus(hlphrs_*) update
 
 drop if _m==2
 cap drop _m
-
-foreach x of varlist hlphrs_i* {
-
-replace `x' = 0 if (hlptag==1 & imputed==0)
-replace `x' = 0 if `x'==.
-}
-
-* Get years before the interview to multiply by Genworth hourly rate  
-gen year_n0 = year
-replace year_n0 = index_year if nflag==0
-gen year_n1 = year_n0 - 1
-label var year_n1 "calendar year prior to ivw date"
-gen year_n2 = year_n0 - 2
-label var year_n2 "calendar year 2 yrs prior to ivw date"
 
 save r01_e.dta, replace
 
+/****** Imputing Interview dates for imputed core interviews ******/
 
-H="Experimental - data aggregation pt 2"
+use r01_e.dta, clear
 
+*gen core_b4_death = 0
+*replace core_b4_death = 1 if nflag==1
 
-H="Experimental - Sample derivation"
-clear all
-capture log close
-
-global datapath "E:\data\burden_dementia\int_data"
-local logpath "E:\data\burden_dementia\logs"
-global ooppath "E:\data\burden_dementia\oopdata"
-global output "E:\projects\burden_dementia\archive logs"
-
-log using `logpath'\R01_derivation.txt, text replace
-
-
-
-/****************** START WITH EXIT **********************/
-
-use "E:\data\hrs_cleaned\exit_02_to_14_dt.dta", clear
-
-foreach x of varlist * {
-
-rename `x' `x'_exit
-}
-
-rename id_exit id
-gen nflag = 0
-cap drop _m
-gen year = exit_year_exit
-save $datapath\exit.dta, replace // all exit interviews 2002-14
-
-
-
-/**************** MERGE TRACKER WITH DECEDENT DATASET ***********/
-
-* get birthdate from tracker, merge with decedent and calculate age at death
-
-use "E:\data\hrs_cleaned\restr_tracker_v2014.dta", clear
-drop id
-gen id=hhid+pn
-drop if id==""
-keep id race hisp_eth birthmo birthday birthyr birth_date gender degree
-save $datapath\tracker.dta, replace // all restricted tracker
-
-cd $datapath
-
-use decedent_dataset.dta if inrange(index_year,2004,2012), clear
-drop year
-cap drop _m
-format %td index_date
-merge m:1 id using tracker.dta 
-keep if _m==3
-
-replace birth_date=mdy(6,birthd,birthy) if missing(birth_date)
-cap drop death_date
-gen death_date = index_date
-gen age_at_death=floor((death_date-birth_date)/365.25)
-
-cap drop _m
-levelsof id if age_at_death<70, local(agedrop)
-global agedrop `agedrop'
-drop if age_at_death<70 // drop people <70 at death
-merge 1:1 id using exit.dta
-
-levelsof id if _m==1, local(exitdrop) 
-global exitdrop1 "`exitdrop'"
-keep if _m==3 /////////// drop people with no exit
-
-cap drop _m
-save r01_a.dta, replace
-
-
-/*************** MERGE WITH CORE INTERVIEW **************/
-
-use r01_a.dta, clear
-keep id index_date index_year
-tempfile id 
-save `id' //decedents with exit 
-
-use "E:\data\hrs_cleaned\core_00_to_12.dta", clear
-
-merge m:1 id using "`id'", keepus(index_date index_year)
-levelsof id if _m==2, local(nocoredrop)
-global nocoredrop1 "`nocoredrop'"
-
-macro list nocoredrop
-macro list nocoredrop1
-
-keep if _m==3 ///////////// dropping people with no core 00-12
-
-cap drop _m
-gsort id -core_year
-by id: gen obs=_n
-keep if obs<=4 // keeping last 4 core interviews
-
-* I'm creating a single ivw date variable that has both the core ivw date and exit ivw date
+gsort id nflag
+cap drop ivw_date
 gen ivw_date = c_ivw_date
+replace ivw_date = index_date if nflag==0
+by id: gen old_ivw_date = ivw_date[_n-1] 
 
-* data is sorted in descending order by core year. I am carrying the date & year //
-* of the previous (chronologically) interview into the current row
-by id: gen next_ivw_date_old = ivw_date[_n+1]
-by id: gen next_ivw_year = core_year[_n+1]
+gen new_ivw_days = old_ivw_date - c_ivw_date
+replace new_ivw_days = new_ivw_days/2
+replace new_ivw_days = 730 if imputed==1 & new_ivw_days>730 & nflag==1 ////// capping interview gap to 2yrs.. possible gap in coverage?
 
-gen earliest = 0
-replace earliest = 1 if next_ivw_year==.
-label var earliest "flag for earliest observable core"
+replace new_ivw_days = ceil(new_ivw_days)
+replace ivw_date = c_ivw_date + new_ivw_days if imputed==1 //c_ivw is date for core prior to gap
+replace c_ivw_year = year(ivw_date)
 
-by id: gen diff = core_year - core_year[_n-1] // -4 or higher denotes a gap year
+format %td ivw_date old_ivw_date
 
-bysort id: egen gap = min(diff) // using min because diff is negative
-replace gap = abs(gap) // max number of years between consecutive core
+replace c_ivw_year=9999 if (miss_core==1 | no_exit==1) & c_ivw_year==. // need to create a value since cannot merge with missing values
+/*
 preserve
-keep if gap>4
-keep id
-duplicates drop 
-levelsof id, local(misscore)
-global misscore1 "`misscore'"
-tempfile droplist
-save `droplist' ///////// people with more than 4 years between cores
+keep if miss_core==1 | no_exit==1
+tempfile tempdrop
+save `tempdrop'
 
 restore
-
-drop obs gap diff
-gen year = core_year
-
-cap drop _m
-
-* Merge with dementia dataset
-
-merge 1:1 id core_year using "E:\data\hrs_public_2012\dementia\pdem_withvarnames_ebl.dta", keepus(pdem)
-drop if _m==2
-
-gen dementia = 0
-replace dementia = 1 if pdem>=.5 & pdem!=.
-cap drop _m
-
-tempfile core
-save `core'
-
-use r01_a.dta, clear
-append using "`core'" // appending to exit/tracker 
-* Data is currently in long form, with one row for exit and a row for each core
-
-merge m:1 id using "`droplist'" //dropping people with >4 years between core
-
-drop if _m==3
-cap drop _m
-
-save r01_b.dta, replace
-
-
-/****** Dropping people with no core 4yrs prior to death, and imputing missing cores  ******/
-
-use r01_b.dta, clear
-
-gsort id -year // year = combined core_year & exit_year
-
-by id: gen obs=_n
-
-foreach x of global nocoredrop1 {
-
-drop if obs==1 & id=="`x'" // dropping exit ivw for people with no core 2000-12
-
-}
-
-gen nflag_ivw = obs - 1
-label var nflag_ivw "Interview type, 0 = exit, 1 = N1, etc."
-
-gen dem_cohort = 0
-
-levelsof id if dementia==1 & nflag_ivw==1, local(demlist)
-
-foreach x of local demlist {
-
-replace dem_cohort = 1 if id=="`x'"
-
-}
-
-gen core_5yr = index_year - core_year if obs==2 
-preserve 
-keep if core_5yr>4 & obs==2
-keep id
-levelsof id, local(nocore4yr) 
-global nocore4yr1 "`nocore4yr'" // no core ivw within 4yrs of death
-tempfile core_2_far 
-save `core_2_far' 
-restore
-
-merge m:1 id using "`core_2_far'"
-codebook id if _m==3
-drop if _m==3 // dropping ppl with no core_ivw within 4 yrs
-cap drop _m
-
-* Impute core ivw for people with a 4 year gap 
-
-gsort id -year
-by id: gen diff = year - year[_n-1] // -4 or higher denotes a gap year
-
-* Everyone remaining in this dataset has a core ivw within 4 (calendar) years of death
-* But their exit ivw may be further away. The date of exit is irrelevant for ivw spacing
-* so will use their date of death instead
-
-replace diff = -4 if diff<=-4 & obs==2 // for exit interviews more than 4 years away
-expand 2 if diff<=-4, gen(imputed) 
-replace year = year + 2 if imputed==1 // imputed core interview
-drop if year > index_year & imputed==1 // dropping imputed cores after death
-drop if (index_year - c_ivw_year)<=2 & imputed==1 // dropping imputed cores if person died inbetween core and exit
-*keep if (index_year - c_ivw_year)==2 & imputed==1
-
-levelsof id if imputed==1, local(impu)
-global impu1 "`impu'"
-cap drop nflag
-
-gsort id -year
-by id: gen nflag = _n
-replace nflag = nflag - 1
-
-drop if nflag>4
-save r01_c.dta, replace
-
-
-
-/**************** GET OOP DATA ********************/
-
-use r01_c.dta, clear
-
-keep if nflag_ivw==0 
-keep id index_date index_year exit_year_exit year
-tempfile index
-save `index'
-
-use $ooppath\oopme_final_2014.dta, clear
-rename *, l
-gen id=hhid+pn
-
-merge m:1 id using "`index'", keepus(index_year index_date)
-keep if _m==3 // only keep oop data for people in cohort
-
-tab year if total_oop==.
-drop if total_oop==.
-
-* Imputing the missing interviews (gap years) and then append to original dataset
-preserve
-tempfile oop_mer
-save `oop_mer' // original dataset, not imputed
-restore 
-
-gsort id -year
-by id: gen obs=_n
-keep if obs<=6
-by id: gen diff = year - year[_n-1] // -4 or higher denotes a gap year
-replace diff = -4 if diff<=-4 & obs==2 // recoding people with >4 gap between exit and N1 to be 4yrs
-
-expand 2 if diff==-4, gen(ooptag) //created imputed interview
-tab diff if obs<=3
-* Gaps of >4 years don't really matter, since we know for their last 3 hrs interviews
-* the gap isn't bigger than 4 years (people with longer gaps were dropped from cohort
-* in earlier stage
-replace year = year + 2 if ooptag==1
-gsort id -year
-cap drop obs
-by id: gen obs=_n
-
-by id: gen total_imp_a = total_oop[_n+1] if ooptag==1
-by id: gen total_imp_b = (total_oop[_n+1] + total_oop[_n-1])/2 if ooptag==1
-
-label var ooptag "imputed oop"
-keep if ooptag==1 // keep only imputed cores and then append to original dataset
-tempfile imputed
-save `imputed'
-
-
-use "`oop_mer'", clear
-
-append using "`imputed'"
-cap drop _m 
-preserve
-drop if iwtype==1 // dropping exit so it can be merged separately (see below)
-
-tempfile oop
-save `oop'
-restore 
-
-keep if iwtype==1
-
-gen nflag = 0
-
-foreach x of varlist total* {
-
-rename `x' `x'_exit
-}
-rename year exit_year_exit
-
-tempfile oop_exit
-save `oop_exit'
-
-cd $datapath 
-
-use r01_c.dta, clear
-cap drop _m
-merge 1:1 id year using "`oop'", keepus(total* ooptag)
-drop if _m==2
-cap drop _m
-
-merge 1:1 id nflag using "`oop_exit'", keepus(total* ooptag)
-
-drop if _m==2
-cap drop _m
-
-save r01_d.dta, replace
-
-
-
-/************ Get Helper data ***********/
-
-* Helper hours imputation follows the same logic as the OOP
-
-use r01_d.dta, clear
-
-keep if nflag_ivw==0
-keep id index_date index_year exit_year_exit year
-tempfile index
-save `index'
-
-
-use "E:\data\hrs_oop_2010\received_data\2012\helper_hours_2012.dta", clear
-gen id=hhid+pn 
-*rename year core_year
-//cap number of hours at 720 (24 hrs for 30 days) for spouses and other informal
-foreach x in s u {
-replace hlphrs_`x'=720 if hlphrs_`x'>720
-replace hlphrs_`x' = 0 if hlphrs_`x'==.
-}
-replace hlphrs_i=hlphrs_s+hlphrs_u
-replace hlphrs_i= 720 if hlphrs_i>=720
-
-merge m:1 id using "`index'", keepus(index_year index_date)
-keep if _m==3 // only keep helper data for people in cohort
-drop _m
-
-tempfile hlp_mer
-save `hlp_mer'
-
-merge 1:1 id year using "`index'", keepus(id exit_year_exit year)
-
-* Imputing 0 helper hours for exit interviews with no helper data 
-replace inx = 1 if _m==2
-replace hlphrs_i = 0 if _m==2
-
-
-gsort id -year
-by id: gen obs=_n
-by id: gen diff = year - year[_n-1] // -4 or higher denotes a gap year
-replace diff = -4 if diff<=-4 & obs==2 // replacing obs where gap between exit and N1 was >4yrs, since we already kept people who had core in last years of life
-expand 2 if diff==-4, gen(hlptag)
-
-
-replace year = year + 2 if hlptag==1
-replace hlptag=1 if _m==2 // flagging imputed helper hrs at exit
-cap drop obs
-
-gsort id -year
-by id: gen obs=_n
-* Imputations, Method A (Carry forward) and Method B (Ave prior and later ivws to fill gap)
-by id: gen hlphrs_i_a = hlphrs_i[_n+1] if hlptag==1
-by id: gen hlphrs_i_b = (hlphrs_i[_n+1] + hlphrs_i[_n-1])/2 if hlptag==1 // if there is no _n+1 then this returns missing
-
-
-label var hlptag "imputed hlp hrs"
-
-gen hlp_exit = 1 if hlptag==1 & _m==2
-label var hlp_exit "hlp exit imputed"
-replace hlptag = 0 if _m==2
-preserve
-keep if hlptag==1 
-
-tempfile hlp
-save `hlp'
-
-
-use "`hlp_mer'", clear
-
-append using "`hlp'"
-cap drop _m
-
-drop if inx==1
-
-
-tempfile help
-save `help'
-restore 
-
-keep if inx==1
-
-gen nflag = 0
-
-foreach x of varlist hlphrs_i* {
-
-rename `x' `x'_exit
-}
-
-tempfile hlp_exit 
-save `hlp_exit'
-
-
-use r01_d.dta, clear
-cap drop _m
-merge 1:1 id year using "`help'", keepus(hlphrs_i* hlptag hlp_exit)
-*merge 1:1 id year using "`help'", keepus(hlphrs_i* hlptag)
-drop if _m==2
-
-cap drop _m
-
-merge 1:1 id nflag using "`hlp_exit'", keepus(hlphrs_i* hlptag hlp_exit) update
-
-drop if _m==2
-cap drop _m
-
-foreach x of varlist hlphrs_i* {
-
-replace `x' = 0 if (hlptag==1 & imputed==0)
-replace `x' = 0 if `x'==.
-}
-
+drop if miss_core==1 | no_exit==1
+*/
 * Get years before the interview to multiply by Genworth hourly rate  
-gen year_n0 = year
-replace year_n0 = index_year if nflag==0
-gen year_n1 = year_n0 - 1
-label var year_n1 "calendar year prior to ivw date"
-gen year_n2 = year_n0 - 2
-label var year_n2 "calendar year 2 yrs prior to ivw date"
+gen c_ivw_year_n0 = c_ivw_year
+replace c_ivw_year_n0 = index_year if nflag==0
+gen c_ivw_year_n1 = c_ivw_year_n0 - 1
+label var c_ivw_year_n1 "calendar year prior to ivw date"
+gen c_ivw_year_n2 = c_ivw_year_n0 - 2
+label var c_ivw_year_n2 "calendar year 2 yrs prior to ivw date"
 
-save r01_e.dta, replace
+save r01_f.dta, replace
 
 /************** Get State information *************/
 
-
-use r01_e.dta, clear
+use r01_f.dta, clear
 keep id
 
 duplicates drop id, force
 tempfile id
 save `id'
-
 
 
 use "E:\data\hrs_cleaned\restr_tracker_v2014.dta", clear
@@ -5569,77 +5128,76 @@ forvalues i=0(2)8{
 rename stateusps0`i' stateusps`i'
 rename zipcode0`i' zipcode`i'
 }
-reshape long stateusps zipcode, i(hhid pn) j(year)
+reshape long stateusps zipcode, i(hhid pn) j(c_ivw_year)
 
 forvalues i=0/99{
-qui replace year=200`i' if year==`i' & year<=9
-qui replace year=20`i' if year==`i' & inrange(year, 10,14)
-qui replace year=19`i' if year==`i' & year>=90
+qui replace c_ivw_year=200`i' if c_ivw_year==`i' & c_ivw_year<=9
+qui replace c_ivw_year=20`i' if c_ivw_year==`i' & inrange(c_ivw_year, 10,14)
+qui replace c_ivw_year=19`i' if c_ivw_year==`i' & c_ivw_year>=90
 }
 
 gen id= hhid+pn
-sort id year
+sort id c_ivw_year
 drop if id==""
 by id: carryforward stateusps, replace
 
-gsort id -year
+gsort id -c_ivw_year
 by id: carryforward stateusps, replace
 
 
 tempfile state
 save "`state'"
 
-rename year year_n1
+rename c_ivw_year c_ivw_year_n1
 rename stateusps stateusps_n1
 tempfile state_n1
 save `state_n1'
 
-rename year_n1 year_n2
+rename c_ivw_year_n1 c_ivw_year_n2
 rename stateusps_n1 stateusps_n2 
 tempfile state_n2
 save `state_n2'
 
-use R01_int.dta, clear
-merge 1:1 id year using "`state'"
-keep if _m==3
+use R01_f.dta, clear
+merge m:1 id c_ivw_year using "`state'"
+drop if _m==2
 cap drop _m
-merge m:1 id year_n1 using "`state_n1'"
-keep if _m==3
+merge m:1 id c_ivw_year_n1 using "`state_n1'"
+drop if _m==2
 cap drop _m
-merge m:1 id year_n2 using "`state_n2'"
-keep if _m==3
+merge m:1 id c_ivw_year_n2 using "`state_n2'"
+drop if _m==2
 cap drop _m
 
-
-save R01_int.dta, replace
+save R01_g.dta, replace
 
 //merging with the Genworth/Metlife hourly home health aide cost. 
 import excel "E:\data\burden_dementia\ref_data\Cost Care Survey (Genworth-Metlife)\HHA_hourly_genworth.xlsx", sheet("Sheet1") firstrow clear
 
-rename A year
+rename A c_ivw_year
 rename B stateusps
 rename HomeHealthAideServicesHourly state_hha
 rename MedianHourlyRate hr_rate
 
-drop if year==.
+drop if c_ivw_year==.
 destring hr_rate, replace
 
-expand 2 if year==1998, gen(duptag)
+expand 2 if c_ivw_year==1998, gen(duptag)
 
-replace year = year - 1 if duptag==1
+replace c_ivw_year = c_ivw_year - 1 if duptag==1
 cap drop duptag
 
-expand 2 if year==1997, gen(duptag)
+expand 2 if c_ivw_year==1997, gen(duptag)
 
-replace year = year - 1 if duptag==1
+replace c_ivw_year = c_ivw_year - 1 if duptag==1
 drop duptag
 
-rename year year_n0
+rename c_ivw_year c_ivw_year_n0
 
 tempfile rate
-save "`rate'"
+save "`rate'" // hourly rate for calendar c_ivw_year of i
 
-rename year_n0 year_n1
+rename c_ivw_year_n0 c_ivw_year_n1
 rename stateusps stateusps_n1
 rename state_hha state_hha_n1
 rename hr_rate hr_rate_n1
@@ -5647,7 +5205,7 @@ rename hr_rate hr_rate_n1
 tempfile rate_n1
 save "`rate_n1'"
 
-rename year_n1 year_n2
+rename c_ivw_year_n1 c_ivw_year_n2
 rename stateusps_n1 stateusps_n2
 rename state_hha_n1 state_hha_n2
 rename hr_rate_n1 hr_rate_n2
@@ -5655,311 +5213,106 @@ rename hr_rate_n1 hr_rate_n2
 tempfile rate_n2
 save "`rate_n2'"
 
-use R01_int.dta, clear
+use R01_g.dta, clear
 cap drop _m
-merge m:1 year_n0 stateusps using "`rate'"
-keep if _m==3
+merge m:1 c_ivw_year_n0 stateusps using "`rate'"
+drop if _m==2
 cap drop _m
-merge m:1 year_n1 stateusps_n1 using "`rate_n1'"
-keep if _m==3
+merge m:1 c_ivw_year_n1 stateusps_n1 using "`rate_n1'"
+drop if _m==2
 cap drop _m
-merge m:1 year_n2 stateusps_n2 using "`rate_n2'"
-keep if _m==3
+merge m:1 c_ivw_year_n2 stateusps_n2 using "`rate_n2'"
+drop if _m==2
 cap drop _m
 
-save R01_int1.dta, replace
+save R01_h.dta, replace
 
-/**************** calculations *********************/
+/********** Final Calculations *********/
 
-use R01_int1.dta, clear
-
-gen core_b4_death = 0
-replace core_b4_death = 1 if nflag==1
+use R01_h.dta, clear
 
 gsort id nflag
-replace ivw_date = index_date if nflag==0
 
-
-by id: gen old_ivw_date = ivw_date[_n-1]  //if imputed==1 // get dates before imputed ivw
-
-gen new_ivw_days = old_ivw_date - c_ivw_date
-replace new_ivw_days = new_ivw_days/2
-replace new_ivw_days = 730 if imputed==1 & new_ivw_days>730 & nflag==1 ////// capping interview gap to 2yrs.. possible gap in coverage?
-
-replace new_ivw_days = ceil(new_ivw_days)
-replace ivw_date = c_ivw_date + new_ivw_days if imputed==1 //c_ivw is date for core prior to gap
-
-format %td ivw_date next_ivw_date old_ivw_date
-
-*cap drop next_ivw_date
-
-/* calculating time in between ivw */
 by id: gen next_ivw_date = ivw_date[_n+1] // bringing forward date from prior core away from death
 
-format %td ivw_date next_ivw_date old_ivw_date 
-
 gen ivw_time = ivw_date - next_ivw_date
-replace ivw_time = ivw_date - c_ivw_date if imputed==1
-replace ivw_time = ivw_date - next_ivw_date_old if ivw_time==. & nflag>=2
+replace ivw_time = ivw_time * 0.0329
+label var ivw_time "Months between previous ivw & current ivw"
 
-replace ivw_time = ivw_time * 0.03
-replace ivw_time = ceil(ivw_time) // leave as decimal?
-replace ivw_time = . if nflag==0
-
-
-gen death_2_n1 = index_date - ivw_date if core_b4_death==1
-replace death_2_n1 = death_2_n1 * 0.033
-replace death_2_n1 = ceil(death_2_n1)
-replace death_2_n1 = 24 if death_2_n1>=24 & death_2_n1!=. // capping contribution of exit to 2 years
-replace death_2_n1 = 1 if death_2_n1<=0
+gen death_2_ivw = index_date - ivw_date
+replace death_2_ivw = death_2_ivw * 0.0329
+label var death_2_ivw "Months between current ivw & death"
 
 
-gen death_2_n2 = death_2_n1 + ivw_time if nflag==1
+sum ivw_time if nflag>0
+/*Average time between core ivws is 24 months. So if we subtract ivw date from death, 
+only need it to be >=60 since interview data extends ~24 months back */
+
+gen months_obs = death_2_ivw + ivw_time
+label var months_obs "# of months person is observed in sample"
+
+gen hrs_gte_84m = 0
+replace hrs_gte_84m = 1 if months_obs>=83.5 & months_obs!=.
+label var hrs_gte_84m ">=84 months of HRS ivw data"
+
+levelsof id if hrs_gte_84m, local(havedata)
+foreach x of local havedata {
+replace hrs_gte_84m = 1 if id=="`x'"
+}
+
+gen hrs_lt_84m = .
+replace hrs_lt_84m = 1 if hrs_gte_84m==0
+label var hrs_lt_84m "<84 months of HRS ivw data, to be dropped"
+
+save R01_i.dta, replace
 
 
+H="Experimental - Sample derivation"
+clear all
+capture log close
 
-gen death_cat = .
-replace death_cat = 1 if death_2_n1<12
-replace death_cat = 2 if death_2_n1==12
-replace death_cat = 3 if death_2_n1>12 & death_2_n1!=.
+global datapath "E:\data\burden_dementia\int_data"
+local logpath "E:\data\burden_dementia\logs"
+global ooppath "E:\data\burden_dementia\oopdata"
+global output "E:\projects\burden_dementia\archive logs"
 
-gsort id -core_b4_death
+log using `logpath'\sample_derivation.txt, text replace
+cd $datapath
 
-by id: carryforward death_cat death_2_n1 death_2_n2, replace
-gen death_2_n3 = death_2_n2 + ivw_time if nflag==2
+use R01_i.dta, clear
 
-gsort id nflag
-by id: carryforward death_2_n3, replace
+local samplevars age_lt_72 no_exit miss_core no_core nocore4yr hrs_lt_84m imputed
 
-gsort id -nflag
-by id: carryforward death_2_n3, replace
+foreach x of local samplevars {
 
+levelsof id if `x'==1, local(samp)
 
+foreach y of local samp {
 
-gen death_2_n4 = death_2_n3 + ivw_time if nflag==3
-replace death_2_n4 = death_2_n3 if death_2_n4==.
-replace death_2_n4 = death_2_n2 if death_2_n4==.
-*by id: carryforward death_2_n4, replace
+replace `x'=1 if id=="`y'"
 
-gen hrs_60m = .
-replace hrs_60m = 1 if death_2_n4>=60
-
-
-
-
-gsort id -hrs_60m
-
-by id: carryforward hrs_60m, replace
-
-levelsof id if hrs_60m==., local(non3)
-drop if hrs_60m==. /////////// dropping people with <60m of HRS data
-
-replace death_2_n4 = . if nflag!=4
-
-gsort id -nflag
-
-by id: carryforward death_2_n3 death_2_n4, replace
-
-gsort id nflag
-by id: carryforward death_2_n4, replace
-
-replace death_2_n4 = death_2_n3 if death_2_n4==.
-
-
-
-
-tab ivw_time
-label var ivw_time "interview weight" 
-
-cap drop mar_n0 mar_n1 mar_n2
-cap drop mar
-
-gen mar_n0 = . //months at risk
-gen mar_n1 = .
-gen mar_n2 = .
-
-replace mar_n0 = index_month if nflag==0
-*replace mar_n0 = death_2_n1 if death_2_n1<12 & nflag==0
-replace mar_n0 = death_2_n1 if (death_2_n1-mar_n0 < 0) & nflag==0
-
-replace mar_n1 = death_2_n1 - mar_n0 if nflag==0
-replace mar_n1 = 0 if mar_n1<0 & nflag==0
-replace mar_n1 = 12 if (mar_n1>12 & mar_n1!=.) & nflag==0
-
-
-replace mar_n2 = death_2_n1 - mar_n0 -mar_n1 if nflag==0
-replace mar_n2 = 0 if mar_n2<0
-*replace mar_n2 = 12 if (mar_n2>12 & mar_n2!=.) & nflag==0
-
-
-replace mar_n0 = c_ivw_month if nflag>0
-
-replace mar_n1 = ivw_time - c_ivw_month if nflag>0
-replace mar_n1 = 0 if mar_n1<0 & nflag>0
-replace mar_n1 = 12 if (mar_n1>12 & mar_n1!=.) & nflag>0
-
-replace mar_n2 = ivw_time - 12 - c_ivw_month if nflag>0
-replace mar_n2 = 0 if mar_n2<0 & nflag>0
-*replace mar_n2 = 12 if (mar_n2>12 & mar_n2!=.) & nflag>0
-
-gen mar = mar_n0+mar_n1+mar_n2
-corr mar death_2_n1 if nflag==0
-corr mar ivw_time if nflag>0 // checks to see if months at risk (mar) = months between ivw
-
-gsort id +nflag
-
-gen hlphrs_0 = hlphrs_i
-replace hlphrs_0 = hlphrs_i_exit if nflag==0
-
-gen hlphrs_a = hlphrs_i
-replace hlphrs_a = hlphrs_i_a if imputed==1
-replace hlphrs_a = hlphrs_i_exit if nflag==0
-
-gen hlphrs_b = hlphrs_i
-replace hlphrs_b = hlphrs_i_b if imputed==1
-replace hlphrs_b = hlphrs_i_exit if nflag==0 
-
-
-
-foreach x of varlist hlphrs_0 hlphrs_a hlphrs_b {
-
-by id: gen `x'_n = `x'[_n+1]
-
-replace `x'_n = 0 if `x'_n==. // stop gap, remove later 
-
+}
 } 
 
+keep if nflag==0
 
-//start with nflag = 0
-
-gen hlphrs_0_av = .
-replace hlphrs_0_av = death_2_n1*hlphrs_0 if death_2_n1<=4 & nflag==0
-replace hlphrs_0_av = (4*hlphrs_0) + (death_2_n1-4)*((hlphrs_0+hlphrs_0_n)/2) if death_2_n1>4 & nflag==0
-replace hlphrs_0_av = (4*hlphrs_0) + (ivw_time-4)*((hlphrs_0+hlphrs_0_n)/2) if nflag>0 & hlphrs_0_n>0
-replace hlphrs_0_av = (4*hlphrs_0) if nflag>0 & hlphrs_0_n==0
-
-
-gen hlphrs_a_av = .
-replace hlphrs_a_av = death_2_n1*hlphrs_a if death_2_n1<=4 & nflag==0
-replace hlphrs_a_av = (4*hlphrs_a) + (death_2_n1-4)*((hlphrs_a+hlphrs_a_n)/2) if death_2_n1>4 & nflag==0
-replace hlphrs_a_av = (4*hlphrs_a) + (ivw_time-4)*((hlphrs_a+hlphrs_a_n)/2) if nflag>0 & hlphrs_a_n>0
-replace hlphrs_a_av = (4*hlphrs_a) if nflag>0 & hlphrs_a_n==0
-
-
-gen hlphrs_b_av = .
-replace hlphrs_b_av = death_2_n1*hlphrs_b if death_2_n1<=4 & nflag==0
-replace hlphrs_b_av = (4*hlphrs_b) + (death_2_n1-4)*((hlphrs_b+hlphrs_b_n)/2) if death_2_n1>4 & nflag==0
-replace hlphrs_b_av = (4*hlphrs_b) + (ivw_time-4)*((hlphrs_b+hlphrs_b_n)/2) if nflag>0 & hlphrs_b_n>0
-replace hlphrs_b_av = (4*hlphrs_b) if nflag>0 & hlphrs_b_n==0
-
-
-
-
-
-
-foreach x of varlist *_av {
-
-replace `x' = `x'/death_2_n1 if nflag==0
-replace `x' = `x'/ivw_time if nflag>0
-replace `x' = (`x'*mar_n0*hr_rate) +  (`x'*mar_n1*hr_rate_n1) + (`x'*mar_n2*hr_rate_n2)
-
-}
-
-replace hlphrs_i = hlphrs_0_av if nflag>0
-replace hlphrs_i_exit = hlphrs_0_av if nflag==0
-
-replace hlphrs_i_a = hlphrs_a_av if nflag>0
-replace hlphrs_i_a_exit = hlphrs_a_av if nflag==0
-
-replace hlphrs_i_b = hlphrs_b_av if nflag>0
-replace hlphrs_i_b_exit = hlphrs_b_av if nflag==0
-
-
-
-
-
-gen has_imputed = 0
-foreach x of local impu {
-
-replace has_imputed=1 if id=="`x'"
-
-}
-
-
-
-save R01_int.dta, replace
-
-/* Sample Derivation */
-
-use decedent_dataset.dta if inrange(index_year,2004,2012), clear
-
-gen age_lt_70 = 0
-label var age_lt_70 "Dropped because age at death <70"
-foreach x of global agedrop1 {
-
-replace age_lt_70 = 1 if id=="`x'"
-
-}
-
-gen exdrop = 0
-label var exdrop "Dropped because no Exit Ivw 2002-2014"
-foreach x of global exitdrop1 {
-replace exdrop = 1 if id=="`x'"
-}
-
-gen nocore = 0
-label var nocore "Dropped because no Core Ivw 2000-2012"
-foreach x of global nocoredrop1 {
-
-replace nocore = 1 if id=="`x'"
-}
-
-gen misscore = 0
-label var misscore "Dropped because missing consecutive cores"
-foreach x of global misscore1 {
-
-replace misscore = 1 if id=="`x'"
-}
-
-gen nocore4yr = 0
-label var nocore4yr "Dropped because no Core within last 4 years of life"
-foreach x of global nocore4yr1 {
-replace nocore4yr = 1 if id=="`x'"
-}
-
-gen impu = 0
-label var impu "Had a core imputed"
-foreach x of global impu1 {
-replace impu = 1 if id=="`x'"
-}
-
-gen non3 = 0
-label var non3 "Dropped because <60m of HRS data available between death and furthest core"
-foreach x of global non31 {
-
-replace non3 = 1 if id=="`x'"
-
-}
-
-local deri age_lt_70 exdrop nocore misscore nocore4yr non3 
+local deri age_lt_72 no_exit miss_core no_core nocore4yr hrs_lt_84m 
 
 gen final = 1
 label var final "Final Sample Size, includes decedents w/imputed core"
 
 foreach x of local deri {
-
 replace final = 0 if `x'==1
-
 }
 
 gen final_noimp = 0
-replace final_noimp = 1 if final==1 & impu==0
+replace final_noimp = 1 if final==1 & imputed==0
 label var final_noimp "Final Sample Size, excludes decedents with imputed core"
 
 gen all = 1
 label var all "All HRS respondents Deceased 2004-2012"
 
-local full all age_lt_70 exdrop nocore misscore nocore4yr non3 final final_noimp
+local full all age_lt_72 no_exit miss_core no_core nocore4yr hrs_lt_84m final final_noimp
 
 local rd: word count `full'
 
@@ -5978,8 +5331,10 @@ mat rownames tab1 = `full'
 
 
 frmttable using "E:\projects\burden_dementia\archive logs\Sample_Derivation.doc", replace statmat(tab1) ///
-varlabels title("Sample Derivation for R01 (Deceased 2004-2012, Age 70+)") ctitles("Reason for Exclusion" "N" ) sdec(0) ///
-annotate(stars) asymbol(*,**)note("Death Date was determined by NDI, Medicare MBSF or HRS Exit in that order. //If NDI death date was after HRS Exit Interview and respondent had no subsequent data, then HRS death date was used.")
+varlabels title("Sample Derivation for R01 (Deceased 2004-2012, Age 72+)") ctitles("Reason for Exclusion" "N" ) sdec(0) ///
+annotate(stars) asymbol(*,**)note("Death Date was determined by NDI, Medicare MBSF or HRS Exit in that order. Reasons for exclusion are NOT mutally exclusive.")
+
+cap log close
 
 
 H="Experimental - R01 final"
@@ -9275,6 +8630,10 @@ save "`fdpath'/burden_dementia_sample_long.dta", replace
 
 
 H="changelog"
+01/04/19 - Continued working on separating the Dataset construction from Sample Derivation. Omari
+
+01/03/19 - Continued working on separating the Dataset construction from Sample Derivation. Omari
+
 01/02/19 - Continued working on separating the Dataset construction from Sample Derivation. Omari
 
 12/31/18 - Worked on separating the Dataset construction from Sample Derivation. Omari

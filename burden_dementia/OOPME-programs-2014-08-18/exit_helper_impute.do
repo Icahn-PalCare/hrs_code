@@ -311,5 +311,28 @@ replace helper_OOP = min( helper_OOP , 15000 * (cpi2014 / cpiBASE)) if !missing(
 keep HHID PN helper_OOP numhelpers numpaidhelpers
 save "$savedir/helper_exit_2014_imputed", replace
 
+****************************************************************************************		* 2014
+*2016
+
+use  "$loaddir/X16G_HP.dta" , clear
+by HHID PN, sort: gen numhelpers = _N
+append using "$savedir/helper_exit_all", gen(appended)
+replace helper_all = helper_all * (cpi2016 / cpiBASE)
+
+helper ZG078 ZG079
+replace helper_OOP = min( helper_OOP , 15000* (cpi2016 / cpiBASE) ) if !missing(helper_OOP)
+
+helper_impute ZG076 ZG080
+
+drop if appended==1
+drop appended
+sort HHID PN
+gen numpaidhelpers = (helper_OOP>0) if !missing(helper_OOP)
+collapse (sum) helper_OOP (first) numhelpers (sum) numpaidhelpers, by(HHID PN)
+replace helper_OOP = min( helper_OOP , 15000 * (cpi2016 / cpiBASE)) if !missing(helper_OOP)
+
+keep HHID PN helper_OOP numhelpers numpaidhelpers
+save "$savedir/helper_exit_2016_imputed", replace
+
 ****************************************************************************************		
 clear

@@ -2387,7 +2387,7 @@ replace death_cat = 3 if n1_2_death>12 & n1_2_death!=.
 
 gsort id -core_b4_death
 
-carryforward death_cat n1_2_death, replace
+by id: carryforward death_cat n1_2_death, replace
 
 gen all = 1
 bysort id: egen count = total(all)
@@ -2452,11 +2452,73 @@ gen mar = mar_n0+mar_n1+mar_n2
 corr mar n1_2_death if nflag==0
 corr mar ivw_time if nflag>0 // checks to see if months at risk (mar) = months between ivw
 
-foreach x of varlist hlphrs_i* {
+gsort id +nflag
 
+gen hlphrs_0 = hlphrs_i
+replace hlphrs_0 = hlphrs_i_exit if nflag==0
+
+gen hlphrs_a = hlphrs_i
+replace hlphrs_a = hlphrs_i_a if imputed==1
+replace hlphrs_a = hlphrs_i_exit if nflag==0
+
+gen hlphrs_b = hlphrs_i
+replace hlphrs_b = hlphrs_i_b if imputed==1
+replace hlphrs_b = hlphrs_i_exit if nflag==0 
+
+
+
+foreach x of varlist hlphrs_0 hlphrs_a hlphrs_b {
+
+by id: gen `x'_n = `x'[_n+1]
+
+replace `x'_n = 0 if `x'_n==. // stop gap, remove later 
+
+} 
+
+
+//start with nflag = 0
+
+gen hlphrs_0_av = .
+replace hlphrs_0_av = death_2_n1*hlphrs_0 if death_2_n1<=4 & nflag==0
+replace hlphrs_0_av = (4*hlphrs_0) + (death_2_n1-4)*((hlphrs_0+hlphrs_0_n)/2) if death_2_n1>4 & nflag==0
+replace hlphrs_0_av = (4*hlphrs_0) + (ivw_time-4)*((hlphrs_0+hlphrs_0_n)/2) if nflag>0 & hlphrs_0_n>0
+replace hlphrs_0_av = (4*hlphrs_0) if nflag>0 & hlphrs_0_n==0
+
+
+gen hlphrs_a_av = .
+replace hlphrs_a_av = death_2_n1*hlphrs_a if death_2_n1<=4 & nflag==0
+replace hlphrs_a_av = (4*hlphrs_a) + (death_2_n1-4)*((hlphrs_a+hlphrs_a_n)/2) if death_2_n1>4 & nflag==0
+replace hlphrs_a_av = (4*hlphrs_a) + (ivw_time-4)*((hlphrs_a+hlphrs_a_n)/2) if nflag>0 & hlphrs_a_n>0
+replace hlphrs_a_av = (4*hlphrs_a) if nflag>0 & hlphrs_a_n==0
+
+
+gen hlphrs_b_av = .
+replace hlphrs_b_av = death_2_n1*hlphrs_b if death_2_n1<=4 & nflag==0
+replace hlphrs_b_av = (4*hlphrs_b) + (death_2_n1-4)*((hlphrs_b+hlphrs_b_n)/2) if death_2_n1>4 & nflag==0
+replace hlphrs_b_av = (4*hlphrs_b) + (ivw_time-4)*((hlphrs_b+hlphrs_b_n)/2) if nflag>0 & hlphrs_b_n>0
+replace hlphrs_b_av = (4*hlphrs_b) if nflag>0 & hlphrs_b_n==0
+
+
+
+
+
+
+foreach x of varlist *_av {
+
+replace `x' = `x'/death_2_n1 if nflag==0
+replace `x' = `x'/ivw_time if nflag>0
 replace `x' = (`x'*mar_n0*hr_rate) +  (`x'*mar_n1*hr_rate_n1) + (`x'*mar_n2*hr_rate_n2)
 
 }
+
+replace hlphrs_i = hlphrs_0_av if nflag>0
+replace hlphrs_i_exit = hlphrs_0_av if nflag==0
+
+replace hlphrs_i_a = hlphrs_a_av if nflag>0
+replace hlphrs_i_a_exit = hlphrs_a_av if nflag==0
+
+replace hlphrs_i_b = hlphrs_b_av if nflag>0
+replace hlphrs_i_b_exit = hlphrs_b_av if nflag==0
 
 
 gen has_imputed = 0
@@ -4862,7 +4924,7 @@ c_ivw_date > index_date */
 
 preserve
 keep if c_ivw_date > index_date & c_ivw_date!=. // people with core dates after ivw
-keep id index_date c_ivw_date core_year proxy_core
+keep id index_date c_ivw_date core_year proxy_core no_exit female birth_date bid_hrs_22
 save check_id_xwalk.dta, replace
 restore
 
@@ -4871,6 +4933,16 @@ levelsof id if (core_4yr>4 & core_4yr!=.) | core_4yr<0, local(nocore4yr)
 gen nocore4yr = .
 label var nocore4yr "No Core ivw within 4 years of death, to be dropped"
 
+gen death_b4_core = .
+label var death_b4_core "Has NDI/Bene DOD before Core Ivw" 
+
+
+levelsof id if c_ivw_date > index_date & c_ivw_date!=., local(diedb4core)
+
+foreach x of local diedb4core {
+
+replace death_b4_core = 1 if id=="`x'"
+}
 
 foreach x of local nocore4yr {
 replace nocore4yr = 1 if id=="`x'"
@@ -4882,7 +4954,7 @@ by id: gen diff = year_ci - year_ci[_n-1] // -4 or higher denotes a gap year
 replace diff = -4 if diff<=-3 & obs==2 & nocore4yr==. & no_exit==. // imputing an interview between N1 & death if N1>=3yrs prior to death
 expand 2 if diff==-4, gen(imputed) 
 replace year = year + 2 if imputed==1 // imputed core interview
-label var imputed "Has imputed core interview"
+label var imputed "imputed core interview"
 
 drop if year > index_year & imputed==1 // dropping imputed cores after death
 drop if (index_year - c_ivw_year)<=2 & imputed==1 // dropping imputed cores if person died inbetween core and exit
@@ -5092,6 +5164,8 @@ replace new_ivw_days = 730 if imputed==1 & new_ivw_days>730 & nflag==1 ////// ca
 replace new_ivw_days = ceil(new_ivw_days)
 replace ivw_date = c_ivw_date + new_ivw_days if imputed==1 //c_ivw is date for core prior to gap
 replace c_ivw_year = year(ivw_date)
+replace c_ivw_month = month(ivw_date)
+replace c_ivw_date = ivw_date if imputed==1
 
 format %td ivw_date old_ivw_date
 
@@ -5134,6 +5208,9 @@ keep if _m==3
 
 keep hhid pn stateusps* zipcode*
 
+gen stateusps16 = stateusps14
+gen zipcode16 = zipcode14
+
 foreach x of varlist stateusps* {
 
 replace `x' = "" if `x'=="ZZ"
@@ -5143,7 +5220,7 @@ replace `x' = "" if `x'=="ZZ"
 gen stateusps97=""
 gen stateusps99=""
 
-forvalues i= 1(2)13{
+forvalues i= 1(2)15{
 gen stateusps`i'=""
 gen zipcode`i' = ""
 }
@@ -5156,7 +5233,7 @@ reshape long stateusps zipcode, i(hhid pn) j(c_ivw_year)
 
 forvalues i=0/99{
 qui replace c_ivw_year=200`i' if c_ivw_year==`i' & c_ivw_year<=9
-qui replace c_ivw_year=20`i' if c_ivw_year==`i' & inrange(c_ivw_year, 10,14)
+qui replace c_ivw_year=20`i' if c_ivw_year==`i' & inrange(c_ivw_year, 10,16)
 qui replace c_ivw_year=19`i' if c_ivw_year==`i' & c_ivw_year>=90
 }
 
@@ -5259,6 +5336,8 @@ gsort id nflag
 
 by id: gen next_ivw_date = ivw_date[_n+1] // bringing forward date from prior core away from death
 
+format %td next_ivw_date
+
 gen ivw_time = ivw_date - next_ivw_date
 replace ivw_time = ivw_time * 0.0329
 label var ivw_time "Months between previous ivw & current ivw"
@@ -5267,6 +5346,9 @@ gen death_2_ivw = index_date - ivw_date
 replace death_2_ivw = death_2_ivw * 0.0329
 label var death_2_ivw "Months between current ivw & death"
 
+gen last_core = 1 if ivw_time==. & nflag>0
+label var last_core "Last observable core, ivw_time imputed at 24 months"
+replace ivw_time = 24 if ivw_time==. & nflag>0
 
 sum ivw_time if nflag>0
 /*Average time between core ivws is 24 months. So if we subtract ivw date from death, 
@@ -5291,10 +5373,6 @@ label var hrs_lt_84m "<84 months of HRS ivw data, to be dropped"
 save R01_i.dta, replace
 
 
-/**************************************************************************** /
-
-
-
 
 H="Experimental - Sample derivation"
 clear all
@@ -5310,7 +5388,10 @@ cd $datapath
 
 use R01_i.dta, clear
 
-local samplevars age_lt_72 no_exit miss_core no_core nocore4yr hrs_lt_84m imputed
+gen has_imputed = imputed
+label var has_imputed "Has an imputed core ivw"
+
+local samplevars age_lt_72 no_exit miss_core no_core nocore4yr hrs_lt_84m has_imputed death_b4_core
 
 foreach x of local samplevars {
 
@@ -5323,9 +5404,8 @@ replace `x'=1 if id=="`y'"
 }
 } 
 
-keep if nflag==0
 
-local deri age_lt_72 no_exit miss_core no_core nocore4yr hrs_lt_84m 
+local deri age_lt_72 no_exit miss_core no_core nocore4yr hrs_lt_84m death_b4_core
 
 gen final = 1
 label var final "Final Sample Size, includes decedents w/imputed core"
@@ -5335,13 +5415,16 @@ replace final = 0 if `x'==1
 }
 
 gen final_noimp = 0
-replace final_noimp = 1 if final==1 & imputed==0
+replace final_noimp = 1 if final==1 & has_imputed==0
 label var final_noimp "Final Sample Size, excludes decedents with imputed core"
+
+preserve
+keep if nflag==0
 
 gen all = 1
 label var all "All HRS respondents Deceased 2004-2015"
 
-local full all age_lt_72 no_exit miss_core no_core nocore4yr hrs_lt_84m final final_noimp
+local full all age_lt_72 no_exit miss_core no_core nocore4yr death_b4_core hrs_lt_84m final final_noimp
 
 local rd: word count `full'
 
@@ -5372,8 +5455,101 @@ annotate(stars) asymbol(*,**)note("Death Date was determined by NDI, Medicare MB
 
 cap log close
 
+restore
+keep if final==1
+save R01_j.dta, replace
 
-H="Experimental - R01 final"
+
+H="Experimental - Final Sample"
+
+/**************** calculations *********************/
+clear all
+capture log close
+
+global datapath "E:\data\burden_dementia\int_data"
+local logpath "E:\data\burden_dementia\logs"
+global ooppath "E:\data\burden_dementia\oopdata"
+global output "E:\projects\burden_dementia\archive logs"
+
+
+cd $datapath
+
+use R01_j.dta, clear
+
+gen n1_2_death = index_date - c_ivw_date if nflag==1
+replace n1_2_death = n1_2_death * 0.0329
+replace n1_2_death = ceil(n1_2_death)
+replace n1_2_death = 24 if n1_2_death>=24 & n1_2_death!=.
+replace n1_2_death = 1 if n1_2_death<=0
+
+gen core_b4_death = 0
+replace core_b4_death = 1 if nflag==1
+
+gsort id -core_b4_death
+
+by id: carryforward n1_2_death, replace
+
+
+cap drop mar_n0 mar_n1 mar_n2
+cap drop mar
+
+gen mar_n0 = . //months observed (aka "at risk") within a calendar year for helper hours cost imputation
+gen mar_n1 = .
+gen mar_n2 = .
+
+replace mar_n0 = index_month if nflag==0
+replace mar_n0 = n1_2_death if (n1_2_death-mar_n0 < 0) & nflag==0 // if they died the same year as their N1 ivw, then
+
+replace mar_n1 = n1_2_death - mar_n0 if nflag==0
+replace mar_n1 = 0 if mar_n1<0 & nflag==0
+replace mar_n1 = 12 if (mar_n1>12 & mar_n1!=.) & nflag==0
+
+replace mar_n2 = n1_2_death - mar_n0 -mar_n1 if nflag==0
+replace mar_n2 = 0 if mar_n2<0
+
+
+replace mar_n0 = c_ivw_month if nflag>0
+replace mar_n1 = ivw_time - c_ivw_month if nflag>0
+replace mar_n1 = 0 if mar_n1<0 & nflag>0
+replace mar_n1 = 12 if (mar_n1>12 & mar_n1!=.) & nflag>0
+
+replace mar_n2 = ivw_time - 12 - c_ivw_month if nflag>0
+replace mar_n2 = 0 if mar_n2<0 & nflag>0
+*replace mar_n2 = 12 if (mar_n2>12 & mar_n2!=.) & nflag>0
+
+gen mar = mar_n0+mar_n1+mar_n2
+corr mar n1_2_death if nflag==0
+corr mar ivw_time if nflag>0 // checks to see if months at risk (mar) = months between ivw
+
+gsort id +nflag
+
+gen hlp_cost = hlphrs_i
+replace hlp_cost = hlphrs_i_exit if nflag==0
+replace hlp_cost = hlphrs_i_b if imputed==1
+
+replace hlp_cost = 720 if hlp_cost>720 // capping hlphrs to 24 hours per day for each person
+
+by id: gen hlp_cost_n = hlp_cost[_n+1]
+
+/* Helper hours are currently 30 day estimates. Will create ~2 year totals using the
+4 months at current ivw + remainder months*((current+previous)/2) */
+
+gen hlp_cost_ivw = .
+replace hlp_cost_ivw = n1_2_death*hlp_cost if n1_2_death<=4 & nflag==0
+replace hlp_cost_ivw = (4*hlp_cost) + (n1_2_death-4)*((hlp_cost+hlp_cost_n)/2) if n1_2_death>4 & nflag==0
+replace hlp_cost_ivw = (4*hlp_cost) + (ivw_time-4)*((hlp_cost+hlp_cost_n)/2) if nflag>0 & hlp_cost_n>0
+replace hlp_cost_ivw = (4*hlp_cost) if nflag>0 & (hlp_cost_n==0 | hlp_cost_n==.)
+
+foreach x of varlist hlp_cost_ivw  {
+
+replace `x' = `x'/n1_2_death if nflag==0
+replace `x' = `x'/ivw_time if nflag>0
+replace `x' = (`x'*mar_n0*hr_rate) +  (`x'*mar_n1*hr_rate_n1) + (`x'*mar_n2*hr_rate_n2)
+
+}
+
+
+H="Experimental - annual calculations"
 
 /********* Constructing Final Dataset *********/
 

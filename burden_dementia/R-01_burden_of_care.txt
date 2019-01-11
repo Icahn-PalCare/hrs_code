@@ -3583,7 +3583,8 @@ by id: keep if _n==_N
 
 gen ivw_time=death_date-c_ivw_date
 drop if ivw_time<0
-replace nh_nights_x=ivw_time if nh_nights_x>=730
+replace nh_nights_x=ivw_time if nh_nights_x>ivw_time
+//>=730
 
 rename hhidpn hh
 rename id hhidpn
@@ -3615,13 +3616,17 @@ bys hhidpn core_year: egen ltc_tot=total(ltc_day) if range==1,m
 
 bys hhidpn core_year: keep if _n==1
 
-replace nh_nights_x=. if nh_nights_x==0
-replace mm_days=. if mm_days==0
+//replace nh_nights_x=. if nh_nights_x==0
+//replace mm_days=. if mm_days==0
 
 merge 1:1 hhidpn using "E:\data\CMS_DUA_51675_2014\Medicare Xref2015\CMSxref20151\stata\xref2015medicare.dta", nogen keep(master matched) force
 rename BID_HRS_22 bid_hrs_22
 capture drop year
 gen year=exit_year
+
+rename medicaid sr_medicaid
+
+drop if bid_hrs_22==""
 
 tempfile a
 save "`a'"
@@ -3629,19 +3634,26 @@ save "`a'"
 use "E:\data\CMS_DUA_51675_2014\Merged\Stata\basf_1998_2015.dta", replace
 gen year=year(start_dt)
 gen medicaid=0
-replace medicaid=1 if buyin_mo>=1
+replace medicaid=1 if buyin_mo>=1 & buyin_mo!=.
 
 sort bid_hrs_22 year
 gen medicaid_p=0
 by bid_hrs_22: replace medicaid_p=1 if medicaid==1 | medicaid[_n-1]==1 
 //by bid_hrs_22: replace medicaid_p=2 if medicaid==1 & medicaid[_n-1]==1 
 
+label var medicaid "Medicaid from claims"
+label var medicaid_p "Medicaid from claims previous year"
+
+sort bid_hrs_22 year
+by bid_hrs_22: keep if _n==_N 
+
+
 tempfile b
 save "`b'"
 
 use "`a'", replace
 
-merge 1:1 bid_hrs_22 year using "`b'", nogen keep(master match) keepusing(medicaid medicaid_p)
+merge 1:1 bid_hrs_22 using "`b'", nogen keep(master match) keepusing(medicaid medicaid_p)
 
 
 capture drop diff
@@ -3651,7 +3663,7 @@ replace ltc_ins_x=. if ltc_ins_x==8
 
 
 gen nh_nights_f=0
-replace nh_nights_f=1 if nh_nights_x!=.
+replace nh_nights_f=1 if nh_nights_x!=0
 gen mm_days_f=0 
 replace mm_days_f=1 if mm_days!=.
 gen both_f=0
@@ -3700,23 +3712,23 @@ graph bar (mean) diff diff if nh_nights_x!=. & mm_days!=., over(ltc_ins_x) over(
 "`c' NHRES and No SR LTC Ins." "`d' NHRES and SR LTC Ins.") ///
 blabel(bar) ytitle(mean `:variable label diff') title("Diff. between SR HRS and Medicaid/Medicare Nights" " by LTC Ins. and NHRES from death to last core ivw.")
 
-graph save "E:\projects\burden_dementia\archive logs\20181217\difference", replace
-graph export "E:\projects\burden_dementia\archive logs\20181217\difference.pdf", replace
+//graph save "E:\projects\burden_dementia\archive logs\20181217\difference", replace
+//graph export "E:\projects\burden_dementia\archive logs\20181217\difference.pdf", replace
 
 graph bar (mean) nh_nights_x mm_days if nh_nights_x!=. & mm_days!=., over(ltc_ins_x) over(nhres_x) blabel(bar) ///
 note("SR HRS and Medicare/Medicare NH Nights by LTC Ins.") ytitle(Mean # of Nights) ///
 title("Mean Nights by LTC Ins. for SR HRS and Claims" "by LTC Ins. and NHRES") legend(label(2 "Claim Nights") label(1 "SR NH Nights from exit" ))
 
-graph save "E:\projects\burden_dementia\archive logs\20181217\mean_nights", replace
-graph export "E:\projects\burden_dementia\archive logs\20181217\mean_nights.pdf", replace
+//graph save "E:\projects\burden_dementia\archive logs\20181217\mean_nights", replace
+//graph export "E:\projects\burden_dementia\archive logs\20181217\mean_nights.pdf", replace
 
 graph bar (count) nh_nights_f mm_days_f both_f, over(ltc_ins_x) over(nhres_x) blabel(bar) ///
 title("Count of having NH Nights in SR HRS, Claims, & Both" "by LTC Ins. and NHRES") ytitle(# of people) ///
 legend(label(1 "SR NH Nights from exit") ///
 label(2 "Claim Nights") label(3 "Both"))
 
-graph save "E:\projects\burden_dementia\archive logs\20181217\count", replace
-graph export "E:\projects\burden_dementia\archive logs\20181217\count.pdf", replace
+//graph save "E:\projects\burden_dementia\archive logs\20181217\count", replace
+//graph export "E:\projects\burden_dementia\archive logs\20181217\count.pdf", replace
 
 tab ltc_ins_x medicaid_p
 
@@ -3761,6 +3773,7 @@ replace year=20`i' if year==`i'
 
 sort id year
 
+//assumption
 by id: carryforward stateusps, gen(state)
 
 rename id hhidpn 
@@ -3784,10 +3797,135 @@ gen nh_oop_nights=NH_OOP/nh_daily
 gen nh_oop_big_flag=1 if nh_oop_nights>ivw_time
 
 replace nh_oop_nights=ivw_time if nh_oop_nights>ivw_time
+replace nh_oop_nights=round(nh_oop_nights)
+
+
+replace mm_days=0 if mm_days==.
+replace nh_nights_x=0 if nh_nights_x==.
 
 gen unatt=nh_nights_x-nh_oop_nights-mm_days
 /*
+//just to see comparing nh_nights_x with ivw_time
+gen comp=ivw_time-nh_oop_nights-mm_days
 
+sum unatt if sr_medicaid==0, d
+// N-3023 Mean-78 Med-0
+sum unatt if sr_medicaid==1, d
+//N-830 Mean- 70 Med-0
+sum unatt if medicaid==0, d
+// N-3019 Mean-77 Med-0
+sum unatt if medicaid==1, d
+// N-919 Mean-78 Med-0
+
+tab medicaid sr_medicaid, m
+
+tab ltc_ins_x sr_medicaid, m
+
+tab ltc_ins_x medicaid,m
+
+sum unatt if ltc_ins_x==0,d
+//3424 mean-75
+sum unatt if ltc_ins_x==1,d
+//363 mean-104
+
+sum unatt if sr_medicaid==0 & ltc_ins_x==0, d
+// N-2583 Mean-74 Med-0
+sum unatt if sr_medicaid==1 & ltc_ins_x==0, d
+//N-766 Mean- 75 Med-0
+sum unatt if medicaid==0 & ltc_ins_x==0, d
+// N-2567 Mean-72 Med-0
+sum unatt if medicaid==1 & ltc_ins_x==0, d
+// N-854 Mean-83 Med-0
+*/
+//frequency of people who have reported nh_days and then how many people have unatt nights
+
+sum nh_nights_f, d
+
+sum mm_days_f, d
+
+la def nh_nights_f 0 "No NH Nights" 1 "Yes NH Nights"
+la val nh_nights_f nh_nights_f
+
+la def mm_days_f 0 "No Medicare/Medicaid Nights" 1 "Yes Medicare/Medicaid Nights"
+la val mm_days_f mm_days_f
+la def medicaid 0 "No Medicaid" 1 "Yes Medicaid"
+la val medicaid medicaid
+la def ltc_ins_x 0 "No LTC Ins." 1 "Yes LTC Ins. "
+la val ltc_ins_x ltc_ins_x
+la def nh_oop_f 0 "No NH OOP Cost" 1 "Yes NH OOP Cost"
+la val nh_oop_f nh_oop_f
+la def sr_medicaid 0 "No SR Medicaid" 1 "Yes SR Medicaid"
+la val sr_medicaid sr_medicaid
+
+count if !missing(nh_nights_f)
+local N `r(N)'
+graph bar, over(nh_nights_f) blabel(bar) title(Reported NH Nights (N =`N'))
+graph save "E:\data\burden_dementia\logs\nh_nights_flag", replace
+graph export "E:\data\burden_dementia\logs\nh_nights_flag.pdf", replace
+
+count if !missing(mm_days_f)
+local N `r(N)'
+graph bar, over(mm_days_f) blabel(bar)  title(Reported Medicare/Medicaid Nights (N =`N'))
+graph save "E:\data\burden_dementia\logs\mm_days_flag", replace
+graph export "E:\data\burden_dementia\logs\mm_days_flag.pdf", replace
+
+count if !missing(mm_days_f) & !missing(nh_nights_f)
+local N `r(N)'
+catplot nh_nights_f mm_days_f,percent recast(bar) title("SR NH Nights flag vs Medicare/Medicaid Nights flag" "(N =`N')") blabel(bar)
+graph save "E:\data\burden_dementia\logs\mm_days_nh_nights", replace
+graph export "E:\data\burden_dementia\logs\mm_days_nh_nights.pdf", replace
+
+count if !missing(nh_nights_f) & !missing(medicaid) 
+local N `r(N)'
+catplot nh_nights_f medicaid, percent recast(bar) title("SR NH Nights flag vs Medicaid flag (from claims)" "(N =`N')") blabel(bar)
+graph save "E:\data\burden_dementia\logs\nh_nights_medicaid", replace
+graph export "E:\data\burden_dementia\logs\nh_nights_medicaid.pdf", replace
+
+count if !missing(nh_nights_f) & !missing(ltc_ins_x) 
+local N `r(N)'
+catplot nh_nights_f ltc_ins_x,percent recast(bar) title("SR NH Nights flag vs LTC Insurance flag" "(N =`N')") blabel(bar)
+graph save "E:\data\burden_dementia\logs\nh_nights_ltc", replace
+graph export "E:\data\burden_dementia\logs\nh_nights_ltc.pdf", replace
+
+count if !missing(nh_nights_f) & !missing(nh_oop_f) 
+local N `r(N)'
+catplot nh_nights_f nh_oop_f,percent recast(bar) title("SR NH Nights flag vs NH OOP" "(N =`N')") blabel(bar)
+graph save "E:\data\burden_dementia\logs\nh_nights_nh_oop", replace
+graph export "E:\data\burden_dementia\logs\nh_nights_nh_oop.pdf", replace
+
+count if !missing(unatt)
+local N `r(N)'
+graph bar (mean) unatt, blabel(bar) title("Unattributed Nights" "(N =`N')") blabel(bar) ytitle("Mean of Unattributed Nights")
+graph save "E:\data\burden_dementia\logs\unatt", replace
+graph export "E:\data\burden_dementia\logs\unatt.pdf", replace
+
+count if !missing(unatt) & !missing(medicaid)
+local N `r(N)'
+graph bar (mean) unatt, over(medicaid) blabel(bar) title("Unattributed Nights vs Medcaid flag (from claims)" "(N =`N')") blabel(bar) ytitle("Mean of Unattributed Nights")
+graph save "E:\data\burden_dementia\logs\unatt_medicaid", replace
+graph export "E:\data\burden_dementia\logs\unatt_medicaid.pdf", replace
+
+count if !missing(unatt) & !missing(sr_medicaid)
+local N `r(N)'
+graph bar (mean) unatt, over(sr_medicaid) blabel(bar) title("Unattributed Nights vs Medcaid flag (SR)" "(N =`N')") blabel(bar) ytitle("Mean of Unattributed Nights")
+graph save "E:\data\burden_dementia\logs\unatt_sr_medicaid", replace
+graph export "E:\data\burden_dementia\logs\unatt_sr_medicaid.pdf", replace
+
+count if !missing(unatt) & !missing(ltc_ins_x)
+local N `r(N)' 
+graph bar (mean) unatt, over(ltc_ins_x) blabel(bar) title("Unattributed Nights vs LTC Ins. flag" "(N =`N')") blabel(bar) ytitle("Mean of Unattributed Nights")
+graph save "E:\data\burden_dementia\logs\unatt_ltc", replace
+graph export "E:\data\burden_dementia\logs\unatt_ltc.pdf", replace
+
+count if !missing(unatt) & !missing(nh_oop_f)
+local N `r(N)'
+graph bar (mean) unatt, over(nh_oop_f) blabel(bar) title("Unattributed Nights vs NH OOP flag" "(N =`N')") blabel(bar) ytitle("Mean of Unattributed Nights")
+graph save "E:\data\burden_dementia\logs\unatt_nh_oop", replace
+graph export "E:\data\burden_dementia\logs\unatt_nh_oop.pdf", replace
+
+
+
+/*
 saveold "E:\data\test\samp.dta", version(12) replace
 
 

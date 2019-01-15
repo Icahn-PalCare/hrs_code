@@ -1478,6 +1478,227 @@ xtile qtile_doctor = dr_visits, nq(4)
 
 save $savedir/exit2014_use.dta, replace
 
+********************************************************************************
+
+use $savedir/exit2016.dta, clear
+merge 1:1 HHID PN using $savedir/exit2016_months.dta, nogen keep(match)
+
+gen cause_die = ZA133M1M
+
+gen mc_cov = ZN001
+gen mc_b_cov = ZN004
+gen md_cov = ZN005
+gen gov_oth_cov = ZN007
+
+gen private_medigap_plans = ZN023
+
+gen nh_liv = ZA028
+gen loc_die = ZA124
+
+gen hospital_use = ZN099
+//note, broke insurance payment questiZN N102 into a multiple questiZN series, but possible to recreate it
+gen ZN102=.
+replace ZN102=1 if inlist(ZN434_1,1)
+replace ZN102=2 if inlist(ZN435_1,1)
+replace ZN102=3 if inlist(ZN435_1,5)
+replace ZN102=4 if inlist(ZN433_1,5)
+replace ZN102=8 if inlist(ZN433_1,8,9) | inlist(ZN434_1,8,9) | inlist(ZN435_1,8,9)
+gen hospital_cov = ZN102
+
+gen hospital_nights = ZN101
+replace hospital_nights = . if hospital_nights == 998 | hospital_nights == 999
+
+*if died in hospital, calculate time before death
+gen hosp_tbd = ZN301
+replace hosp_tbd = . if hosp_tbd == 998 | hosp_tbd == 999
+gen hosp_time_unit = ZN302
+replace hosp_tbd = (1/24)   * hosp_tbd if hosp_time_unit == 1
+replace hosp_tbd = 1        * hosp_tbd if hosp_time_unit == 2
+replace hosp_tbd = 7        * hosp_tbd if hosp_time_unit == 3
+replace hosp_tbd = (365/12) * hosp_tbd if hosp_time_unit == 4
+replace hosp_tbd = 365      * hosp_tbd if hosp_time_unit == 5
+replace hosp_tbd = .                   if (hosp_time_unit==8 | hosp_time_unit==9) & hosp_tbd != 0
+replace hosp_tbd = round(hosp_tbd)
+
+replace hospital_nights = hosp_tbd if missing(hospital_nights)
+
+*cap at time elapsed between interviews
+replace hospital_nights = min( hospital_nights , (365/12)*months ) if !missing(hospital_nights)
+
+gen nh_use = ZN114
+
+
+//note, broke insurance payment questions into multiple question series, but possible to recreate them
+gen ZN118=.
+replace ZN118=1 if inlist(ZN434_2,1)
+replace ZN118=2 if inlist(ZN435_2,1)
+replace ZN118=3 if inlist(ZN435_2,5)
+replace ZN118=4 if inlist(ZN433_2,5)
+replace ZN118=8 if inlist(ZN433_2,8,9) | inlist(ZN434_2,8,9) | inlist(ZN435_2,8,9)
+gen nh_cov = ZN118
+
+*IF R ANSWERS IN MONTHS RATHER THAN NIGHTS, ENTER 0 FOR NIGHTS
+*IWER: ENTER 996 FOR CONTINUOUS SINCE ENTERED OR  since [PREV WAVE IW MONTH], [PREV WAVE IW ZEAR]/since [PREV WAVE IW ZEAR]/in the last two years)
+gen nh_nights = ZN116
+replace nh_nights = . if nh_nights == 996 | nh_nights == 998 | nh_nights == 999
+gen nh_months = ZN117
+replace nh_months = . if nh_months == 98 | nh_months == 99
+replace nh_nights = round( (365/12) * nh_months ) if missing(nh_nights) | nh_nights==0
+
+*using coverscreen NH entry date, compute time in NH
+*if NH nights missing, R lives in NH, and # stays == 1 | missing | unknown, use this value:
+MAKEDATE nh_enter_date_cs ZA065 ZA066
+gen nh_time_cs = curr_iw_date - nh_enter_date_cs if ZA028==1 | ZA124==2
+replace nh_time_cs = . if nh_time_cs < 0
+replace nh_nights = round( 365 * nh_time_cs ) if missing(nh_nights) & (ZN115==1 | ZN115==. | ZN115==98 | ZN115==99)
+
+*using NH entry & exit dates (up to 3) in section NH, do similar procedure
+*if exit date missing, and R still lives in NH (exit year == 9995) (2006,2008,2010 exit IWs only), replace exit date with current IW date:
+MAKEDATE nh_enter_date_1 ZN123_1 ZN124_1
+MAKEDATE nh_exit_date_1  ZN125_1 ZN126_1
+replace nh_exit_date_1 = curr_iw_date if nh_exit_date_1 == . & ZN126_1 == 9995
+gen nh_time_1 = nh_exit_date_1 - nh_enter_date_1
+replace nh_time_1 = .  if nh_time_1 < 0
+
+MAKEDATE nh_enter_date_2 ZN123_2 ZN124_2
+MAKEDATE nh_exit_date_2  ZN125_2 ZN126_2
+replace nh_exit_date_2 = curr_iw_date if nh_exit_date_2 == . & ZN126_2 == 9995
+gen nh_time_2 = nh_exit_date_2 - nh_enter_date_2
+replace nh_time_2 = .  if nh_time_2 < 0
+
+MAKEDATE nh_enter_date_3 ZN123_3 ZN124_3
+MAKEDATE nh_exit_date_3  ZN125_3 ZN126_3
+replace nh_exit_date_3 = curr_iw_date if nh_exit_date_3 == . & ZN126_3 == 9995
+gen nh_time_3 = nh_exit_date_3 - nh_enter_date_3
+replace nh_time_3 = .  if nh_time_3 < 0
+
+*sum across stays, replace nights if missing
+egen nh_time_sum = rowtotal( nh_time_1 nh_time_2 nh_time_3 ), m
+replace nh_nights = round( 365 * nh_time_sum ) if missing(nh_nights)
+
+*fill in remaining missing values using coverscreen where possible if R lives in NH:
+replace nh_nights = round( 365 * nh_time_cs ) if missing(nh_nights)
+
+*cap at time elapsed between interviews
+replace nh_nights = min( nh_nights , (365/12)*months ) if !missing(nh_nights)
+
+gen patient_use = ZN134
+
+
+//note, broke insurance payment questions into multiple question series, but possible to recreate them
+gen ZN135=.
+replace ZN135=1 if inlist(ZN434_3,1)
+replace ZN135=2 if inlist(ZN435_3,1)
+replace ZN135=3 if inlist(ZN435_3,5)
+replace ZN135=4 if inlist(ZN433_3,5)
+replace ZN135=8 if inlist(ZN433_3,8,9) | inlist(ZN434_3,8,9) | inlist(ZN435_3,8,9)
+gen patient_cov = ZN135
+
+gen dr_visits = ZN147
+replace dr_visits = . if dr_visits == 998 | dr_visits == 999
+
+impute_dr_visits ZN148 ZN149 ZN150 ZN151
+replace dr_visits = min( dr_visits , (365/12)*months ) if !missing(dr_visits)
+
+recode dr_visits (1/max=1), gen(doctor_use)			//rrd: correct this to use ZN150 instead
+replace doctor_use = 8 if missing(doctor_use) & ZN147==998
+replace doctor_use = 9 if missing(doctor_use) & ZN147==999
+
+
+
+//note, broke insurance payment questions into multiple question series, but possible to recreate them
+gen ZN152=.
+replace ZN152=1 if inlist(ZN434_4,1)
+replace ZN152=2 if inlist(ZN435_4,1)
+replace ZN152=3 if inlist(ZN435_4,5)
+replace ZN152=4 if inlist(ZN433_4,5)
+replace ZN152=8 if inlist(ZN433_4,8,9) | inlist(ZN434_4,8,9) | inlist(ZN435_4,8,9)
+gen doctor_cov = ZN152
+
+gen dental_use = ZN164
+//note, broke insurance payment questions into multiple question series, but possible to recreate them
+gen ZN165=.
+replace ZN165=1 if inlist(ZN434_5,1)
+replace ZN165=2 if inlist(ZN435_5,1)
+replace ZN165=3 if inlist(ZN435_5,5)
+replace ZN165=4 if inlist(ZN433_5,5)
+replace ZN165=8 if inlist(ZN433_5,8,9) | inlist(ZN434_5,8,9) | inlist(ZN435_5,8,9)
+gen dental_cov = ZN165
+
+//note--hospice questions are quite different in 2016--hospice night questions must be redone
+gen ZN320=ZN436
+forvalues i=1/4 {
+	replace ZN320=1 if ZN439M`i'==4
+}
+
+gen hospice_use = ZN320
+
+
+gen ZN324=1 if ZN328==0
+replace ZN324=3 if inrange(ZN328,1,99997)
+gen hospice_cov = ZN324
+
+
+gen hospice_nights = ZN437 if ZN320==1
+replace hospice_nights = . if hospice_nights == 996 | hospice_nights == 998 | hospice_nights == 999
+
+gen hospice_months = ZN438==1
+replace hospice_months = . if hospice_months == 998 | hospice_months == 999
+replace hospice_nights = round( (365/12) * hospice_months) + hospice_nights ///
+if !missing(hospice_nights) & !missing(hospice_months)
+replace hospice_nights = round( (365/12) * hospice_months ) if missing(hospice_nights)
+
+/*
+gen hospice_tbd_days = ZN315
+replace hospice_tbd_days = . if (hospice_tbd_days == 998 | hospice_tbd_days == 999)
+gen hospice_tbd_months = ZN316
+replace hospice_tbd_months = . if (hospice_tbd_months == 98 | hospice_tbd_months == 99)
+
+replace hospice_nights = hospice_tbd_days if missing(hospice_nights)
+
+*cap at time elapsed between IWs
+replace hospice_nights = round( (365/12) * hospice_tbd_months ) if missing(hospice_nights)
+*/
+gen rx_use = ZN175
+
+
+//note, broke insurance payment questions into multiple question series, but possible to recreate them
+gen ZN176=.
+replace ZN176=1 if inlist(ZN434_6,1)
+replace ZN176=2 if inlist(ZN435_6,1)
+replace ZN176=3 if inlist(ZN435_6,5)
+replace ZN176=4 if inlist(ZN433_6,5)
+replace ZN176=8 if inlist(ZN433_6,8,9) | inlist(ZN434_6,8,9) | inlist(ZN435_6,8,9)
+gen rx_cov = ZN176
+
+gen home_use = ZN189
+
+//note, broke insurance payment questions into multiple question series, but possible to recreate them
+gen ZN190=.
+replace ZN190=1 if inlist(ZN434_7,1)
+replace ZN190=2 if inlist(ZN435_7,1)
+replace ZN190=3 if inlist(ZN435_7,5)
+replace ZN190=4 if inlist(ZN433_7,5)
+replace ZN190=8 if inlist(ZN433_7,8,9) | inlist(ZN434_7,8,9) | inlist(ZN435_7,8,9)
+gen home_cov = ZN190
+
+gen other_use = ZN332
+
+gen home_modif_use = ZN267
+
+gen special_use = ZN202
+gen special_cov = ZN203
+
+keep HHID PN year *_iw_date months *_use *_liv *_die *_cov *_nights *_visits private_medigap_plans ///
+ZN102 ZN118 ZN135 ZN152 ZN165 ZN176 ZN190 ZN320 ZN324
+
+xtile qtile_hospital = hospital_nights, nq(4)
+xtile qtile_nh = nh_nights, nq(4)
+xtile qtile_hospice = hospice_nights, nq(4)
+xtile qtile_doctor = dr_visits, nq(4)
+
+save $savedir/exit2016_use.dta, replace
+
 
 
 ********************************************************************************
@@ -1494,7 +1715,8 @@ $savedir/exit2006_use.dta ///
 $savedir/exit2008_use.dta ///
 $savedir/exit2010_use.dta ///
 $savedir/exit2012_use.dta ///
-$savedir/exit2014_use.dta
+$savedir/exit2014_use.dta ///
+$savedir/exit2016_use.dta
 
 sort HHID PN year		
 

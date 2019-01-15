@@ -194,4 +194,4 @@ egen x = rowtotal( private_ltc hospital_NH_doctor_OOP RX_OOP ) if year==1994 ,m
 replace total_OOP = x if year==1994
 drop x
 
-save $savedir/oopme_final_2014.dta, replace
+save $savedir/oopme_final_2016.dta, replace

@@ -21,6 +21,7 @@ scalar cpi2008 = 215.303
 scalar cpi2010 = 218.056
 scalar cpi2012 = 229.594
 scalar cpi2014 = 236.736
+scalar cpi2016 = 240.007
 
 /*Select base year*/
 

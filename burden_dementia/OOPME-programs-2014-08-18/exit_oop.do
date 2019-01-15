@@ -1086,7 +1086,6 @@ replace other_OOP = min( 15000*z*months , other_OOP ) if !missing(other_OOP)
 save $savedir/exit2012_oop.dta, replace	
 
 
-
 ********************************************************************************
 
 use $savedir/exit2014.dta, clear
@@ -1206,6 +1205,125 @@ replace other_OOP = min( 15000*z*months , other_OOP ) if !missing(other_OOP)
 
 save $savedir/exit2014_oop.dta, replace	
 
+********************************************************************************
+
+use $savedir/exit2016.dta, clear
+merge 1:1 HHID PN using $savedir/exit2016_months.dta, nogen keep(match)
+
+gen MC_HMO = ZN014
+replace MC_HMO = . if (MC_HMO == 998 | MC_HMO == 999)
+
+*convert to monthly frequency:
+replace MC_HMO = 1      * MC_HMO if ZN018 == 1
+replace MC_HMO = (1/3)  * MC_HMO if ZN018 == 2
+replace MC_HMO = (1/6)  * MC_HMO if ZN018 == 3
+replace MC_HMO = (1/12) * MC_HMO if ZN018 == 4
+replace MC_HMO = . 				 if (ZN018 == 7 | ZN018 == 8 | ZN018 == 9) & ///
+									(MC_HMO!=0)
+
+//rrd: as before, using prior wave of rules/prems (2011)
+//rrd: http://www.ssa.gov/policy/docs/statcomps/supplement/2010/medicare.html#partBtable
+//rrd: NOT ONTROLING FOR HOLD HARMLESS, IE IS UPPER BOUND
+gen MC_B = 115.40 if (ZN004 == 1 & ZN005 != 1 & ZN007 != 1)
+
+gen MC_B_adjustment = .
+
+*Single
+replace MC_B_adjustment = 0      if r10mstat!=1 & r10mstat!=2 & h10itot<=85000						
+replace MC_B_adjustment = 46.10  if r10mstat!=1 & r10mstat!=2 & h10itot>85000  & h10itot<=107000
+replace MC_B_adjustment = 115.30 if r10mstat!=1 & r10mstat!=2 & h10itot>107000 & h10itot<=160000
+replace MC_B_adjustment = 184.50 if r10mstat!=1 & r10mstat!=2 & h10itot>160000 & h10itot<=214000
+replace MC_B_adjustment = 253.70 if r10mstat!=1 & r10mstat!=2 & h10itot>214000 & h10itot<.
+
+*Married, filing jointly (we assume all married respondents file jointly)
+replace MC_B_adjustment = 0      if (r10mstat==1 | r10mstat==2) & h10itot<=170000
+replace MC_B_adjustment = 46.10  if (r10mstat==1 | r10mstat==2) & h10itot>170000 & h10itot<=214000
+replace MC_B_adjustment = 115.30 if (r10mstat==1 | r10mstat==2) & h10itot>214000 & h10itot<=320000
+replace MC_B_adjustment = 184.50 if (r10mstat==1 | r10mstat==2) & h10itot>320000 & h10itot<=428000
+replace MC_B_adjustment = 253.70 if (r10mstat==1 | r10mstat==2) & h10itot>428000 & h10itot<.
+
+replace MC_B = MC_B + MC_B_adjustment if !missing(MC_B,MC_B_adjustment)
+
+gen private_medigap_1 = ZN040_1
+replace private_medigap_1  = . if (private_medigap_1== 9998 | private_medigap_1== 9999)
+
+gen private_medigap_2 = ZN040_2
+replace private_medigap_2  = . if (private_medigap_2== 998 | private_medigap_2== 999)
+
+gen private_medigap_3 = ZN040_3
+replace private_medigap_3  = . if (private_medigap_3== 998 | private_medigap_3== 999)									
+
+gen long_term_care = ZN079
+replace long_term_care = . if (long_term_care == 99998 | long_term_care == 99999)
+
+*convert to monthly frequency 
+*NOTE: WN083==6 denotes "lump sum"; we assume that payment covers 20 years
+replace long_term_care = 1                 * long_term_care if (ZN083 == 1)
+replace long_term_care = (1/3)             * long_term_care if (ZN083 == 2)
+replace long_term_care = (1/12)            * long_term_care if (ZN083 == 4)
+replace long_term_care = ((1/20) * (1/12)) * long_term_care if (ZN083 == 6)
+replace long_term_care = . if (ZN083 == 7 | ZN083 == 8 | ZN083 == 9) & ///
+							  (long_term_care!=0)
+
+gen hospital_OOP = ZN106
+replace hospital_OOP = . if (hospital_OOP == 999998 | hospital_OOP == 999999)
+
+gen NH_OOP = ZN119
+replace NH_OOP = . if (NH_OOP == 999998 | NH_OOP == 999999)
+
+gen patient_OOP = ZN139
+replace patient_OOP = . if (patient_OOP == 99998 | patient_OOP == 9999)
+
+gen doctor_OOP = ZN156
+replace doctor_OOP = . if (doctor_OOP == 99998 | doctor_OOP == 99999)
+
+gen dental_OOP = ZN168
+replace dental_OOP = . if (dental_OOP == 99998 | dental_OOP == 99999)
+
+gen hospice_OOP = ZN328
+replace hospice_OOP = . if (hospice_OOP == 99998 | hospice_OOP == 99999)
+
+gen RX_OOP = ZN180
+replace RX_OOP = . if (RX_OOP == 9998 | RX_OOP == 9999)
+
+gen home_OOP = ZN194
+replace home_OOP = . if (home_OOP == 999998 | home_OOP == 999999)
+
+gen other_OOP = ZN333
+replace other_OOP = . if (other_OOP == 999998 | other_OOP == 999999)
+
+gen home_modif_OOP = ZN268
+replace home_modif_OOP = . if (home_modif_OOP == 99998 | home_modif_OOP == 99999)
+
+gen special_OOP = ZN239
+replace special_OOP = . if (ZN239 == 99998 | ZN239 == 99999)
+
+*summarize
+*fsum MC_HMO long_term_care private_medigap_* *_OOP, s(n miss min max mean se p5 p25 p50 p75 p95) f(%9.0f)
+
+*caps
+
+scalar z = cpi2016/cpiBASE
+
+replace MC_HMO = min( MC_HMO, 400*z ) if !missing(MC_HMO)
+replace private_medigap_1 = min( private_medigap_1 , cond(ZN001==1,400*z,2000*z) ) if !missing(private_medigap_1)
+replace private_medigap_2 = min( private_medigap_2 , cond(ZN001==1,400*z,2000*z) ) if !missing(private_medigap_2)
+replace private_medigap_3 = min( private_medigap_3 , cond(ZN001==1,400*z,2000*z) ) if !missing(private_medigap_3)
+replace long_term_care = min( long_term_care , 2000*z ) if !missing(long_term_care)
+replace hospital_OOP = min( 15000*z*months , hospital_OOP) if !missing(hospital_OOP)
+replace NH_OOP = min( 15000*z*months , NH_OOP) if !missing(NH_OOP)
+replace patient_OOP = min( 15000*z*months , patient_OOP ) if !missing(patient_OOP)
+replace doctor_OOP = min( 5000*z*months , doctor_OOP) if !missing(doctor_OOP)
+replace dental_OOP = min( 1000*z*months , dental_OOP ) if !missing(dental_OOP)
+replace hospice_OOP = min( 5000*z*months , hospice_OOP ) if !missing(hospice_OOP)
+replace RX_OOP = min( 5000*z , RX_OOP) if !missing(RX_OOP)
+replace home_OOP = min( 15000*z* months , home_OOP ) if !missing(home_OOP)
+replace home_modif_OOP = min( 5000*z*months , home_modif_OOP ) if !missing(home_modif_OOP)
+replace special_OOP = min( 15000*z*months , special_OOP ) if !missing(special_OOP)
+replace other_OOP = min( 15000*z*months , other_OOP ) if !missing(other_OOP)
+
+save $savedir/exit2016_oop.dta, replace	
+
 
 
 ********************************************************************************
@@ -1257,6 +1375,11 @@ keep HHID PN year MC_HMO private_medigap_* long_term_care hospital_OOP NH_OOP do
 	other_OOP home_modif_OOP
 save $savedir/tmp2014.dta, replace
 
+use $savedir/exit2016_oop.dta, clear
+keep HHID PN year MC_HMO private_medigap_* long_term_care hospital_OOP NH_OOP doctor_OOP patient_OOP dental_OOP hospice_OOP RX_OOP home_OOP special_OOP ///
+	other_OOP home_modif_OOP
+save $savedir/tmp2016.dta, replace
+
 use $savedir/tmp1995.dta, clear
 append using ///
 $savedir/tmp1996.dta ///
@@ -1268,7 +1391,8 @@ $savedir/tmp2006.dta ///
 $savedir/tmp2008.dta ///
 $savedir/tmp2010.dta ///
 $savedir/tmp2012.dta ///
-$savedir/tmp2014.dta 
+$savedir/tmp2014.dta ///
+$savedir/tmp2016.dta 
 
 save $savedir/exit_oop.dta, replace
 
@@ -1282,4 +1406,5 @@ rm $savedir/tmp2006.dta
 rm $savedir/tmp2008.dta
 rm $savedir/tmp2012.dta
 rm $savedir/tmp2014.dta
+rm $savedir/tmp2016.dta
 

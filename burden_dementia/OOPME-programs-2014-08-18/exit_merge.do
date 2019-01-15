@@ -68,6 +68,13 @@ merge 1:1 HHID PN using $savedir/exit2014_use.dta, nogen
 merge 1:1 HHID PN using $savedir/helper_exit_2014_imputed, nogen keepusing(numhelpers numpaidhelpers helper_OOP)
 save $savedir/exit2014_merge.dta, replace
 
+use $savedir/exit2016_oopi2.dta, clear
+keep HHID PN year MC_HMO MC_B private_medigap long_term_care hospital_OOP NH_OOP hospice_OOP doctor_OOP patient_OOP dental_OOP RX_OOP home_OOP special_OOP other_OOP ///
+			home_modif_OOP
+merge 1:1 HHID PN using $savedir/exit2016_use.dta, nogen
+merge 1:1 HHID PN using $savedir/helper_exit_2016_imputed, nogen keepusing(numhelpers numpaidhelpers helper_OOP)
+save $savedir/exit2016_merge.dta, replace
+
 use $savedir/exit1995_merge.dta, clear
 append using ///
 $savedir/exit1996_merge.dta ///
@@ -79,7 +86,8 @@ $savedir/exit2006_merge.dta ///
 $savedir/exit2008_merge.dta ///
 $savedir/exit2010_merge.dta ///
 $savedir/exit2012_merge.dta ///
-$savedir/exit2014_merge.dta
+$savedir/exit2014_merge.dta ///
+$savedir/exit2016_merge.dta
 
 sort HHID PN year
 
@@ -89,6 +97,7 @@ scalar drop _all
 do load_cpi
 
 gen cpi = .
+replace cpi = cpiBASE / cpi2016 if year==2016
 replace cpi = cpiBASE / cpi2014 if year==2014
 replace cpi = cpiBASE / cpi2012 if year==2012
 replace cpi = cpiBASE / cpi2010 if year==2010
@@ -123,3 +132,4 @@ rm $savedir/exit2008_merge.dta
 rm $savedir/exit2010_merge.dta
 rm $savedir/exit2012_merge.dta
 rm $savedir/exit2014_merge.dta
+rm $savedir/exit2016_merge.dta

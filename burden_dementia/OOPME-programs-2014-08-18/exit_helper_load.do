@@ -156,11 +156,12 @@ replace helper_OOP = helper_OOP * (cpiBASE / cpi2014)
 save "$savedir/helper_exit_2014.dta" , replace
 
 
-/* *********************************************************************** */* 2014
+/* *********************************************************************** */
+* 2016
 
 use  "$loaddir/X16G_HP.dta" , clear
 by HHID PN, sort: gen numhelpers = _N
-helper ZG078 YZ079
+helper ZG078 ZG079
 replace helper_OOP = helper_OOP * (cpiBASE / cpi2016)
 save "$savedir/helper_exit_2016.dta" , replace
 

@@ -3641,7 +3641,7 @@ gen medicaid_p=0
 by bid_hrs_22: replace medicaid_p=1 if medicaid==1 | medicaid[_n-1]==1 
 //by bid_hrs_22: replace medicaid_p=2 if medicaid==1 & medicaid[_n-1]==1 
 
-label var medicaid "Medicaid from claims"
+label var medicaid "Medicaid from Medicare claims"
 label var medicaid_p "Medicaid from claims previous year"
 
 sort bid_hrs_22 year
@@ -3661,6 +3661,13 @@ gen diff=nh_nights_x-mm_days
 
 replace ltc_ins_x=. if ltc_ins_x==8
 
+gen mcaid=0
+replace mcaid=1 if ltc_tot>=1 & ltc_tot!=.
+label var mcaid "Medicaid from Medicaid Claims"
+
+//nh_nights_x is not missing for any observations
+//ltc_ins_x can be missing
+//
 
 gen nh_nights_f=0
 replace nh_nights_f=1 if nh_nights_x!=0
@@ -3839,6 +3846,9 @@ sum unatt if medicaid==1 & ltc_ins_x==0, d
 */
 //frequency of people who have reported nh_days and then how many people have unatt nights
 
+gen mcaid_final=0
+replace mcaid_final=1 if medicaid==1 | mcaid==1
+
 sum nh_nights_f, d
 
 sum mm_days_f, d
@@ -3846,13 +3856,15 @@ sum mm_days_f, d
 la def nh_nights_f 0 "No NH Nights" 1 "Yes NH Nights"
 la val nh_nights_f nh_nights_f
 
-la def mm_days_f 0 "No Medicare/Medicaid Nights" 1 "Yes Medicare/Medicaid Nights"
+la def mm_days_f 0 "No Claims" 1 "Yes Claims"
 la val mm_days_f mm_days_f
 la def medicaid 0 "No Medicaid" 1 "Yes Medicaid"
 la val medicaid medicaid
+la def mcaid_final 0 "No Medicaid" 1 "Yes Medicaid"
+la val mcaid_final mcaid_final
 la def ltc_ins_x 0 "No LTC Ins." 1 "Yes LTC Ins. "
 la val ltc_ins_x ltc_ins_x
-la def nh_oop_f 0 "No NH OOP Cost" 1 "Yes NH OOP Cost"
+la def nh_oop_f 0 "No NH OOP" 1 "Yes NH OOP"
 la val nh_oop_f nh_oop_f
 la def sr_medicaid 0 "No SR Medicaid" 1 "Yes SR Medicaid"
 la val sr_medicaid sr_medicaid
@@ -3871,25 +3883,25 @@ graph export "E:\data\burden_dementia\logs\mm_days_flag.pdf", replace
 
 count if !missing(mm_days_f) & !missing(nh_nights_f)
 local N `r(N)'
-catplot nh_nights_f mm_days_f,percent recast(bar) title("SR NH Nights flag vs Medicare/Medicaid Nights flag" "(N =`N')") blabel(bar)
+catplot mm_days_f nh_nights_f ,percent recast(bar) title("SR NH Nights flag vs Medicare/Medicaid Nights flag" "(N =`N')") blabel(total)
 graph save "E:\data\burden_dementia\logs\mm_days_nh_nights", replace
 graph export "E:\data\burden_dementia\logs\mm_days_nh_nights.pdf", replace
 
-count if !missing(nh_nights_f) & !missing(medicaid) 
+count if !missing(nh_nights_f) & !missing(mcaid_final) 
 local N `r(N)'
-catplot nh_nights_f medicaid, percent recast(bar) title("SR NH Nights flag vs Medicaid flag (from claims)" "(N =`N')") blabel(bar)
+catplot mcaid_final nh_nights_f, percent recast(bar) title("SR NH Nights flag vs Medicaid flag (from claims)" "(N =`N')") blabel(bar)
 graph save "E:\data\burden_dementia\logs\nh_nights_medicaid", replace
 graph export "E:\data\burden_dementia\logs\nh_nights_medicaid.pdf", replace
 
 count if !missing(nh_nights_f) & !missing(ltc_ins_x) 
 local N `r(N)'
-catplot nh_nights_f ltc_ins_x,percent recast(bar) title("SR NH Nights flag vs LTC Insurance flag" "(N =`N')") blabel(bar)
+catplot ltc_ins_x nh_nights_f ,percent recast(bar) title("SR NH Nights flag vs LTC Insurance flag" "(N =`N')") blabel(bar)
 graph save "E:\data\burden_dementia\logs\nh_nights_ltc", replace
 graph export "E:\data\burden_dementia\logs\nh_nights_ltc.pdf", replace
 
 count if !missing(nh_nights_f) & !missing(nh_oop_f) 
 local N `r(N)'
-catplot nh_nights_f nh_oop_f,percent recast(bar) title("SR NH Nights flag vs NH OOP" "(N =`N')") blabel(bar)
+catplot nh_oop_f nh_nights_f ,percent recast(bar) title("SR NH Nights flag vs NH OOP" "(N =`N')") blabel(bar)
 graph save "E:\data\burden_dementia\logs\nh_nights_nh_oop", replace
 graph export "E:\data\burden_dementia\logs\nh_nights_nh_oop.pdf", replace
 
@@ -3899,9 +3911,14 @@ graph bar (mean) unatt, blabel(bar) title("Unattributed Nights" "(N =`N')") blab
 graph save "E:\data\burden_dementia\logs\unatt", replace
 graph export "E:\data\burden_dementia\logs\unatt.pdf", replace
 
-count if !missing(unatt) & !missing(medicaid)
+count if !missing(unatt) & !missing(mcaid_final)
 local N `r(N)'
-graph bar (mean) unatt, over(medicaid) blabel(bar) title("Unattributed Nights vs Medcaid flag (from claims)" "(N =`N')") blabel(bar) ytitle("Mean of Unattributed Nights")
+count if mcaid_final==0
+local a `r(N)'
+count if mcaid_final==1
+local b `r(N)'
+graph bar (mean) unatt, over(mcaid_final) blabel(bar) title("Unattributed Nights vs Medicaid flag (from claims)" "(N =`N')") blabel(bar) ytitle("Mean of Unattributed Nights") ///
+note("`a' No Medicaid" "`b' Yes Medicaid")
 graph save "E:\data\burden_dementia\logs\unatt_medicaid", replace
 graph export "E:\data\burden_dementia\logs\unatt_medicaid.pdf", replace
 
@@ -3913,17 +3930,54 @@ graph export "E:\data\burden_dementia\logs\unatt_sr_medicaid.pdf", replace
 
 count if !missing(unatt) & !missing(ltc_ins_x)
 local N `r(N)' 
-graph bar (mean) unatt, over(ltc_ins_x) blabel(bar) title("Unattributed Nights vs LTC Ins. flag" "(N =`N')") blabel(bar) ytitle("Mean of Unattributed Nights")
+count if ltc_ins_x==0
+local a `r(N)'
+count if ltc_ins_x==1
+local b `r(N)'
+graph bar (mean) unatt, over(ltc_ins_x) blabel(bar) title("Unattributed Nights vs LTC Ins. flag" "(N =`N')") blabel(bar) ytitle("Mean of Unattributed Nights") ///
+note("`a' No LTC Insurance" "`b' Yes LTC Insurance")
 graph save "E:\data\burden_dementia\logs\unatt_ltc", replace
 graph export "E:\data\burden_dementia\logs\unatt_ltc.pdf", replace
 
 count if !missing(unatt) & !missing(nh_oop_f)
 local N `r(N)'
-graph bar (mean) unatt, over(nh_oop_f) blabel(bar) title("Unattributed Nights vs NH OOP flag" "(N =`N')") blabel(bar) ytitle("Mean of Unattributed Nights")
+count if nh_oop_f==0
+local a `r(N)'
+count if nh_oop_f==1
+local b `r(N)'
+graph bar (mean) unatt, over(nh_oop_f) blabel(bar) title("Unattributed Nights vs NH OOP flag" "(N =`N')") blabel(bar) ytitle("Mean of Unattributed Nights") ///
+note("`a' No NH OOP" "`b' Yes NH OOP")
 graph save "E:\data\burden_dementia\logs\unatt_nh_oop", replace
 graph export "E:\data\burden_dementia\logs\unatt_nh_oop.pdf", replace
 
+gen unatt_b=0 if unatt==0
+replace unatt_b=-1 if unatt<0
+replace unatt_b=1 if unatt>0
+label def unatt_b -1 "<0 Unattributed" 0 "=0 Unattributed" 1 ">0 Unattributed"
+la val unatt_b unatt_b
 
+label var nh_nights_f "SR NH Nights Flag"
+count if !missing(unatt) & !missing(nh_oop_f)
+local N `r(N)'
+catplot nh_nights_f, over(unatt_b) blabel(bar) title("Unattributed Nights vs NH Nights" "(N =`N')") percent 
+graph save "E:\data\burden_dementia\logs\unatt_nh", replace
+graph export "E:\data\burden_dementia\logs\unatt_nh.pdf", replace
+
+
+catplot nh_nights_f , over(mm_days_f) over(unatt_b) recast(bar) percent
+tab nh_nights_f mm_days_f if unatt==0
+tab nh_nights_f mm_days_f if unatt>0
+tab nh_nights_f mm_days_f if unatt<0
+
+gen cat=0 if nh_nights_f==0 & unatt_b==-1
+replace cat=1 if nh_nights_f==0 & unatt_b==0
+replace cat=2 if nh_nights_f==0 & unatt_b==1
+replace cat=3 if nh_nights_f==1 & unatt_b==-1
+replace cat=4 if nh_nights_f==1 & unatt_b==0
+replace cat=5 if nh_nights_f==1 & unatt_b==1
+
+graph bar, over(cat)
+graph bar unatt, over(cat) 
 
 /*
 saveold "E:\data\test\samp.dta", version(12) replace

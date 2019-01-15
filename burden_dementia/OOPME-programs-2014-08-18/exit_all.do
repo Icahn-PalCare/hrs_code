@@ -137,6 +137,20 @@ save $savedir/exit2014_all.dta, replace
 
 ********************************************************************************
 
+use $savedir/exit2016_oop.dta, clear
+
+foreach v of varlist MC_HMO long_term_care hospital_OOP NH_OOP hospice_OOP doctor_OOP patient_OOP dental_OOP RX_OOP home_OOP special_OOP other_OOP home_modif_OOP {
+	replace `v' = `v' * cpiBASE / cpi2016
+}
+
+keep HHID PN year months MC_HMO long_term_care hospital_OOP NH_OOP hospice_OOP doctor_OOP patient_OOP dental_OOP RX_OOP home_OOP special_OOP other_OOP home_modif_OOP
+
+save $savedir/exit2016_all.dta, replace
+
+
+
+********************************************************************************
+
 use $savedir/exit1995_all.dta, clear
 append using $savedir/exit1996_all.dta
 append using $savedir/exit1998_all.dta
@@ -148,6 +162,7 @@ append using $savedir/exit2008_all.dta
 append using $savedir/exit2010_all.dta
 append using $savedir/exit2012_all.dta
 append using $savedir/exit2014_all.dta
+append using $savedir/exit2016_all.dta
 
 egen x = rowtotal( hospital_OOP NH_OOP ),m
 replace hospital_NH_OOP = x if missing(hospital_NH_OOP)
@@ -217,6 +232,7 @@ rm $savedir/exit2008_all.dta
 rm $savedir/exit2010_all.dta
 rm $savedir/exit2012_all.dta
 rm $savedir/exit2014_all.dta
+rm $savedir/exit2016_all.dta
 
 ********************************************************************************
 
@@ -227,6 +243,7 @@ append using $savedir/exit2004_oop.dta ///
 				$savedir/exit2010_oop.dta ///
 				$savedir/exit2012_oop.dta ///
 				$savedir/exit2014_oop.dta ///
+				$savedir/exit2016_oop.dta ///
 	, keep(HHID PN year private_medigap_?)
 
 reshape long private_medigap@, i(HHID PN year) j(PLAN "_1" "_2" "_3")
@@ -234,6 +251,7 @@ reshape long private_medigap@, i(HHID PN year) j(PLAN "_1" "_2" "_3")
 drop if private_medigap==.
 
 gen cpi = .
+replace cpi = cpiBASE / cpi2016 if year==2016
 replace cpi = cpiBASE / cpi2014 if year==2014
 replace cpi = cpiBASE / cpi2012 if year==2012
 replace cpi = cpiBASE / cpi2010 if year==2010

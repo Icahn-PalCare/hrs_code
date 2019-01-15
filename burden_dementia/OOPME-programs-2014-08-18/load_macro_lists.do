@@ -7,7 +7,7 @@
 ** Used thoughout various .do files
 global data_types 			core exit
 global core_year_list		1992	1993	1994	1995	1996	1998	2000	2002	2004	2006	2008	2010	2012 	2014
-global exit_year_list		1995	1996	1998	2000	2002	2004	2006	2008	2010	2012	2014
+global exit_year_list		1995	1996	1998	2000	2002	2004	2006	2008	2010	2012	2014	2016
 
 ********************************************************************************
 ** load_data 
@@ -24,25 +24,25 @@ global core_merge11_4_list	.na		.na		.na		.na		.na		.na		.na		.na		.na		.na		.na
 global core_merge11_5_list	.na		.na		.na		.na		.na		.na		.na		.na		.na		.na		.na		.na		.na		.na
        
 ** Loading Exit Data
-*global exit_year_list		1995	1996	1998	2000	2002	2004	2006	2008	2010	2012	2014
-global exit_wave_num_list	2		3		4		5		6		7		8		9		10		11		12	//2012 should be updated to 11 when ready
-global exit_wave_let_list	N		P		Q		R		S		T		U		V		W		X		Y
-global exit_hh_file_list 	x95A_R	x96A_R	x98A_R	x00A_R	x02A_R	x04A_R	X06A_R	X08A_R	X10A_R	X12A_R 	X14A_R
-global exit_merge1m_list	.na		.na		.na		.na		.na		.na		.na		.na		.na		.na		.na
-global exit_merge11_1_list	x95CS_R	x96CS_R	x98CS_R	x00CS_R	x02B_R	x04B_R	X06B_R	X08B_R	X10B_R	X12B_R	X14B_R //1:1 on PN
-global exit_merge11_2_list	x95D_R	x96D_R	x98D_R	x00E_R	x02N_R	x04N_R	X06N_R	X08N_R	X10N_R	X12N_R	X14N_R
-global exit_merge11_3_list	x95E_R	x96E_R	x98E_R	x00N_R	x02T_R	x04T_R	X06T_R	X08T_R	X10T_R	X12T_R	X14T_R
-global exit_merge11_4_list	x95N_R	x96N_R	x98N_R	x00R_R	.na		.na		.na		.na		.na		.na		.na
-global exit_merge11_5_list	x95R_R	x96R_R	x98R_R	x00S_R	.na		.na		.na		.na		.na		.na		.na
+*global exit_year_list		1995	1996	1998	2000	2002	2004	2006	2008	2010	2012	2014 	2016
+global exit_wave_num_list	2		3		4		5		6		7		8		9		10		11		12		13	
+global exit_wave_let_list	N		P		Q		R		S		T		U		V		W		X		Y		Z
+global exit_hh_file_list 	x95A_R	x96A_R	x98A_R	x00A_R	x02A_R	x04A_R	X06A_R	X08A_R	X10A_R	X12A_R 	X14A_R 	X16A_R
+global exit_merge1m_list	.na		.na		.na		.na		.na		.na		.na		.na		.na		.na		.na		.na
+global exit_merge11_1_list	x95CS_R	x96CS_R	x98CS_R	x00CS_R	x02B_R	x04B_R	X06B_R	X08B_R	X10B_R	X12B_R	X14B_R 	X16B_R //1:1 on PN
+global exit_merge11_2_list	x95D_R	x96D_R	x98D_R	x00E_R	x02N_R	x04N_R	X06N_R	X08N_R	X10N_R	X12N_R	X14N_R	X16N_R
+global exit_merge11_3_list	x95E_R	x96E_R	x98E_R	x00N_R	x02T_R	x04T_R	X06T_R	X08T_R	X10T_R	X12T_R	X14T_R	X16T_R
+global exit_merge11_4_list	x95N_R	x96N_R	x98N_R	x00R_R	.na		.na		.na		.na		.na		.na		.na		.na
+global exit_merge11_5_list	x95R_R	x96R_R	x98R_R	x00S_R	.na		.na		.na		.na		.na		.na		.na		.na
 
 
 ********************************************************************************
 ** add_months
 global ex_prior_wave_list	C		B		A		//needs to be in reverse order		
 
-*global exit_year_list		1995	1996	1998	2000	2002	2004	2006	2008	2010	2012	2014
-global ex_co_wave_let_list	D		E		F		G		H		J		K		L		M		N		O
-global death_mo_list		N223	P223	Q488	R520	SA121	TA121	UA121	VA121	WA121	XA121	YA121
-global death_yr_list		N225	P225	Q490	R522	SA123	TA123	UA123	VA123	WA123	XA123	YA123
+*global exit_year_list		1995	1996	1998	2000	2002	2004	2006	2008	2010	2012	2014	2016
+global ex_co_wave_let_list	D		E		F		G		H		J		K		L		M		N		O		P
+global death_mo_list		N223	P223	Q488	R520	SA121	TA121	UA121	VA121	WA121	XA121	YA121	ZA121
+global death_yr_list		N225	P225	Q490	R522	SA123	TA123	UA123	VA123	WA123	XA123	YA123	ZA123
 
 

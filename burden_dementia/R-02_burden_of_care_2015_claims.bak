@@ -463,14 +463,14 @@ H="MC Spending"
 *get claims that overlap with date of death;
 
 data &source._meet_admit;
-set proj_int.&source._meet_84m;
+set proj_int.&source._meet_60m;
 if index_date=admit_date and admit_date~=disch_date;
 admit_on_index_date=1;
 run;
 
 
 data &source._meet_both;
-set proj_int.&source._meet_84m;
+set proj_int.&source._meet_60m;
 if index_date=disch_date and admit_date=disch_date;
 admit_on_index_date=1;
 disch_on_index_date=1;
@@ -481,311 +481,6 @@ run;
 
 data &source._cost;
 set &source._meet_admit &source._meet_both;
-array list pmt_amt passthru;
-do over list;
-if list=. then list=0;
-end;
-
-use "E:\data\burden_dementia\int_data\medicaid_cost_hh_snf.dta", clear
-
-*drop if index_year>2012 | index_year<=2005
-
-/* inflation adjustment */
-
-gen rate = .
-
-
-
-replace rate=1 if year==2014
-replace rate=1.01622 if year==2013
-replace rate=1.03111 if year==2012
-replace rate=1.05245 if year==2011
-replace rate=1.08567 if year==2010
-replace rate=1.10347 if year==2009
-replace rate=1.09955 if year==2008
-replace rate=1.14177 if year==2007
-replace rate=1.17429 if year==2006
-replace rate=1.21217 if year==2005
-replace rate=1.25323 if year==2004
-replace rate=1.28661 if year==2003
-replace rate=1.31593 if year==2002
-replace rate=1.33674 if year==2001
-replace rate=1.37477 if year==2000
-replace rate=1.42098 if year==1999
-replace rate=1.45237 if year==1998
-
-/*put into 2015 dollars*/
-replace rate=(1.01382/1.03026)*rate
-
-gen cost = 0
-replace cost = 1 if (_name_=="hh_cost_maid" | _name_=="nf_cost_maid" | _name_=="tot_paid_maid")
-
-forvalues p = 1/12 {
-
-replace _`p' = _`p'*rate if cost==1
-}
-
-
-/*Flag year markers, n1=[0,-12], n2=[-12,-24], n3=[-24,-36], etc. */
-
-gen n1_flag = 0
-replace n1_flag = 1 if (index_year==year) | (year==index_year-1)
-
-gen n2_flag = 0
-replace n2_flag = 1 if (year==index_year-1) | (year==index_year-2)
-
-gen n3_flag = 0
-replace n3_flag = 1 if (year==index_year-2) | (year==index_year-3)
-
-gen n4_flag = 0
-replace n4_flag = 1 if (year==index_year-3) | (year==index_year-4)
-
-gen n5_flag = 0
-replace n5_flag = 1 if (year==index_year-4) | (year==index_year-5)
-
-gen index_day = day(index_date)
-
-
-
-save "E:\data\burden_dementia\int_data\medicaid_cost_inflation.dta", replace
-
-cd "E:\data\burden_dementia\int_data"
-
-levelsof _name_, local(namevars)
-return list
-
-foreach x of local namevars {
-use "E:\data\burden_dementia\int_data\medicaid_cost_inflation.dta", clear
-keep if _name_=="`x'"
-
-
-
-forvalues t=1/12 {
-preserve
-keep if index_month==`t'
-
-forvalues i=1/5 {
-
-gen sum_n`i'_cyr= 0 if n`i'_flag==1 /*sum months before index month in current year*/
-
-local j = index_month
-local k = 1
-
-
-	while `k' <= `j' { // while current month less than or equal index, add to past value
-		while `k' < `j' {
-			replace sum_n`i'_cyr = sum_n`i'_cyr + _`k' if sum_n`i'_cyr!=.
-			local ++k
-		}
-	    replace sum_n`i'_cyr = sum_n`i'_cyr + (_`k')*(index_day/30.4) if sum_n`i'_cyr!=. // if current month = index, then prorate it
-		local ++k
-}
-
-gen sum_n`i'_b4yr = 0 if n`i'_flag==1
-
-local r = index_month
-local s = 12
-	while `s' >=`r' { // count backwards to get months before index in previous year
-		while `s' > `r' {
-		replace sum_n`i'_b4yr = sum_n`i'_b4yr + _`s' if sum_n`i'_b4yr!=.
-		local --s
-	}
-	
-	replace sum_n`i'_b4yr = sum_n`i'_b4yr + (_`s')*(1-(index_day/30.4)) if sum_n`i'_b4yr!=.
-	local --s
-	}
-	
-
-
-}
-keep if n1_flag | n2_flag | n3_flag | n4_flag | n5_flag
-
-
-gsort +id +year
-
-
-forvalues i=1/5 {
-
-gen tot_`x'_n`i' = sum_n`i'_cyr + sum_n`i'_b4yr[_n-1]
-}
-
-*keep id index_date bid_hrs_23 index_year year n*_flag tot_`x'_n* 
-sort id year
-by id: carryforward tot_*, replace
-by id: keep if _n==_N
-keep id index_date bid_hrs_23 tot_`x'_n* 
-save mc_`x'_`t'.dta, replace
-
-restore
-
-}
-
-}
-
-foreach x of local namevars {
-
-	use mc_`x'_1.dta, clear
-	
-	forvalues i = 2/12 {
-		
-		append using mc_`x'_`i'.dta
-		save tot_`x'.dta, replace
-		}
-		}
-
-foreach x of local namevars {
-
-use tot_paid_maid.dta, clear
-cap drop _m 
-merge 1:1 id using "E:\data\burden_dementia\int_data\tot_`x'.dta", keepus(tot_`x'_n1 tot_`x'_n2 tot_`x'_n3 tot_`x'_n4 tot_`x'_n5)
-save tot_paid_maid.dta, replace
-}
-
-
-label var tot_paid_maid_n1 "Total Medicaid Spending N1"
-label var tot_paid_maid_n2 "Total Medicaid Spending N2"
-label var tot_paid_maid_n3 "Total Medicaid Spending N3"
-label var tot_paid_maid_n4 "Total Medicaid Spending N4"
-label var tot_paid_maid_n5 "Total Medicaid Spending N5"
-label var tot_hh_cost_maid_n1 "Total HH (FFS) Medicaid Spending N1"
-label var tot_hh_cost_maid_n2 "Total HH (FFS) Medicaid Spending N2"
-label var tot_hh_cost_maid_n3 "Total HH (FFS) Medicaid Spending N3"
-label var tot_hh_cost_maid_n4 "Total HH (FFS) Medicaid Spending N4"
-label var tot_hh_cost_maid_n5 "Total HH (FFS) Medicaid Spending N5"
-
-label var tot_hh_days_maid_n1 "Total HH Medicaid Days N1"
-label var tot_hh_days_maid_n2 "Total HH Medicaid Days N2"
-label var tot_hh_days_maid_n3 "Total HH Medicaid Days N3"
-label var tot_hh_days_maid_n4 "Total HH Medicaid Days N4"
-label var tot_hh_days_maid_n5 "Total HH Medicaid Days N5"
-
-label var tot_hh_ffs_days_maid_n1 "Total HH (FFS) Medicaid Days N1"
-label var tot_hh_ffs_days_maid_n2 "Total HH (FFS) Medicaid Days N2"
-label var tot_hh_ffs_days_maid_n3 "Total HH (FFS) Medicaid Days N3"
-label var tot_hh_ffs_days_maid_n4 "Total HH (FFS) Medicaid Days N4"
-label var tot_hh_ffs_days_maid_n5 "Total HH (FFS) Medicaid Days N5"
-
-label var tot_nf_cost_maid_n1 "Total SNF (FFS) Medicaid Spending N1"
-label var tot_nf_cost_maid_n2 "Total SNF (FFS) Medicaid Spending N2"
-label var tot_nf_cost_maid_n3 "Total SNF (FFS) Medicaid Spending N3"
-label var tot_nf_cost_maid_n4 "Total SNF (FFS) Medicaid Spending N4"
-label var tot_nf_cost_maid_n5 "Total SNF (FFS) Medicaid Spending N5"
-
-label var tot_nf_days_maid_n1 "Total SNF Medicaid Days N1"
-label var tot_nf_days_maid_n2 "Total SNF Medicaid Days N2"
-label var tot_nf_days_maid_n3 "Total SNF Medicaid Days N3"
-label var tot_nf_days_maid_n4 "Total SNF Medicaid Days N4"
-label var tot_nf_days_maid_n5 "Total SNF Medicaid Days N5"
-
-label var tot_nf_ffs_days_maid_n1 "Total SNF (FFS) Medicaid Days N1"
-label var tot_nf_ffs_days_maid_n2 "Total SNF (FFS) Medicaid Days N2"
-label var tot_nf_ffs_days_maid_n3 "Total SNF (FFS) Medicaid Days N3"
-label var tot_nf_ffs_days_maid_n4 "Total SNF (FFS) Medicaid Days N4"
-label var tot_nf_ffs_days_maid_n5 "Total SNF (FFS) Medicaid Days N5"
-
-cd "E:\projects\burden_dementia\archive logs"
-
-forvalues i = 1/5 {
-
-qui twoway scatter tot_nf_cost_maid_n`i' tot_nf_ffs_days_maid_n`i'
-graph export SNF_n`i'.pdf, as(pdf) replace 
-
-qui twoway scatter tot_hh_cost_maid_n`i' tot_hh_ffs_days_maid_n`i'
-graph export HH_n`i'.pdf, as(pdf) replace
-}
-
-
-*preserve
-*keep if year(index_date)>=2005 & year(index_date)<=2012
-
-local cost tot_paid_maid_n1 tot_paid_maid_n2 tot_paid_maid_n3 tot_paid_maid_n4 tot_paid_maid_n5 tot_hh_cost_maid_n1 tot_hh_cost_maid_n2 tot_hh_cost_maid_n3 tot_hh_cost_maid_n4 tot_hh_cost_maid_n5 tot_nf_cost_maid_n1 tot_nf_cost_maid_n2 tot_nf_cost_maid_n3 tot_nf_cost_maid_n4 tot_nf_cost_maid_n5
-local days tot_hh_days_maid_n1 tot_hh_days_maid_n2 tot_hh_days_maid_n3 tot_hh_days_maid_n4 tot_hh_days_maid_n5 tot_nf_days_maid_n1 tot_nf_days_maid_n2 tot_nf_days_maid_n3 tot_nf_days_maid_n4 tot_nf_days_maid_n5 tot_hh_ffs_days_maid_n1 tot_hh_ffs_days_maid_n2 tot_hh_ffs_days_maid_n3 tot_hh_ffs_days_maid_n4 tot_hh_ffs_days_maid_n5 tot_nf_ffs_days_maid_n1 tot_nf_ffs_days_maid_n2 tot_nf_ffs_days_maid_n3 tot_nf_ffs_days_maid_n4 tot_nf_ffs_days_maid_n5
-local full `cost' `days'
-
-local rd: word count `full' 1
-
-di `rd'
-
-mat tab1= J(`rd',9,.)
-local r = 1
-
-foreach x of local full {
-
-sum `x'
-mat tab1[`r',1] = r(mean)
-sum `x' if `x'>0, d
-mat tab1[`r',2]= r(mean)
-mat tab1[`r',3] = r(min)
-mat tab1[`r',4]= r(p25)
-mat tab1[`r',5] = r(p50)
-mat tab1[`r',6]= r(p75)
-mat tab1[`r',7] = r(p99)
-mat tab1[`r',8] = r(max)
-
-cap drop zero
-gen zero = .
-replace zero = 1 if `x'==0
-sum zero, d
-mat tab1[`r',9]= r(N)
-local ++r
-
-}
-
-sum `x'
-mat tab1[`r',9] = 1422
-mat list tab1
-
-mat rownames tab1 = `full' N
-
-
-frmttable using "E:\projects\burden_dementia\archive logs\MAX_summary.doc", replace statmat(tab1) landscape a4 ///
-varlabels title("MAX Summary Statistics For R01 Sample (includes all deceased, regardless of age or dementia)") ctitles("Variables" "Ave." "Ave (non-zero)" "Minimum" "25th percentile" "Median" "75th percentile" "99th percentile" "Maximum" "# of zero's") sdec(2) ///
-note("Costs have been pro-rated and inflation adjusted to 2012 dollars. The Percentiles exclude zeros")
-
-
-
-/*
-frmttable using "E:\projects\burden_dementia\archive logs\MAX_summary_0512.doc", replace statmat(tab1) landscape a4 ///
-varlabels title("MAX Summary Statistics For R01 Sample (includes all deceased who died between 2005-2012, regardless of age or dementia)") ctitles("Variables" "Ave." "Ave (non-zero)" "Minimum" "25th percentile" "Median" "75th percentile" "99th percentile" "Maximum" "# of zero's") sdec(2) ///
-note("Costs have been pro-rated and inflation adjusted to 2012 dollars. The Percentiles exclude zeros")
-
-*/
-
-
-
-&source._paid_by_mc=rate*(pmt_amt+passthru);
-&source._paid_by_mc_index_dt=(1/(disch_date-admit_date+1))*&source._paid_by_mc;
-run;
-
-proc sql;
-create table &source._pay as select distinct bid_hrs_22,index_date,
-sum(&source._paid_by_mc_index_dt) as &source._paid_by_mc_index_dt,
-sum(admit_on_index_date) as &source._admit_dod, sum(disch_on_index_date) as &source._disch_dod
-from &source._cost group by bid_hrs_22,index_date;
-quit;
-
-
-proc sort data=&source._pay;
-by bid_hrs_22 index_date;
-run;
-
-%mend;
-%mp_index_dt(source=ip);
-%mp_index_dt(source=snf);
-
-
-%macro claims_index_dt(source=);
-*get claims that start with date of death;
-
-data &source._meet_admit;
-set proj_int.&source._meet_84m;
-if index_date=admit_date; 
-run;
-
-
-
-data &source._cost;
-set &source._meet_admit;
 array list pmt_amt passthru;
 do over list;
 if list=. then list=0;
@@ -811,8 +506,62 @@ if year(admit_date)=2000 then rate=1.39377;
 if year(admit_date)=1999 then rate=1.44062;
 if year(admit_date)=1998 then rate=1.47244;
 
-/*switch to 2015 since that's the last year we have*/
-rate=rate/1.01262;
+
+&source._paid_by_mc=rate*(pmt_amt+passthru);
+&source._paid_by_mc_index_dt=(1/(disch_date-admit_date+1))*&source._paid_by_mc;
+run;
+
+proc sql;
+create table &source._pay as select distinct bid_hrs_21,index_date,
+sum(&source._paid_by_mc_index_dt) as &source._paid_by_mc_index_dt,
+sum(admit_on_index_date) as &source._admit_dod, sum(disch_on_index_date) as &source._disch_dod
+from &source._cost group by bid_hrs_21,index_date;
+quit;
+
+
+proc sort data=&source._pay;
+by bid_hrs_21 index_date;
+run;
+
+%mend;
+%mp_index_dt(source=ip);
+%mp_index_dt(source=snf);
+
+
+%macro claims_index_dt(source=);
+*get claims that start with date of death;
+
+data &source._meet_admit;
+set proj_int.&source._meet_60m;
+if index_date=admit_date; 
+run;
+
+
+
+data &source._cost;
+set &source._meet_admit;
+array list pmt_amt passthru;
+do over list;
+if list=. then list=0;
+end;
+
+if year(admit_date)=2014 then rate=1;
+if year(admit_date)=2013 then rate=1.01622;
+if year(admit_date)=2012 then rate=1.03111;
+if year(admit_date)=2011 then rate=1.05245;
+if year(admit_date)=2010 then rate=1.08567;
+if year(admit_date)=2009 then rate=1.10347;
+if year(admit_date)=2008 then rate=1.09955;
+if year(admit_date)=2007 then rate=1.14177;
+if year(admit_date)=2006 then rate=1.17429;
+if year(admit_date)=2005 then rate=1.21217;
+if year(admit_date)=2004 then rate=1.25323;
+if year(admit_date)=2003 then rate=1.28661;
+if year(admit_date)=2002 then rate=1.31593;
+if year(admit_date)=2001 then rate=1.33674;
+if year(admit_date)=2000 then rate=1.37477;
+if year(admit_date)=1999 then rate=1.42098;
+if year(admit_date)=1998 then rate=1.45237
 
 
 
@@ -820,13 +569,13 @@ rate=rate/1.01262;
 run;
 
 proc sql;
-create table &source._pay as select distinct bid_hrs_22,index_date,
+create table &source._pay as select distinct bid_hrs_21,index_date,
 sum(&source._paid_by_mc_index_dt) as &source._paid_by_mc_index_dt
-from &source._cost group by bid_hrs_22,index_date;
+from &source._cost group by bid_hrs_21,index_date;
 quit;
 
 proc sort data=&source._pay;
-by bid_hrs_22 index_date;
+by bid_hrs_21 index_date;
 run;
 
 %mend;
@@ -840,8 +589,8 @@ run;
 
 data mc_costs_doda;
 merge ip_pay snf_pay op_pay pb_pay hh_pay hs_pay dm_pay ;
-bid_hrs_22=bid_hrs_22;
-by bid_hrs_22 index_date;
+bid_hrs_21=bid_hrs_21;
+by bid_hrs_21 index_date;
 run;
 
 
@@ -856,7 +605,7 @@ run;
 
 *first get claims lists for the specific claims type, snf or ip;
 data &source._meet;
-set proj_int.&source._meet_84m;
+set proj_int.&source._meet_60m;
 win_start_dt=index_date-&days_bef_index;
 win_stop_dt=index_date-&days_start;
 format admit_date disch_date win_start_dt win_stop_dt date9.;
@@ -938,28 +687,23 @@ do over list;
 if list=. then list=0;
 end;
 
-if year(admit_date)=2016 then rate=1;
-if year(admit_date)=2015 then rate=1.01262;
-if year(admit_date)=2014 then rate=1.01382;
-if year(admit_date)=2013 then rate=1.03026;
-if year(admit_date)=2012 then rate=1.04535;
-if year(admit_date)=2011 then rate=1.06699;
-if year(admit_date)=2010 then rate=1.10067;
-if year(admit_date)=2009 then rate=1.11872;
-if year(admit_date)=2008 then rate=1.11474;
-if year(admit_date)=2007 then rate=1.15754;
-if year(admit_date)=2006 then rate=1.19051;
-if year(admit_date)=2005 then rate=1.22891;
-if year(admit_date)=2004 then rate=1.27055;
-if year(admit_date)=2003 then rate=1.30439;
-if year(admit_date)=2002 then rate=1.33411;
-if year(admit_date)=2001 then rate=1.35521;
-if year(admit_date)=2000 then rate=1.39377;
-if year(admit_date)=1999 then rate=1.44062;
-if year(admit_date)=1998 then rate=1.47244;
-
-/*switch to 2015 since that's the last year we have*/
-rate=rate/1.01262;
+if year(admit_date)=2014 then rate=1;
+if year(admit_date)=2013 then rate=1.01622;
+if year(admit_date)=2012 then rate=1.03111;
+if year(admit_date)=2011 then rate=1.05245;
+if year(admit_date)=2010 then rate=1.08567;
+if year(admit_date)=2009 then rate=1.10347;
+if year(admit_date)=2008 then rate=1.09955;
+if year(admit_date)=2007 then rate=1.14177;
+if year(admit_date)=2006 then rate=1.17429;
+if year(admit_date)=2005 then rate=1.21217;
+if year(admit_date)=2004 then rate=1.25323;
+if year(admit_date)=2003 then rate=1.28661;
+if year(admit_date)=2002 then rate=1.31593;
+if year(admit_date)=2001 then rate=1.33674;
+if year(admit_date)=2000 then rate=1.37477;
+if year(admit_date)=1999 then rate=1.42098;
+if year(admit_date)=1998 then rate=1.45237
 
 
 &source._paid_by_mc=rate*(pmt_amt+passthru);
@@ -967,22 +711,22 @@ run;
 
 *calculates total of mc charges for the claim type by hrs bid;
 proc sql;
-create table &source._pay as select distinct bid_hrs_22,index_date,
+create table &source._pay as select distinct bid_hrs_21,index_date,
 sum(&source._paid_by_mc) as &source._paid_by_mc 
-from &source._cost group by bid_hrs_22,index_date;
+from &source._cost group by bid_hrs_21,index_date;
 quit;
 
 /*merge into a full bid list of those s's with ffs mc 6m or more*/
 proc sql;
 create table &source._&name. as select 
-a.bid_hrs_22,a.index_date,coalesce(b.&source._paid_by_mc,0) as &source._paid_by_mc_&name.
+a.bid_hrs_21,a.index_date,coalesce(b.&source._paid_by_mc,0) as &source._paid_by_mc_&name.
 from proj_int.index a
 left join
  &source._pay b
- on trim(left(a.bid_hrs_22))=trim(left(b.bid_hrs_22)) and a.index_date=b.index_date;
+ on trim(left(a.bid_hrs_21))=trim(left(b.bid_hrs_21)) and a.index_date=b.index_date;
  quit;
 
-proc sort data=&source._&name.; by bid_hrs_22 index_date; run;
+proc sort data=&source._&name.; by bid_hrs_21 index_date; run;
 
 %mend;
 
@@ -992,7 +736,7 @@ proc sort data=&source._&name.; by bid_hrs_22 index_date; run;
 
 *first get claims lists for the specific claims type, not snf or ip;
 data &source._meet;
-set proj_int.&source._meet_84m;
+set proj_int.&source._meet_60m;
 win_start_dt=index_date-&days_bef_index;
 win_stop_dt=index_date-&days_start;
 format admit_date disch_date win_start_dt win_stop_dt date9.;
@@ -1035,9 +779,6 @@ if year(admit_date)=2000 then rate=1.39377;
 if year(admit_date)=1999 then rate=1.44062;
 if year(admit_date)=1998 then rate=1.47244;
 
-/*switch to 2015 since that's the last year we have*/
-rate=rate/1.01262;
-
 
 
 &source._paid_by_mc=rate*(pmt_amt);
@@ -1045,22 +786,22 @@ run;
 
 *calculates total of mc charges for the claim type by hrs bid;
 proc sql;
-create table &source._pay as select distinct bid_hrs_22,index_date,
+create table &source._pay as select distinct bid_hrs_21,index_date,
 sum(&source._paid_by_mc) as &source._paid_by_mc 
-from &source._cost group by bid_hrs_22,index_date;
+from &source._cost group by bid_hrs_21,index_date;
 quit;
 
 /*merge into a full bid list of those s's with ffs at death*/
 proc sql;
 create table &source._&name. as select 
-a.bid_hrs_22,a.index_date,coalesce(b.&source._paid_by_mc,0) as &source._paid_by_mc_&name.
+a.bid_hrs_21,a.index_date,coalesce(b.&source._paid_by_mc,0) as &source._paid_by_mc_&name.
 from proj_int.index a
 left join
  &source._pay b
- on trim(left(a.bid_hrs_22))=trim(left(b.bid_hrs_22)) and a.index_date=b.index_date;
+ on trim(left(a.bid_hrs_21))=trim(left(b.bid_hrs_21)) and a.index_date=b.index_date;
  quit;
 
-proc sort data=&source._&name.; by bid_hrs_22 index_date; run;
+proc sort data=&source._&name.; by bid_hrs_21 index_date; run;
 
 %mend;
 
@@ -1074,7 +815,7 @@ proc sort data=&source._&name.; by bid_hrs_22 index_date; run;
 
 *first get claims lists for the specific claims type, snf or ip;
 data &source._meet;
-set proj_int.&source._meet_p84m;
+set proj_int.&source._meet_p60m;
 win_end_dt=index_date+&days_aft_index;
 win_start_dt=index_date+&days_start;
 format admit_date disch_date win_end_dt win_start_dt date9.;
@@ -1172,30 +913,27 @@ if year(admit_date)=2000 then rate=1.39377;
 if year(admit_date)=1999 then rate=1.44062;
 if year(admit_date)=1998 then rate=1.47244;
 
-/*switch to 2015 since that's the last year we have*/
-rate=rate/1.01262;
-
 &source._paid_by_mc=rate*(pmt_amt+passthru);
 run;
 
 *calculates total of mc charges for the claim type by hrs bid;
 proc sql;
-create table &source._pay as select distinct bid_hrs_22,index_date,
+create table &source._pay as select distinct bid_hrs_21,index_date,
 sum(&source._paid_by_mc) as &source._paid_by_mc 
-from &source._cost group by bid_hrs_22,index_date;
+from &source._cost group by bid_hrs_21,index_date;
 quit;
 
 /*merge into a full bid list of those s's with ffs mc at death*/
 proc sql;
 create table &source._&name. as select 
-a.bid_hrs_22,a.index_date,coalesce(b.&source._paid_by_mc,0) as &source._paid_by_mc_&name.
+a.bid_hrs_21,a.index_date,coalesce(b.&source._paid_by_mc,0) as &source._paid_by_mc_&name.
 from proj_int.index a
 left join
  &source._pay b
- on trim(left(a.bid_hrs_22))=trim(left(b.bid_hrs_22)) and a.index_date=b.index_date;
+ on trim(left(a.bid_hrs_21))=trim(left(b.bid_hrs_21)) and a.index_date=b.index_date;
  quit;
 
-proc sort data=&source._&name.; by bid_hrs_22 index_date; run;
+proc sort data=&source._&name.; by bid_hrs_21 index_date; run;
 
 %mend;
 
@@ -1209,7 +947,7 @@ proc sort data=&source._&name.; by bid_hrs_22 index_date; run;
 
 *first get claims lists for the specific claims type, snf or ip;
 data &source._meet;
-set proj_int.&source._meet_p84m;
+set proj_int.&source._meet_p60m;
 win_end_dt=index_date+&days_aft_index;
 win_start_dt=index_date+&days_start;
 format admit_date disch_date win_end_dt win_start_dt date9.;
@@ -1250,36 +988,33 @@ if year(admit_date)=2000 then rate=1.39377;
 if year(admit_date)=1999 then rate=1.44062;
 if year(admit_date)=1998 then rate=1.47244;
 
-/*switch to 2015 since that's the last year we have*/
-rate=rate/1.01262;
-
 &source._paid_by_mc=rate*(pmt_amt);
 run;
 
 *calculates total of mc charges for the claim type by hrs bid;
 proc sql;
-create table &source._pay as select distinct bid_hrs_22,index_date,
+create table &source._pay as select distinct bid_hrs_21,index_date,
 sum(&source._paid_by_mc) as &source._paid_by_mc 
-from &source._cost group by bid_hrs_22,index_date;
+from &source._cost group by bid_hrs_21,index_date;
 quit;
 
 /*merge into a full bid list of those s's with ffs mc at death*/
 proc sql;
 create table &source._&name. as select 
-a.bid_hrs_22,a.index_date,coalesce(b.&source._paid_by_mc,0) as &source._paid_by_mc_&name.
+a.bid_hrs_21,a.index_date,coalesce(b.&source._paid_by_mc,0) as &source._paid_by_mc_&name.
 from proj_int.index a
 left join
  &source._pay b
- on trim(left(a.bid_hrs_22))=trim(left(b.bid_hrs_22)) and a.index_date=b.index_date;
+ on trim(left(a.bid_hrs_21))=trim(left(b.bid_hrs_21)) and a.index_date=b.index_date;
  quit;
 
-proc sort data=&source._&name.; by bid_hrs_22 index_date; run;
+proc sort data=&source._&name.; by bid_hrs_21 index_date; run;
 
 %mend;
 
 %macro days_nesting();
 
-%do i=1 %to 7 ;
+%do i=1 %to 5 ;
 
 
 %mp_claims(days_start=floor((&i.-1)*365),days_bef_index=floor(&i.*365), source=snf,  name=%eval(12*&i.)m);
@@ -1312,7 +1047,7 @@ data &source._&time._12m;
 set &source._&p.12m;
 run;
 
-%do i=24 %to 84 %by 12;
+%do i=24 %to 60 %by 12;
 %let l = %eval(&i.-12) ;
 
 data &source._&time._&i.m;
@@ -1321,11 +1056,11 @@ run;
 %end;
 
 data &source._&time.;
-set &source._&time._84m;
+set &source._&time._60m;
 run;
 
 proc sort data=&source._&time.;
-by bid_hrs_22 index_date;
+by bid_hrs_21 index_date;
 run;
 %mend;
 
@@ -1348,14 +1083,14 @@ run;
 data mc_costs_all;
 merge ip_bef snf_bef op_bef pb_bef hh_bef hs_bef dm_bef 
 ip_aft snf_aft op_aft pb_aft hh_aft hs_aft dm_aft;
-by bid_hrs_22 index_date;
+by bid_hrs_21 index_date;
 run;
 
 %macro total();
 
 data mc_costs_all2;
 set mc_costs_all;
-%do i=12 %to 84 %by 12;
+%do i=12 %to 60 %by 12;
 tot_paid_by_mc_&i.m=ip_paid_by_mc_&i.m + snf_paid_by_mc_&i.m + op_paid_by_mc_&i.m + 
 pb_paid_by_mc_&i.m + hh_paid_by_mc_&i.m + hs_paid_by_mc_&i.m + dm_paid_by_mc_&i.m;
 tot_paid_by_mc_p&i.m=ip_paid_by_mc_p&i.m + snf_paid_by_mc_p&i.m + op_paid_by_mc_p&i.m + 
@@ -1364,7 +1099,7 @@ pb_paid_by_mc_p&i.m + hh_paid_by_mc_p&i.m + hs_paid_by_mc_p&i.m + dm_paid_by_mc_
 run;
 
 proc sort data=mc_costs_all2;
-by bid_hrs_22 index_date;
+by bid_hrs_21 index_date;
 run;
 
 %mend;
@@ -1373,7 +1108,7 @@ run;
 
 data mc_costs_all3;
 merge mc_costs_all2 mc_costs_dod;
-by  bid_hrs_22 index_date;
+by  bid_hrs_21 index_date;
 run;
 
 /*save permanent dataset*/
@@ -1473,23 +1208,25 @@ use "E:\data\burden_dementia\int_data\medicaid_cost_hh_snf.dta", clear
 
 gen rate = .
 
-replace rate=1 if year==2014
-replace rate=1.01622 if year==2013
-replace rate=1.03111 if year==2012
-replace rate=1.05245 if year==2011
-replace rate=1.08567 if year==2010
-replace rate=1.10347 if year==2009
-replace rate=1.09955 if year==2008
-replace rate=1.14177 if year==2007
-replace rate=1.17429 if year==2006
-replace rate=1.21217 if year==2005
-replace rate=1.25323 if year==2004
-replace rate=1.28661 if year==2003
-replace rate=1.31593 if year==2002
-replace rate=1.33674 if year==2001
-replace rate=1.37477 if year==2000
-replace rate=1.42098 if year==1999
-replace rate=1.45237 if year==1998
+replace rate = 1 if year==2016
+replace rate=1.01262 if year==2015
+replace rate=1.01382 if year==2014
+replace rate=1.03026 if year==2013
+replace rate=1.04535 if year==2012
+replace rate=1.06699 if year==2011
+replace rate=1.10067 if year==2010
+replace rate=1.11872 if year==2009
+replace rate=1.11474 if year==2008
+replace rate=1.15754 if year==2007
+replace rate=1.19051 if year==2006
+replace rate=1.22891 if year==2005
+replace rate=1.27055 if year==2004
+replace rate=1.30439 if year==2003
+replace rate=1.33411 if year==2002
+replace rate=1.35521 if year==2001
+replace rate=1.39377 if year==2000
+replace rate=1.44062 if year==1999
+replace rate=1.47244 if year==1998
 
 gen cost = 0
 replace cost = 1 if (_name_=="hh_cost_maid" | _name_=="nf_cost_maid" | _name_=="tot_paid_maid")
@@ -5198,7 +4935,45 @@ duplicates drop id, force
 tempfile id
 save `id'
 
+// creating CPI-U 
+clear
+set obs 21
+gen obs = _n
+gen year = .
+gen cpi_rate = .
 
+forvalues i=1/21 {
+
+replace year = 2017 - `i' if obs==`i'
+
+}
+
+replace cpi_rate = 1 if year==2016
+replace cpi_rate=1.01262 if year==2015
+replace cpi_rate=1.01382 if year==2014
+replace cpi_rate=1.03026 if year==2013
+replace cpi_rate=1.04535 if year==2012
+replace cpi_rate=1.06699 if year==2011
+replace cpi_rate=1.10067 if year==2010
+replace cpi_rate=1.11872 if year==2009
+replace cpi_rate=1.11474 if year==2008
+replace cpi_rate=1.15754 if year==2007
+replace cpi_rate=1.19051 if year==2006
+replace cpi_rate=1.22891 if year==2005
+replace cpi_rate=1.27055 if year==2004
+replace cpi_rate=1.30439 if year==2003
+replace cpi_rate=1.33411 if year==2002
+replace cpi_rate=1.35521 if year==2001
+replace cpi_rate=1.39377 if year==2000
+replace cpi_rate=1.44062 if year==1999
+replace cpi_rate=1.47244 if year<=1998
+
+rename year c_ivw_year
+label var cpi_rate "Inflation adjustment factor"
+tempfile cpi
+save `cpi'
+
+// pull tracker
 use "E:\data\hrs_cleaned\restr_tracker_v2014.dta", clear
 drop id
 gen id=hhid+pn
@@ -5245,17 +5020,21 @@ by id: carryforward stateusps, replace
 gsort id -c_ivw_year
 by id: carryforward stateusps, replace
 
+merge m:1 c_ivw_year using "`cpi'", keepus(cpi_rate)
+cap drop _m
 
 tempfile state
 save "`state'"
 
 rename c_ivw_year c_ivw_year_n1
 rename stateusps stateusps_n1
+rename cpi_rate cpi_rate_n1
 tempfile state_n1
 save `state_n1'
 
 rename c_ivw_year_n1 c_ivw_year_n2
 rename stateusps_n1 stateusps_n2 
+rename cpi_rate_n1 cpi_rate_n2
 tempfile state_n2
 save `state_n2'
 
@@ -5370,6 +5149,11 @@ gen hrs_lt_84m = .
 replace hrs_lt_84m = 1 if hrs_gte_84m==0
 label var hrs_lt_84m "<84 months of HRS ivw data, to be dropped"
 
+gen ffs_84m = 0
+replace ffs_84m = 1 if cont_ffs_n_mos>=84 & cont_ffs_n_mos!=. & nflag==0
+label var ffs_84m "84 months of continuous FFS prior to death"
+
+
 save R01_i.dta, replace
 
 
@@ -5391,7 +5175,7 @@ use R01_i.dta, clear
 gen has_imputed = imputed
 label var has_imputed "Has an imputed core ivw"
 
-local samplevars age_lt_72 no_exit miss_core no_core nocore4yr hrs_lt_84m has_imputed death_b4_core
+local samplevars age_lt_72 no_exit miss_core no_core nocore4yr hrs_lt_84m has_imputed death_b4_core ffs_84m
 
 foreach x of local samplevars {
 
@@ -5544,7 +5328,7 @@ foreach x of varlist hlp_cost_ivw  {
 
 replace `x' = `x'/n1_2_death if nflag==0
 replace `x' = `x'/ivw_time if nflag>0
-replace `x' = (`x'*mar_n0*hr_rate) +  (`x'*mar_n1*hr_rate_n1) + (`x'*mar_n2*hr_rate_n2)
+replace `x' = (`x'*mar_n0*hr_rate*cpi_rate) +  (`x'*mar_n1*hr_rate_n1*cpi_rate_n1) + (`x'*mar_n2*hr_rate_n2*cpi_rate_n2)
 
 }
 

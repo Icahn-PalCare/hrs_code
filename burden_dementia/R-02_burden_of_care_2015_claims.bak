@@ -4726,7 +4726,7 @@ keep id index_date index_year exit_year_exit year
 tempfile index
 save `index'
 
-use $ooppath\oopme_final_2014.dta, clear
+use $ooppath\oopme_final_2016.dta, clear
 rename *, l
 gen id=hhid+pn
 
@@ -5134,6 +5134,7 @@ sum ivw_time if nflag>0
 only need it to be >=60 since interview data extends ~24 months back */
 
 gen months_obs = death_2_ivw + ivw_time
+replace months_obs = ceil(months_obs) // round up to keep integers. Makes subsequent math easier
 label var months_obs "# of months person is observed in sample"
 
 gen hrs_gte_84m = 0
@@ -5154,8 +5155,24 @@ replace ffs_84m = 1 if cont_ffs_n_mos>=84 & cont_ffs_n_mos!=. & nflag==0
 label var ffs_84m "84 months of continuous FFS prior to death"
 
 
-save R01_i.dta, replace
+gen has_imputed = imputed
+label var has_imputed "Has an imputed core ivw"
 
+local samplevars age_lt_72 no_exit miss_core no_core nocore4yr hrs_lt_84m has_imputed death_b4_core ffs_84m
+
+foreach x of local samplevars {
+
+levelsof id if `x'==1, local(samp)
+
+foreach y of local samp {
+
+replace `x'=1 if id=="`y'"
+replace `x'=0 if `x'!=1
+
+}
+} 
+
+save R01_i.dta, replace
 
 
 H="Experimental - Sample derivation"
@@ -5172,35 +5189,27 @@ cd $datapath
 
 use R01_i.dta, clear
 
-gen has_imputed = imputed
-label var has_imputed "Has an imputed core ivw"
-
-local samplevars age_lt_72 no_exit miss_core no_core nocore4yr hrs_lt_84m has_imputed death_b4_core ffs_84m
-
-foreach x of local samplevars {
-
-levelsof id if `x'==1, local(samp)
-
-foreach y of local samp {
-
-replace `x'=1 if id=="`y'"
-
-}
-} 
-
 
 local deri age_lt_72 no_exit miss_core no_core nocore4yr hrs_lt_84m death_b4_core
 
 gen final = 1
-label var final "Final Sample Size, includes decedents w/imputed core"
+label var final "Sample Size, includes decedents w/imputed core"
 
 foreach x of local deri {
 replace final = 0 if `x'==1
 }
 
+gen final_ffs = 0
+replace final_ffs = 1 if final==1 & ffs_84m==1
+label var final_ffs "84m FFS Sample Size, includes decedents w/imputed core"
+
 gen final_noimp = 0
 replace final_noimp = 1 if final==1 & has_imputed==0
-label var final_noimp "Final Sample Size, excludes decedents with imputed core"
+label var final_noimp "Sample Size, excludes decedents with imputed core"
+
+gen final_noimp_ffs = 0
+replace final_noimp_ffs = 1 if final_noimp==1 & ffs_84m==1
+label var final_noimp_ffs "84m FFS Sample Size, excludes decedents with imputed core"
 
 preserve
 keep if nflag==0
@@ -5208,7 +5217,7 @@ keep if nflag==0
 gen all = 1
 label var all "All HRS respondents Deceased 2004-2015"
 
-local full all age_lt_72 no_exit miss_core no_core nocore4yr death_b4_core hrs_lt_84m final final_noimp
+local full all age_lt_72 no_exit miss_core no_core nocore4yr death_b4_core hrs_lt_84m final final_noimp final_ffs final_noimp_ffs
 
 local rd: word count `full'
 
@@ -5237,11 +5246,76 @@ frmttable using "E:\projects\burden_dementia\archive logs\Sample_Derivation.doc"
 varlabels title("Sample Derivation for R01 (Deceased 2004-2015, Age 72+)") ctitles("Reason for Exclusion" "All" "Dementia" "Non-Dementia") sdec(0) ///
 annotate(stars) asymbol(*,**)note("Death Date was determined by NDI, Medicare MBSF or HRS Exit in that order. Reasons for exclusion are NOT mutally exclusive.")
 
+
+/**** */
+
+
+local full1 age_lt_72 no_exit miss_core no_core nocore4yr hrs_lt_84m death_b4_core
+local full2 final final_noimp final_ffs final_noimp_ffs
+
+local rd: word count 1 `full1' `full2'
+
+mat tab1 = J(`rd',3,.)
+
+sum all
+mat tab1[1,1] = r(sum)
+
+sum all if dem_cohort==1
+mat tab1[1,2] = r(sum)
+
+sum all if dem_cohort==0
+mat tab1[1,3] = r(sum)
+
+
+local r = 2
+
+foreach x of local full1 {
+
+sum `x'
+mat tab1[`r',1] = r(sum)
+
+sum `x' if dem_cohort==1
+mat tab1[`r',2] = r(sum)
+
+sum `x' if dem_cohort==0
+mat tab1[`r',3] = r(sum)
+
+drop if `x'==1
+local ++r
+}
+
+foreach x of local full2 {
+
+sum `x'
+mat tab1[`r',1] = r(sum)
+
+sum `x' if dem_cohort==1
+mat tab1[`r',2] = r(sum)
+
+sum `x' if dem_cohort==0
+mat tab1[`r',3] = r(sum)
+
+local ++r
+}
+
+
+
+
+mat rownames tab1 = all `full1' `full2'
+
+
+frmttable using "E:\projects\burden_dementia\archive logs\Sample_Derivation.doc", addtable statmat(tab1) ///
+varlabels title("Sample Derivation for R01 (Deceased 2004-2015, Age 72+)") ctitles("Reason for Exclusion" "All" "Dementia" "Non-Dementia") sdec(0) ///
+annotate(stars) asymbol(*,**)note("Death Date was determined by NDI, Medicare MBSF or HRS Exit in that order. Reasons for exclusion are ARE mutally exclusive.")
+
 cap log close
+
 
 restore
 keep if final==1
 save R01_j.dta, replace
+
+
 
 
 H="Experimental - Final Sample"
@@ -5273,6 +5347,10 @@ gsort id -core_b4_death
 
 by id: carryforward n1_2_death, replace
 
+gen death_cat = .
+replace death_cat = 1 if n1_2_death<12
+replace death_cat = 2 if n1_2_death==12
+replace death_cat = 3 if n1_2_death>12
 
 cap drop mar_n0 mar_n1 mar_n2
 cap drop mar
@@ -5328,9 +5406,52 @@ foreach x of varlist hlp_cost_ivw  {
 
 replace `x' = `x'/n1_2_death if nflag==0
 replace `x' = `x'/ivw_time if nflag>0
-replace `x' = (`x'*mar_n0*hr_rate*cpi_rate) +  (`x'*mar_n1*hr_rate_n1*cpi_rate_n1) + (`x'*mar_n2*hr_rate_n2*cpi_rate_n2)
+replace `x' = (`x'*mar_n0*hr_rate) +  (`x'*mar_n1*hr_rate_n1) + (`x'*mar_n2*hr_rate_n2)
 
 }
+
+
+gen oop_cost = total_oop
+replace oop_cost = total_imp_b if imputed==1
+replace oop_cost = total_oop_exit if nflag==0
+
+replace ivw_time = ceil(ivw_time)
+replace ivw_time = 1 if ivw_time==0 & nflag==0
+
+// Combining original OOP and imputed OOP into a single variable 
+
+
+keep id death_cat nflag oop_cost hlp_cost_ivw n1_2_death c_ivw_year ivw_time
+
+reshape wide oop_cost hlp_cost_ivw c_ivw_year ivw_time, i(id) j(nflag)
+
+
+gen a = n1_2_death
+gen b = ivw_time1
+gen c = ivw_time2
+gen d = ivw_time3
+gen e = ivw_time4
+
+keep if death_cat==1
+
+/* Year 1 cost imputation */
+
+
+gen oop_y1 = ((a*oop_cost0)/ivw_time0) + (((12-a)*oop_cost1)/ivw_time1)
+gen informal_y1 = ((a*hlp_cost_ivw0)/ivw_time0) + (((12-a)*hlp_cost_ivw1)/ivw_time1)
+
+replace b = b-(12-a) // subtract the amount of months of N1 ivw that was used in Year 1
+
+/* Year 2 cost */
+
+oop_y2 = ((b*oop_cost1)/
+
+
+
+
+
+
+
 
 
 H="Experimental - annual calculations"
@@ -8680,7 +8801,9 @@ save "`fdpath'/burden_dementia_sample_long.dta", replace
 
 
 H="changelog"
-01/11/2019 - Continued working on separating the Dataset construction from Sample Derivation. Omari
+01/15/2019 - Inflation adjusted all figures 2016 and correct sample derivation. Omari
+
+01/11/2019 - Updated Sample to include death dates to 2015, Exit 2016 and 7 year lookback. Omari
 
 01/04/19 - Continued working on separating the Dataset construction from Sample Derivation. Omari
 

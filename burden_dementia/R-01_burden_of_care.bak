@@ -4002,3 +4002,287 @@ saveold "E:\data\test\samp.dta", version(12) replace
 "E:\data\test\mp_ltc_contact_days.dta"
 
 "E:\data\CMS_DUA_51675_2014\Merged\Stata\basf_1998_2015.dta"
+
+
+H="X"
+use id death_date using "E:\data\burden_dementia\final_data\R01_final.dta", replace
+format %td death_date
+duplicates drop 
+/*
+merge 1:1 id using "E:\data\hrs_cleaned\exit_02_to_14_dt.dta", keep(match master) ///
+keepusing(nh_nights exit_year ltc_ins nhres)  gen(xm)
+rename nh_ nh_nights_x
+rename ltc_ins ltc_ins_x
+rename nhres nhres_x
+
+duplicates report 
+
+*/
+merge 1:m id using "E:\data\hrs_cleaned\core_00_to_14.dta", keep(match master) gen(cm)
+sort id core_year
+
+gen c_ivw_date_1=.
+bys id: replace c_ivw_date_1=c_ivw_date if _n==_N-1
+format %td c_ivw_date_1
+bys id: carryforward c_ivw_date_1, replace
+
+by id: keep if _n==_N
+
+gen ivw_time=c_ivw_date-c_ivw_date_1
+drop if ivw_time<0
+replace nh_nights=ivw_time if nh_nights>ivw_time
+//>=730
+
+rename hhidpn hh
+rename id hhidpn
+
+merge 1:1 hhid pn core_year using "E:\data\hrs_cleaned\working\core_98_14_clean_final.dta", keepusing(ltc_ins) keep(master matched)
+
+gen year= core_year
+gen HHID=hhid
+gen PN=pn
+merge 1:1 HHID PN year using "E:\data\burden_dementia\oopdata\oopme_final_2016.dta" , keepusing(NH_OOP) keep(master matched) nogen
+
+merge 1:m hhidpn using "E:\data\test\mp_ltc_contact_days.dta", gen(p)
+
+
+//replace nh_nights_x=730 if nh_nights_x==770
+
+drop if p==2
+
+keep if inrange(date, c_ivw_date_1, c_ivw_date) | day==0
+sort hhidpn
+
+gen range=1 if c_ivw_date>=date & date>c_ivw_date_1 & date!=.
+
+codebook hhidpn
+
+bys hhidpn core_year: egen mm_days=total(day) if range==1,m
+bys hhidpn core_year: egen medpar_tot=total(medpar_day) if range==1,m
+bys hhidpn core_year: egen ltc_tot=total(ltc_day) if range==1,m
+
+bys hhidpn core_year: keep if _n==1
+
+//replace nh_nights_x=. if nh_nights_x==0
+//replace mm_days=. if mm_days==0
+
+merge 1:1 hhidpn using "E:\data\CMS_DUA_51675_2014\Medicare Xref2015\CMSxref20151\stata\xref2015medicare.dta", nogen keep(master matched) force
+rename BID_HRS_22 bid_hrs_22
+capture drop year
+gen year=core_year
+
+rename medicaid sr_medicaid
+
+drop if bid_hrs_22==""
+
+tempfile a
+save "`a'"
+
+use "E:\data\CMS_DUA_51675_2014\Merged\Stata\basf_1998_2015.dta", replace
+gen year=year(start_dt)
+gen medicaid=0
+replace medicaid=1 if buyin_mo>=1 & buyin_mo!=.
+
+sort bid_hrs_22 year
+gen medicaid_p=0
+by bid_hrs_22: replace medicaid_p=1 if medicaid==1 | medicaid[_n-1]==1 
+//by bid_hrs_22: replace medicaid_p=2 if medicaid==1 & medicaid[_n-1]==1 
+
+label var medicaid "Medicaid from Medicare claims"
+label var medicaid_p "Medicaid from claims previous year"
+
+sort bid_hrs_22 year
+by bid_hrs_22: keep if _n==_N 
+
+
+tempfile b
+save "`b'"
+
+use "`a'", replace
+
+merge 1:1 bid_hrs_22 using "`b'", nogen keep(master match) keepusing(medicaid medicaid_p)
+
+
+capture drop diff
+gen diff=nh_nights-mm_days
+
+replace ltc_ins=. if ltc_ins==8
+
+gen mcaid=0
+replace mcaid=1 if ltc_tot>=1 & ltc_tot!=.
+label var mcaid "Medicaid from Medicaid Claims"
+
+//nh_nights_x is not missing for any observations
+//ltc_ins_x can be missing
+//
+
+gen nh_nights_f=0
+replace nh_nights_f=1 if nh_nights!=0
+gen mm_days_f=0 
+replace mm_days_f=1 if mm_days!=.
+gen both_f=0
+replace both=1 if nh_nights_f==1 & mm_days_f==1
+
+
+gen nh_oop=NH_OOP if NH_OOP!=0 & NH_OOP!=.
+gen nh_oop_f=0 
+replace nh_oop_f=1 if nh_oop!=0 & nh_oop!=.
+
+
+sum nh_nights if nh_oop_f==1
+sum mm_days if nh_oop_f==1
+
+sum nh_oop if ltc_ins==0
+
+
+
+label var mm_days "Claim Nights"
+label var nh_nights "NH Nights from core" 
+label var diff "Difference"
+label var ltc_ins "LTC insurance at core"
+la def lt 0 "No LTC Ins." 1 "LTC Ins."
+la val ltc_ins lt
+la def nhres 0 "Not NHRES" 1 "NHRES"
+la val nhres nhres
+
+
+/*
+sum diff,d
+sum diff if ltc_ins_x==0 & nhres_x==0,d
+local a=`r(N)'
+sum diff if ltc_ins_x==1 & nhres_x==0,d 
+local b=`r(N)'
+sum diff if ltc_ins_x==0 & nhres_x==1,d 
+local c=`r(N)'
+sum diff if ltc_ins_x==1 & nhres_x==1,d 
+local d=`r(N)'
+
+
+count if !missing(nh_nights_x) & !missing(mm_days) & !missing(ltc_ins_x)
+local N=`r(N)'
+
+graph bar (mean) diff diff if nh_nights_x!=. & mm_days!=., over(ltc_ins_x) over(nhres_x) note("`N' Non-missing/non-zero HRS Nursing Home Nights & Medicare/Medicaid Nights" ///
+"`a' Not a NHRES and No SR LTC Ins." "`b' Not a NHRES with SR LTC Ins." ///
+"`c' NHRES and No SR LTC Ins." "`d' NHRES and SR LTC Ins.") ///
+blabel(bar) ytitle(mean `:variable label diff') title("Diff. between SR HRS and Medicaid/Medicare Nights" " by LTC Ins. and NHRES from death to last core ivw.")
+
+//graph save "E:\projects\burden_dementia\archive logs\20181217\difference", replace
+//graph export "E:\projects\burden_dementia\archive logs\20181217\difference.pdf", replace
+
+graph bar (mean) nh_nights_x mm_days if nh_nights_x!=. & mm_days!=., over(ltc_ins_x) over(nhres_x) blabel(bar) ///
+note("SR HRS and Medicare/Medicare NH Nights by LTC Ins.") ytitle(Mean # of Nights) ///
+title("Mean Nights by LTC Ins. for SR HRS and Claims" "by LTC Ins. and NHRES") legend(label(2 "Claim Nights") label(1 "SR NH Nights from exit" ))
+
+//graph save "E:\projects\burden_dementia\archive logs\20181217\mean_nights", replace
+//graph export "E:\projects\burden_dementia\archive logs\20181217\mean_nights.pdf", replace
+
+graph bar (count) nh_nights_f mm_days_f both_f, over(ltc_ins_x) over(nhres_x) blabel(bar) ///
+title("Count of having NH Nights in SR HRS, Claims, & Both" "by LTC Ins. and NHRES") ytitle(# of people) ///
+legend(label(1 "SR NH Nights from exit") ///
+label(2 "Claim Nights") label(3 "Both"))
+
+//graph save "E:\projects\burden_dementia\archive logs\20181217\count", replace
+//graph export "E:\projects\burden_dementia\archive logs\20181217\count.pdf", replace
+
+tab ltc_ins_x medicaid_p
+
+
+tab nh_oop_f nhres_x
+tab nh_oop_f ltc_ins_x
+
+tab nh_oop_f nh_nights_f,m
+sum NH_OOP if nhres_x==1 & nh_oop_f==1, d
+
+pctile nh_oop_q= NH_OOP, n(4)
+
+*/
+
+// need to first find state var
+//then make sure genworth data is showing nh rates costs
+//then merge in to the exit year--will need to change variable
+//then convert sr oop nh to nights 
+// then find the unattributed section
+
+
+tempfile a 
+save "`a'"
+
+use "E:\data\hrs_restricted_2014\hrsxgeo1_3.dta", replace 
+
+rename stateusps0* stateusps*
+rename zipcode0* zipcode*
+
+reshape long zipcode stateusps, i(id) j(year)
+
+forvalues i=90/99{
+replace year=19`i' if year==`i'
+}
+
+forvalues i=0/9{
+replace year=200`i' if year==`i'
+}
+
+forvalues i=10/16{
+replace year=20`i' if year==`i'
+}
+
+sort id year
+
+//assumption
+by id: carryforward stateusps, gen(state)
+
+rename id hhidpn 
+rename year core_year
+
+merge 1:1 hhid core using "`a'", nogen keep(using match)
+
+tempfile b
+save "`b'"
+
+import excel "E:\data\burden_dementia\ref_data\Cost Care Survey (Genworth-Metlife)\HHA_hourly_genworth.xlsx" ///
+, sheet("Sheet5") firstrow case(lower) clear
+
+drop if year==.
+rename mediandailyratenursinghomed nh_daily
+rename year core_year 
+merge 1:m core_year state using "`b'", nogen keep(using matched)
+
+destring nh_daily, replace
+gen nh_oop_nights=NH_OOP/nh_daily
+gen nh_oop_big_flag=1 if nh_oop_nights>ivw_time
+
+replace nh_oop_nights=ivw_time if nh_oop_nights>ivw_time
+replace nh_oop_nights=round(nh_oop_nights)
+
+
+replace mm_days=0 if mm_days==.
+replace nh_nights=0 if nh_nights==.
+
+gen unatt=nh_nights-nh_oop_nights-mm_days
+
+sum unatt, d
+
+
+gen mcaid_final=0
+replace mcaid_final=1 if medicaid==1 | mcaid==1
+
+sum nh_nights_f, d
+
+sum mm_days_f, d
+
+la def nh_nights_f 0 "No NH Nights" 1 "Yes NH Nights"
+la val nh_nights_f nh_nights_f
+
+la def mm_days_f 0 "No Claims" 1 "Yes Claims"
+la val mm_days_f mm_days_f
+la def medicaid 0 "No Medicaid" 1 "Yes Medicaid"
+la val medicaid medicaid
+la def mcaid_final 0 "No Medicaid" 1 "Yes Medicaid"
+la val mcaid_final mcaid_final
+la def ltc_ins 0 "No LTC Ins." 1 "Yes LTC Ins. "
+la val ltc_ins ltc_ins_x
+la def nh_oop_f 0 "No NH OOP" 1 "Yes NH OOP"
+la val nh_oop_f nh_oop_f
+la def sr_medicaid 0 "No SR Medicaid" 1 "Yes SR Medicaid"
+la val sr_medicaid sr_medicaid
+

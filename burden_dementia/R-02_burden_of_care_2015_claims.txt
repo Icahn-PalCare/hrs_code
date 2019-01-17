@@ -5117,13 +5117,32 @@ by id: gen next_ivw_date = ivw_date[_n+1] // bringing forward date from prior co
 
 format %td next_ivw_date
 
+gen n1_2_death = index_date - c_ivw_date if nflag==1
+replace n1_2_death = n1_2_death * 0.0329
+replace n1_2_death = ceil(n1_2_death)
+replace n1_2_death = 24 if n1_2_death>=24 & n1_2_death!=.
+replace n1_2_death = 1 if n1_2_death<=0
+
+gen core_b4_death = 0
+replace core_b4_death = 1 if nflag==1
+
+gsort id -core_b4_death
+
+gen n1_ivw_date = c_ivw_date if nflag==1
+
+by id: carryforward n1_2_death n1_ivw_date, replace
+
+
+
 gen ivw_time = ivw_date - next_ivw_date
 replace ivw_time = ivw_time * 0.0329
 label var ivw_time "Months between previous ivw & current ivw"
 
-gen death_2_ivw = index_date - ivw_date
-replace death_2_ivw = death_2_ivw * 0.0329
-label var death_2_ivw "Months between current ivw & death"
+gen n1_2_ivw = n1_ivw_date - ivw_date
+replace n1_2_ivw = n1_2_ivw * 0.0329
+label var n1_2_ivw "Months between current ivw & N1 interview"
+
+
 
 gen last_core = 1 if ivw_time==. & nflag>0
 label var last_core "Last observable core, ivw_time imputed at 24 months"
@@ -5133,7 +5152,7 @@ sum ivw_time if nflag>0
 /*Average time between core ivws is 24 months. So if we subtract ivw date from death, 
 only need it to be >=60 since interview data extends ~24 months back */
 
-gen months_obs = death_2_ivw + ivw_time
+gen months_obs = n1_2_ivw + ivw_time + n1_2_death
 replace months_obs = ceil(months_obs) // round up to keep integers. Makes subsequent math easier
 label var months_obs "# of months person is observed in sample"
 
@@ -5334,6 +5353,7 @@ cd $datapath
 
 use R01_j.dta, clear
 
+/*
 gen n1_2_death = index_date - c_ivw_date if nflag==1
 replace n1_2_death = n1_2_death * 0.0329
 replace n1_2_death = ceil(n1_2_death)
@@ -5346,7 +5366,7 @@ replace core_b4_death = 1 if nflag==1
 gsort id -core_b4_death
 
 by id: carryforward n1_2_death, replace
-
+*/
 gen death_cat = .
 replace death_cat = 1 if n1_2_death<12
 replace death_cat = 2 if n1_2_death==12
@@ -5402,6 +5422,15 @@ replace hlp_cost_ivw = (4*hlp_cost) + (n1_2_death-4)*((hlp_cost+hlp_cost_n)/2) i
 replace hlp_cost_ivw = (4*hlp_cost) + (ivw_time-4)*((hlp_cost+hlp_cost_n)/2) if nflag>0 & hlp_cost_n>0
 replace hlp_cost_ivw = (4*hlp_cost) if nflag>0 & (hlp_cost_n==0 | hlp_cost_n==.)
 
+
+egen hr_mean = mean(hr_rate)
+egen hr_mean_n1 = mean(hr_rate_n1)
+egen hr_mean_n2 = mean(hr_rate_n2)
+
+replace hr_rate = hr_mean if hr_rate==.
+replace hr_rate_n1 = hr_mean_n1 if hr_rate_n1==.
+replace hr_rate_n2 = hr_mean_n2 if hr_rate_n2==.
+
 foreach x of varlist hlp_cost_ivw  {
 
 replace `x' = `x'/n1_2_death if nflag==0
@@ -5432,27 +5461,129 @@ gen c = ivw_time2
 gen d = ivw_time3
 gen e = ivw_time4
 
-keep if death_cat==1
+*keep if death_cat<3
 
 /* Year 1 cost imputation */
 
 
-gen oop_y1 = ((a*oop_cost0)/ivw_time0) + (((12-a)*oop_cost1)/ivw_time1)
-gen informal_y1 = ((a*hlp_cost_ivw0)/ivw_time0) + (((12-a)*hlp_cost_ivw1)/ivw_time1)
+gen oop_y1 = ((a*oop_cost0)/ivw_time0) + (((12-a)*oop_cost1)/ivw_time1) if death_cat<=2
+gen informal_y1 = ((a*hlp_cost_ivw0)/ivw_time0) + (((12-a)*hlp_cost_ivw1)/ivw_time1) if death_cat<=2
 
-replace b = b-(12-a) // subtract the amount of months of N1 ivw that was used in Year 1
+replace oop_y1 = ((12*oop_cost0)/ivw_time0) if death_cat==3
+replace informal_y1 = ((12*hlp_cost_ivw0)/ivw_time0) if death_cat==3
+
+replace b = b-(12-a) if death_cat<=2 // subtract the amount of months of N1 ivw that was used in Year 1
+replace a = a - 12 if death_cat==3
+replace a = 0 if death_cat<3
 
 /* Year 2 cost */
 
-oop_y2 = ((b*oop_cost1)/
+
+gen oop_y2 = ((a*oop_cost0)/ivw_time0) +  (((12-a)*oop_cost1)/ivw_time1) if death_cat==3
+
+gen informal_y2 = ((a*hlp_cost_ivw0)/ivw_time0) +  (((12-a)*hlp_cost_ivw1)/ivw_time1) if death_cat==3
 
 
+replace b = b-(12-a) if death_cat==3
+
+replace oop_y2 = ((b*oop_cost1)/ivw_time1) if b>=12 & death_cat<3
+replace oop_y2 = ((b*oop_cost1)/ivw_time1) + (((12-b)*oop_cost2)/ivw_time2) if b<12 & death_cat<3
 
 
+replace informal_y2 = ((b*hlp_cost_ivw1)/ivw_time1) if b>=12 & death_cat<3
+replace informal_y2 = ((b*hlp_cost_ivw1)/ivw_time1) + (((12-b)*hlp_cost_ivw2)/ivw_time2) if b<12 & death_cat<3
 
 
+replace c = c-(12-b) if b<12 & death_cat<2 // if b<12, part of the year came from N2 and needs to be subtracted
+replace b = 0 if b<12 & death_cat<2 // recoding b to 0 to show that N1 interview will no longer contribute to cost
+replace b = b-12 if b>=12 & death_cat<2 // if b>=12, used a full year of data from N1
 
 
+/* Year 3 cost */
+
+gen oop_y3 = ((b*oop_cost1)/ivw_time1) if b>=12
+replace oop_y3 = ((b*oop_cost1)/ivw_time1) + (((12-b)*oop_cost2)/ivw_time2) if b<12
+
+
+gen informal_y3 = ((b*hlp_cost_ivw1)/ivw_time1) if b>=12
+replace informal_y3 = ((b*hlp_cost_ivw1)/ivw_time1) + (((12-b)*hlp_cost_ivw2)/ivw_time2) if b<12
+
+
+replace c = c-(12-b) if b<12 // if b<12, part of the year came from N2 and needs to be subtracted
+replace b = 0 if b<12 // recoding b to 0 to show that N1 interview will no longer contribute to cost
+replace b = b-12 if b>=12 // if b>=12, used a full year of data from N1
+
+
+/* Year 4 cost */
+
+tab b
+tab ivw_time1 /* not sure why so many people have >24 months attributed to 1 interview
+there are weird cases e.g. 2010 core has a 2011 ivw date, so it ends up being ~ 3 years
+between 2008 core and 2010. But expecting those to be in the minority */
+
+replace b = 12 if b>12 // need to remove and properly fix later
+
+gen oop_y4 = ((b*oop_cost1)/ivw_time1) + (((12-b)*oop_cost2)/ivw_time2) if b>0 & b<=12 // if b = 12 the second term is zero
+gen informal_y4 = ((b*oop_cost1)/ivw_time1) + (((12-b)*oop_cost2)/ivw_time2) if b>0 & b<=12 // if b = 12 the second term is zero
+
+replace c = c-(12-b) if b>0 & b<12 // if b<12, part of the year came from N2 and needs to be subtracted
+replace b = 0 if b<12 // recoding b to 0 to show that N1 interview will no longer contribute to cost
+replace b = b-12 if b>=12 // if b>=12, used a full year of data from N1
+
+
+replace oop_y4 = ((c*oop_cost2)/ivw_time2) + (((12-c)*oop_cost3)/ivw_time3) if c<=12 & oop_y4==.
+replace oop_y4 = ((c*oop_cost2)/ivw_time2) if c>12 & oop_y4==.
+
+replace informal_y4 = ((c*hlp_cost_ivw2)/ivw_time2) + (((12-c)*hlp_cost_ivw3)/ivw_time3) if c<=12 & informal_y4==.
+replace informal_y4 = ((c*hlp_cost_ivw2)/ivw_time2) if c>12 & informal_y4==.
+
+replace d = d - (12-c) if c<12
+replace c = 0 if c<12 //& b==0
+replace c = c - 12 if c>=12
+
+
+/* Year 5 */
+
+gen oop_y5 = ((c*oop_cost2)/ivw_time2) + (((12-c)*oop_cost3)/ivw_time3) if c<=12
+replace oop_y5 = ((c*oop_cost2)/ivw_time2) if c>12
+
+gen informal_y5 = ((c*hlp_cost_ivw2)/ivw_time2) + (((12-c)*hlp_cost_ivw3)/ivw_time3) if c<=12
+replace informal_y5 = ((c*hlp_cost_ivw2)/ivw_time2) if c>12
+
+replace d = d-(12-c) if c<12
+replace c = 0 if c<12
+replace c = c-12 if c>=12
+
+/* Year 6 */
+
+gen oop_y6 = ((c*oop_cost2)/ivw_time2) + (((12-c)*oop_cost3)/ivw_time3) if c>0 & c<=12
+gen informal_y6 = ((c*hlp_cost_ivw2)/ivw_time2) + (((12-c)*hlp_cost_ivw3)/ivw_time3) if c>0 & c<=12
+
+replace d = d-(12-c) if c<12 & c>0 // if b<12, part of the year came from N2 and needs to be subtracted
+
+replace c = 0 if b<12 
+replace c = c-12 if b>=12 
+
+replace oop_y6 = ((d*oop_cost3)/ivw_time3) + (((12-d)*oop_cost4)/ivw_time4) if d<=12 & oop_y6==.
+replace oop_y6 = ((d*oop_cost3)/ivw_time3) if d>12 & oop_y6==.
+
+replace informal_y6 = ((d*hlp_cost_ivw3)/ivw_time3) + (((12-d)*hlp_cost_ivw4)/ivw_time4) if d<=12 & informal_y6==.
+replace informal_y6 = ((d*hlp_cost_ivw3)/ivw_time3) if d>12 & informal_y6==.
+
+replace e = e-(12-d) if d<12
+replace d = 0 if d<12
+replace d = d-12 if d>=12
+
+
+/* Year 7 */
+
+gen oop_y7 = ((d*oop_cost3)/ivw_time3) + (((12-d)*oop_cost4)/ivw_time4) if d<=12
+replace oop_y7 = ((d*oop_cost3)/ivw_time3) if d>12
+
+gen informal_y7 = ((d*hlp_cost_ivw3)/ivw_time3) + (((12-d)*hlp_cost_ivw4)/ivw_time4) if d<=12
+replace informal_y7 = ((d*hlp_cost_ivw3)/ivw_time3) if d>12
+
+save R01_annualized.dta, replace
 
 H="Experimental - annual calculations"
 

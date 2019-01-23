@@ -1813,7 +1813,9 @@ gen age_at_death=floor((death_date-birth_date)/365.25)
 cap drop _m
 merge 1:1 id using exit.dta
 gen age_lt_72 = 1 if age_at_death<72
+gen age_lt_70 = 1 if age_at_death<70
 label var age_lt_72 "Age <72 at death, to be dropped"
+label var age_lt_70 "Age <70 at death, to be dropped"
 
 gen no_exit=1 if _m==1
 label var no_exit "Decedents with no exit ivw 2002-16, to be dropped"
@@ -2439,6 +2441,20 @@ gen hrs_gte_84m = 0
 replace hrs_gte_84m = 1 if months_obs>=83.5 & months_obs!=.
 label var hrs_gte_84m ">=84 months of HRS ivw data"
 
+gen hrs_gte_60m = 0
+replace hrs_gte_60m = 1 if months_obs>=60 & months_obs!=.
+
+levelsof id if hrs_gte_60m, local(moredata)
+foreach x of local moredata {
+replace hrs_gte_60m = 1 if id=="`x'"
+}
+
+gen hrs_lt_60m = .
+replace hrs_lt_60m = 1 if hrs_gte_60m==0
+label var hrs_lt_60m "<60m of HRS ivw data, to be dropped"
+
+
+
 levelsof id if hrs_gte_84m, local(havedata)
 foreach x of local havedata {
 replace hrs_gte_84m = 1 if id=="`x'"
@@ -2453,10 +2469,15 @@ replace ffs_84m = 1 if cont_ffs_n_mos>=84 & cont_ffs_n_mos!=. & nflag==0
 label var ffs_84m "84 months of continuous FFS prior to death"
 
 
+gen ffs_60m = 0
+replace ffs_60m = 1 if cont_ffs_n_mos>=60 & cont_ffs_n_mos!=. & nflag==0
+label var ffs_84m "60 months of continuous FFS prior to death"
+
+
 gen has_imputed = imputed
 label var has_imputed "Has an imputed core ivw"
 
-local samplevars age_lt_72 no_exit miss_core no_core nocore4yr hrs_lt_84m has_imputed death_b4_core ffs_84m
+local samplevars age_lt_72 age_lt_70 no_exit miss_core no_core nocore4yr hrs_lt_84m hrs_lt_60m has_imputed death_b4_core ffs_84m ffs_60m 
 
 foreach x of local samplevars {
 
@@ -6724,13 +6745,26 @@ restore
 
 
 H="7 year graphs"
-use "E:\data\burden_dementia\final_data\R01_final.dta", clear
+use "E:\data\serious_ill\int_data\core_ids_1yr_criteria_5.dta", clear
+sort id core_year
+by id: keep if _n==_N
+keep id wage*
+duplicates drop
+tempfile t1
+save `t1'
 
+use "E:\data\burden_dementia\final_data\R01_final.dta", clear
+merge m:1 id using `t1', nogen keep(match master)
 cd "E:\data\burden_dementia\logs\graphs"
 
 keep if nflag==0
 keep if ffs_84==1
-keep id tot_paid_by_mc_y* tot_paid_maid_y* oop_y* informal_y* dem_cohort
+
+forvalues i=1/7 {
+	gen wi_mc`i'=tot_paid_by_mc_y`i'/wage_index_2012
+}
+
+keep id tot_paid_by_mc_y* tot_paid_maid_y* oop_y* informal_y* dem_cohort wi_*
 
 rename tot_paid_by_mc_y* mc*
 rename tot_paid_maid_y* mcaid*
@@ -6741,7 +6775,7 @@ foreach x of varlist mcaid* {
 
 rename (oop_y* informal_y*) (oop* informal*)
 
-foreach x in mc mcaid oop informal {
+foreach x in mc mcaid oop informal wi_mc {
 	forvalues i=1/7 {
 		replace `x'`i'=`x'`i'/1000
 }
@@ -6751,10 +6785,10 @@ foreach x in mc mcaid oop informal {
 }
 }
 
-keep id mc* mcaid* oop* informal* cum* dem_cohort
+keep id mc* mcaid* oop* informal* cum* dem_cohort wi*
 
 
-reshape long mc mcaid oop informal cummc cummcaid cumoop cuminformal, ///
+reshape long mc mcaid oop informal cummc cummcaid cumoop cuminformal wi_mc, ///
 i(id) j(year_before_death)
 
 replace year=-year+8
@@ -6768,7 +6802,7 @@ foreach x in "" cum {
 
 
 
-collapse (mean) mc mcaid oop informal all cummc cummcaid cumoop cuminformal cumall, ///
+collapse (mean) mc mcaid oop informal all cummc cummcaid cumoop cuminformal cumall wi_mc, ///
 by(dem_cohort year_before_death)
 
 foreach x in mc mcaid oop informal all {
@@ -6788,6 +6822,14 @@ foreach x in mc mcaid oop informal all {
 	graph save `x'_spending_7yrs.gph, replace
 	graph export `x'_spending_7yrs.pdf, replace
 }
+
+twoway (connected mc year if dem_cohort==0) (connected mc year if dem_cohort==1) ///
+(connected wi_mc year if dem_cohort==0) (connected wi_mc year if dem_cohort==1), ///
+legend(label(1 "MC, No-D") label(2 "MC-D") label(3 "WIMC, No-D") label(4 "WIMC-D")) ///
+xlabel(1 "6-7" 2 "5-6" 3 "4-5" 4 "3-4" 5 "2-3" 6 "1-2" 7 "0-1") ytitle("")
+graph save annu_`x'_spending_over_time_wi.gph, replace
+graph export annu_`x'_spending_over_time_wi.pdf, replace
+
 
 foreach x in mc mcaid oop informal all {
 	rename `x' annu`x'
@@ -6843,10 +6885,111 @@ foreach x in annu cum {
 }
 
 
+graph combine cum_spending_diff_no_dem_stacked.gph cum_spending_diff_dem_stacked.gph, ///
+ycommon saving(cum_spending_stacked_7yrs, replace) rows(1)
+graph export cum_spending_stacked_7yrs.pdf, replace
+
+
+graph combine cum_spending_diff_no_dem_stacked.gph cum_spending_diff_dem_stacked.gph, ///
+ycommon saving(cum_spending_stacked_7yrs, replace) rows(1)
+graph export cum_spending_stacked_7yrs.pdf, replace
+
 graph combine annu_spending_diff_no_dem_stacked.gph annu_spending_diff_dem_stacked.gph ///
 cum_spending_diff_no_dem_stacked.gph cum_spending_diff_dem_stacked.gph, ycommon ///
 saving(spending_stacked_7yrs, replace) rows(1) ysize(4) xsize(12)
 graph export spending_stacked_7yrs.pdf, replace
+
+
+H="Medicaid graphs"
+
+
+cd "E:\data\burden_dementia\logs\graphs"
+
+use bid_hrs_22 ffs_84 using "E:\data\burden_dementia\final_data\R01_final.dta", clear
+keep if ffs_84==1
+drop if missing(bid)
+duplicates drop
+merge 1:m bid_hrs_22 using "E:\data\CMS_DUA_51675_2014\Merged\Stata\basf_1998_2015.dta", ///
+keep(match) nogen
+keep bid buyin_mo start_dt
+gen year=year(start_dt)
+drop if missing(bid_hrs)
+tempfile mbsf
+save `mbsf'
+
+import excel "E:\data\hrs_restricted_2014\Ref Docs\Medicaid generosity.xlsx", sheet("Sheet1") firstrow case(lower) clear
+rename location stateusps
+tempfile generosity
+save `generosity'
+
+use "E:\data\burden_dementia\final_data\R01_final.dta" if ffs_84==1, clear
+drop buyin_mo
+sort id nflag
+by id: carryforward bid_hrs_22, replace
+replace year=index_year if nflag==0
+sort id year nflag
+by id year: keep if _n==1
+merge m:1 stateusps using `generosity', gen(gm)
+drop if gm==2
+duplicates report bid_hrs_22 year
+merge 1:1 bid_hrs_22 year using `mbsf', gen(mbsf)
+drop if mbsf==2
+tab mbsf
+tab medicaid
+gen mbsf_medicaid=buyin_mo>=1 if !missing(buyin_mo)
+tab mbsf_medicaid
+tab nflag
+gen t2d=index_date-c_ivw_date
+replace t2d=0 if index_year==year
+sum t2d
+gen y2d=ceil(t2d/365.25)
+tab y2d
+gen baseline=1 if year>=7
+replace baseline=y2d>=7
+sort id baseline y2d
+by id baseline: drop if baseline & _n>1
+replace y2d=7 if y2d>7
+replace year=-y2d+8
+replace medicaid=medicaid_exit if missing(medicaid)
+replace medicaid=0 if missing(medicaid)
+preserve
+collapse (mean) medicaid mbsf_medicaid generous (count) nmcaid=medicaid nmbsf=mbsf_medicaid n=generous, by(year)
+
+
+
+twoway (connected medicaid year) (connected mbsf_ year) (connected generous year), ///
+xlabel(1 "6-7" 2 "5-6" 3 "4-5" 4 "3-4" 5 "2-3" 6 "1-2" 7 "0-1" 8 "at death")xtitle("")  ytitle("") ///
+legend(label(1 "SR Medicaid") label(2 "Medicaid from Buy-in") ///
+label(3 "Resides in Generous State")) saving(medicaid_over_time, replace)
+
+restore
+preserve
+collapse (mean) medicaid mbsf_medicaid generous (count) ///
+nmcaid=medicaid nmbsf=mbsf_medicaid n=generous, by(year dem_cohort)
+
+twoway (connected medicaid year if dem_cohort==1) (connected mbsf_ year if dem_cohort==1) (connected generous year if dem_cohort==1), ///
+xlabel(1 "6-7" 2 "5-6" 3 "4-5" 4 "3-4" 5 "2-3" 6 "1-2" 7 "0-1" 8 "at death")xtitle("")  ytitle("") ///
+legend(label(1 "SR Medicaid") label(2 "Medicaid from Buy-in") ///
+label(3 "Resides in Generous State")) saving(medicaid_over_time_dem, replace) ///
+title("No Dementia")
+
+twoway (connected medicaid year if dem_cohort==0) (connected mbsf_ year if dem_cohort==0) (connected generous year if dem_cohort==0), ///
+xlabel(1 "6-7" 2 "5-6" 3 "4-5" 4 "3-4" 5 "2-3" 6 "1-2" 7 "0-1" 8 "at death")xtitle("")  ytitle("") ///
+legend(label(1 "SR Medicaid") label(2 "Medicaid from Buy-in") ///
+label(3 "Resides in Generous State")) saving(medicaid_over_time_no_dem, replace) title("Dementia") 
+
+graph combine medicaid_over_time_no_dem.gph medicaid_over_time_dem.gph, ycommon ///
+saving(medicaid_combined, replace)
+graph export medicaid_combined.pdf, replace
+
+twoway (connected medicaid year if dem_cohort==1) (connected mbsf_ year if dem_cohort==1) ///
+(connected medicaid year if dem_cohort==0) (connected mbsf_ year if dem_cohort==0), ///
+xlabel(1 "6-7" 2 "5-6" 3 "4-5" 4 "3-4" 5 "2-3" 6 "1-2" 7 "0-1" 8 "at death")xtitle("")  ytitle("") ///
+legend(label(1 "SR Medicaid-Dem") label(2 "Medicaid from Buy-in-Dem") ///
+label(3 "SR Medicaid-no-Dem") label(4 "Medicaid from Buy-in-no-Dem")) ///
+saving(medicaid_over_time_7yrs, replace)
+graph export medicaid_over_time_7yrs.pdf, replace
+
 
 
 H="*********************************"
@@ -7309,6 +7452,8 @@ save "`fdpath'/burden_dementia_sample_long.dta", replace
 
 
 H="changelog"
+01/22/19 - Updated the graphs and added graph of Medicaid over time.
+
 01/17/19 - Added the predicted Medicaid. Evan
 
 01/16/2019 - Calculating annualized costs for the 7 years prior to death. Omari

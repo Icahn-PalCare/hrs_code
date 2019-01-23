@@ -1813,7 +1813,9 @@ gen age_at_death=floor((death_date-birth_date)/365.25)
 cap drop _m
 merge 1:1 id using exit.dta
 gen age_lt_72 = 1 if age_at_death<72
+gen age_lt_70 = 1 if age_at_death<70
 label var age_lt_72 "Age <72 at death, to be dropped"
+label var age_lt_70 "Age <70 at death, to be dropped"
 
 gen no_exit=1 if _m==1
 label var no_exit "Decedents with no exit ivw 2002-16, to be dropped"
@@ -2439,6 +2441,20 @@ gen hrs_gte_84m = 0
 replace hrs_gte_84m = 1 if months_obs>=83.5 & months_obs!=.
 label var hrs_gte_84m ">=84 months of HRS ivw data"
 
+gen hrs_gte_60m = 0
+replace hrs_gte_60m = 1 if months_obs>=60 & months_obs!=.
+
+levelsof id if hrs_gte_60m, local(moredata)
+foreach x of local moredata {
+replace hrs_gte_60m = 1 if id=="`x'"
+}
+
+gen hrs_lt_60m = .
+replace hrs_lt_60m = 1 if hrs_gte_60m==0
+label var hrs_lt_60m "<60m of HRS ivw data, to be dropped"
+
+
+
 levelsof id if hrs_gte_84m, local(havedata)
 foreach x of local havedata {
 replace hrs_gte_84m = 1 if id=="`x'"
@@ -2453,10 +2469,15 @@ replace ffs_84m = 1 if cont_ffs_n_mos>=84 & cont_ffs_n_mos!=. & nflag==0
 label var ffs_84m "84 months of continuous FFS prior to death"
 
 
+gen ffs_60m = 0
+replace ffs_60m = 1 if cont_ffs_n_mos>=60 & cont_ffs_n_mos!=. & nflag==0
+label var ffs_84m "60 months of continuous FFS prior to death"
+
+
 gen has_imputed = imputed
 label var has_imputed "Has an imputed core ivw"
 
-local samplevars age_lt_72 no_exit miss_core no_core nocore4yr hrs_lt_84m has_imputed death_b4_core ffs_84m
+local samplevars age_lt_72 age_lt_70 no_exit miss_core no_core nocore4yr hrs_lt_84m hrs_lt_60m has_imputed death_b4_core ffs_84m ffs_60m 
 
 foreach x of local samplevars {
 
@@ -6724,399 +6745,251 @@ restore
 
 
 H="7 year graphs"
-
-use "E:\data\hrs_cleaned\core_00_to_14.dta", clear
+use "E:\data\serious_ill\int_data\core_ids_1yr_criteria_5.dta", clear
 sort id core_year
 by id: keep if _n==_N
-keep id reschil_d
-rename reschil_d reschil_d_n1
-tempfile core
-save `core'
+keep id wage*
+duplicates drop
+tempfile t1
+save `t1'
 
-clear all
-set more off
-capture log close
+use "E:\data\burden_dementia\final_data\R01_final.dta", clear
+merge m:1 id using `t1', nogen keep(match master)
+cd "E:\data\burden_dementia\logs\graphs"
 
-cd "E:\data\burden_dementia\logs"
-use "E:\data\burden_dementia\final_data\R01_final_2015.dta", clear
-keep if ffs_7==1
+keep if nflag==0
+keep if ffs_84==1
 
-	
-keep if impute==2
-drop tot_paid*p*
-merge 1:1 id using `core', keep(match master) nogen
+forvalues i=1/7 {
+	gen wi_mc`i'=tot_paid_by_mc_y`i'/wage_index_2012
+}
 
-foreach x of varlist tot* oop* informal* {
+keep id tot_paid_by_mc_y* tot_paid_maid_y* oop_y* informal_y* dem_cohort wi_*
+
+rename tot_paid_by_mc_y* mc*
+rename tot_paid_maid_y* mcaid*
+
+foreach x of varlist mcaid* {
 	replace `x'=0 if missing(`x')
 }
 
+rename (oop_y* informal_y*) (oop* informal*)
 
-	forvalues i=12(12)84 {
-		rename tot_paid_by_mc_`i'm tot_paid_by_mc`=`i'/12'
-		rename tot_paid_maid_n`=`i'/12' tot_paid_by_mcaid`=`i'/12'
-		rename oop_n`=`i'/12' tot_paid_oop`=`i'/12'
-		foreach x in "" _s _u _k _nk {
-			rename informal`x'_n`=`i'/12' tot_paid_informal`x'`=`i'/12'
+foreach x in mc mcaid oop informal wi_mc {
+	forvalues i=1/7 {
+		replace `x'`i'=`x'`i'/1000
 }
-}
-
-foreach x in by_mc by_mcaid oop informal informal_s informal_u informal_k informal_nk {
-	gen cum1_paid_`x'7=tot_paid_`x'7
+	gen cum`x'7=`x'7
 	forvalues i=6(-1)1 {
-		gen cum1_paid_`x'`i'=cum1_paid_`x'`=`i'+1'+tot_paid_`x'`i'
+		gen cum`x'`i'=cum`x'`=`i'+1'+`x'`i'
 }
 }
 
-keep id tot_paid* cum1_* dem_cohort reschil_d_n1 married_or_part
+keep id mc* mcaid* oop* informal* cum* dem_cohort wi*
 
 
-reshape long tot_paid_by_mc tot_paid_by_mcaid tot_paid_oop cum1_paid_by_mc ///
-cum1_paid_by_mcaid cum1_paid_oop tot_paid_informal cum1_paid_informal ///
-tot_paid_informal_u cum1_paid_informal_u tot_paid_informal_s cum1_paid_informal_s ///
-tot_paid_informal_k cum1_paid_informal_k tot_paid_informal_nk cum1_paid_informal_nk ///
-, i(id) j(year_bef_death)
-replace tot_paid_by_mcaid=0 if missing(tot_paid_by_mcaid)
+reshape long mc mcaid oop informal cummc cummcaid cumoop cuminformal wi_mc, ///
+i(id) j(year_before_death)
 
-
-*preserve
 replace year=-year+8
+
 label define year 1 "6-7" 2 "5-6" 3 "4-5" 4 "3-4" 5 "2-3" 6 "1-2" 7 "0-1"
-foreach x of varlist tot* cum* {
-	*replace `x'=`x'/1.03^(year_bef-1)
-}
 label values year year
 
-foreach x in tot cum1 {
-	egen `x'_paid_by_all=rowtotal(`x'_paid_by_mc `x'_paid_by_mcaid `x'_paid_oop ///
-	`x'_paid_informal)
-}
-
-foreach x in by_mc by_mcaid oop informal informal_s informal_u informal_k informal_nk by_all {
-	by dem_cohort year_bef_death, sort: egen annu_`x'=mean(tot_paid_`x')
-	by dem_cohort year_bef_death, sort: egen cum_`x'=mean(cum1_paid_`x')
-	by dem_cohort year_bef_death reschil_d_n1, sort: egen annu_resch_`x'=mean(tot_paid_`x')
-	by dem_cohort year_bef_death married_or_part, sort: egen annu_married_`x'=mean(tot_paid_`x')
+foreach x in "" cum {
+	egen `x'all=rowtotal(`x'mc `x'mcaid `x'oop `x'informal)
 }
 
 
+
+collapse (mean) mc mcaid oop informal all cummc cummcaid cumoop cuminformal cumall wi_mc, ///
+by(dem_cohort year_before_death)
+
+foreach x in mc mcaid oop informal all {
+	twoway (connected `x' year if dem_cohort==0) (connected `x' year if dem_cohort==1), ///
+	legend(label(1 "Non-dementia") label(2 "Probable dementia")) ///
+	xlabel(1 "6-7" 2 "5-6" 3 "4-5" 4 "3-4" 5 "2-3" 6 "1-2" 7 "0-1") ytitle("")
+	graph save annu_`x'_spending_over_time.gph, replace
+	graph export annu_`x'_spending_over_time.pdf, replace
 	
-foreach x in by_mc by_mcaid oop informal informal_s informal_u informal_k informal_nk by_all {
-	by dem_cohort year_bef_death, sort: egen annu_sd_`x'=sd(tot_paid_`x')
-	by dem_cohort year_bef_death, sort: egen cum_sd_`x'=sd(cum1_paid_`x')
+	twoway (connected cum`x' year if dem_cohort==0) (connected cum`x' year if dem_cohort==1), ///
+	legend(label(1 "Non-dementia") label(2 "Probable dementia")) ///
+	xlabel(1 "6-7" 2 "5-6" 3 "4-5" 4 "3-4" 5 "2-3" 6 "1-2" 7 "0-1") ytitle("")
+	graph save cum_`x'_spending_over_time.gph, replace
+	graph export cum_`x'_spending_over_time.pdf, replace
+	
+	graph combine annu_`x'_spending_over_time.gph cum_`x'_spending_over_time.gph, ycommon
+	graph save `x'_spending_7yrs.gph, replace
+	graph export `x'_spending_7yrs.pdf, replace
 }
 
+twoway (connected mc year if dem_cohort==0) (connected mc year if dem_cohort==1) ///
+(connected wi_mc year if dem_cohort==0) (connected wi_mc year if dem_cohort==1), ///
+legend(label(1 "MC, No-D") label(2 "MC-D") label(3 "WIMC, No-D") label(4 "WIMC-D")) ///
+xlabel(1 "6-7" 2 "5-6" 3 "4-5" 4 "3-4" 5 "2-3" 6 "1-2" 7 "0-1") ytitle("")
+graph save annu_`x'_spending_over_time_wi.gph, replace
+graph export annu_`x'_spending_over_time_wi.pdf, replace
 
-foreach x in s u k nk {
-	foreach y in "" resch_ married_ {
-		gen hlphrs_`y'`x'=((annu_`y'informal_`x'/20)/12)
-}	
+
+foreach x in mc mcaid oop informal all {
+	rename `x' annu`x'
 }
-
-by dem_cohort year_bef_death: gen n=_N
-
-rename *informal* *inf*
-drop cum1*
-*preserve
-drop id tot*
-duplicates drop
-format cum* %16.0g
-
-foreach x of varlist annu* cum* {
-	replace `x'=`x'/1000
-}
-
-label var dem_c "Dementia" 
-label var year_bef "Years before death"
-label var annu_by_mc "Annual Medicarenditures"
-label var cum_by_mc "Cumulative Medicare "
-label var annu_by_mca "Annual Medicaid "
-label var cum_by_mca "Cumulative Medicaid "
-label var annu_oop "Annual OOP"
-label var cum_oop "Cumulative OOP"
-label var annu_inf "Annual imputed inf. caregiving"
-label var cum_inf "Cumulative imputed inf. caregiving "
-
-format annu* cum* %9.2fc
-
-log using spending_tables.txt, text replace
-foreach x in by_mc by_mcaid oop inf by_all {
-	list year_bef_death dem_cohort annu_`x' cum_`x', abbreviate(16)
-}
-log close
-
-foreach x in annu_ cum_ {
-	gen hi_`x'all=`x'by_all+ invttail(n-1,0.025)*(`x'sd_by_all/sqrt(n))
-	gen lo_`x'all=`x'by_all-invttail(n-1,0.025)*(`x'sd_by_all/sqrt(n))
-}
-
-/* error bars (can we do serrbar?)
-twoway (rcap lo_annu hi_annu year if dem_cohort==0) (connected annu_by_all year if dem_cohort==0) (connected annu_by_all year if dem_cohort==1), ///
-legend(label(1 "Non-dementia") label(2 "Probable dementia")) xlabel(1 "6-7" 2 "5-6" 3 "4-5" 4 "3-4" 5 "2-3" 6 "1-2" 7 "0-1") 
-
-
-
-graph save annu_all_spending_over_time_7yrs.gph, replace
-graph export annu_all_spending_over_time_7yrs.pdf, replace
-*/
-
-
-
-
-
-
-twoway (connected annu_by_mc year if dem_cohort==0) (connected annu_by_mc year if dem_cohort==1), ///
-legend(label(1 "Non-dementia") label(2 "Probable dementia")) xlabel(1 "6-7" 2 "5-6" 3 "4-5" 4 "3-4" 5 "2-3" 6 "1-2" 7 "0-1")
-graph save annu_mc_spending_over_time_7yrs.gph, replace
-graph export annu_mc_spending_over_time_7yrs.pdf, replace
-twoway (connected annu_by_mca year if dem_cohort==0) (connected annu_by_mca year if dem_cohort==1), ///
-legend(label(1 "Non-dementia") label(2 "Probable dementia")) xlabel(1 "6-7" 2 "5-6" 3 "4-5" 4 "3-4" 5 "2-3" 6 "1-2" 7 "0-1")
-graph save annu_mcaid_spending_over_time_7yrs.gph, replace
-graph export annu_mcaid_spending_over_time_7yrs.pdf, replace
-twoway (connected cum_by_mc year if dem_cohort==0) (connected cum_by_mc year if dem_cohort==1), ///
-legend(label(1 "Non-dementia") label(2 "Probable dementia")) xlabel(1 "6-7" 2 "5-6" 3 "4-5" 4 "3-4" 5 "2-3" 6 "1-2" 7 "0-1")
-graph save cum_mc_spending_over_time_7yrs.gph, replace
-graph export cum_mc_spending_over_time_7yrs.pdf, replace
-twoway (connected cum_by_mca year if dem_cohort==0) (connected cum_by_mca year if dem_cohort==1), ///
-legend(label(1 "Non-dementia") label(2 "Probable dementia")) xlabel(1 "6-7" 2 "5-6" 3 "4-5" 4 "3-4" 5 "2-3" 6 "1-2" 7 "0-1")
-graph save cum_mcaid_spending_over_time_7yrs.gph, replace
-graph export cum_mcaid_spending_over_time_7yrs.pdf, replace
-
-twoway (connected annu_oop year if dem_cohort==0) (connected annu_oop year if dem_cohort==1), ///
-legend(label(1 "Non-dementia") label(2 "Probable dementia")) xlabel(1 "6-7" 2 "5-6" 3 "4-5" 4 "3-4" 5 "2-3" 6 "1-2" 7 "0-1")
-graph save annu_oop_spending_over_time_7yrs.gph, replace
-graph export annu_oopid_spending_over_time_7yrs.pdf, replace
-twoway (connected cum_oop year if dem_cohort==0) (connected cum_oop year if dem_cohort==1), ///
-legend(label(1 "Non-dementia") label(2 "Probable dementia")) xlabel(1 "6-7" 2 "5-6" 3 "4-5" 4 "3-4" 5 "2-3" 6 "1-2" 7 "0-1")
-graph save cum_oop_spending_over_time_7yrs.gph, replace
-graph export cum_oop_spending_over_time_7yrs.pdf, replace
-
-
-twoway (connected annu_inf year if dem_cohort==0) (connected annu_inf year if dem_cohort==1), ///
-legend(label(1 "Non-dementia") label(2 "Probable dementia")) xlabel(1 "6-7" 2 "5-6" 3 "4-5" 4 "3-4" 5 "2-3" 6 "1-2" 7 "0-1")
-graph save annu_informal_spending_over_time_7yrs.gph, replace
-graph export annu_informal_spending_over_time_7yrs.pdf, replace
-twoway (connected cum_inf year if dem_cohort==0) (connected cum_inf year if dem_cohort==1), ///
-legend(label(1 "Non-dementia") label(2 "Probable dementia")) xlabel(1 "6-7" 2 "5-6" 3 "4-5" 4 "3-4" 5 "2-3" 6 "1-2" 7 "0-1")
-graph save cum_informal_spending_over_time_7yrs.gph, replace
-graph export cum_informal_spending_over_time_7yrs.pdf, replace
-
-twoway (connected annu_by_all year if dem_cohort==0) (connected annu_by_all year if dem_cohort==1), ///
-legend(label(1 "Non-dementia") label(2 "Probable dementia")) xlabel(1 "6-7" 2 "5-6" 3 "4-5" 4 "3-4" 5 "2-3" 6 "1-2" 7 "0-1") 
-graph save annu_all_spending_over_time_7yrs.gph, replace
-graph export annu_all_spending_over_time_7yrs.pdf, replace
-twoway (connected cum_by_all year if dem_cohort==0) (connected cum_by_all year if dem_cohort==1), ///
-legend(label(1 "Non-dementia") label(2 "Probable dementia")) xlabel(1 "6-7" 2 "5-6" 3 "4-5" 4 "3-4" 5 "2-3" 6 "1-2" 7 "0-1")
-graph save cum_all_spending_over_time_7yrs.gph, replace
-graph export cum_all_spending_over_time_7yrs.pdf, replace
-
-
-twoway (connected cum_by_mc year if dem_cohort==1) (connected cum_by_mca year if dem_cohort==1) ///
-(connected cum_oop year if dem_cohort==1) ///
-(connected cum_inf year if dem_cohort==1), title("Dementia") ///
-legend(label(1 "Medicare") label(2 "Medicaid") label(3 "OOP") label(4 "Informal")) ///
-saving(cum_spending_diff_dem, replace) xlabel(1 "6-7" 2 "5-6" 3 "4-5" 4 "3-4" 5 "2-3" 6 "1-2" 7 "0-1") 
-
-
-twoway (connected cum_by_mc year if dem_cohort==0) (connected cum_by_mca year if dem_cohort==0) ///
-(connected cum_oop year if dem_cohort==0) ///
-(connected cum_inf year if dem_cohort==0), title("No Dementia") ///
-legend(label(1 "Medicare") label(2 "Medicaid") label(3 "OOP") label(4 "Informal")) ///
-saving(cum_spending_diff_no_dem, replace) xlabel(1 "6-7" 2 "5-6" 3 "4-5" 4 "3-4" 5 "2-3" 6 "1-2" 7 "0-1") 
-
-
-
-graph bar annu_by_mca annu_by_mc annu_oop annu_inf, over(dem_cohort)  over(year) ///
- stack saving(annu_stack_1, replace)
-graph export annu_stack_1_7yrs.pdf, replace
-
-graph bar annu_by_mca annu_by_mc annu_oop annu_inf,over(year)  over(dem_cohort)  ///
-saving(annu_stack_2, replace) stack
-graph export annu_stack_2_7yrs.pdf, replace
 
 preserve
-tokenize inf oop by_mc by_mca 
+
+
+
+
+graph bar annumca annumc annuoop annuinf, over(dem_cohort)  over(year) ///
+stack saving(annu_stack_1, replace) percent 
+graph export annu_stack_1.pdf, replace
+
+graph bar annumca annumc annuoop annuinf if dem_cohort==0, over(year) stack percent ///
+saving(annu_stack_no_dem, replace) legend(off ) title("No dementia" "Annual")
+graph bar annumca annumc annuoop annuinf if dem_cohort==1,over(year)  ///
+saving(annu_stack_dem, replace) stack percent legend(off )title("Dementia" "Annual")
+
+graph bar cummca cummc cumoop cuminf if dem_cohort==0,over(year)  ///
+saving(cum_stack_no_dem, replace) stack percent legend(off ) title("No dementia" "Cumulative")
+graph bar cummca cummc cumoop cuminf if dem_cohort==1,over(year)  ///
+saving(cum_stack_dem, replace) stack percent legend(off ) title("Dementia" "Cumulative")
+
+graph combine annu_stack_no_dem.gph annu_stack_dem.gph cum_stack_no_dem.gph cum_stack_dem.gph, ///
+row(1) xsize(12) ysize(4)
+graph save stacked_percentage_bars_7yrs.gph, replace
+graph export stacked_percentage_bars_7yrs.pdf, replace
+
+
+tokenize inf oop mc mca 
 forvalues i=2/4 {
-	replace annu_``i''=annu_``=`i'-1''+annu_``i''
-	replace cum_``i''=cum_``=`i'-1''+cum_``i''
+	replace annu``i''=annu``=`i'-1''+annu``i''
+	replace cum``i''=cum``=`i'-1''+cum``i''
+}
+
+foreach x in annu cum {
+	twoway (area `x'mcaid year if dem_cohort==0) (area `x'mc year if dem_cohort==0) ///
+	(area `x'oop year if dem_cohort==0) (area `x'inf year if dem_cohort==0), ///
+	title("No Dementia") legend(label(1 "Medicaid") label(2 "Medicare") label(3 "OOP") label(4 "Informal")) ///
+	saving(`x'_spending_diff_no_dem_stacked, replace) ///
+	xlabel(1 "6-7" 2 "5-6" 3 "4-5" 4 "3-4" 5 "2-3" 6 "1-2" 7 "0-1") ytitle("")
+
+	twoway (area `x'mcaid year if dem_cohort==1) (area `x'mc year if dem_cohort==1) ///
+	(area `x'oop year if dem_cohort==1) (area `x'inf year if dem_cohort==1), ///
+	title("Dementia") legend(label(1 "Medicaid") label(2 "Medicare") label(3 "OOP") label(4 "Informal")) ///
+	saving(`x'_spending_diff_dem_stacked, replace) ///
+	xlabel(1 "6-7" 2 "5-6" 3 "4-5" 4 "3-4" 5 "2-3" 6 "1-2" 7 "0-1") ytitle("")
+
+	graph combine `x'_spending_diff_no_dem_stacked.gph `x'_spending_diff_dem_stacked.gph, ///
+	ycommon saving(`x'_spending_stacked_7yrs, replace)
+	graph export `x'_spending_stacked_7yrs.pdf, replace	
 }
 
 
-foreach x in cum annu {
-	twoway (area `x'_by_mca year if dem_cohort==1) (area `x'_by_mc year if dem_cohort==1) (area `x'_oop year if dem_cohort==1) ///
-	(area `x'_inf year if dem_cohort==1), title("Dementia") ///
-	legend(label(1 "Medicaid") label(2 "Medicare") label(3 "OOP") label(4 "Informal")) ///
-	saving(`x'_spending_diff_dem_stacked_7yrs, replace) xlabel(1 "6-7" 2 "5-6" 3 "4-5" 4 "3-4" 5 "2-3" 6 "1-2" 7 "0-1") 
+graph combine cum_spending_diff_no_dem_stacked.gph cum_spending_diff_dem_stacked.gph, ///
+ycommon saving(cum_spending_stacked_7yrs, replace) rows(1)
+graph export cum_spending_stacked_7yrs.pdf, replace
 
 
-	twoway (area `x'_by_mca year if dem_cohort==0) (area `x'_by_mc year if dem_cohort==0) ///
-	(area `x'_oop year if dem_cohort==0) ///
-	(area `x'_inf year if dem_cohort==0), title("No Dementia") ///
-	legend(label(1 "Medicaid") label(2 "Medicare") label(3 "OOP") label(4 "Informal")) ///
-	saving(`x'_spending_diff_no_dem_stacked_7yrs, replace) xlabel(1 "6-7" 2 "5-6" 3 "4-5" 4 "3-4" 5 "2-3" 6 "1-2" 7 "0-1") 
+graph combine cum_spending_diff_no_dem_stacked.gph cum_spending_diff_dem_stacked.gph, ///
+ycommon saving(cum_spending_stacked_7yrs, replace) rows(1)
+graph export cum_spending_stacked_7yrs.pdf, replace
 
-
-	graph combine `x'_spending_diff_no_dem_stacked_7yrs.gph `x'_spending_diff_dem_stacked_7yrs.gph, ///
-	ycommon saving(`x'_spending_stacked, replace)
-	graph export `x'_spending_stacked_7yrs.pdf, replace
-
-	twoway (connected `x'_inf_s year if dem_cohort==0) (connected `x'_inf_u year if dem_cohort==0), ///
-	legend(label(1 "Spouses") label(2 "Other informal helpers")) xlabel(1 "6-7" 2 "5-6" 3 "4-5" 4 "3-4" 5 "2-3" 6 "1-2" 7 "0-1") ///
-	name(`x'_no_dem_basic, replace) title("No Dementia")
-
-	twoway (connected `x'_inf_s year if dem_cohort==1) (connected `x'_inf_u year if dem_cohort==1), ///
-	legend(label(1 "Spouses") label(2 "Other informal helpers")) xlabel(1 "6-7" 2 "5-6" 3 "4-5" 4 "3-4" 5 "2-3" 6 "1-2" 7 "0-1") ///
-	name(`x'_dem_basic, replace) title("Dementia")
-
-	graph combine `x'_no_dem_basic `x'_dem_basic, ycommon
-	graph save `x'_informal_spending_by_type_basic_7yrs.gph, replace
-	graph export `x'_informal_spending_by_type_basic_7yrs.pdf, replace
-
-
-
-	twoway (connected `x'_inf_s year if dem_cohort==0) (connected `x'_inf_k year if dem_cohort==0) ///
-	(connected `x'_inf_nk year if dem_cohort==0), ///
-	legend(label(1 "Spouses") label(2 "Kids") label(3 "Other informal helpers")) ///
-	xlabel(1 "6-7" 2 "5-6" 3 "4-5" 4 "3-4" 5 "2-3" 6 "1-2" 7 "0-1") ///
-	name(`x'_no_dem_kids, replace) title("No Dementia")
-
-	twoway (connected `x'_inf_s year if dem_cohort==1) (connected `x'_inf_k year if dem_cohort==1) ///
-	(connected `x'_inf_nk year if dem_cohort==1), ///
-	legend(label(1 "Spouses") label(2 "Kids") label(3 "Other informal helpers")) ///
-	xlabel(1 "6-7" 2 "5-6" 3 "4-5" 4 "3-4" 5 "2-3" 6 "1-2" 7 "0-1") ///
-	name(`x'_dem_kids, replace) title("Dementia")
-
-	graph combine `x'_no_dem_kids `x'_dem_kids, ycommon
-	graph save `x'_informal_spending_by_type_kids_7yrs.gph, replace
-	graph export `x'_informal_spending_by_type_kids_7yrs.pdf, replace
-
-
-/*
-	twoway (connected `x'_inf_s year if dem_cohort==0 & reschil_d_n1==1) ///
-	(connected `x'_inf_k year if dem_cohort==0 & reschil_d_n1==1) ///
-	(connected `x'_inf_nk year if dem_cohort==0 & reschil_d_n1==1), ///
-	legend(label(1 "Spouses") label(2 "Kids") label(3 "Other informal helpers")) xlabel(1 "6-7" 2 "5-6" 3 "4-5" 4 "3-4" 5 "2-3" 6 "1-2" 7 "0-1") ///
-	name(`x'_no_dem_res_kids, replace) title("No Dementia")
-
-	twoway (connected `x'_inf_s year if dem_cohort==1 & reschil_d_n1==1) ///
-	(connected `x'_inf_k year if dem_cohort==1 & reschil_d_n1==1) ///
-	(connected `x'_inf_nk year if dem_cohort==1 & reschil_d_n1==1), ///
-	legend(label(1 "Spouses") label(2 "Kids") label(3 "Other informal helpers")) xlabel(1 "6-7" 2 "5-6" 3 "4-5" 4 "3-4" 5 "2-3" 6 "1-2" 7 "0-1") ///
-	name(`x'_dem_res_kids, replace) title("Dementia")
-
-	graph combine `x'_no_dem_res_kids `x'_dem_res_kids, ycommon
-	graph save `x'_informal_spending_by_type_res_kids_7yrs.gph, replace
-	graph export `x'_informal_spending_by_type_res_kids_7yrs.pdf, replace
-
-
-
-
-	twoway (connected `x'_inf_s year if dem_cohort==0 & married_or==1) ///
-	(connected `x'_inf_k year if dem_cohort==0 & married_or==1) ///
-	(connected `x'_inf_nk year if dem_cohort==0 & married_or==1), ///
-	legend(label(1 "Spouses") label(2 "Kids") label(3 "Other informal helpers")) xlabel(1 "6-7" 2 "5-6" 3 "4-5" 4 "3-4" 5 "2-3" 6 "1-2" 7 "0-1") ///
-	name(`x'_no_dem_married, replace) title("No Dementia")
-
-	twoway (connected `x'_inf_s year if dem_cohort==1 & married_or==1) ///
-	(connected `x'_inf_k year if dem_cohort==1 & married_or==1) ///
-	(connected `x'_inf_nk year if dem_cohort==1 & married_or==1), ///
-	legend(label(1 "Spouses") label(2 "Kids") label(3 "Other informal helpers")) xlabel(1 "6-7" 2 "5-6" 3 "4-5" 4 "3-4" 5 "2-3" 6 "1-2" 7 "0-1") ///
-	name(`x'_dem_married, replace) title("Dementia")
-
-	graph combine `x'_no_dem_married `x'_dem_married, ycommon
-	graph save `x'_informal_spending_by_type_married_7yrs.gph, replace
-	graph export `x'_informal_spending_by_type_married_7yrs.pdf, replace	
-*/
-
-}
-
-	twoway (connected hlphrs_s year if dem_cohort==0) (connected hlphrs_u year if dem_cohort==0), ///
-	legend(label(1 "Spouses") label(2 "Other informal helpers")) xlabel(1 "6-7" 2 "5-6" 3 "4-5" 4 "3-4" 5 "2-3" 6 "1-2" 7 "0-1") ///
-	name(`x'_no_dem, replace) title("No Dementia")
-
-	twoway (connected hlphrs_s year if dem_cohort==1) (connected hlphrs_u year if dem_cohort==1), ///
-	legend(label(1 "Spouses") label(2 "Other informal helpers")) xlabel(1 "6-7" 2 "5-6" 3 "4-5" 4 "3-4" 5 "2-3" 6 "1-2" 7 "0-1") ///
-	name(`x'_dem, replace) title("Dementia")
-
-	graph combine `x'_no_dem `x'_dem, ycommon
-	graph save hlphrs_hrs_by_type_basic_7yrs.gph, replace
-	graph export hlphrs_hrs_by_type_basic_7yrs.pdf, replace
-
-
-
-
-	twoway (connected hlphrs_s year if dem_cohort==0) (connected hlphrs_k year if dem_cohort==0) ///
-	(connected hlphrs_nk year if dem_cohort==0), ///
-	legend(label(1 "Spouses") label(2 "Kids") label(3 "Other informal helpers")) ///
-	xlabel(1 "6-7" 2 "5-6" 3 "4-5" 4 "3-4" 5 "2-3" 6 "1-2" 7 "0-1") ///
-	name(`x'_no_dem, replace) title("No Dementia")
-
-	twoway (connected hlphrs_s year if dem_cohort==1) (connected hlphrs_k year if dem_cohort==1) ///
-	(connected hlphrs_nk year if dem_cohort==1), ///
-	legend(label(1 "Spouses") label(2 "Kids") label(3 "Other informal helpers")) ///
-	xlabel(1 "6-7" 2 "5-6" 3 "4-5" 4 "3-4" 5 "2-3" 6 "1-2" 7 "0-1") ///
-	name(`x'_dem, replace) title("Dementia")
-
-	graph combine `x'_no_dem `x'_dem, ycommon
-	graph save hlphrs_hrs_by_type_kids_7yrs.gph, replace
-	graph export hlphrs_hrs_by_type_kids_7yrs.pdf, replace
-
-
-
-
-	twoway (connected hlphrs_resch_s year if dem_cohort==0 & reschil_d_n1==1) (connected hlphrs_resch_k year if dem_cohort==0 & reschil_d_n1==1) ///
-	(connected hlphrs_resch_nk year if dem_cohort==0 & reschil_d_n1==1), ///
-	legend(label(1 "Spouses") label(2 "Kids") label(3 "Other informal helpers")) xlabel(1 "6-7" 2 "5-6" 3 "4-5" 4 "3-4" 5 "2-3" 6 "1-2" 7 "0-1") ///
-	name(`x'_no_dem, replace) title("No Dementia")
-
-	twoway (connected hlphrs_resch_s year if dem_cohort==1 & reschil_d_n1==1) ///
-	(connected hlphrs_resch_k year if dem_cohort==1 & reschil_d_n1==1) ///
-	(connected hlphrs_resch_nk year if dem_cohort==1 & reschil_d_n1==1), ///
-	legend(label(1 "Spouses") label(2 "Kids") label(3 "Other informal helpers")) xlabel(1 "6-7" 2 "5-6" 3 "4-5" 4 "3-4" 5 "2-3" 6 "1-2" 7 "0-1") ///
-	name(`x'_dem, replace) title("Dementia")
-
-	graph combine `x'_no_dem `x'_dem, ycommon
-	graph save hlphrs_hrs_by_type_res_kids_7yrs.gph, replace
-	graph export hlphrs_hrs_by_type_res_kids_7yrs.pdf, replace
-
-	
-
-	twoway (connected hlphrs_married_s year if dem_cohort==0 & married_or==1) (connected hlphrs_married_k year if dem_cohort==0 & married_or==1) ///
-	(connected hlphrs_married_nk year if dem_cohort==0 & married_or==1), ///
-	legend(label(1 "Spouses") label(2 "Kids") label(3 "Other informal helpers")) xlabel(1 "6-7" 2 "5-6" 3 "4-5" 4 "3-4" 5 "2-3" 6 "1-2" 7 "0-1") ///
-	name(`x'_no_dem, replace) title("No Dementia")
-
-	twoway (connected hlphrs_married_s year if dem_cohort==1 & married_or==1) ///
-	(connected hlphrs_married_k year if dem_cohort==1 & married_or==1) ///
-	(connected hlphrs_married_nk year if dem_cohort==1 & married_or==1), ///
-	legend(label(1 "Spouses") label(2 "Kids") label(3 "Other informal helpers"))  xlabel(1 "6-7" 2 "5-6" 3 "4-5" 4 "3-4" 5 "2-3" 6 "1-2" 7 "0-1") ///
-	name(`x'_dem, replace) title("Dementia")
-
-	graph combine `x'_no_dem `x'_dem, ycommon
-	graph save hlphrs_hrs_by_type_married_7yrs.gph, replace
-	graph export hlphrs_hrs_by_type_married_7yrs.pdf, replace	
-
-
-
-
-graph dir, m
-
-graph combine annu_spending_diff_no_dem_stacked_7yrs.gph annu_spending_diff_dem_stacked_7yrs.gph ///
-cum_spending_diff_no_dem_stacked_7yrs.gph cum_spending_diff_dem_stacked_7yrs.gph, ycommon ///
-saving(spending_stacked, replace) rows(1) ysize(4) xsize(12)
+graph combine annu_spending_diff_no_dem_stacked.gph annu_spending_diff_dem_stacked.gph ///
+cum_spending_diff_no_dem_stacked.gph cum_spending_diff_dem_stacked.gph, ycommon ///
+saving(spending_stacked_7yrs, replace) rows(1) ysize(4) xsize(12)
 graph export spending_stacked_7yrs.pdf, replace
 
-graph combine annu_mc_spending_over_time_7yrs.gph cum_mc_spending_over_time_7yrs.gph, ycommon
-graph combine annu_mcaid_spending_over_time_7yrs.gph cum_mcaid_spending_over_time_7yrs.gph, ycommon
-graph combine annu_oop_spending_over_time_7yrs.gph cum_oop_spending_over_time_7yrs.gph, ycommon
-graph combine annu_informal_spending_over_time_7yrs.gph cum_informal_spending_over_time_7yrs.gph, ycommon
-graph combine annu_all_spending_over_time_7yrs.gph cum_all_spending_over_time_7yrs.gph, ycommon
+
+H="Medicaid graphs"
+
+
+cd "E:\data\burden_dementia\logs\graphs"
+
+use bid_hrs_22 ffs_84 using "E:\data\burden_dementia\final_data\R01_final.dta", clear
+keep if ffs_84==1
+drop if missing(bid)
+duplicates drop
+merge 1:m bid_hrs_22 using "E:\data\CMS_DUA_51675_2014\Merged\Stata\basf_1998_2015.dta", ///
+keep(match) nogen
+keep bid buyin_mo start_dt
+gen year=year(start_dt)
+drop if missing(bid_hrs)
+tempfile mbsf
+save `mbsf'
+
+import excel "E:\data\hrs_restricted_2014\Ref Docs\Medicaid generosity.xlsx", sheet("Sheet1") firstrow case(lower) clear
+rename location stateusps
+tempfile generosity
+save `generosity'
+
+use "E:\data\burden_dementia\final_data\R01_final.dta" if ffs_84==1, clear
+drop buyin_mo
+sort id nflag
+by id: carryforward bid_hrs_22, replace
+replace year=index_year if nflag==0
+sort id year nflag
+by id year: keep if _n==1
+merge m:1 stateusps using `generosity', gen(gm)
+drop if gm==2
+duplicates report bid_hrs_22 year
+merge 1:1 bid_hrs_22 year using `mbsf', gen(mbsf)
+drop if mbsf==2
+tab mbsf
+tab medicaid
+gen mbsf_medicaid=buyin_mo>=1 if !missing(buyin_mo)
+tab mbsf_medicaid
+tab nflag
+gen t2d=index_date-c_ivw_date
+replace t2d=0 if index_year==year
+sum t2d
+gen y2d=ceil(t2d/365.25)
+tab y2d
+gen baseline=1 if year>=7
+replace baseline=y2d>=7
+sort id baseline y2d
+by id baseline: drop if baseline & _n>1
+replace y2d=7 if y2d>7
+replace year=-y2d+8
+replace medicaid=medicaid_exit if missing(medicaid)
+replace medicaid=0 if missing(medicaid)
+preserve
+collapse (mean) medicaid mbsf_medicaid generous (count) nmcaid=medicaid nmbsf=mbsf_medicaid n=generous, by(year)
 
 
 
-
-
+twoway (connected medicaid year) (connected mbsf_ year) (connected generous year), ///
+xlabel(1 "6-7" 2 "5-6" 3 "4-5" 4 "3-4" 5 "2-3" 6 "1-2" 7 "0-1" 8 "at death")xtitle("")  ytitle("") ///
+legend(label(1 "SR Medicaid") label(2 "Medicaid from Buy-in") ///
+label(3 "Resides in Generous State")) saving(medicaid_over_time, replace)
 
 restore
+preserve
+collapse (mean) medicaid mbsf_medicaid generous (count) ///
+nmcaid=medicaid nmbsf=mbsf_medicaid n=generous, by(year dem_cohort)
+
+twoway (connected medicaid year if dem_cohort==1) (connected mbsf_ year if dem_cohort==1) (connected generous year if dem_cohort==1), ///
+xlabel(1 "6-7" 2 "5-6" 3 "4-5" 4 "3-4" 5 "2-3" 6 "1-2" 7 "0-1" 8 "at death")xtitle("")  ytitle("") ///
+legend(label(1 "SR Medicaid") label(2 "Medicaid from Buy-in") ///
+label(3 "Resides in Generous State")) saving(medicaid_over_time_dem, replace) ///
+title("No Dementia")
+
+twoway (connected medicaid year if dem_cohort==0) (connected mbsf_ year if dem_cohort==0) (connected generous year if dem_cohort==0), ///
+xlabel(1 "6-7" 2 "5-6" 3 "4-5" 4 "3-4" 5 "2-3" 6 "1-2" 7 "0-1" 8 "at death")xtitle("")  ytitle("") ///
+legend(label(1 "SR Medicaid") label(2 "Medicaid from Buy-in") ///
+label(3 "Resides in Generous State")) saving(medicaid_over_time_no_dem, replace) title("Dementia") 
+
+graph combine medicaid_over_time_no_dem.gph medicaid_over_time_dem.gph, ycommon ///
+saving(medicaid_combined, replace)
+graph export medicaid_combined.pdf, replace
+
+twoway (connected medicaid year if dem_cohort==1) (connected mbsf_ year if dem_cohort==1) ///
+(connected medicaid year if dem_cohort==0) (connected mbsf_ year if dem_cohort==0), ///
+xlabel(1 "6-7" 2 "5-6" 3 "4-5" 4 "3-4" 5 "2-3" 6 "1-2" 7 "0-1" 8 "at death")xtitle("")  ytitle("") ///
+legend(label(1 "SR Medicaid-Dem") label(2 "Medicaid from Buy-in-Dem") ///
+label(3 "SR Medicaid-no-Dem") label(4 "Medicaid from Buy-in-no-Dem")) ///
+saving(medicaid_over_time_7yrs, replace)
+graph export medicaid_over_time_7yrs.pdf, replace
+
 
 
 H="*********************************"

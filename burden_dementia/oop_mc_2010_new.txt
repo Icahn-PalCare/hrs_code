@@ -1245,7 +1245,7 @@ interview dates in oop dataset are just by month*/
 
 /*get interview dates from core datasets, ultimately from restricted data*/
 data core_dates;
-set hrs_cln.core_00_to_10;
+set hrs_cln.core_00_to_14;
 keep id core_year c_ivw_date c_ivw_year c_ivw_month c_ivw_day ;
 rename core_year=year;
 rename c_ivw_date=ivw_date_e;
@@ -1256,7 +1256,7 @@ run;
 
 /*use dod=exit interview date to match oop dataset*/
 data exit_dates;
-set oop_int.exit_restricted_02_to_10_v1;
+set oop_int.exit_restricted_02_to_14_v1;
 keep id exit_year_x death_date_e ;
 rename exit_year_x=year;
 rename death_date_e=ivw_date_e;
@@ -1319,7 +1319,7 @@ proc freq; table prev_ivw_date_e_imp; run;
 
 /*get snf claims only from full medpar dataset*/
 data snf_2000_2010;
-set medi.mp_2000_2010(where=(trim(left(SSLSSNF))="N"));
+set medi.mp_2000_2012(where=(trim(left(SSLSSNF))="N"));
 run;
 
 /*identify claims where entire claim is within the interview window*/
@@ -1327,7 +1327,7 @@ proc sql;
 create table snf_meet as select a.*,b.ivw_date_e,b.prev_ivw_date_e
 from snf_2000_2010 a inner join
 oop_bid_dec_5 b
-on trim(left(a.BID_HRS_19))=trim(left(b.BID_hrs))
+on trim(left(a.BID_HRS_21))=trim(left(b.BID_hrs))
 and b.prev_ivw_date_e<=a.admit_date and a.disch_date<=b.ivw_date_e;
 quit;
 
@@ -1337,7 +1337,7 @@ proc sql;
 create table snf_meet2 as select a.*,b.ivw_date_e,b.prev_ivw_date_e
 from snf_2000_2010 a inner join
 oop_bid_dec_5 b
-on trim(left(a.BID_HRS_19))=trim(left(b.BID_hrs))
+on trim(left(a.BID_HRS_21))=trim(left(b.BID_hrs))
 and a.admit_date<b.prev_ivw_date_e and a.disch_date>b.prev_ivw_date_e ;
 quit;
 
@@ -1360,7 +1360,7 @@ proc sql;
 create table snf_meet4 as select a.*,b.prev_ivw_date_e,b.ivw_date_e
 from snf_2000_2010 a inner join
 oop_bid_dec_5 b
-on trim(left(a.BID_HRS_19))=trim(left(b.BID_hrs))
+on trim(left(a.BID_HRS_21))=trim(left(b.BID_hrs))
 and (b.prev_ivw_date_e<=a.admit_date) and (b.ivw_date_e<a.disch_date) 
 and (a.admit_date<b.ivw_date_e);
 quit;
@@ -1422,14 +1422,14 @@ run;
 proc means; var total_snf_los snf_days_mc_paid; run;
 
 /*sum over all claims by interview window*/
-proc sort data=snf_all; by bid_hrs_19 ivw_date_e; run;
+proc sort data=snf_all; by bid_hrs_21 ivw_date_e; run;
 
 proc sql;
-create table snf_ivw as select distinct bid_hrs_19, ivw_date_e,
+create table snf_ivw as select distinct bid_hrs_21, ivw_date_e,
 sum(total_snf_los) as snf_stay_all_ivw ,
 sum(snf_days_mc_paid) as los_snf_paid_by_mc_ivw ,
 sum(util_day) as tot_util_days_ivw
-from snf_all group by bid_hrs_19 , ivw_date_e;
+from snf_all group by bid_hrs_21 , ivw_date_e;
 quit;
 
 proc means; var snf_stay_all_ivw los_snf_paid_by_mc_ivw tot_util_days_ivw; run;
@@ -1439,13 +1439,13 @@ proc means; var snf_stay_all_ivw los_snf_paid_by_mc_ivw tot_util_days_ivw; run;
 /************************************************************/
 proc sort data=oop_bid_dec_5; by bid_hrs ivw_date_e; run;
 
-proc sort data=snf_ivw ; by bid_hrs_19 ivw_date_e; run;
+proc sort data=snf_ivw ; by bid_hrs_21 ivw_date_e; run;
 
 proc sql;
-create table oop_bid_dec_nh(drop=ivw_date_e2 bid_hrs_19) as select * from
+create table oop_bid_dec_nh(drop=ivw_date_e2 bid_hrs_21) as select * from
 oop_bid_dec_5 a left join
 snf_ivw(rename=(ivw_date_e=ivw_date_e2)) b 
-on a.bid_hrs=b.bid_hrs_19 and a.ivw_date_e=b.ivw_date_e2;
+on a.bid_hrs=b.bid_hrs_21 and a.ivw_date_e=b.ivw_date_e2;
 quit;
 
 proc sql; select count( distinct id) from oop_bid_dec_nh ; quit;
@@ -1973,13 +1973,19 @@ Preliminary methodology:
 rather than the state prices used for the main analysis
 */
 
-proc sort data=oop_int.oop_nh_costs_2 out=hh_costs_1;
+proc sort data=oop_int.oop_bid_dec_nh_3 out=oop_int.oop_nh_costs_2;
 by id year;
 run; 
 
+data hh_costs_1;
+set oop_int.oop_nh_costs_2;
+run;
+
+
 /*get cost/month using helper hours*/
 data hh_costs_2;
-set hh_costs_1(keep=id months year iwtype n_s n_u numpaidhelpers hlphrs_s hlphrs_u helper_OOP avg_hh_aide_rate national_hh_aide_rate);
+set hh_costs_1(keep=id months year iwtype n_s n_u numpaidhelpers hlphrs_s hlphrs_u helper_OOP /* avg_hh_aide_rate national_hh_aide_rate */);
+/*
 if avg_hh_aide_rate~=.;
 
 if hlphrs_s~=. then do;
@@ -1990,10 +1996,13 @@ if hlphrs_u~=. then do;
 	hh_u_capped=0;
 	natl_hh_u_capped=0;
 end;
+*/
 if helper_OOP~=. then ind_helper_OOP_mod=0;
 
 /*imputed costs per month for spouse and other unpaid helpers
 cost/helper capped at $15000 per month, same as it was in the OOP dataset*/
+
+/*
 hh_s_cost_per_mo=hlphrs_s*avg_hh_aide_rate;
 natl_hh_s_cost_per_mo=hlphrs_s*national_hh_aide_rate;
 if hh_s_cost_per_mo>15000 & hh_s_cost_per_mo~=. then do;
@@ -2014,26 +2023,30 @@ if natl_hh_u_cost_per_mo>15000 & natl_hh_u_cost_per_mo~=. then do;
 	natl_hh_u_cost_per_mo=15000;
 	natl_hh_u_capped=1;
 	end;
+*/
 
 if months>=4 then helper_OOP_per_mo=helper_OOP/4;
 else helper_OOP_per_mo=helper_OOP/months;
 
+/*
 label hh_s_cost_per_mo="Spouse helpers cost per month";
 label hh_u_cost_per_mo="Other unpaid helpers cost per month";
 
 label natl_hh_s_cost_per_mo="Spouse helpers cost per month, national prices";
 label natl_hh_u_cost_per_mo="Other unpaid helpers cost per month, national prices";
-
+*/
 label helper_OOP_per_mo="OOP helpers per month";
 
 run;
 
+/*
 proc means print nway;
 class iwtype;
 var hh_s_capped hh_u_capped hh_s_cost_per_mo hh_u_cost_per_mo helper_OOP_per_mo 
  natl_hh_s_capped natl_hh_u_capped natl_hh_s_cost_per_mo natl_hh_u_cost_per_mo ;
 run;
 
+/*
 /*get helpers, cost/month previous interview period*/
 data hh_costs_3;
 set hh_costs_2;
@@ -2057,7 +2070,7 @@ if first.id then list=.;
 end;
 run;
 
-proc freq; table n_s*n_s_1bef n_u*n_u_1bef numpaidhelpers*numpaidhelpers_1bef; run;
+/* proc freq; table n_s*n_s_1bef n_u*n_u_1bef numpaidhelpers*numpaidhelpers_1bef; run; */
 
 
 /*Use previous interview to determine months
@@ -2193,7 +2206,7 @@ H="Get OOP data for exit, n1, n2 and n3 cores"
 Collects OOP data for decedents from exit, n1, n2, and n3 core interview imputations
 Dataset is oop_int.oop_x_n1_n2_n3
 */
-libname oop_int "E:\data\hrs_oop_2010\int_data";
+libname oop_int "E:\data\burden_dementia\int_data";
 libname hrs_cln 'E:\data\hrs_cleaned';
 
 /*OOP dataset with added nursing home stay, costs information
@@ -2540,6 +2553,8 @@ RX is capped at $300/month to mimic cap set once
 Medicare Part D was implemented*/
 /**********************************************************************/
 /**********************************************************************/
+options nofmterr; run;
+
 data adjust_rx_start;
 *set adjust_oop_n3;
 set oop_int.oop_x_n1_n2_n3;
@@ -2786,6 +2801,8 @@ run;
 proc means data=oop_int.oop_24m_60m;
 vars hlphrs_p_24m hlphrs_s_24m ind_24m_oop_yes;
 run;
+
+proc export data=oop_int.oop_24m_60m outfile="E:\data\burden_dementia\int_data\oop_24m_60m_2016oop.dta" dbms=stata replace; run;
 
 proc means; vars s_months_used_24m u_months_used_24m OOP_months_used_24m; run;
 proc means; vars s_months_used_60m u_months_used_60m OOP_months_used_60m; run;

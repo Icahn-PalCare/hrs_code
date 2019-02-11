@@ -163,9 +163,8 @@ proc export data=proxy outfile="E:\data\serious_ill\int_data\proxy.dta" replace;
 
 
 H="Proxy stata"
-cd "E:\data\serious_ill\int_data"
 
-use proxy.dta, clear
+use "E:\data\serious_ill\int_data\proxy.dta", clear
 
 
 local fvars 1389 1394 1399 1404 1409 1414 1419 1424 1429 1434 ///
@@ -192,51 +191,74 @@ foreach g of local gvars {
 keep hhid pn *d* core_year
 tokenize f g h j k l m n o
 gen cy2=(core_year-1996)/2
+levelsof cy2, local(levels)
+
 local j=1
 local k=506
 forvalues i=1/16 {
 	gen base=.
 	gen bet=.
 	gen worse=.
-	forvalues j=1/9 {
-		replace base=``j''d`k' if cy2==`j'
-		replace bet=``j''d`=`k'+1' if cy2==`j'
-		replace worse=``j''d`=`k'+2' if cy2==`j'
+	gen pc`i'_notdone=0
+	foreach j of local levels {
+		qui replace pc`i'_notdone=1 if ``j''d`k'==4 & cy2==`j' 
+		qui replace base=``j''d`k' if cy2==`j'
+		qui replace bet=``j''d`=`k'+1' if cy2==`j'
+		qui replace worse=``j''d`=`k'+2' if cy2==`j'
 }
 	gen pc`i'=3 if base==2
-	replace pc`i'=bet if inlist(bet,1,2)
-	replace pc`i'=worse if inlist(worse,4,5)
+	qui replace pc`i'=bet if inlist(bet,1,2)
+	qui replace pc`i'=worse if inlist(worse,4,5)
 	drop base bet worse
 	local k=`k'+3
 	local j=`j'+1
 }
-foreach x in miss total mean {
-	egen iq`x'=row`x'(pc1-pc16)
-	if "`x'"!="miss" {
-	replace iq`x'=. if iqmiss>0
+
+forvalues i=1/16 {
+	local pc `pc' pc`i'
 }
+foreach x in miss total mean {
+	egen iq`x'=row`x'(`pc')
+
 }
 
+
+
+
+
 drop if iqmiss==16
-save proxycog.dta, replace
+save E:/data/serious_ill/int_data/proxycog.dta, replace
+
 
 
 H="get pdem for all and export dataset"
+use "E:\data\hrs_public_2014\rand2014\main\trk2014tr_r.dta", clear
 
+
+tokenize a b c d e f g h j k l m n o
+
+local yr=1
+foreach x in 1992 1993 1994 1995 1996 1998 2000 2002 2004 2006 2008 2010 2012 2014 {
+	rename ``yr''age age`x'
+	local yr=`yr'+1
+}	
+keep hhid pn age* gender
+reshape long age, i(hhid pn) j(core_year)
+tempfile track
+save `track'
 
 use "E:\data\hrs_cleaned\core_00_to_14.dta", clear
 gen prediction_year=core_year+1
 merge 1:1 hhid pn core_year using "E:\data\hrs_cleaned\working\tics_9814.dta" , nogen keep(match master)
 merge 1:1 hhid pn prediction_year using  "E:\data\hrs_public_2012\dementia\pdem_withvarnames.dta", keepusing(prob)  keep(match master) nogen
 merge 1:1 hhid pn core_year using "E:\data\hrs_public_2012\dementia\ADAMS\dementia_dx_adams_wave1_only.dta", nogen
-merge m:1 hhid  pn using "E:\data\hrs_cleaned\restricted_tracker_v2012.dta", keepusing(birth_date gender) keep(match master) nogen
+merge m:1 hhid  pn core_year using `track', keepusing(age gender) keep(match master) nogen
 merge 1:1 hhid pn core_year using "E:\data\serious_ill\int_data\proxycog.dta", nogen keep(match master) keepusing(iq*)
 
 replace female=gender-1 if !missing(gender)
 
-//note--3/28/18--temporarily use 12/31/14 as ivw date for core_year 2014 until we get restricted data
 replace c_ivw_date=td(31dec2014) if core_year==2014 & missing(c_ivw_date)
-gen age=floor((c_ivw_date-birth_date)/365.25)
+
 keep if age>=65
 gen age_cat=1
 replace age_cat=2 if age>=70
@@ -272,6 +294,7 @@ iadl_diff_index adlmiss iadlmiss iqmean iqmissgt2 iqmissany
 sum n `cogvars' if !proxy & !missing(dx_a)
 sum n `cogvars' if proxy & !missing(dx_a)
 
+
 foreach x of local cogvars {
 sort id core_year
 qui by id: gen prev`x'=`x'[_n-1]
@@ -287,23 +310,26 @@ if inlist("`x'","imrc","dlrc","ser7","bwc20","dates","scis","cact","pres","vp") 
 qui replace ch_`x'=0 if ch_`x'==.
 qui replace prev`x'=`x' if prev`x'==.
 sum prev`x' if proxy==1
-replace prev`x'=r(mean) if missprev`x' & proxy==1 & prevproxy==1
+replace prev`x'=0 if missprev`x' & proxy==1 & prevproxy==1 & "`x'" !="proxy_core"
 }
 gen adliadlmiss=adlmiss | iadlmiss
+egen cogmissany=rowmax(missbwc missser7 missscis misscact misspres missimrc missdlrc ///
+missdates adliadlmiss)
 
+egen missprev=rowmax(missprevimrc missprevdlrc missprevser7 missprevbwc20 missprevdates ///
+missprevscis missprevcact missprevpres missprevvp)
 
 /*note-most missing variables excluded due to collinearity*/
 local regvars  age_cat3 age_cat4 age_cat5 age_cat6 ed_hs_only ed_gt_hs female ///
 adl_diff_index iadl_diff_index ch_adl_diff ch_iadl_diff  dates bwc20 ///
 ser7 scis cact pres imrc dlrc ch_dates ch_bwc20 ch_ser7 ch_scis ch_cact ch_pres ///
-ch_imrc ch_dlrc missbwc20 missser7 misssci misscact misspres missimrc ///
-missdlrc missdates adliadlmiss 
+ch_imrc ch_dlrc 
 
 local proxyvars  age_cat3 age_cat4 age_cat5 age_cat6 ed_hs_only ed_gt_hs female ///
-adl_diff_index iadl_diff_index ch_adl_diff ch_iadl_diff iqmean  iqmissany ch_iqmean ///
-prevproxy prevdates prevser7 prevpres previmrc prevdlrc ///
- missprevdates missprevpres missprevimrc missprevdlrc ///
-adliadlmiss  previqmissany
+adl_diff_index iadl_diff_index ch_adl_diff ch_iadl_diff iqmean  ///
+prevproxy c.ch_iqmean prevdates prevser7 prevpres previmrc prevdlrc
+
+
 
 sum `regvars' if core_year==2012
 sum `regvars' if core_year==2014
@@ -312,10 +338,12 @@ sum `proxyvars' if proxy & !missing(dx_a)
 
 
 oprobit dx `regvars' if proxy==0
+estimate store oprob1
 predict pself if proxy==0
 predict pself2 if proxy==0, outcome(#2)
 predict pself3 if proxy==0, outcome(#3)
 oprobit dx `proxyvars' if proxy==1
+estimates store oprob2
 predict pdem if proxy==1
 predict pdem2 if proxy==1, outcome(#2)
 predict pdem3 if proxy==1, outcome(#3)
@@ -332,9 +360,21 @@ gen likely_dem=ldem==1 if !missing(pdem)
 gen likely_cind=ldem==2 if !missing(pdem)
 gen likely_normal=ldem==3 if !missing(pdem)
 preserve
-keep id proxy pdem* prob_dem dx_adams core_year ldem likely_*
+keep id hhid pn proxy pdem* prob_dem core_year
 rename prob_dem prob_hurd
 save E:\data\hrs_public_2014\dementia\pdem_withvarnames_00_14, replace
+restore
+gen dem=dx_adams==1 if !missing(dx_adams)
+*logit dem pdem
+*lroc
+gen mdem=missing(pdem)
+tab mdem
+gen mhurd=missing(prob) if core_year<=2006 & age>=70
+tab mdem mhurd if !missing(dx_a)
+
+sum `regvars' if !proxy & core_year>=2000
+sum `proxyvars' if proxy & core_year>=2000
+
 
 
 H="***********************************"
@@ -900,7 +940,22 @@ note("Restricted to instances with 12m FFS with only one diagnosis & non-missing
 
 
 H="recreate hurd tables"
-use  E:\data\hrs_public_2012\dementia\ADAMS\dementia_dx_adams if !missing(dx), clear
+capture log close
+set more off
+
+cd "E:\data\hrs_public_2014\dementia"
+
+
+use "E:\Files to move out\New Data\ucsf code for dementia in hrs\cogvars_gdr_20170518.dta", clear
+rename hhidpn id
+reshape long memimp dementpimp, i(id) j(wave)
+
+gen core_year=wave*2+1992
+tempfile wu
+save `wu'
+
+
+use  E:\data\hrs_public_2014\dementia\ADAMS\dementia_dx_adams if !missing(dx), clear
 rename dx_a dx1
 rename core_year core_prior_to_adams
 gen core_year=core_prior if adams_wave==1
@@ -908,7 +963,7 @@ replace core_year=2*(floor(adams_year/2)) if adams_wave>1
 replace core_year=2006 if adams_wave==3
 duplicates tag id core_year, gen(dup)
 replace core_year=core_year+2 if dup==1 & adams_wave>1
-merge 1:1 id core_year using E:\data\hrs_public_2014\dementia\pdem_withvarnames_00_14, nogen keep(match)
+merge 1:1 id core_year using E:\data\hrs_public_2014\dementia\pdem_withvarnames_00_14_test, nogen keep(match)
 *merge 1:1 id core_year using E:\data\hrs_cleaned\core_00_to_12
 *merge m:1 hhid  pn using "E:\data\hrs_cleaned\restricted_tracker_v2012.dta", keepusing(birth_date gender) keep(match master) nogen
 
@@ -944,15 +999,24 @@ foreach i in 0 {
 	local r=`r'+1
 }
 
-frmttable using "E:\data\hrs_public_2012\dementia\hurd_replication_tables`c(current_date)'.rtf", replace statmat(tab) ctitles("Bin" "N" "Fitted Prob" "Actual prob" ///
+frmttable using "E:\data\hrs_public_2014\dementia\hurd_replication_tables`c(current_date)'.rtf", replace statmat(tab) ctitles("Bin" "N" "Fitted Prob" "Actual prob" ///
 "Estimated cases" "Actual cases") sdec(0,0,3,3,3,0) ///
 title(Replication Hurd Table S1)
 
+rename dx1 dx_inwave
+sort id adams_wave
+by id: egen lw=max(adams_wave)
+levelsof adams_wave, local(levels)
+foreach l of local levels {
+	by id: egen dx`l'=max(cond(adams_wave==`l',dx_inwave,.))
+}
 
 by id, sort: egen adx=max(dx_a)
 label values adx dx_adams
+
+
 preserve
-keep if adams_wave==3 & !missing(ldem)
+keep if adams_wave==3 & !missing(ldem) & !missing(prob_)
 
 tab adx dx1, row nofreq
 tab adx ldem, row nofreq
@@ -966,7 +1030,7 @@ foreach x in 3 2 "3,2" {
 	mat tab[`r',1]=r(N)
 	local denom=r(N)
 	foreach y in 3 2 1 {
-		sum adx if dx1==`y' & inlist(adx,`x')
+		sum adx if dx_inwave==`y' & inlist(adx,`x')
 		mat tab[`r',`c']=(r(N)/`denom')*100
 		local c=`c'+1
 }
@@ -976,16 +1040,18 @@ foreach x in 3 2 "3,2" {
 
 mat rownames tab=Normal CIND Total
 
-frmttable using "E:\data\hrs_public_2012\dementia\hurd_replication_tables`c(current_date)'.rtf", addtable statmat(tab) ctitles("" "" "Wave C" "" \"Wave A" "N" "Normal" "CIND" ///
+frmttable using "E:\data\hrs_public_2014\dementia\hurd_replication_tables`c(current_date)'.rtf", addtable statmat(tab) ctitles("" "" "Wave C" "" \"Wave A" "N" "Normal" "CIND" ///
 "Demented") title(Replication Hurd table S4) sdec(0,1,1,1)
+
+
 
 mat tab=J(4,3,.)
 local r=1
 local c=1
 
-foreach x in 3 2 "" {
+foreach x in normal cind dem {
 	foreach y in 3 2 1 "1,2,3" {
-		sum pdem`x' if inlist(dx1,`y') 
+		sum likely_`x' if inlist(dx3,`y') 
 		mat tab[`r',`c']=r(mean)*100
 		local r=`r'+1
 }
@@ -996,5 +1062,45 @@ foreach x in 3 2 "" {
 
 mat rownames tab=Normal CIND Demented Total
 
-frmttable using "E:\data\hrs_public_2012\dementia\hurd_replication_tables`c(current_date)'.rtf", addtable statmat(tab) ctitles("Wave C" "" "Model" "" \"" "Normal" "CIND" ///
+frmttable using "E:\data\hrs_public_2014\dementia\hurd_replication_tables`c(current_date)'.rtf", ///
+addtable statmat(tab) ctitles("Wave C" "" "Model" "" \"" "Normal" "CIND" ///
 "Demented") title(Replication Hurd table S5) sdec(1)
+
+restore
+
+		di "Answers set to `x' if not applicable/not done"
+		di "IQCode missing if >`miss' unanswered questions"
+		
+		run E:\data\hrs_public_2014\dementia\compare
+		
+		destring id, replace
+		merge 1:1 id core_year using `wu', keep(match master)
+		
+		sort id adams_wave
+		qui gen init =adams_wave==1 & !missing(prob) & !missing(dementpimp)
+		qui by id, sort: egen fdem=min(cond(dementia==1,adams_wave,.))
+		
+		gen followup=adams_wave>1 & !missing(prob) & adams_wave<=fdem & !missing(dementpimp)
+		qui gen mydem=pdem>.5 if !missing(pdem)
+		
+		di "Test sample"
+		qui logit dementia pdem if init==1
+		lroc, nograph
+		roctab dementia mydem if init==1 , detail
+		di "Validation sample"
+		qui logit dementia pdem if followup==1
+		lroc, nograph
+		roctab dementia mydem if followup==1 , detail
+		
+		di "Direct comparison to Hurd in Adams Wave C"
+		qui gen hdem=prob>.5 if !missing(prob) 
+		roctab dementia mydem if adams_wave==3 & !missing(prob) , detail
+		roctab dementia hdem if adams_wave==3 & !missing(pdem), detail
+
+
+		roctab dementia mydem if proxy==1 & followup==1, detail
+		roctab dementia hdem if proxy==1 & followup==1, detail
+		roctab dementia mydem if proxy==0 & followup==1, detail
+		roctab dementia hdem if proxy==0 & followup==1, detail
+		roctab dementia hdem if followup==1, detail
+		roctab dementia mydem if followup==1, detail

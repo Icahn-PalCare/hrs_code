@@ -2622,7 +2622,11 @@ gen year = core_year // combines exit_year & core_year into a single variable
 merge 1:1 id core_year using "E:\data\hrs_public_2014\dementia\pdem_withvarnames_00_14.dta", keepus(pdem)
 drop if _m==2
 
-gen dementia = 0
+gsort id -core_year
+
+by id: replace pdem = pdem[_n+1] if pdem==.
+
+gen dementia = 0 if pdem!=.
 replace dementia = 1 if pdem>=.5 & pdem!=.
 cap drop _m
 
@@ -2673,7 +2677,7 @@ cap drop nflag
 gen nflag = obs - 1
 label var nflag "Interview type, 0 = exit, 1 = N1, etc."
 
-gen dem_cohort = 0
+gen dem_cohort = 0 if dementia!=.
 label var dem_cohort "Probable Dementia at N1"
 levelsof id if dementia==1 & nflag==1, local(demlist)
 
@@ -3230,6 +3234,17 @@ label var ffs_84m "60 months of continuous FFS prior to death"
 gen has_imputed = imputed
 label var has_imputed "Has an imputed core ivw"
 
+levelsof id if dem_cohort==0, local(demb)
+foreach x of local demb {
+replace dem_cohort=0 if id=="`x'"
+
+}
+
+levelsof id if dem_cohort==1, local(demc)
+foreach x of local demc {
+replace dem_cohort=1 if id=="`x'"
+}
+
 local samplevars age_lt_72 age_lt_70 no_exit miss_core no_core nocore4yr hrs_lt_84m hrs_lt_60m has_imputed death_b4_core ffs_84m ffs_60m 
 
 foreach x of local samplevars {
@@ -3256,39 +3271,60 @@ local logpath "E:\data\burden_dementia\logs"
 global ooppath "E:\data\burden_dementia\oopdata"
 global output "E:\projects\burden_dementia\archive logs"
 
-log using `logpath'\sample_derivation.txt, text replace
+*log using `logpath'\sample_derivation.txt, text replace
 cd $datapath
 
 use R01_i.dta, clear
+*preserve
 
+drop if dem_cohort==.
 
-local deri age_lt_72 no_exit miss_core no_core nocore4yr hrs_lt_84m death_b4_core
+gen ffs_lt_60m = 0
+replace ffs_lt_60m = 1 if ffs_60m==0
+
+gen ffs_lt_84m = 0
+replace ffs_lt_84m = 1 if ffs_84m==0
+
+local deri age_lt_70 no_exit miss_core no_core nocore4yr hrs_lt_60m death_b4_core ffs_lt_60m
+
 
 gen final = 1
-label var final "Sample Size, includes decedents w/imputed core"
+label var final "5yr Sample Size, includes decedents w/imputed core"
 
 foreach x of local deri {
 replace final = 0 if `x'==1
 }
 
-gen final_ffs = 0
-replace final_ffs = 1 if final==1 & ffs_84m==1
-label var final_ffs "84m FFS Sample Size, includes decedents w/imputed core"
+gen final_7yr = 1 if final==1
+label var final_7yr "7yr Sample Size, includes decedents w/imputed core"
+
 
 gen final_noimp = 0
 replace final_noimp = 1 if final==1 & has_imputed==0
-label var final_noimp "Sample Size, excludes decedents with imputed core"
+label var final_noimp "5yr Sample Size, excludes decedents w/imputed core"
 
-gen final_noimp_ffs = 0
-replace final_noimp_ffs = 1 if final_noimp==1 & ffs_84m==1
-label var final_noimp_ffs "84m FFS Sample Size, excludes decedents with imputed core"
+foreach x of varlist age_lt_72 hrs_lt_84m ffs_lt_84m {
+replace final_7yr = 0 if `x'==1
+}
+
+gen final_7yr_noimp = 0
+replace final_7yr_noimp = 1 if final_7yr==1 & has_imputed==0
+label var final_7yr_noimp "7yr Sample Size, excludes decedents w/imputed core"
+
+label var ffs_lt_60m "<60m continuous FFS prior to death"
+label var ffs_lt_84m "<84m continuous FFS prior to death"
+
+
+gen dropped_7yr = 0
+replace dropped_7yr = 1 if final_7yr==0 & final==1
+
 
 preserve
 keep if nflag==0
 
 gen all = 1
 label var all "All HRS respondents Deceased 2004-2015"
-
+/*
 local full all age_lt_72 no_exit miss_core no_core nocore4yr death_b4_core hrs_lt_84m final final_noimp final_ffs final_noimp_ffs
 
 local rd: word count `full'
@@ -3319,13 +3355,15 @@ varlabels title("Sample Derivation for R01 (Deceased 2004-2015, Age 72+)") ctitl
 annotate(stars) asymbol(*,**)note("Death Date was determined by NDI, Medicare MBSF or HRS Exit in that order. Reasons for exclusion are NOT mutally exclusive.")
 
 
-/**** */
+ */
 
 
-local full1 age_lt_72 no_exit miss_core no_core nocore4yr hrs_lt_84m death_b4_core
-local full2 final final_noimp final_ffs final_noimp_ffs
+local full1 age_lt_70 death_b4_core no_exit miss_core no_core nocore4yr hrs_lt_60m ffs_lt_60m
+local full2 final final_noimp
+local full3 age_lt_72 hrs_lt_84m ffs_lt_84m 
+local full4 final_7yr final_7yr_noimp
 
-local rd: word count 1 `full1' `full2'
+local rd: word count 1 `full1' `full2' `full3' `full4'
 
 mat tab1 = J(`rd',3,.)
 
@@ -3370,13 +3408,42 @@ mat tab1[`r',3] = r(sum)
 local ++r
 }
 
+foreach x of local full3 {
+
+sum `x'
+mat tab1[`r',1] = r(sum)
+
+sum `x' if dem_cohort==1
+mat tab1[`r',2] = r(sum)
+
+sum `x' if dem_cohort==0
+mat tab1[`r',3] = r(sum)
+
+drop if `x'==1
+local ++r
+}
+
+foreach x of local full4 {
+
+sum `x'
+mat tab1[`r',1] = r(sum)
+
+sum `x' if dem_cohort==1
+mat tab1[`r',2] = r(sum)
+
+sum `x' if dem_cohort==0
+mat tab1[`r',3] = r(sum)
+
+local ++r
+}
 
 
 
-mat rownames tab1 = all `full1' `full2'
+
+mat rownames tab1 = all `full1' `full2' `full3' `full4'
 
 
-frmttable using "E:\projects\burden_dementia\archive logs\Sample_Derivation.doc", addtable statmat(tab1) ///
+frmttable using "E:\projects\burden_dementia\archive logs\Sample_Derivation.doc", replace statmat(tab1) ///
 varlabels title("Sample Derivation for R01 (Deceased 2004-2015, Age 72+)") ctitles("Reason for Exclusion" "All" "Dementia" "Non-Dementia") sdec(0) ///
 annotate(stars) asymbol(*,**)note("Death Date was determined by NDI, Medicare MBSF or HRS Exit in that order. Reasons for exclusion are ARE mutally exclusive.")
 
@@ -7004,7 +7071,7 @@ save `ro1'
 
 use `temp', clear
 
-merge m:1 id using "`ro1'", keepus(index_date index_year)
+merge m:1 id using "`ro1'", keepus(index_date index_year final final_7yr dem_cohort)
 *keep if inrange(index_year,2004,2015)
 *drop if _m==1
 keep if _m==3
@@ -7053,7 +7120,7 @@ replace total_oop = total_oop - rx_oop + mod_rx_oop
 
 gen oop_per_mo = total_oop / months
 
-keep id core_year nflag oop_per_mo months
+keep id core_year nflag oop_per_mo months final final_7yr dem_cohort index_year
 
 reshape wide core_year oop_per_mo months, i(id) j(nflag)
 
@@ -7064,15 +7131,20 @@ gen oop_y`i' = .
 
 // oop_y1
 
+* start with oop at exit if months < 12. Subtract months - 12 so that it can be pulled from N1
+
 replace oop_y1 = oop_per_mo0 * months0 if months0<12
 replace months0 = months0 - 12 if months0<12
 
+* Pulling the leftover months from N1 (if exit < 12)
 replace oop_y1 = oop_y1 + (-months0)*oop_per_mo1 if months0<0
 replace months1 = months1 + months0 if months0<0
 
+*Using full exit if exit months==12
 replace oop_y1 = oop_per_mo0 * 12 if months0==12
 replace months0 = 0 if months0==12
 
+* Using 12 months from exit if exit months>12
 replace oop_y1 = oop_per_mo0 * 12 if months0>12 & months0!=.
 replace months0 = months0 - 12 if months0>12 & months0!=.
 
@@ -7080,29 +7152,343 @@ replace months0 = . if months0 <=0
 
 // oop_y2
 
+* People with leftover oop exit data
 replace oop_y2 = oop_per_mo0 * months0 if months0<12
 replace months0 = months0 - 12 if months0<12
 
 replace oop_y2 = oop_y2 + (-months0)*oop_per_mo1 if months0<0
 replace months1 = months1 + months0 if months0<0
 
+replace oop_y2 = oop_per_mo0 * 12 if months0==12
+replace months0 = months0 - 12 if months0==12
+
+replace oop_y2 = oop_per_mo0 * 12 if months0>12 & months0!=.
+replace months0 = months0 - 12 if months0>12 & months0!=.
 
 
+* People with no exit data leftover from y1
+
+gen noop = 1 if oop_y2==.
+
+replace oop_y2 = oop_per_mo1 * months1 if months1<12 & noop==1
+replace months1 = months1 - 12 if months1<12 & noop==1
+
+replace oop_y2 = oop_y2 + (-months1)*oop_per_mo2 if months1<0 & noop==1
+replace months2 = months2 + months1 if months1<0 & noop==1
+
+replace oop_y2 = oop_per_mo1 * 12 if months1==12 & noop==1
+replace months1 = months1 - 12 if months1==12 & noop==1
+
+replace oop_y2 = oop_per_mo1 * 12 if months1>12 & months1!=. & noop==1
+replace months1 = months1 - 12 if months1>12 & months1!=. & noop==1
+
+replace months0 = . if months0<=0
+replace months1 = . if months1<=0
+drop noop
+
+// oop_y3
+
+* People with leftover oop exit data
+replace oop_y3 = oop_per_mo0 * months0 if months0<12
+replace months0 = months0 - 12 if months0<12
+
+replace oop_y3 = oop_y3 + (-months0)*oop_per_mo1 if months0<0
+replace months1 = months1 + months0 if months0<0
+
+replace oop_y3 = oop_per_mo0 * 12 if months0==12
+replace months0 = months0 - 12 if months0==12
+
+replace oop_y3 = oop_per_mo0 * 12 if months0>12 & months0!=.
+replace months0 = months0 - 12 if months0>12 & months0!=.
+
+* People with leftover N1
+
+gen noop = 1 if oop_y3==.
+
+replace oop_y3 = oop_per_mo1 * months1 if months1<12 & noop==1
+replace months1 = months1 - 12 if months1<12 & noop==1
+
+replace oop_y3 = oop_y3 + (-months1)*oop_per_mo2 if months1<0 & noop==1
+replace months2 = months2 + months1 if months1<0 & noop==1
+
+replace oop_y3 = oop_per_mo1 * 12 if months1==12 & noop==1
+replace months1 = months1 - 12 if months1==12 & noop==1
+
+replace oop_y3 = oop_per_mo1 * 12 if months1>12 & months1!=. & noop==1
+replace months1 = months1 - 12 if months1>12 & months1!=. & noop==1
+
+drop noop
+
+* People who exhausted N0 & N1
+
+gen noop = 1 if oop_y3==.
+
+replace oop_y3 = oop_per_mo2 * 12 if noop==1
+replace months2 = months2 - 12 if noop==1
+
+replace months0 = . if months0<=0
+replace months1 = . if months1<=0
+replace months2 = . if months2<=0
+
+drop noop 
+
+// oop_y4
+
+* People with leftover oop exit data
+replace oop_y4 = oop_per_mo0 * months0 if months0<12
+replace months0 = months0 - 12 if months0<12
+
+replace oop_y4 = oop_y4 + (-months0)*oop_per_mo1 if months0<0
+replace months1 = months1 + months0 if months0<0
+
+replace oop_y4 = oop_per_mo0 * 12 if months0==12
+replace months0 = months0 - 12 if months0==12
+
+replace oop_y4 = oop_per_mo0 * 12 if months0>12 & months0!=.
+replace months0 = months0 - 12 if months0>12 & months0!=.
+
+* People with leftover N1
+
+gen noop = 1 if oop_y4==.
+
+replace oop_y4 = oop_per_mo1 * months1 if months1<12 & noop==1
+replace months1 = months1 - 12 if months1<12 & noop==1
+
+replace oop_y4 = oop_y4 + (-months1)*oop_per_mo2 if months1<0 & noop==1
+replace months2 = months2 + months1 if months1<0 & noop==1
+
+replace oop_y4 = oop_per_mo1 * 12 if months1==12 & noop==1
+replace months1 = months1 - 12 if months1==12 & noop==1
+
+replace oop_y4 = oop_per_mo1 * 12 if months1>12 & months1!=. & noop==1
+replace months1 = months1 - 12 if months1>12 & months1!=. & noop==1
+
+drop noop
+
+* People who exhausted N0 & N1
+
+gen noop = 1 if oop_y4==.
+
+replace oop_y4 = oop_per_mo2 * months2 if months2<12 & noop==1
+replace months2 = months2 - 12 if months2<12 & noop==1
+
+replace oop_y4 = oop_y4 + (-months2)*oop_per_mo3 if months2<0 & noop==1
+replace months3 = months3 + months2 if months2<0 & noop==1
+
+replace oop_y4 = oop_per_mo2 * 12 if months2==12 & noop==1
+replace months2 = months2 - 12 if months2==12 & noop==1
+
+replace oop_y4 = oop_per_mo2 * 12 if months2>12 & months2!=. & noop==1
+replace months2 = months2 - 12 if months2>12 & months2!=. & noop==1
+
+replace months0 = . if months0<=0
+replace months1 = . if months1<=0
+replace months2 = . if months2<=0
+
+drop noop 
 
 
+// oop_y5
+
+* People with leftover oop exit data
+replace oop_y5 = oop_per_mo0 * months0 if months0<12
+replace months0 = months0 - 12 if months0<12
+
+replace oop_y5 = oop_y5 + (-months0)*oop_per_mo1 if months0<0
+replace months1 = months1 + months0 if months0<0
+
+replace oop_y5 = oop_per_mo0 * 12 if months0==12
+replace months0 = months0 - 12 if months0==12
+
+replace oop_y5 = oop_per_mo0 * 12 if months0>12 & months0!=.
+replace months0 = months0 - 12 if months0>12 & months0!=.
+
+* People with leftover N1
+
+gen noop = 1 if oop_y5==.
+
+replace oop_y5 = oop_per_mo1 * months1 if months1<12 & noop==1
+replace months1 = months1 - 12 if months1<12 & noop==1
+
+replace oop_y5 = oop_y5 + (-months1)*oop_per_mo2 if months1<0 & noop==1
+replace months2 = months2 + months1 if months1<0 & noop==1
+
+replace oop_y5 = oop_per_mo1 * 12 if months1==12 & noop==1
+replace months1 = months1 - 12 if months1==12 & noop==1
+
+replace oop_y5 = oop_per_mo1 * 12 if months1>12 & months1!=. & noop==1
+replace months1 = months1 - 12 if months1>12 & months1!=. & noop==1
+
+drop noop
+
+* People who exhausted N0 & N1
+
+gen noop = 1 if oop_y5==.
+
+replace oop_y5 = oop_per_mo2 * months2 if months2<12 & noop==1
+replace months2 = months2 - 12 if months2<12 & noop==1
+
+replace oop_y5 = oop_y5 + (-months2)*oop_per_mo3 if months2<0 & noop==1
+replace months3 = months3 + months2 if months2<0 & noop==1
+
+replace oop_y5 = oop_per_mo2 * 12 if months2==12 & noop==1
+replace months2 = months2 - 12 if months2==12 & noop==1
+
+replace oop_y5 = oop_per_mo2 * 12 if months2>12 & months2!=. & noop==1
+replace months2 = months2 - 12 if months2>12 & months2!=. & noop==1
+
+drop noop 
+
+* People who exhausted N0, N1 & N2
+
+gen noop = 1 if oop_y5==.
+
+replace oop_y5 = oop_per_mo3 * 12 if noop==1
+replace months3 = months3 - 12 if noop==1
 
 
+replace months0 = . if months0<=0
+replace months1 = . if months1<=0
+replace months2 = . if months2<=0
+replace months3 = . if months3<=0
+
+drop noop
+
+// oop_y6
+
+* People with leftover N1
+
+gen noop = 1 if oop_y6==.
+
+replace oop_y6 = oop_per_mo1 * months1 if months1<12 & noop==1
+replace months1 = months1 - 12 if months1<12 & noop==1
+
+replace oop_y6 = oop_y6 + (-months1)*oop_per_mo2 if months1<0 & noop==1
+replace months2 = months2 + months1 if months1<0 & noop==1
+
+replace oop_y6 = oop_per_mo1 * 12 if months1==12 & noop==1
+replace months1 = months1 - 12 if months1==12 & noop==1
+
+replace oop_y6 = oop_per_mo1 * 12 if months1>12 & months1!=. & noop==1
+replace months1 = months1 - 12 if months1>12 & months1!=. & noop==1
+
+drop noop
+
+* People who exhausted N0 & N1
+
+gen noop = 1 if oop_y6==.
+
+replace oop_y6 = oop_per_mo2 * months2 if months2<12 & noop==1
+replace months2 = months2 - 12 if months2<12 & noop==1
+
+replace oop_y6 = oop_y6 + (-months2)*oop_per_mo3 if months2<0 & noop==1
+replace months3 = months3 + months2 if months2<0 & noop==1
+
+replace oop_y6 = oop_per_mo2 * 12 if months2==12 & noop==1
+replace months2 = months2 - 12 if months2==12 & noop==1
+
+replace oop_y6 = oop_per_mo2 * 12 if months2>12 & months2!=. & noop==1
+replace months2 = months2 - 12 if months2>12 & months2!=. & noop==1
+
+drop noop 
+
+* People who exhausted N0, N1 & N2
+
+gen noop = 1 if oop_y6==.
+
+replace oop_y6 = oop_per_mo3 * months3 if months3<12 & noop==1
+replace months3 = months3 - 12 if months3<12 & noop==1
+
+replace oop_y6 = oop_y6 + (-months3)*oop_per_mo4 if months3<0 & noop==1
+replace months4 = months4 + months3 if months3<0 & noop==1
+
+replace oop_y6 = oop_per_mo3 * 12 if months3==12 & noop==1
+replace months3 = months3 - 12 if months3==12 & noop==1
+
+replace oop_y6 = oop_per_mo3 * 12 if months3>12 & months3!=. & noop==1
+replace months3 = months3 - 12 if months3>12 & months3!=. & noop==1
 
 
-/*
-*gen time = e_ivw_date - next_date if iwtype==1
-gen time = e_ivw_date - index_date if iwtype==1
-replace time = c_ivw_date - next_date if iwtype==0
-replace time = time*0.0329
-*replace time = ceil(time)
+replace months0 = . if months0<=0
+replace months1 = . if months1<=0
+replace months2 = . if months2<=0
+replace months3 = . if months3<=0
 
-corr time months
-*/
+drop noop
+
+// oop_y7
+
+* People with leftover N1
+
+gen noop = 1 if oop_y7==.
+
+replace oop_y7 = oop_per_mo1 * months1 if months1<12 & noop==1
+replace months1 = months1 - 12 if months1<12 & noop==1
+
+replace oop_y7 = oop_y7 + (-months1)*oop_per_mo2 if months1<0 & noop==1
+replace months2 = months2 + months1 if months1<0 & noop==1
+
+replace oop_y7 = oop_per_mo1 * 12 if months1==12 & noop==1
+replace months1 = months1 - 12 if months1==12 & noop==1
+
+replace oop_y7 = oop_per_mo1 * 12 if months1>12 & months1!=. & noop==1
+replace months1 = months1 - 12 if months1>12 & months1!=. & noop==1
+
+drop noop
+
+* People who exhausted N0 & N1
+
+gen noop = 1 if oop_y7==.
+
+replace oop_y7 = oop_per_mo2 * months2 if months2<12 & noop==1
+replace months2 = months2 - 12 if months2<12 & noop==1
+
+replace oop_y7 = oop_y7 + (-months2)*oop_per_mo3 if months2<0 & noop==1
+replace months3 = months3 + months2 if months2<0 & noop==1
+
+replace oop_y7 = oop_per_mo2 * 12 if months2==12 & noop==1
+replace months2 = months2 - 12 if months2==12 & noop==1
+
+replace oop_y7 = oop_per_mo2 * 12 if months2>12 & months2!=. & noop==1
+replace months2 = months2 - 12 if months2>12 & months2!=. & noop==1
+
+drop noop 
+
+* People who exhausted N0, N1 & N2
+
+gen noop = 1 if oop_y7==.
+
+replace oop_y7 = oop_per_mo3 * months3 if months3<12 & noop==1
+replace months3 = months3 - 12 if months3<12 & noop==1
+
+replace oop_y7 = oop_y7 + (-months3)*oop_per_mo4 if months3<0 & noop==1
+replace months4 = months4 + months3 if months3<0 & noop==1
+
+replace oop_y7 = oop_per_mo3 * 12 if months3==12 & noop==1
+replace months3 = months3 - 12 if months3==12 & noop==1
+
+replace oop_y7 = oop_per_mo3 * 12 if months3>12 & months3!=. & noop==1
+replace months3 = months3 - 12 if months3>12 & months3!=. & noop==1
+
+
+replace months0 = . if months0<=0
+replace months1 = . if months1<=0
+replace months2 = . if months2<=0
+replace months3 = . if months3<=0
+
+drop noop
+
+gen oop_7yr = oop_y1+ oop_y2+ oop_y3+ oop_y4+ oop_y5 + oop_y6 + oop_y7
+gen oop_6yr = oop_y1+ oop_y2+ oop_y3+ oop_y4+ oop_y5 + oop_y6
+gen oop_5yr = oop_y1+ oop_y2+ oop_y3+ oop_y4+ oop_y5
+gen oop_4yr = oop_y1+ oop_y2+ oop_y3+ oop_y4
+gen oop_3yr = oop_y1+ oop_y2+ oop_y3
+gen oop_2yr = oop_y1+ oop_y2
+
+ttest oop_5yr, by(dem_cohort)
+ttest oop_5yr if final_7yr==1, by(dem_cohort)
+ttest oop_7yr if final_7yr==1, by(dem_cohort)
+
 
 H="Experimental - Comparison of 5yr vs 7yr Sample"
 clear all

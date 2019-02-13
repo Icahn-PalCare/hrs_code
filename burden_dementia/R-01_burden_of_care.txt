@@ -4615,3 +4615,544 @@ by bid_hrs_21: drop if disc==disc[_n-1]
 drop if entry==. | disc==.
 
 sort bid_hrs_21
+
+
+H="new 2/12"
+use id death_date final_7yr using "E:\data\burden_dementia\final_data\R01_final.dta", replace
+keep if final_7yr==1
+format %td death_date
+duplicates drop 
+gen r01=1
+/*
+merge 1:1 id using "E:\data\hrs_cleaned\exit_02_to_14_dt.dta", keep(match master) ///
+keepusing(nh_nights exit_year ltc_ins nhres)  gen(xm)
+rename nh_ nh_nights_x
+rename ltc_ins ltc_ins_x
+rename nhres nhres_x
+
+duplicates report 
+
+*/
+duplicates drop id, force
+merge 1:m id using "E:\data\hrs_cleaned\core_00_to_14.dta", keep(match master) gen(cm)
+sort id core_year
+
+gen c_ivw_date_1=.
+bys id: replace c_ivw_date_1=c_ivw_date if _n==_N-1
+format %td c_ivw_date_1
+bys id: carryforward c_ivw_date_1, replace
+
+by id: keep if _n==_N
+
+gen ivw_time=c_ivw_date-c_ivw_date_1
+drop if ivw_time<0
+replace nh_nights=ivw_time if nh_nights>ivw_time
+//>=730
+
+rename hhidpn hh
+rename id hhidpn
+
+merge 1:1 hhid pn core_year using "E:\data\hrs_cleaned\working\core_98_14_clean_final.dta", keepusing(ltc_ins) keep(master matched)
+
+gen year= core_year
+gen HHID=hhid
+gen PN=pn
+merge 1:1 HHID PN year using "E:\data\burden_dementia\oopdata\oopme_final_2016.dta" , keepusing(NH_OOP long_term_care private_medigap) keep(master matched) nogen
+
+tempfile bb
+save "`bb'"
+
+merge 1:m hhidpn using "E:\data\test\mp_ltc_contact_days.dta", gen(p)
+sort hhidpn date
+
+drop if p==2 & r01!=1
+sort hhidpn date
+codebook hhidpn
+
+duplicates tag hhidpn, gen(tag1)
+
+keep if inrange(date, c_ivw_date_1, c_ivw_date) 
+//gen claim_day=1 if inrange(date, c_ivw_date_1, c_ivw_date) | day==0
+sort hhidpn
+
+gen range=1 if c_ivw_date>=date & date>=c_ivw_date_1 & date!=.
+
+codebook hhidpn
+
+bys hhidpn core_year: egen mm_days=total(day) if range==1,m
+bys hhidpn core_year: egen medpar_tot=total(medpar_day) if range==1,m
+bys hhidpn core_year: egen ltc_tot=total(ltc_day) if range==1,m
+
+merge m:1 hhidpn using "`bb'", gen(bb)
+
+bys hhidpn core_year: keep if _n==1
+
+//replace nh_nights_x=. if nh_nights_x==0
+//replace mm_days=. if mm_days==0
+
+rename BID_HRS_22 bid_hrs_22
+capture drop year
+gen year=core_year
+
+rename medicaid sr_medicaid
+
+merge 1:1 hhidpn using "E:\data\CMS_DUA_51675_2014\Merged\Stata\xref2015medicare.dta", keepusing(BID_HRS_22) nogen keep(matched)
+drop bid_hrs_22
+rename BID_HRS_22 bid_hrs_22
+
+tempfile a
+save "`a'"
+
+use "E:\data\CMS_DUA_51675_2014\Merged\Stata\basf_1998_2015.dta", replace
+gen year=year(start_dt)
+gen medicaid=0
+replace medicaid=1 if buyin_mo>=1 & buyin_mo!=.
+
+sort bid_hrs_22 year
+gen medicaid_p=0
+by bid_hrs_22: replace medicaid_p=1 if medicaid==1 | medicaid[_n-1]==1 
+//by bid_hrs_22: replace medicaid_p=2 if medicaid==1 & medicaid[_n-1]==1 
+
+label var medicaid "Medicaid from Medicare claims"
+label var medicaid_p "Medicaid from claims previous year"
+
+sort bid_hrs_22 year
+by bid_hrs_22: keep if _n==_N 
+
+
+tempfile b
+save "`b'"
+
+use "`a'", replace
+
+merge 1:1 bid_hrs_22 using "`b'", nogen keep(master match) keepusing(medicaid medicaid_p)
+
+drop bid_hrs_23
+
+merge m:1 hhidpn using "E:\data\CMS_DUA_51675_2014\Medicaid Xref2016\MedicaidXref2016\stata\Medicaid2016Xref.dta", ///
+keep(master match) keepusing(bid_hrs_23) nogen
+
+tempfile c
+save "`c'"
+
+use "E:\data\CMS_DUA_51675_2014\Medicaid_merged\asf.dta", clear
+
+gen medicaid_m=1
+keep bid_hrs_23 year medicaid_m
+
+duplicates drop bid_hrs_23, force
+
+tempfile d
+save "`d'"
+
+use "`c'", clear
+
+merge m:1 bid_hrs_23 using "`d'", ///
+keep(master match) nogen
+
+
+
+capture drop diff
+gen diff=nh_nights-mm_days
+
+replace ltc_ins=. if ltc_ins==8
+replace ltc_bene=. if ltc_bene==8
+
+gen mcaid=0
+replace mcaid=1 if ltc_tot>=1 & ltc_tot!=.
+label var mcaid "Medicaid from Medicaid Max_LT"
+
+//nh_nights_x is not missing for any observations
+//ltc_ins_x can be missing
+//
+
+gen nh_nights_f=0
+replace nh_nights_f=1 if nh_nights!=0
+gen mm_days_f=0 
+replace mm_days_f=1 if mm_days!=.
+gen both_f=0
+replace both=1 if nh_nights_f==1 & mm_days_f==1
+
+
+gen nh_oop=NH_OOP if NH_OOP!=0 & NH_OOP!=.
+gen nh_oop_f=0 
+replace nh_oop_f=1 if nh_oop!=0 & nh_oop!=.
+
+
+sum nh_nights if nh_oop_f==1
+sum mm_days if nh_oop_f==1
+
+sum nh_oop if ltc_ins==0
+
+
+
+label var mm_days "Claim Nights"
+label var nh_nights "NH Nights from core" 
+label var diff "Difference"
+label var ltc_ins "LTC insurance at core"
+la def lt 0 "No LTC Ins." 1 "LTC Ins."
+la val ltc_ins lt
+la def nhres 0 "Not NHRES" 1 "NHRES"
+la val nhres nhres
+
+
+
+/*
+sum diff,d
+sum diff if ltc_ins_x==0 & nhres_x==0,d
+local a=`r(N)'
+sum diff if ltc_ins_x==1 & nhres_x==0,d 
+local b=`r(N)'
+sum diff if ltc_ins_x==0 & nhres_x==1,d 
+local c=`r(N)'
+sum diff if ltc_ins_x==1 & nhres_x==1,d 
+local d=`r(N)'
+
+
+count if !missing(nh_nights_x) & !missing(mm_days) & !missing(ltc_ins_x)
+local N=`r(N)'
+
+graph bar (mean) diff diff if nh_nights_x!=. & mm_days!=., over(ltc_ins_x) over(nhres_x) note("`N' Non-missing/non-zero HRS Nursing Home Nights & Medicare/Medicaid Nights" ///
+"`a' Not a NHRES and No SR LTC Ins." "`b' Not a NHRES with SR LTC Ins." ///
+"`c' NHRES and No SR LTC Ins." "`d' NHRES and SR LTC Ins.") ///
+blabel(bar) ytitle(mean `:variable label diff') title("Diff. between SR HRS and Medicaid/Medicare Nights" " by LTC Ins. and NHRES from death to last core ivw.")
+
+//graph save "E:\projects\burden_dementia\archive logs\20181217\difference", replace
+//graph export "E:\projects\burden_dementia\archive logs\20181217\difference.pdf", replace
+
+graph bar (mean) nh_nights_x mm_days if nh_nights_x!=. & mm_days!=., over(ltc_ins_x) over(nhres_x) blabel(bar) ///
+note("SR HRS and Medicare/Medicare NH Nights by LTC Ins.") ytitle(Mean # of Nights) ///
+title("Mean Nights by LTC Ins. for SR HRS and Claims" "by LTC Ins. and NHRES") legend(label(2 "Claim Nights") label(1 "SR NH Nights from exit" ))
+
+//graph save "E:\projects\burden_dementia\archive logs\20181217\mean_nights", replace
+//graph export "E:\projects\burden_dementia\archive logs\20181217\mean_nights.pdf", replace
+
+graph bar (count) nh_nights_f mm_days_f both_f, over(ltc_ins_x) over(nhres_x) blabel(bar) ///
+title("Count of having NH Nights in SR HRS, Claims, & Both" "by LTC Ins. and NHRES") ytitle(# of people) ///
+legend(label(1 "SR NH Nights from exit") ///
+label(2 "Claim Nights") label(3 "Both"))
+
+//graph save "E:\projects\burden_dementia\archive logs\20181217\count", replace
+//graph export "E:\projects\burden_dementia\archive logs\20181217\count.pdf", replace
+
+tab ltc_ins_x medicaid_p
+
+
+tab nh_oop_f nhres_x
+tab nh_oop_f ltc_ins_x
+
+tab nh_oop_f nh_nights_f,m
+sum NH_OOP if nhres_x==1 & nh_oop_f==1, d
+
+pctile nh_oop_q= NH_OOP, n(4)
+
+*/
+
+// need to first find state var
+//then make sure genworth data is showing nh rates costs
+//then merge in to the exit year--will need to change variable
+//then convert sr oop nh to nights 
+// then find the unattributed section
+
+
+tempfile a 
+save "`a'"
+
+use "E:\data\hrs_restricted_2014\hrsxgeo1_3.dta", replace 
+
+rename stateusps0* stateusps*
+rename zipcode0* zipcode*
+
+reshape long zipcode stateusps, i(id) j(year)
+
+forvalues i=90/99{
+replace year=19`i' if year==`i'
+}
+
+forvalues i=0/9{
+replace year=200`i' if year==`i'
+}
+
+forvalues i=10/16{
+replace year=20`i' if year==`i'
+}
+
+sort id year
+
+//assumption
+by id: carryforward stateusps, gen(state)
+
+rename id hhidpn 
+rename year core_year
+
+merge 1:1 hhid core using "`a'", nogen keep(using match)
+
+tempfile b
+save "`b'"
+
+import excel "E:\data\burden_dementia\ref_data\Cost Care Survey (Genworth-Metlife)\HHA_hourly_genworth.xlsx" ///
+, sheet("Sheet5") firstrow case(lower) clear
+
+drop if year==.
+rename mediandailyratenursinghomed nh_daily
+rename year core_year 
+merge 1:m core_year state using "`b'", nogen keep(using matched)
+
+destring nh_daily, replace
+gen nh_oop_nights=NH_OOP/nh_daily
+gen ltc_nights=long_term_care/nh_daily
+gen medigap_nights=private_medigap/nh_daily
+
+gen ltc_flag=1 if long_term_care>=1 & long_term_care!=.
+gen medigap_flag=1 if private_medigap>=1 & private_medigap!=.
+
+gen nh_oop_big_flag=1 if nh_oop_nights>ivw_time
+
+replace nh_oop_nights=ivw_time if nh_oop_nights>ivw_time
+replace nh_oop_nights=round(nh_oop_nights)
+replace ltc_nights=round(ltc_nights)
+replace medigap_nights=round(medigap_nights)
+
+replace mm_days=0 if mm_days==.
+replace nh_nights=0 if nh_nights==.
+
+gen unatt=nh_nights-nh_oop_nights-mm_days
+//gen unatt_1=nh_nights-nh_oop_nights-mm_days-ltc_nights
+//gen unatt_2=nh_nights-nh_oop_nights-mm_days-ltc_nights-medigap_nights
+
+sum unatt, d
+
+
+gen mcaid_final=0
+replace mcaid_final=1 if medicaid==1 | mcaid==1
+
+sum nh_nights_f, d
+
+sum mm_days_f, d
+
+la def nh_nights_f 0 "No NH Nights" 1 "Yes NH Nights"
+la val nh_nights_f nh_nights_f
+
+la def mm_days_f 0 "No Claims" 1 "Yes Claims"
+la val mm_days_f mm_days_f
+la def medicaid 0 "No Medicaid" 1 "Yes Medicaid"
+la val medicaid medicaid
+la def mcaid_final 0 "No Medicaid" 1 "Yes Medicaid"
+la val mcaid_final mcaid_final
+la def ltc_ins 0 "No LTC Ins." 1 "Yes LTC Ins. "
+la val ltc_ins ltc_ins_x
+la def nh_oop_f 0 "No NH OOP" 1 "Yes NH OOP"
+la val nh_oop_f nh_oop_f
+la def sr_medicaid 0 "No SR Medicaid" 1 "Yes SR Medicaid"
+la val sr_medicaid sr_medicaid
+
+la var unatt "Unattributed NH Nights"
+//la var unatt_1 "Unattributed NH Nights (LTC)"
+//la var unatt_2 "Unattributed NH Nights (LTC+Medigap)"
+
+
+gen unatt_c=unatt*nh_daily
+//gen unatt_c_1=unatt_1*nh_daily
+//gen unatt_c_2=unatt_2*nh_daily
+
+
+sum unatt, d
+//sum unatt_1, d
+//sum unatt_2, d
+
+sum unatt_c,d
+//sum unatt_c_1,d
+//sum unatt_c_2,d
+/*
+count if !missing(nh_nights_f)
+local N `r(N)'
+count if nh_nights_f==0
+local a `r(N)'
+count if nh_nights_f==1
+local b `r(N)'
+graph bar, over(nh_nights_f) blabel(bar) title(Reported NH Nights (N =`N')) ///
+note("`a' Reported no NH Nights" "`b' Reported NH Nights")
+
+
+count if !missing(unatt)
+local a `r(N)'
+count if !missing(unatt_1)
+local b `r(N)'
+count if !missing(unatt_2)
+local c `r(N)'
+graph bar (mean) unatt unatt_1 unatt_2, legend( label(1 "Unatt. NH Nights") label(2 "Unatt. NH Nights (LTC)") ///
+label(3 "Unatt. NH Nights (LTC+Medigap)") ) ytitle("Num. of Nights") blabel(bar) title("Mean Unattributed NH Nights" "(Full Sample)") ///
+subtitle("3 Different Methods") note("`a' Unatt. NH Nights" "`b' Unatt. NH Nights (LTC)" "`c' Unatt. NH Nights (LTC+Medigap)")
+
+
+count if !missing(unatt) & nh_nights_f==1
+local a `r(N)'
+count if !missing(unatt_1) & nh_nights_f==1
+local b `r(N)'
+count if !missing(unatt_2) & nh_nights_f==1
+local c `r(N)'
+graph bar (mean) unatt unatt_1 unatt_2 if nh_nights_f==1, over(ltc_ins) legend( label(1 "Unatt. NH Nights") label(2 "Unatt. NH Nights (LTC)") ///
+label(3 "Unatt. NH Nights (LTC+Medigap)") ) ytitle("Num. of Nights") blabel(bar) title("Mean Unattributed NH Nights" "(Nights only)") ///
+subtitle("3 Different Methods") note("`a' Unatt. NH Nights" "`b' Unatt. NH Nights (LTC)" "`c' Unatt. NH Nights (LTC+Medigap)")
+
+
+graph box unatt unatt_1 unatt_2 if nh_nights_f==1, nooutsides legend( label(1 "Unatt. NH Nights") label(2 "Unatt. NH Nights (LTC)") ///
+label(3 "Unatt. NH Nights (LTC+Medigap)") ) ytitle("Num. of Nights") title("Unattributed NH Nights") ///
+subtitle("3 Different Methods")
+
+
+
+count if !missing(unatt)
+local a `r(N)'
+count if !missing(unatt_1)
+local b `r(N)'
+count if !missing(unatt_2)
+local c `r(N)'
+graph bar (mean) unatt_c unatt_c_1 unatt_c_2, legend( label(1 "Unatt. NH Nights Cost") label(2 "Unatt. NH Nights Cost (LTC)") ///
+label(3 "Unatt. NH Nights Cost (LTC+Medigap)") ) ytitle("Dollars ($)") blabel(bar) title("Mean Unattributed NH Nights Costs" "(Full Sample)") ///
+subtitle("3 Different Methods") note("`a' Unatt. NH Nights Cost" "`b' Unatt. NH Nights (LTC)" "`c' Unatt. NH Nights (LTC+Medigap)") 
+
+
+count if !missing(unatt) & nh_nights_f==1
+local a `r(N)'
+count if !missing(unatt_1) & nh_nights_f==1
+local b `r(N)'
+count if !missing(unatt_2) & nh_nights_f==1
+local c `r(N)'
+graph bar (mean) unatt_c unatt_c_1 unatt_c_2 if nh_nights_f==1, legend( label(1 "Unatt. NH Nights Cost") label(2 "Unatt. NH Nights Cost (LTC)") ///
+label(3 "Unatt. NH Nights Cost (LTC+Medigap)") ) ytitle("Dollars ($)") blabel(bar) title("Mean Unattributed NH Nights Cost" "(Nights only)") ///
+subtitle("Different Methodology") note("`a' Unatt. NH Nights Cost" "`b' Unatt. NH Nights Cost (LTC)" "`c' Unatt. NH Nights Cost (LTC+Medigap)")
+*/
+
+gen mis=1 if ltc_ins==0 & champus==0
+gen n=1
+sum unatt,d
+sum unatt_c, d
+sum unatt if ltc_ins==1, d
+sum unatt_c if ltc_ins==1, d
+sum unatt if ltc_bene==1, d
+sum unatt_c if ltc_bene==1, d
+sum unatt if champus==1, d
+sum unatt_c if champus==1, d
+sum unatt if mis==1, d
+sum unatt_c if mis==1, d
+
+
+lab var medicaid_m "Medicaid from Medicaid ASF"
+
+gen medicaid_full=0
+replace medicaid_full=1 if medicaid==1 | medicaid_m==1
+
+gen no_medicaid=0
+replace no_medicaid=1 if ltc_ins==0 & champus==0 & medicaid_full==0
+
+// tables 
+
+
+local vars n ltc_ins ltc_bene champus mis medicaid_full medicaid medicaid_m mcaid no_medicaid medigap
+
+
+mat tab=J(11,5,.)
+local r=1
+local c=1
+
+foreach x in `vars'{
+sum unatt if `x'==1, d
+mat tab[`r',`c']=`r(N)'
+mat tab[`r',`c'+1]=`r(mean)'
+mat tab[`r',`c'+2]=`r(p50)'
+mat tab[`r',`c'+3]=`r(sd)'
+mat tab[`r',`c'+4]=`r(max)'
+local r=`r'+1
+}
+
+mat rownames tab= "Unattributed Nights" "Unatt Nights if LTC Ins" ///
+"Unatt Nights if LTC Benefits" "Unatt Nights if CHAMPUS" ///
+"U.N. if No LTC, No CHAMPUS" "U.N. if in buyin & ASF" "U.N. if in Medicaid buyin" ///
+"U.N. if in Medicaid ASF" "U.N. if in Medicaid MAX_LT" "U.N. No LTC/CHAMPUS/Medicaid*" "Medigap/Private"
+mat list tab
+
+frmttable using "E:\data\burden_dementia\logs\unatt_characteristics.rtf", replace statmat(tab) ///
+title("Unattributed Nights Statistics (All)") varlabels  ctitles(" " "N (obs)" "Mean" "Median" "Std Dev." "Max") ///
+note("Looking at decedents bet. N1 and N2 interviews." "*No LTC, No CHAMPUS and No Medicaid from buy-in and ASF")
+
+local vars n ltc_ins ltc_bene champus mis medicaid_full medicaid medicaid_m mcaid no_medicaid medigap
+
+mat tab1=J(11,5,.)
+local r=1
+local c=1
+
+foreach x in `vars'{
+sum unatt_c if `x'==1, d
+mat tab1[`r',`c']=`r(N)'
+mat tab1[`r',`c'+1]=`r(mean)'
+mat tab1[`r',`c'+2]=`r(p50)'
+mat tab1[`r',`c'+3]=`r(sd)'
+mat tab1[`r',`c'+4]=`r(max)'
+local r=`r'+1
+}
+
+
+mat rownames tab1= "Unattributed Nights" "Unatt Nights if LTC Ins" ///
+"Unatt Nights if LTC Benefits" "Unatt Nights if CHAMPUS" ///
+"U.N. if No LTC, No CHAMPUS" "U.N. if in buyin & ASF" "U.N. if in Medicaid buyin" ///
+"U.N. if in Medicaid ASF" "U.N. if in Medicaid MAX_LT" "U.N. No LTC/CHAMPUS/Medicaid*" "Medigap/Private"
+mat list tab1
+
+frmttable using "E:\data\burden_dementia\logs\unatt_characteristics.rtf", replace addtable statmat(tab1) ///
+title("Cost of Unattributed Nights Statistics (All,$)") varlabels ctitles(" " "N (obs)" "Mean" "Median" "Std Dev." "Max") ///
+note("Looking at decedents bet. N1 and N2 interviews." "*No LTC, No CHAMPUS and No Medicaid from buy-in and ASF")
+
+
+local vars n ltc_ins ltc_bene champus mis medicaid_full medicaid medicaid_m mcaid no_medicaid medigap
+
+mat tab=J(11,5,.)
+local r=1
+local c=1
+
+foreach x in `vars'{
+sum unatt if `x'==1 & nh_nights!=0, d
+mat tab[`r',`c']=`r(N)'
+mat tab[`r',`c'+1]=`r(mean)'
+mat tab[`r',`c'+2]=`r(p50)'
+mat tab[`r',`c'+3]=`r(sd)'
+mat tab[`r',`c'+4]=`r(max)'
+local r=`r'+1
+}
+
+mat rownames tab= "Unattributed Nights" "Unatt Nights if LTC Ins" ///
+"Unatt Nights if LTC Benefits" "Unatt Nights if CHAMPUS" ///
+"U.N. if No LTC, No CHAMPUS" "U.N. if in buyin & ASF" "U.N. if in Medicaid buyin" ///
+"U.N. if in Medicaid ASF" "U.N. if in Medicaid MAX_LT" "U.N. No LTC/CHAMPUS/Medicaid*" "Medigap/Private"
+mat list tab
+
+frmttable using "E:\data\burden_dementia\logs\unatt_characteristics.rtf", replace addtable statmat(tab) ///
+title("Unattributed Nights Statistics, non-zero NH nights") varlabels  ctitles(" " "N (obs)" "Mean" "Median" "Std Dev." "Max") ///
+note("Looking at decedents  bet. N1 and N2 interviews." "Removed if No NH Nights" "*No LTC, No CHAMPUS and No Medicaid from buy-in and ASF")
+
+local vars n ltc_ins ltc_bene champus mis medicaid_full medicaid medicaid_m mcaid no_medicaid medigap
+
+mat tab1=J(11,5,.)
+local r=1
+local c=1
+
+foreach x in `vars'{
+sum unatt_c if `x'==1 & nh_nights!=0, d
+mat tab1[`r',`c']=`r(N)'
+mat tab1[`r',`c'+1]=`r(mean)'
+mat tab1[`r',`c'+2]=`r(p50)'
+mat tab1[`r',`c'+3]=`r(sd)'
+mat tab1[`r',`c'+4]=`r(max)'
+local r=`r'+1
+}
+
+
+mat rownames tab1= "Unattributed Nights" "Unatt Nights if LTC Ins" ///
+"Unatt Nights if LTC Benefits" "Unatt Nights if CHAMPUS" ///
+"U.N. if No LTC, No CHAMPUS" "U.N. if in buyin & ASF" "U.N. if in Medicaid buyin" ///
+"U.N. if in Medicaid ASF" "U.N. if in Medicaid MAX_LT" "U.N. No LTC/CHAMPUS/Medicaid*" "Medigap/Private"
+mat list tab1
+
+frmttable using "E:\data\burden_dementia\logs\unatt_characteristics.rtf", replace addtable statmat(tab1) ///
+title("Cost of Unattributed Nights Statistics, non-zero NH nights ($)") varlabels ctitles(" " "N (obs)" "Mean" "Median" "Std Dev." "Max") ///
+note("Looking at decedents and bet. N1 and N2 interviews." "Removed if No NH Nights" "*No LTC, No CHAMPUS and No Medicaid from buy-in and ASF")

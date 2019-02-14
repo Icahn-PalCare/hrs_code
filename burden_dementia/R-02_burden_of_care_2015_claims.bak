@@ -1163,14 +1163,14 @@ H="MC Spending"
 *get claims that overlap with date of death;
 
 data &source._meet_admit;
-set proj_int.&source._meet_60m;
+set proj_int.&source._meet_84m;
 if index_date=admit_date and admit_date~=disch_date;
 admit_on_index_date=1;
 run;
 
 
 data &source._meet_both;
-set proj_int.&source._meet_60m;
+set proj_int.&source._meet_84m;
 if index_date=disch_date and admit_date=disch_date;
 admit_on_index_date=1;
 disch_on_index_date=1;
@@ -1232,7 +1232,7 @@ run;
 *get claims that start with date of death;
 
 data &source._meet_admit;
-set proj_int.&source._meet_60m;
+set proj_int.&source._meet_84m;
 if index_date=admit_date; 
 run;
 
@@ -1308,7 +1308,7 @@ run;
 
 *first get claims lists for the specific claims type, snf or ip;
 data &source._meet;
-set proj_int.&source._meet_60m;
+set proj_int.&source._meet_84m;
 win_start_dt=index_date-&days_bef_index;
 win_stop_dt=index_date-&days_start;
 format admit_date disch_date win_start_dt win_stop_dt date9.;
@@ -1441,7 +1441,7 @@ proc sort data=&source._&name.; by bid_hrs_22 index_date; run;
 
 *first get claims lists for the specific claims type, not snf or ip;
 data &source._meet;
-set proj_int.&source._meet_60m;
+set proj_int.&source._meet_84m;
 win_start_dt=index_date-&days_bef_index;
 win_stop_dt=index_date-&days_start;
 format admit_date disch_date win_start_dt win_stop_dt date9.;
@@ -1520,7 +1520,7 @@ proc sort data=&source._&name.; by bid_hrs_22 index_date; run;
 
 *first get claims lists for the specific claims type, snf or ip;
 data &source._meet;
-set proj_int.&source._meet_p60m;
+set proj_int.&source._meet_p84m;
 win_end_dt=index_date+&days_aft_index;
 win_start_dt=index_date+&days_start;
 format admit_date disch_date win_end_dt win_start_dt date9.;
@@ -1652,7 +1652,7 @@ proc sort data=&source._&name.; by bid_hrs_22 index_date; run;
 
 *first get claims lists for the specific claims type, snf or ip;
 data &source._meet;
-set proj_int.&source._meet_p60m;
+set proj_int.&source._meet_p84m;
 win_end_dt=index_date+&days_aft_index;
 win_start_dt=index_date+&days_start;
 format admit_date disch_date win_end_dt win_start_dt date9.;
@@ -1761,7 +1761,7 @@ run;
 %end;
 
 data &source._&time.;
-set &source._&time._60m;
+set &source._&time._84m;
 run;
 
 proc sort data=&source._&time.;
@@ -7609,22 +7609,70 @@ use ${final}\R01_final.dta, clear
 gsort id -nflag
 by id: carryforward pdem, replace
 
-keep if nflag==0 & ffs_60==1 & age_at_death>=70 & !missing(dem_cohort)
-replace ffs_84=0 if age_at_death<72
+keep if nflag==0 & ffs_60==1 & age_at_death>=70 & !missing(dem_cohort) & ///
+index_year>=2005
+replace ffs_84=0 if age_at_death<72 |ab_mos<84
+label var generous "Resident of a generous state"
 
+forvalues i=1/17 {
+	local charls `charls' charls_`i'_0d_n12m
+}
+gen ind_hs_12m=hs_paid_by_mc_12m & !missing(hs_paid_by_mc_12m)
+label var ind_hs_12m "Any hospice in last 12m, from claims"
 
 keep if !missing(pdem)
 
 gen n=1
 
+*gen age_lt_72=age_at_death<72
+gen hmo_lt_84=0
+forvalues i=1/28 {
+	replace hmo_lt_84=1 if inrange(hmo`i',1,3)
+}
+
+gen ab_lt_84=ab_mos<84
+
+label var age_lt_72 "Age <72"
+label var hmo_lt_84 "HMO Medicare"
+label var ab_lt_84 "<84 months of AB coverage"
+
+
+preserve
+mat tab=J(5,2,.)
+local r=2
+sum n
+local samplevars age_lt_72 hmo_lt_84 ab_lt_84
+
+mat tab[1,2]=r(N)
+foreach x of local samplevars {
+	sum `x'
+	mat tab[`r',1]=r(mean)*r(N)
+	drop if `x'==1
+	sum `x'
+	mat tab[`r',2]=r(N)
+	local r=`r'+1
+}
+sum ffs_84
+mat tab[5,1]=(1-r(mean))*r(N)
+mat tab[5,2]=r(N)
+
+mat rownames tab=ffs_60 `samplevars' ffs_84
+restore
+frmttable using characteristics_comparison_5_7_yrs_ffs.rtf, statmat(tab) ///
+title("Comparison of those w/ 60m FFS only and 84m FFS") ///
+ctitles("" "N dropped" "N remaining") ///
+annotate(stars) asymbol(*,**) varlabels sdec(0) replace
+ 
+
+label var adl_severe_exit "Severe dependence for ADLs (Help in 4+)"
 local cvars1 age_at_death
 local cvars2 pdem
-local cvars3
+local cvars3 charls_index_wt_0d_n12m
 local ivars1 age_lt_70 age_lt_72 
-local ivars2 dem_cohort female_exit white black other hospice_exit nhres_exit married_exit ///
+local ivars2 dem_cohort female_exit white black hisp_eth other ind_hs_12m nhres_exit married_exit ///
 reschil_d_exit resspouse_exit livealone_exit adl_independent_exit ///
-adl_severe_exit medicare_exit medicareb_exit medicaid_exit champus_exit
-local ivars3
+adl_severe_exit medicare_exit medicareb_exit medicaid_exit champus_exit ltc_ins_exit `charls'
+local ivars3 generous
 local catvars1
 local catvars2 
 local catvars3
@@ -7639,7 +7687,7 @@ local c=1
 
 
 
-forvalues i=1/2 {
+forvalues i=1/3 {
 	foreach x of local cvars`i' {
 		forvalues j=0/1 {
 			sum `x' if ffs_84==`j'
@@ -7675,11 +7723,12 @@ forvalues i=0/1 {
 	mat tab[`r',`i'+1]=r(N)
 }
 
-mat rownames tab=`cvars1' `ivars1' `cvars2'  `ivars2' `ivars3' `cvars3'  N
+mat rownames tab=`cvars1' `ivars1' `cvars2'  `ivars2' `cvars3' `ivars3'  N
 
-frmttable using characteristics_comparison_5_7_yrs_ffs.rtf, statmat(tab) title("Comparison of those w/ 60m FFS only and 84m FFS") ///
+frmttable using characteristics_comparison_5_7_yrs_ffs.rtf, statmat(tab) ///
+title("Comparison of those w/ 60m FFS only and 84m FFS") ///
 ctitles("" "60-83m FFS" "84+m FFS" "P-value") ///
-annotate(stars) asymbol(*,**) varlabels sdec(2) replace
+annotate(stars) asymbol(*,**) varlabels sdec(2) addtable
 
 
 mat tab=J(`rn'+1,6,.)
@@ -7693,7 +7742,7 @@ forvalues j=0/1 {
 	preserve
 	keep if ffs_84==`j'
 	forvalues k=0/1 {
-		forvalues i=1/2 {
+		forvalues i=1/3 {
 			foreach x of local cvars`i' {
 				sum `x' if dem_cohort==`k'
 				mat tab[`r',`c']=r(mean)
@@ -7726,7 +7775,7 @@ forvalues j=0/1 {
 }
 
 
-mat rownames tab=`cvars1' `ivars1' `cvars2'  `ivars2' `ivars3' `cvars3'  N
+mat rownames tab=`cvars1' `ivars1' `cvars2'  `ivars2' `cvars3' `ivars3'  N
 
 frmttable using characteristics_comparison_5_7_yrs_ffs.rtf, statmat(tab) ///
 title("Comparison of those w/ 60m FFS only and 84m FFS") ///
@@ -9679,6 +9728,7 @@ cum_spending_diff_no_dem_stacked.gph cum_spending_diff_dem_stacked.gph, ycommon 
 saving(spending_stacked_7yrs, replace) rows(1) ysize(4) xsize(12)
 graph export spending_stacked_7yrs.pdf, replace
 
+export excel using "E:\data\burden_dementia\logs\graphs\graphs_data_20190214.xls", firstrow(varlabels)
 
 H="Medicaid graphs"
 
@@ -10232,6 +10282,8 @@ save "`fdpath'/burden_dementia_sample_long.dta", replace
 
 
 H="changelog"
+02/13/19 - Corrected "MC Spending" header by pulling for 84 months of claims instead of 60. Evan
+
 02/08/19 - Added header "Charlson comorbodities" for comorbidities in the last year of life and amended "Model Medicaid spending" to bring in the predictions from the two-part model instead of the linear random effects model.  Evan
 
 02/05/19 - Added header "Comparison table 5 v 7 yrs." Evan

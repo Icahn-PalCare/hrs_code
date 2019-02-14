@@ -3,74 +3,388 @@
 H="Project Notes"
 
 
+/* Libraries */
+libname hrsclean 'E:\data\hrs_cleaned';
+libname maid 'E:\data\CMS_DUA_51675_2014\Medicaid_merged';
+libname mcare 'E:\data\CMS_DUA_51675_2014\Merged\SAS'
+
 H="********"
 
 
 H="Create IAH Flags"
-use "E:\nhats\data\Projects\serious_ill\final_data\serious_ill_nhats_sample.dta", replace
-/*
-drop community_dwelling SP_completed
+libname hrs 'E:\data\hrs_cleaned';
+libname maid 'E:\data\CMS_DUA_51675_2014\Medicaid_merged';
+libname medcare 'E:\data\CMS_DUA_51675_2014\Merged\SAS';
 
-merge 1:1 spid wave using "C:\Users\rahmao03\Documents\community.dta"
+proc import datafile="E:\data\CMS_DUA_51675_2014\Medicaid_merged\MedicaidXref2012_old.dta" out=medicaidxwalk dbms=stata replace; run;
+
+proc sql;
+create table hrs_medicaid as select a.*, b.bid_hrs_23
+from hrs.core_00_to_14 a
+inner join medicaidxwalk b
+on a.id=b.id;
+quit;
+
+data ot_file;
+set maid.hrs_max_ot_99_12;
+beg_dos = input(put(beginning_date_of_service,8.),YYMMDD8.);
+end_dos = input(put(ending_date_of_service,8.),YYMMDD8.);
+where msis_type_of_service = 13; *home health claims code;
+run;
+
+proc freq data=ot_file; tables beginning_date_of_service beg_dos / missprint; run;
+
+proc freq data=ot_file; tables msis_type_of_service / missprint; run;
+
+proc sql;
+create table hrs_medicaid_hh as select a.*, b.beg_dos, b.end_dos, b.msis_type_of_service
+from hrs_medicaid a
+inner join ot_file b
+on a.bid_hrs_23=b.bid_hrs_23; *and -90<=a.c_ivw_date-b.beg_dos<=90;
+quit;
+run;
+
+proc sort data=hrs_medicaid_hh nodupkey; by bid_hrs_23; run;
+
+/* People with at least 1 Medicaid HH claim 98-2012 */
+data hrs_medicaid_hh;
+set hrs_medicaid_hh;
+maid_hh = 1;
+run;
+
+proc export data=hrs_medicaid_hh (keep = id maid_hh) outfile="E:\data\HBMC_HRS\int_data\any_maid_hh.dta" dbms=stata replace; run;
+
+/* Number of Medicaid beneficiaries */
+proc sort data=hrs_medicaid nodupkey; by bid_hrs_23; run;
+
+proc export data=hrs_medicaid (keep = id bid_hrs_23) outfile="E:\data\HBMC_HRS\int_data\any_maid.dta" dbms=stata replace; run;
+
+
+/* Merge with Medicare crosswalk */
+
+proc sql;
+create table hrs_mcare as select a.*, b.bid_hrs_22
+from hrs.core_00_to_14 a
+inner join medcare.xref2015medicare b
+on a.id=b.hhidpn;
+quit;
+
+/* Check for cpt and pos codes in carrier file */
+
+* Split carrier file into half due to size;
+data carrier_06 (keep = bid_hrs_22 admit_date disch_date admit_year hcpcs_cd PLCRVC01-PLCRVC13);
+set medcare.pb_1998_2015;
+array dx hcpscd01--hcpscd13;
+do over dx;
+hcpcs_cd = dx;
+output;
+end;
+where admit_year<=2006;
+run;
+
+data carrier_06 (drop = PLCRVC01-PLCRVC13);
+set carrier_06;
+cptcodes1 = input(compress(hcpcs_cd,'ABCDEFGHIJKLMNOPQRSTUVWXYZ/',),8.);
+posflag = 0;
+array dx PLCRVC01-PLCRVC13;
+do over dx;
+if dx in:(12,13,14) then posflag =1;
+end;
+run;
+
+data carrier_06;
+set carrier_06;
+cptflag = 0;
+if 99341<=cptcodes1<=99350 or 99324<=cptcodes1<=99328 or 99334<=cptcodes1<=99337 then cptflag = 1;
+run; 
+
+data carrier_06;
+set carrier_06;
+where cptflag=1 or posflag = 1;
+run;
+
+proc sort data=carrier_06 nodupkey; by bid_hrs_22 admit_date disch_date; run;
+
+* other half;
+
+data carrier_15 (keep = bid_hrs_22 admit_date disch_date admit_year hcpcs_cd PLCRVC01-PLCRVC13);
+set medcare.pb_1998_2015;
+array dx hcpscd01--hcpscd13;
+do over dx;
+hcpcs_cd = dx;
+output;
+end;
+where 2007<=admit_year<=2015;
+run;
+
+data carrier_15 (drop = PLCRVC01-PLCRVC13);
+set carrier_15;
+cptcodes1 = input(compress(hcpcs_cd,'ABCDEFGHIJKLMNOPQRSTUVWXYZ/',),8.);
+posflag = 0;
+array dx PLCRVC01-PLCRVC13;
+do over dx;
+if dx in:(12,13,14) then posflag =1;
+end;
+run;
+
+data carrier_15;
+set carrier_15;
+cptflag = 0;
+if 99341<=cptcodes1<=99350 or 99324<=cptcodes1<=99328 or 99334<=cptcodes1<=99337 then cptflag = 1;
+run; 
+
+data carrier_15;
+set carrier_15;
+where cptflag=1 or posflag = 1;
+run;
+
+
+proc sort data=carrier_15 nodupkey; by bid_hrs_22 admit_date disch_date; run;
+
+data carrier2;
+set carrier_06 carrier_15;
+by bid_hrs_22;
+housecall = 1;
+run;
+
+/* Merge back with HRS dataset */
+
+proc sql;
+create table hrs_housecalls as select a.*, b.housecall
+from hrs_mcare a
+inner join carrier2 b
+on a.bid_hrs_22=b.bid_hrs_22 and -90<=a.c_ivw_date-b.admit_date<=90;
+quit;
+
+proc sort data=hrs_housecalls nodupkey; by descending c_ivw_date bid_hrs_22; run;
+
+proc export data=hrs_housecalls (keep = bid_hrs_22 id core_year housecall) outfile="E:\data\HBMC_HRS\int_data\hrs_housecalls.dta" dbms=stata replace; run;
+
+
+
+/*
+data hrs_medicaid_hh;
+set hrs_medicaid_hh;
+los = (end_dos - beg_dos) + 1;
+run;
+
+proc freq data = hrs_medicaid_hh; tables los; run;
+
+
+proc sort data=hrs_medicaid_hh nodupkey; by id beg_dos end_dos; run;
+proc sort data=hrs_medicaid_hh nodupkey; by id beg_dos; run;
+
+proc sql;
+create table total_hhdays as select distinct id, c_ivw_date,
+sum(los) as total_hh
+from hrs_medicaid_hh
+group by id, c_ivw_date;
+quit;
+
+proc sql;
+create table core_hh as select a.*, b.*
+from hrs.core_00_to_14 a
+left join total_hhdays b
+on a.id=b.id and a.c_ivw_date=b.c_ivw_date;
+quit;
+
+proc export data=core_hh outfile="E:\data\HBMC_HRS\core_0014_hbmc.dta" dbms=stata replace; run;
+
+
+H="Data Setup"
+use "E:\data\hrs_cleaned\core_00_to_14.dta" , clear 
+
+merge 1:1 id core_year using "E:\data\HBMC_HRS\int_data\hrs_housecalls.dta"
+
+/* Only keeping most recent ivws for people without housecall */
+
+gen hcall = .
+preserve
+keep if _m==3
+replace hcall = 1
+drop _m
+tempfile hcalls
+save `hcalls'
+restore
+
+levelsof id if _m==3, local(match)
+
+foreach x of local match {
+replace hcall= 1 if id=="`x'"
+}
+
+drop _m
+drop if hcall==1
+gsort id -core_year
+by id: keep if _n==1
+
+append using "`hcalls'"
+
+replace hcall = 0 if hcall==.
+label var hcall "Medicare House call +/- 90 days of iw"
+
+save "E:\data\HBMC_HRS\int_data\hrs_merged.dta", replace
+
+use "E:\data\HBMC_HRS\int_data\hrs_merged.dta", replace
+
+drop bid_hrs_22
+
+merge 1:1 hhid pn using "E:\data\CMS_DUA_51675_2014\Merged\Stata\xref2015medicare.dta", keepus(BID_HRS_22)
+drop if _m==2
+
+gen mcare_claims = 0
+replace mcare_claims = 1 if BID_HRS_22!=""
+label var mcare_claims "Has Medicare Claims"
 cap drop _m
 
-save "E:\nhats\data\Projects\serious_ill\final_data\serious_ill_nhats_sample.dta", replace
-*/
-keep if community_dwelling
-keep if wave<6
-cap drop bene_id 
+merge 1:1 hhid pn using "E:\data\CMS_DUA_51675_2014\Medicaid_merged\MedicaidXref2012.dta", keepus(bid_hrs_23)
+drop if _m==2
 
-merge m:1 spid using "E:\nhats\data\20180625 NHATS CMS Data\merged\xwalk_2016.dta" 
+gen maid_claims = 0
+replace maid_claims = 1 if _m==3
+label var maid_claims "Has Medicaid Claims"
+drop _m
 
-keep if _m==3
+merge 1:1 id using "E:\data\HBMC_HRS\int_data\any_maid_hh.dta", keepus(maid_hh)
+replace maid_hh = 0 if maid_hh==.
+label var maid_hh "Has any Medicaid HH claim"
+drop _m
 
-save "E:\nhats\data\Projects\IAH\int_data\iah_fullsample.dta", replace
+rename *, l
 
+save "E:\data\HBMC_HRS\int_data\hrs_merged2.dta", replace 
 
-keep bene_id spid wave ivw_month ivw_year
+use "E:\data\CMS_DUA_51675_2014\Merged\Stata\hh_1998_2015.dta", clear
+keep bid_hrs_22
+duplicates drop
 
+tempfile mcarehh
+save `mcarehh'
 
-saveold "E:\nhats\data\Projects\IAH\int_data\iah_ivwdates.dta", version(12) replace
-
-
-
-use "E:\nhats\data\Projects\IAH\int_data\iah_fullsample.dta", clear
-
-cap drop _merge
-
-merge 1:1 spid wave using "E:\nhats\data\Projects\IAH\int_data\iah_ffs.dta", keepus(ffs_6m)
-keep if _m==3
-
-save "E:\nhats\data\Projects\IAH\final_data\iah_fullsample.dta", replace
+use "E:\data\HBMC_HRS\int_data\hrs_merged2.dta", replace 
 
 
+preserve
+keep if bid_hrs_22==""
+tempfile applater
+save `applater'
+restore 
 
-local cvars sr_stroke_ever sr_cancer_ever sr_hip_ever sr_heart_dis_ever sr_htn_ever sr_ra_ever sr_osteoprs_ever sr_diabetes_ever sr_lung_dis_ever sr_dementia_ever
+drop if bid_hrs_22==""
 
- 
-egen c_con = anycount(`cvars'), values(1)
-gen cc_flag = 0
-replace cc_flag = 1 if c_con>=2
-label var cc_flag "2+ Chronic Conditions"
- 
-local avars adl_eat_help adl_bath_help adl_toil_help adl_dres_help adl_bed_help adl_ins_help
-egen adl_con = anycount(`avars'), values(1)
-gen adl_flag = 0
-replace adl_flag = 1 if adl_con>=2 
-label var adl_flag "2+ ADL Impairment"
+merge 1:m bid_hrs_22 using "`mcarehh'", keepus(bid_hrs_22)
+drop if _m==2
 
-gen homebound = 0
-replace homebound = 1 if homebound_cat==1
+gen mcare_hh = .
+replace mcare_hh = 1 if _m==3
 
-gen homebound_never = 0
-replace homebound_never = 1 if homebound_cat==2
+append using "`applater'"
 
-rename cc_flag iah_chronic
-rename adl_flag iah_adl
-rename ind_nonelect_adm_12m iah_nonelect
+replace mcare_hh = 0 if mcare_hh==.
+label var mcare_hh "Has any Medicare HH claim"
+drop _m
+
+save "E:\data\HBMC_HRS\int_data\hrs_merged2.dta", replace  
+
+/* Merge with rest. tracker for demographics */
+
+use "E:\data\HBMC_HRS\int_data\hrs_merged2.dta", replace  
+
+merge m:1 hhid pn using "E:\data\hrs_cleaned\restr_tracker_v2014.dta", keepus(birth_date hisp_eth white black degree gender)
+drop if _m==2
+drop _m
+
+cap drop female
+gen female = 0 if gender!=.
+replace female = 1 if gender==2
+
+gen age = ((c_ivw_date - birth_date)/365.25)
+replace age = ceil(age)
+
+gen livealone = 0 if hhm!=. & nhres!=1
+replace livealone = 1 if hhm==0
+
+gen adl_dep_core = 0 if adl_index_core!=.
+replace adl_dep_core = 1 if  adl_index_core>0 & adl_index_core!=.
+label var adl_dep_core "ADL dependent at core"
+
+gen iadl_dep_core = 0 if iadl_ind_core!=.
+replace iadl_dep_core = 1 if  iadl_ind_core>0 & iadl_ind_core!=.
+label var iadl_dep_core "IADL dependent at core"
+
+gen all = 1
+
+replace hseduc = 0
+replace hseduc = 1 if degree>0
 
 
-saveold "E:\nhats\data\Projects\IAH\final_data\iah_wave1-5.dta", version(12) replace
+local ivars female married hisp_eth black white nhres nhres_2yr resspouse livealone adl_dep_core iadl_dep_core adl_sp_helper iadl_sp_helper hh_worker hseduc srh_pf cesd_tot_ge3
+local cvars reschil comor_in_hrs age networth_adj2012 
+local ivars2 mcare_claims maid_claims maid_hh mcare_hh
+
+local rd: word count `ivars' `cvars' `ivars2' 1
+
+mat tab1=J(`rd', 2, .)
+mat stars=J(`rd',2,0)
+
+local r = 1
+
+foreach x of local ivars {
+
+
+sum `x' if hcall==1
+mat tab1[`r',1] = r(mean)*100
+
+sum `x' if hcall==0
+mat tab1[`r',2] = r(mean)*100
+
+tab `x' hcall, chi2
+mat stars[`r',2] = (r(p)<.01) + (r(p)<0.05)
+
+local ++r
+
+}
+
+foreach x of local cvars {
+
+sum `x' if hcall==1
+mat tab1[`r',1] = r(mean)
+
+sum `x' if hcall==0
+mat tab1[`r',2] = r(mean)
+
+ttest `x', by(hcall)
+mat stars[`r',2] = (r(p)<.01) + (r(p)<0.05)
+local ++r
+}
+
+foreach x of local ivars2 {
+
+sum `x' if hcall==1
+mat tab1[`r',1] = r(mean)*100
+
+sum `x' if hcall==0
+mat tab1[`r',2] = r(mean)*100
+
+tab `x' hcall, chi2
+mat stars[`r',2] = (r(p)<.01) + (r(p)<0.05)
+
+local ++r
+
+}
+
+sum all if hcall==1
+mat tab1[`r',1] = r(N)
+
+sum all if hcall==0
+mat tab1[`r',2] = r(N)
+
+mat rownames tab1 = `ivars' `cvars' `ivars2' "Sample Size"
+
+frmttable using "E:\projects\HBMC_HRS\logs\table1.doc", replace statmat(tab1) ///
+varlabels title("HRS 1998-2014: HBMC based on CPT/POS codes in Medicare Carrier") ctitles("", "HBMC", "No HBMC") sdec(2) ///
+annotate(stars) asymbol(*,**) ///
+note("These are unique people, and only survey data from their most recent HRS interview was used. Housecalls are +/- 90 days of ivw date. *p<0.05, **p<0.01")
 
 
 H="***************************"

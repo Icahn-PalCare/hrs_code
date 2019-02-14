@@ -3375,8 +3375,9 @@ egen day= rowtotal(medpar_day ltc_day)
 gen both=1 if day==2
 replace day=1 if day==2
 
-saveold "E:\data\test\mp_ltc_contact_days.dta", version(12) replace
+drop if day==0
 
+saveold "E:\data\test\mp_ltc_contact_days.dta", version(12) replace
 
 
 /*SAS SECTION
@@ -4618,12 +4619,14 @@ sort bid_hrs_21
 
 
 H="new 2/12"
+//using r01 dataset to find n1 to n2 interviews
 use id death_date final_7yr using "E:\data\burden_dementia\final_data\R01_final.dta", replace
 keep if final_7yr==1
 format %td death_date
 duplicates drop 
 gen r01=1
-/*
+
+/* For n to n1
 merge 1:1 id using "E:\data\hrs_cleaned\exit_02_to_14_dt.dta", keep(match master) ///
 keepusing(nh_nights exit_year ltc_ins nhres)  gen(xm)
 rename nh_ nh_nights_x
@@ -4634,7 +4637,9 @@ duplicates report
 
 */
 duplicates drop id, force
-merge 1:m id using "E:\data\hrs_cleaned\core_00_to_14.dta", keep(match master) gen(cm)
+merge 1:m id using "E:\data\hrs_cleaned\core_00_to_14.dta", keep(match master) gen(cm) keepusing( hhid pn core_year ///
+ltc_ins ltc_bene nhres medigap hmo champus medicaid medicareb medicare nh_stays nh_nights nh_ins c_ivw_date c_ivw_year)
+
 sort id core_year
 
 gen c_ivw_date_1=.
@@ -4647,12 +4652,8 @@ by id: keep if _n==_N
 gen ivw_time=c_ivw_date-c_ivw_date_1
 drop if ivw_time<0
 replace nh_nights=ivw_time if nh_nights>ivw_time
-//>=730
 
-rename hhidpn hh
 rename id hhidpn
-
-merge 1:1 hhid pn core_year using "E:\data\hrs_cleaned\working\core_98_14_clean_final.dta", keepusing(ltc_ins) keep(master matched)
 
 gen year= core_year
 gen HHID=hhid
@@ -4669,7 +4670,7 @@ drop if p==2 & r01!=1
 sort hhidpn date
 codebook hhidpn
 
-duplicates tag hhidpn, gen(tag1)
+//duplicates report hhidpn
 
 keep if inrange(date, c_ivw_date_1, c_ivw_date) 
 //gen claim_day=1 if inrange(date, c_ivw_date_1, c_ivw_date) | day==0
@@ -4691,8 +4692,6 @@ bys hhidpn core_year: keep if _n==1
 //replace mm_days=. if mm_days==0
 
 rename BID_HRS_22 bid_hrs_22
-capture drop year
-gen year=core_year
 
 rename medicaid sr_medicaid
 
@@ -4714,10 +4713,10 @@ by bid_hrs_22: replace medicaid_p=1 if medicaid==1 | medicaid[_n-1]==1
 //by bid_hrs_22: replace medicaid_p=2 if medicaid==1 & medicaid[_n-1]==1 
 
 label var medicaid "Medicaid from Medicare claims"
-label var medicaid_p "Medicaid from claims previous year"
+label var medicaid_p "Medicaid from claims previous year or that year"
 
 sort bid_hrs_22 year
-by bid_hrs_22: keep if _n==_N 
+//by bid_hrs_22: keep if _n==_N 
 
 
 tempfile b
@@ -4725,11 +4724,12 @@ save "`b'"
 
 use "`a'", replace
 
-merge 1:1 bid_hrs_22 using "`b'", nogen keep(master match) keepusing(medicaid medicaid_p)
+merge 1:1 bid_hrs_22 year using "`b'", nogen keep(master match) keepusing(medicaid medicaid_p)
+
 
 drop bid_hrs_23
 
-merge m:1 hhidpn using "E:\data\CMS_DUA_51675_2014\Medicaid Xref2016\MedicaidXref2016\stata\Medicaid2016Xref.dta", ///
+merge 1:1 hhidpn using "E:\data\CMS_DUA_51675_2014\Medicaid Xref2016\MedicaidXref2016\stata\Medicaid2016Xref.dta", ///
 keep(master match) keepusing(bid_hrs_23) nogen
 
 tempfile c
@@ -4740,14 +4740,14 @@ use "E:\data\CMS_DUA_51675_2014\Medicaid_merged\asf.dta", clear
 gen medicaid_m=1
 keep bid_hrs_23 year medicaid_m
 
-duplicates drop bid_hrs_23, force
+duplicates drop bid_hrs_23 year, force
 
 tempfile d
 save "`d'"
 
 use "`c'", clear
 
-merge m:1 bid_hrs_23 using "`d'", ///
+merge m:1 bid_hrs_23 year using "`d'", ///
 keep(master match) nogen
 
 
@@ -4903,8 +4903,8 @@ gen nh_oop_nights=NH_OOP/nh_daily
 gen ltc_nights=long_term_care/nh_daily
 gen medigap_nights=private_medigap/nh_daily
 
-gen ltc_flag=1 if long_term_care>=1 & long_term_care!=.
-gen medigap_flag=1 if private_medigap>=1 & private_medigap!=.
+//gen ltc_flag=1 if long_term_care>=1 & long_term_care!=. long_term_care comes from oop file, where they ask about how much pay to LTC
+//gen medigap_flag=1 if private_medigap>=1 & private_medigap!=. private/medigap comes from oop file, where they ask about how much pay to private/medigap
 
 gen nh_oop_big_flag=1 if nh_oop_nights>ivw_time
 
@@ -5049,7 +5049,7 @@ replace no_medicaid=1 if ltc_ins==0 & champus==0 & medicaid_full==0
 // tables 
 
 
-local vars n ltc_ins ltc_bene champus mis medicaid_full medicaid medicaid_m mcaid no_medicaid medigap
+local vars n ltc_ins ltc_bene champus mis medicaid_full medicaid_p medicaid_m mcaid no_medicaid medigap
 
 
 mat tab=J(11,5,.)
@@ -5076,7 +5076,7 @@ frmttable using "E:\data\burden_dementia\logs\unatt_characteristics.rtf", replac
 title("Unattributed Nights Statistics (All)") varlabels  ctitles(" " "N (obs)" "Mean" "Median" "Std Dev." "Max") ///
 note("Looking at decedents bet. N1 and N2 interviews." "*No LTC, No CHAMPUS and No Medicaid from buy-in and ASF")
 
-local vars n ltc_ins ltc_bene champus mis medicaid_full medicaid medicaid_m mcaid no_medicaid medigap
+local vars n ltc_ins ltc_bene champus mis medicaid_full medicaid_p medicaid_m mcaid no_medicaid medigap
 
 mat tab1=J(11,5,.)
 local r=1
@@ -5104,7 +5104,7 @@ title("Cost of Unattributed Nights Statistics (All,$)") varlabels ctitles(" " "N
 note("Looking at decedents bet. N1 and N2 interviews." "*No LTC, No CHAMPUS and No Medicaid from buy-in and ASF")
 
 
-local vars n ltc_ins ltc_bene champus mis medicaid_full medicaid medicaid_m mcaid no_medicaid medigap
+local vars n ltc_ins ltc_bene champus mis medicaid_full medicaid_p medicaid_m mcaid no_medicaid medigap
 
 mat tab=J(11,5,.)
 local r=1
@@ -5130,7 +5130,7 @@ frmttable using "E:\data\burden_dementia\logs\unatt_characteristics.rtf", replac
 title("Unattributed Nights Statistics, non-zero NH nights") varlabels  ctitles(" " "N (obs)" "Mean" "Median" "Std Dev." "Max") ///
 note("Looking at decedents  bet. N1 and N2 interviews." "Removed if No NH Nights" "*No LTC, No CHAMPUS and No Medicaid from buy-in and ASF")
 
-local vars n ltc_ins ltc_bene champus mis medicaid_full medicaid medicaid_m mcaid no_medicaid medigap
+local vars n ltc_ins ltc_bene champus mis medicaid_full medicaid_p medicaid_m mcaid no_medicaid medigap
 
 mat tab1=J(11,5,.)
 local r=1
@@ -5156,3 +5156,61 @@ mat list tab1
 frmttable using "E:\data\burden_dementia\logs\unatt_characteristics.rtf", replace addtable statmat(tab1) ///
 title("Cost of Unattributed Nights Statistics, non-zero NH nights ($)") varlabels ctitles(" " "N (obs)" "Mean" "Median" "Std Dev." "Max") ///
 note("Looking at decedents and bet. N1 and N2 interviews." "Removed if No NH Nights" "*No LTC, No CHAMPUS and No Medicaid from buy-in and ASF")
+
+
+local vars ltc_ins ltc_bene champus mis medicaid_full medicaid_p medicaid_m mcaid no_medicaid medigap
+foreach x in `vars'{
+tab `x'
+}
+
+tab ltc_ins ltc_bene,  matcell(foo)
+frmttable using "E:\data\burden_dementia\logs\unatt_characteristics.rtf", replace statmat(foo) ///
+title("LTC Insurance vs LTC Benefits") varlabels ctitles("Ins.\Benefit" "0" "1") rtitles("1") 
+
+tab ltc_ins champus, matcell(foo)
+frmttable using "E:\data\burden_dementia\logs\unatt_characteristics.rtf", replace statmat(foo) ///
+title("LTC Insurance vs CHAMPUS") varlabels ctitles("Ins.\CHAMPUS" "0" "1") rtitles("0" \ "1") 
+
+tab ltc_ins medicaid_full, matcell(foo)
+frmttable using "E:\data\burden_dementia\logs\unatt_characteristics.rtf", replace statmat(foo) ///
+title("LTC Insurance vs Medicaid Full") varlabels ctitles("Ins.\Medicaid" "0" "1") rtitles("0" \ "1") //note
+
+tab ltc_ins medicaid_p, matcell(foo)
+frmttable using "E:\data\burden_dementia\logs\unatt_characteristics.rtf", replace statmat(foo) ///
+title("LTC Insurance vs Medicaid buyin") varlabels ctitles("Ins.\Medicaid" "0" "1") rtitles("0" \ "1") //note
+
+//need to fix medicaid_m to be binary
+tab ltc_ins medicaid_m, matcell(foo)
+frmttable using "E:\data\burden_dementia\logs\unatt_characteristics.rtf", replace statmat(foo) ///
+title("LTC Insurance vs Medicaid from Medicaid ASF") varlabels ctitles("Ins.\Medicaid" "0" "1") rtitles("0" \ "1") //note
+
+tab ltc_ins mcaid, matcell(foo)
+frmttable using "E:\data\burden_dementia\logs\unatt_characteristics.rtf", replace statmat(foo) ///
+title("LTC Insurance vs Medicaid from Medicaid MAX_LT") varlabels ctitles("Ins.\Medicaid" "0" "1") rtitles("0" \ "1") //note
+
+tab ltc_ins medigap, matcell(foo)
+frmttable using "E:\data\burden_dementia\logs\unatt_characteristics.rtf", replace statmat(foo) ///
+title("LTC Insurance vs Medigap") varlabels ctitles("Ins.\Medigap" "0" "1") rtitles("0" \ "1") //note
+
+
+////
+tab champus medicaid_full, matcell(foo)
+frmttable using "E:\data\burden_dementia\logs\unatt_characteristics.rtf", replace statmat(foo) ///
+title("CHAMPUS vs Medicaid Full") varlabels ctitles("CHAMPUS\Medicaid" "0" "1") rtitles("0" \ "1") //note
+
+tab champus medicaid_p, matcell(foo)
+frmttable using "E:\data\burden_dementia\logs\unatt_characteristics.rtf", replace statmat(foo) ///
+title("CHAMPUS vs Medicaid buyin") varlabels ctitles("CHAMPUS\Medicaid" "0" "1") rtitles("0" \ "1") //note
+
+//need to fix medicaid_m to be binary
+tab champus medicaid_m, matcell(foo)
+frmttable using "E:\data\burden_dementia\logs\unatt_characteristics.rtf", replace statmat(foo) ///
+title("CHAMPUS vs Medicaid from Medicaid ASF") varlabels ctitles("CHAMPUS\Medicaid" "0" "1") rtitles("0" \ "1") //note
+
+tab champus mcaid, matcell(foo)
+frmttable using "E:\data\burden_dementia\logs\unatt_characteristics.rtf", replace statmat(foo) ///
+title("CHAMPUS vs Medicaid from Medicaid MAX_LT") varlabels ctitles("CHAMPUS\Medicaid" "0" "1") rtitles("0" \ "1") //note
+
+tab champus medigap, matcell(foo)
+frmttable using "E:\data\burden_dementia\logs\unatt_characteristics.rtf", replace statmat(foo) ///
+title("CHAMPUS vs Medigap") varlabels ctitles("CHAMPUS\Medigap" "0" "1") rtitles("0" \ "1") //note

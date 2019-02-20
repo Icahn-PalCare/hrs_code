@@ -405,6 +405,7 @@ data ot_file;
 set maid.hrs_max_ot_99_12;
 beg_dos = input(put(beginning_date_of_service,8.),YYMMDD8.);
 end_dos = input(put(ending_date_of_service,8.),YYMMDD8.);
+admit_year = year(beg_dos);
 where msis_type_of_service = 13; *home health claims code;
 run;
 
@@ -413,26 +414,22 @@ proc freq data=ot_file; tables beginning_date_of_service beg_dos / missprint; ru
 proc freq data=ot_file; tables msis_type_of_service / missprint; run;
 
 proc sql;
-create table hrs_medicaid_hh as select a.*, b.beg_dos, b.end_dos, b.msis_type_of_service
+create table hrs_medicaid_hh as select a.*, b.beg_dos, b.end_dos, b.msis_type_of_service, b.admit_year
 from hrs_medicaid a
 inner join ot_file b
 on a.bid_hrs_23=b.bid_hrs_23; *and -90<=a.c_ivw_date-b.beg_dos<=90;
 quit;
 run;
 
-proc sql;
-create table hh_annual as select distinct 
+proc sql; /* sample size for hh per year */
+create table hh_annual as select distinct bid_hrs_23, admit_year,
+count(msis_type_of_service=13) as medicaid_hh
+from hrs_medicaid_hh group by bid_hrs_23, admit_year;
+quit;
 
 
+proc sort data=hh_annual out=hh_total nodupkey; by bid_hrs_23; run; /*total sample size for hh */
 
-
-proc sort data=hrs_medicaid_hh nodupkey; by bid_hrs_23; run;
-
-/* People with at least 1 Medicaid HH claim 98-2012 */
-data hrs_medicaid_hh;
-set hrs_medicaid_hh;
-maid_hh = 1;
-run;
 
 proc export data=hrs_medicaid_hh (keep = id maid_hh) outfile="E:\data\HBMC_HRS\int_data\any_maid_hh.dta" dbms=stata replace; run;
 
@@ -520,14 +517,42 @@ set carrier_15;
 where cptflag=1 or posflag = 1;
 run;
 
-
 proc sort data=carrier_15 nodupkey; by bid_hrs_22 admit_date disch_date; run;
 
 data carrier2;
 set carrier_06 carrier_15;
 by bid_hrs_22;
 housecall = 1;
+admit_year = year(admit_date);
 run;
+
+proc sql; /* medicare housecalls annual */
+create table mcare_annual as select distinct bid_hrs_22, admit_year,
+sum(cptflag) as cpt_hh,
+sum(posflag) as pos_hh,
+sum(housecall) as both_hh
+from carrier2 group by bid_hrs_22, admit_year;
+quit;
+
+proc sort data=mcare_annual out=mcare_total nodupkey; by bid_hrs_22; run; 
+
+
+/* Medicare home health */
+
+data hrs_hh (keep = bid_hrs_22 admit_date disch_date admit_year);
+set medcare.hh_1998_2015;
+run;
+
+proc sql;
+create table hrs_hh_annual as select bid_hrs_22, admit_year,
+count(admit_year ne .) as hh_claim
+from hrs_hh group by bid_hrs_22, admit_year;
+quit;
+
+
+proc sort data=hrs_hh_annual out=hrs_hh_total nodupkey; by bid_hrs_22; run;
+
+
 
 /* Merge back with HRS dataset */
 

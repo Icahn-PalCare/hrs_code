@@ -1231,6 +1231,9 @@ proc export data=nhats outfile="E:\data\HBMC_HRS\int_data\nhats_claims.dta" repl
 H="P01 - NHATS Sample Size Table"
 use "E:\nhats\data\Projects\serious_ill\final_data\serious_ill_nhats_sample.dta" , clear
 
+gen ffs_6m = 0
+replace ffs_6m = 1 if cont_ffs_n_mos>=6 & cont_ffs_n_mos!=.
+
 merge 1:1 bene_id index_year using "E:\data\HBMC_HRS\int_data\nhats_claims.dta"
 drop if _m==2
 
@@ -1239,7 +1242,17 @@ local date=subinstr("$S_DATE"," ","_",.)
 
 gen all = 1
 
-local cvars all prob_dem reg_doc_homevisit hh_claim both_flag
+gen dem_ffs = 0
+replace dem_ffs = 1 if prob_dem==1 & ffs_6m==1 
+
+gen both_hbmc = 0
+replace both_hbmc = 1 if reg_doc_homevisit==1 | both_flag==1
+
+foreach x of varlist reg_doc_homevisit hh_claim both_flag both_hbmc {
+replace `x' = 0 if dem_ffs==0
+}
+
+local cvars all prob_dem dem_ffs reg_doc_homevisit hh_claim both_flag both_hbmc
 
 
 local full: word count `cvars'
@@ -1269,7 +1282,8 @@ mat rownames tab1 ="2011" "2012" "2013" "2014" "2015" "2016"
 
 
 frmttable using `logpath'\NHATS_P01_SampleSize_`date'.doc, replace statmat(tab1) ///
-varlabels title("Community Dwelling NHATS 2011-2016: Prevelance/Cross-Section ") ctitles("Year", "Full Sample", "Dementia (N)", "Self Report HBMC" "Medicare HH" "Medicare HBMC") sdec(0) //
+varlabels title("Community Dwelling NHATS 2011-2016: Prevelance/Cross-Section ") ctitles("Year", "Full Sample", "Dementia (N)", "Dementia + 6m FFS", "Self Report HBMC", "Medicare HH", "Medicare HBMC", "Self-Report or Medicare HBMC") sdec(0) ///
+note("Utilization/Self Report restricted to Dementia + 6m FFS")
 
 restore
 tempfile nhats
@@ -1348,7 +1362,7 @@ replace anyhelp = 1 if paid_help_ind==1 | informal==1
 label var informal "Any unpaid helpers"
 label var anyhelp "Any Helpers"
 label var both_flag "Medicare HBMC"
-label var all "# at Risk"
+label var all "# at Risk (Unique People)"
 
 preserve
 tempfile hbmc
@@ -1359,11 +1373,25 @@ duplicates drop spid, force
 save `hbmc'
 restore
 
+preserve
+tempfile hbmc2
+keep if both_hbmc==1
+gen any_bothhbmc = 1
+keep spid any_bothhbmc
+duplicates drop spid, force
+save `hbmc2'
+restore
+
+
 cap drop _m
 merge m:1 spid using "`hbmc'", keepus(any_hbmc) 
 drop _m
+merge m:1 spid using "`hbmc2'", keepus(any_bothhbmc)
+drop _m
 label var any_hbmc "Any Medicare HBMC 2011-16"
-
+label var any_bothhbmc "Self Report or Medicare HBMC 2011-16"
+label var reg_doc_homevisit "Self Report HBMC"
+label var both_hbmc "Self Report or Medicare HBMC"
 
 gsort spid -index_year
 
@@ -1371,7 +1399,7 @@ by spid: gen death_sy = 1 if death_year==index_year
 label var death_sy "Died after ivw in the same calendar year"
 by spid: gen death_ny = 1 if (death_year>index_year & _n==1 & death_year!=.)
 label var death_ny "Last observed ivw, dies year(s) after ivw"
-local ivars death_sy death_ny nhres informal ind_paid_helper ind_no_helpers anyhelp both_flag any_hbmc all
+local ivars death_sy death_ny nhres informal ind_paid_helper ind_no_helpers anyhelp both_flag reg_doc_homevisit any_hbmc both_hbmc any_bothhbmc all
 
 
 local full: word count `ivars'
@@ -1402,6 +1430,49 @@ mat list tab1
 frmttable using `logpath'\NHATS_P01_SampleSize_`date'.doc, addtable statmat(tab1) ///
 varlabels title("NHATS 2011-2016: Following People from Incident Dementia+Community Dwelling") ctitles("Variables", "Year 1", "Year 2", "Year 3", "Year 4", "Year 5", "Year 6") sdec(0) ///
 note("People must be community dwelling at incident wave only (Year 1)")
+
+gen keeplist = 0
+
+levelsof spid if ffs_6m==1 & dwave==1, local(keeplist)
+
+foreach x of local keeplist {
+
+replace keeplist = 1 if spid==`x'
+}
+
+keep if keeplist==1
+
+
+local ivars death_sy death_ny nhres informal ind_paid_helper ind_no_helpers anyhelp both_flag reg_doc_homevisit any_hbmc both_hbmc any_bothhbmc all
+
+local full: word count `ivars'
+mat tab1=J(`full', 6,.)
+local r = 1
+local c = 1
+ 
+
+ 
+foreach x of local ivars {
+
+forvalues i = 1/6 {
+	
+sum `x' if dwave==`i'
+mat tab1[`r',`c'] = r(sum)
+
+local ++c
+}
+
+local c = 1
+local ++r
+}
+
+mat rownames tab1 = `ivars'
+
+mat list tab1
+
+frmttable using `logpath'\NHATS_P01_SampleSize_`date'.doc, addtable statmat(tab1) ///
+varlabels title("NHATS 2011-2016: Following People from Incident Dementia+Community Dwelling+6m FFS") ctitles("Variables", "Year 1", "Year 2", "Year 3", "Year 4", "Year 5", "Year 6") sdec(0) ///
+note("People must be community dwelling and >=6m FFS at incident wave only (Year 1)")
 
 
 

@@ -1828,20 +1828,21 @@ H="SNF days"
 
 %macro snfnights (name=);
 
-data snf_&i(keep=bid_hrs_22 los);
+data snf_&i(keep=bid_hrs_22 los index_date);
 set proj_int.snf_meet_&name.;
-if &i.*365.25>=index_date-admit_date>=(&i.-1)*365.25 
-or &i.*365.25>=index_date-admit_date>=(&i.-1)*365.25
-or index_date-admit_date>=&i.*365.25>=index_date-disch_date; 
-if admit_date<index_date-&years.*365.25 then admit_date=index_date-&years.*365.25;
-if disch_date>index_date-(&years.-1)*365.25 then disch_date=index_date-(&years.-1)*365.25;
+if (&i.*365)>=index_date-admit_date>=((&i.-1)*365) 
+or (&i.*365)>=index_date-admit_date>=((&i.-1)*365)
+or index_date-admit_date>=&i.*365>=index_date-disch_date; 
+if admit_date<index_date-(&i.*365) then admit_date=index_date-(&i.*365);
+if disch_date>index_date-((&i.-1)*365) then disch_date=index_date-((&i.-1)*365);
 los=disch_date-admit_date+1;
 run;
 
 proc sql;
 create table snf_&i.b as select distinct bid_hrs_22,
-sum(los) as n_snf_days_y&i.
-from snf_&i.;
+index_date, sum(los) as n_snf_days_y&i.
+from snf_&i.
+group by bid_hrs_22, index_date;
 quit;
 
 
@@ -3905,7 +3906,7 @@ save `predict'
 use R01_j.dta, clear
 
 merge m:1 id using R01_annualized.dta, keepus(oop_y* informal_y* mc_b_prem_y* ///
-private_ltc_prem_y*)
+private_ltc_prem_y* nh_nights_y* nh_oop_y*)
 drop _m
 
 merge m:1 id using tot_paid_maid.dta, keepus(tot_paid_m* tot_nf_days*)
@@ -3914,13 +3915,46 @@ rename tot_nf_days_maid_n* tot_nf_days_y*
 drop if _m==2
 cap drop _m
 
-merge m:1 id index_year using `predict', keepus(buyin_mo generous)
+merge m:1 id index_year using `predict', keepus(buyin_mo generous ind_mcaid_imp)
 drop if _m==2
 cap drop _m
 
 drop generous
 merge m:1 stateusps using `generosity', gen(gm)
 drop if gm==2
+
+destring genworth_nh, replace
+
+sort id nflag
+by id: egen anychampus=max(champus)
+replace champus_exit=anychampus if missing(champus_exit)
+
+forvalues i=1/7 {
+	foreach x in nh_nights n_snf_days private_ltc_prem nh_oop tot_nf_days {
+		replace `x'_y`i'=0 if missing(`x'_y`i')
+}
+	replace nh_nights_y`i'=365 if nh_nights_y`i'>365 
+	gen imputed_nh_costs_a_y`i'=0
+	gen imputed_nh_costs_b_y`i'=(nh_nights_y`i'-n_snf_days_y`i'-tot_nf_days_y`i'- ///
+	(.8*private_ltc_prem_y`i'+nh_oop_y`i')/genworth)*genworth ///
+	if champus_exit==1 | private_ltc_prem_y`i'>0
+	replace imputed_nh_costs_b_y`i'=0 if !champus_exit & !private_ltc_prem_y`i'
+	gen imputed_nh_costs_c_y`i'=(nh_nights_y`i'-n_snf_days_y`i'-tot_nf_days_y`i'- ///
+	(.8*private_ltc_prem_y`i'+nh_oop_y`i')/genworth)*genworth
+	foreach x in a b c {
+		replace imputed_nh_costs_`x'_y`i'=0 if imputed_nh_costs_`x'_y`i'<0
+		//2/26/19-ebl-for now, just replacing with mean imputation for Medicaid
+		sum imputed_nh_costs_`x'_y`i' if !ind_mcaid_imputed & nh_nights
+		replace imputed_nh_costs_`x'_y`i'=r(mean) if ind_mcaid_imputed==1 & nh_nights
+}
+	label var imputed_nh_costs_a_y`i' "Imputed NH Costs, year `i': Conservative (0 for all)"
+	label var imputed_nh_costs_b_y`i' "Imputed NH Costs, year `i': Moderate (only for those with LTC/VA coverage)"
+	label var imputed_nh_costs_c_y`i' "Imputed NH Costs, year `i': Comprehensive (imputed for all)"
+	gen unat_nights`i'=imputed_nh_costs_c_y`i'/genworth
+	label var unat_nights`i' "Unattributed NH nights, year `i': Comprehensive"
+	
+}
+
 
 gen ffs_7yr = 0 
 replace ffs_7yr = 1 if cont_ffs_n_mos>=84 & cont_ffs_n_mos!=.
@@ -7111,7 +7145,13 @@ replace droplist = 1 if id=="`x'"
 
 drop if droplist==1
 
+gen year = core_year
+drop _m
+merge 1:1 id year using "E:\data\hrs_cleaned\helper_hours_2016.dta", keepus(n_i hlphrs_i)
+drop if _m==2
+drop _m
 
+gsort id -year 
 by id: gen next_date = c_ivw_date[_n+1]
 format index_date next_date %td
 
@@ -7129,6 +7169,10 @@ replace death2_n1 = ceil(death2_n1)
 replace death2_n1 = 1 if death2_n1==0
 replace months = death2_n1 if exit==1
 
+
+/* Capping OOP RX spending to $300/month to bring in line with Medicare Part D and
+previous OOP paper */
+
 replace rx_oop = 0 if rx_oop==.
 gen rx_per_mo = rx_oop/months
 replace rx_per_mo = 300 if rx_per_mo>0 & rx_per_mo!=.
@@ -7136,6 +7180,24 @@ replace rx_per_mo = 300 if rx_per_mo>0 & rx_per_mo!=.
 gen mod_rx_oop = rx_per_mo * months
 
 replace total_oop = total_oop - rx_oop + mod_rx_oop
+
+/* Modifying Helper HRS + Helper OOP to match Helper hours imputation in previous OOP paper */
+
+gsort id -year
+
+by id: gen prev_help_hrs = 1 if hlphrs_i[_n+1]>0 & hlphrs_i[_n+1]!=. //check for helper hrs at prev ivw
+by id: gen prev_hrs = hlphrs_i[_n+1] if hlphrs_i[_n+1]>0
+by id: gen prev_oop_yes = 1 if helper_oop[_n+1]>0 & helper_oop[_n+1]!=.
+by id: gen prev_hlp_oop = (helper_oop[_n+1]/months[_n+1]) if helper_oop[_n+1]>0
+
+gen helper_oop_per_mo = helper_oop/months
+gen mod_helper_oop = helper_oop_per_mo * 4 if prev_oop_yes==.
+replace mod_helper_oop = (helper_oop_per_mo*4) + (months-4)*((helper_oop_per_mo+prev_hlp_oop)/2) if prev_oop_yes==1
+
+replace total_oop = total_oop - helper_oop + mod_helper_oop
+
+
+
 
 gen oop_per_mo = total_oop / months
 
@@ -9691,6 +9753,7 @@ restore
 
 
 H="7 year graphs"
+foreach imp in a b c {
 use "E:\data\serious_ill\int_data\core_ids_1yr_criteria_5.dta", clear
 sort id core_year
 by id: keep if _n==_N
@@ -9710,7 +9773,8 @@ forvalues i=1/7 {
 	gen wi_mc`i'=tot_paid_by_mc_y`i'/wage_index_2012
 }
 
-keep id tot_paid_by_mc_y* tot_paid_maid_y* oop_y* informal_y* dem_cohort wi_*
+keep id tot_paid_by_mc_y* tot_paid_maid_y* oop_y* informal_y* dem_cohort wi_* ///
+imputed_nh_costs_`imp'_y*
 
 rename tot_paid_by_mc_y* mc*
 rename tot_paid_maid_y* mcaid*
@@ -9719,9 +9783,9 @@ foreach x of varlist mcaid* {
 	replace `x'=0 if missing(`x')
 }
 
-rename (oop_y* informal_y*) (oop* informal*)
+rename (oop_y* informal_y* imputed_nh_costs_`imp'_y*) (oop* informal* nh*)
 
-foreach x in mc mcaid oop informal wi_mc {
+foreach x in mc mcaid oop informal nh wi_mc {
 	forvalues i=1/7 {
 		replace `x'`i'=`x'`i'/1000
 }
@@ -9731,10 +9795,10 @@ foreach x in mc mcaid oop informal wi_mc {
 }
 }
 
-keep id mc* mcaid* oop* informal* cum* dem_cohort wi*
+keep id mc* mcaid* oop* informal* cum* dem_cohort wi* nh*
 
 
-reshape long mc mcaid oop informal cummc cummcaid cumoop cuminformal wi_mc, ///
+reshape long mc mcaid oop informal cummc cummcaid cumoop cuminformal nh cumnh wi_mc, ///
 i(id) j(year_before_death)
 
 replace year=-year+8
@@ -9743,30 +9807,32 @@ label define year 1 "6-7" 2 "5-6" 3 "4-5" 4 "3-4" 5 "2-3" 6 "1-2" 7 "0-1"
 label values year year
 
 foreach x in "" cum {
-	egen `x'all=rowtotal(`x'mc `x'mcaid `x'oop `x'informal)
+	egen `x'all=rowtotal(`x'mc `x'mcaid `x'oop `x'informal `x'nh)
 }
 
 
 
-collapse (mean) mc mcaid oop informal all cummc cummcaid cumoop cuminformal cumall wi_mc, ///
+collapse (mean) mc mcaid oop informal all cummc cummcaid cumoop cuminformal cumall ///
+nh cumnh wi_mc, ///
 by(dem_cohort year_before_death)
 
-foreach x in mc mcaid oop informal all {
+/*
+foreach x in mc mcaid oop informal nh all {
 	twoway (connected `x' year if dem_cohort==0) (connected `x' year if dem_cohort==1), ///
 	legend(label(1 "Non-dementia") label(2 "Probable dementia")) ///
 	xlabel(1 "6-7" 2 "5-6" 3 "4-5" 4 "3-4" 5 "2-3" 6 "1-2" 7 "0-1") ytitle("")
 	graph save annu_`x'_spending_over_time.gph, replace
-	graph export annu_`x'_spending_over_time.pdf, replace
+	graph export annu_`x'_spending_over_time_nh`imp'.pdf, replace
 	
 	twoway (connected cum`x' year if dem_cohort==0) (connected cum`x' year if dem_cohort==1), ///
 	legend(label(1 "Non-dementia") label(2 "Probable dementia")) ///
 	xlabel(1 "6-7" 2 "5-6" 3 "4-5" 4 "3-4" 5 "2-3" 6 "1-2" 7 "0-1") ytitle("")
 	graph save cum_`x'_spending_over_time.gph, replace
-	graph export cum_`x'_spending_over_time.pdf, replace
+	graph export cum_`x'_spending_over_time_nh`imp'.pdf, replace
 	
 	graph combine annu_`x'_spending_over_time.gph cum_`x'_spending_over_time.gph, ycommon
 	graph save `x'_spending_7yrs.gph, replace
-	graph export `x'_spending_7yrs.pdf, replace
+	graph export `x'_spending_7yrs_nh`imp'.pdf, replace
 }
 
 twoway (connected mc year if dem_cohort==0) (connected mc year if dem_cohort==1) ///
@@ -9774,10 +9840,10 @@ twoway (connected mc year if dem_cohort==0) (connected mc year if dem_cohort==1)
 legend(label(1 "MC, No-D") label(2 "MC-D") label(3 "WIMC, No-D") label(4 "WIMC-D")) ///
 xlabel(1 "6-7" 2 "5-6" 3 "4-5" 4 "3-4" 5 "2-3" 6 "1-2" 7 "0-1") ytitle("")
 graph save annu_`x'_spending_over_time_wi.gph, replace
-graph export annu_`x'_spending_over_time_wi.pdf, replace
+graph export annu_`x'_spending_over_time_wi_nh`imp'.pdf, replace
+*/
 
-
-foreach x in mc mcaid oop informal all {
+foreach x in mc mcaid oop informal all nh {
 	rename `x' annu`x'
 }
 
@@ -9785,67 +9851,81 @@ preserve
 
 
 
-
-graph bar annumca annumc annuoop annuinf, over(dem_cohort)  over(year) ///
+/*
+graph bar annumca annunh annumc annuoop annuinf, over(dem_cohort)  over(year) ///
 stack saving(annu_stack_1, replace) percent 
-graph export annu_stack_1.pdf, replace
+graph export annu_stack_1_nh`imp'.pdf, replace
+*/
+graph bar  annunh annumca annumc annuoop annuinf if dem_cohort==0, over(year) stack percent ///
+saving(annu_stack_no_dem, replace)  title("No dementia" "Annual") ///
+legend(label(2 "Medicaid") label(3 "Medicare") label(4 "OOP") label(5 "Informal") ///
+	label(1 "Imputed NH Cost")) 
+graph bar annunh annumca annumc annuoop annuinf if dem_cohort==1,over(year)  ///
+saving(annu_stack_dem, replace) stack percent title("Dementia" "Annual") ///
+legend(label(2 "Medicaid") label(3 "Medicare") label(4 "OOP") label(5 "Informal") ///
+	label(1 "Imputed NH Cost")) 
 
-graph bar annumca annumc annuoop annuinf if dem_cohort==0, over(year) stack percent ///
-saving(annu_stack_no_dem, replace) legend(off ) title("No dementia" "Annual")
-graph bar annumca annumc annuoop annuinf if dem_cohort==1,over(year)  ///
-saving(annu_stack_dem, replace) stack percent legend(off )title("Dementia" "Annual")
-
-graph bar cummca cummc cumoop cuminf if dem_cohort==0,over(year)  ///
-saving(cum_stack_no_dem, replace) stack percent legend(off ) title("No dementia" "Cumulative")
-graph bar cummca cummc cumoop cuminf if dem_cohort==1,over(year)  ///
-saving(cum_stack_dem, replace) stack percent legend(off ) title("Dementia" "Cumulative")
+graph bar cumnh cummca  cummc cumoop cuminf if dem_cohort==0,over(year)  ///
+saving(cum_stack_no_dem, replace) stack percent  title("No dementia" "Cumulative") ///
+legend(label(2 "Medicaid") label(3 "Medicare") label(4 "OOP") label(5 "Informal") ///
+	label(1 "Imputed NH Cost")) 
+graph bar cumnh  cummca cummc cumoop cuminf if dem_cohort==1,over(year)  ///
+saving(cum_stack_dem, replace) stack percent  title("Dementia" "Cumulative") ///
+legend(label(2 "Medicaid") label(3 "Medicare") label(4 "OOP") label(5 "Informal") ///
+	label(1 "Imputed NH Cost")) 
 
 graph combine annu_stack_no_dem.gph annu_stack_dem.gph cum_stack_no_dem.gph cum_stack_dem.gph, ///
-row(1) xsize(12) ysize(4)
+rows(1) xsize(12) ysize(4)  ycommon
 graph save stacked_percentage_bars_7yrs.gph, replace
-graph export stacked_percentage_bars_7yrs.pdf, replace
+graph export stacked_percentage_bars_7yrs_nh`imp'.pdf, replace
 
 
-tokenize inf oop mc mca 
-forvalues i=2/4 {
+tokenize inf oop mc mca  nh
+forvalues i=2/5 {
 	replace annu``i''=annu``=`i'-1''+annu``i''
 	replace cum``i''=cum``=`i'-1''+cum``i''
 }
 
 foreach x in annu cum {
-	twoway (area `x'mcaid year if dem_cohort==0) (area `x'mc year if dem_cohort==0) ///
+	twoway (area `x'nh year if dem_cohort==0)  (area `x'mcaid year if dem_cohort==0) ///
+	(area `x'mc year if dem_cohort==0) ///
 	(area `x'oop year if dem_cohort==0) (area `x'inf year if dem_cohort==0), ///
-	title("No Dementia") legend(label(1 "Medicaid") label(2 "Medicare") label(3 "OOP") label(4 "Informal")) ///
+	title("No Dementia") legend(label(1 "Imputed NH Cost") label(2 "Medicaid") ///
+	label(3 "Medicare") label(4 "OOP") label(5 "Informal")) ///
 	saving(`x'_spending_diff_no_dem_stacked, replace) ///
 	xlabel(1 "6-7" 2 "5-6" 3 "4-5" 4 "3-4" 5 "2-3" 6 "1-2" 7 "0-1") ytitle("")
 
-	twoway (area `x'mcaid year if dem_cohort==1) (area `x'mc year if dem_cohort==1) ///
+	twoway (area `x'nh year if dem_cohort==1)  (area `x'mcaid year if dem_cohort==1) ///
+	(area `x'mc year if dem_cohort==1) ///
 	(area `x'oop year if dem_cohort==1) (area `x'inf year if dem_cohort==1), ///
-	title("Dementia") legend(label(1 "Medicaid") label(2 "Medicare") label(3 "OOP") label(4 "Informal")) ///
+	title("Dementia") legend(label(1 "Imputed NH Cost")label(2 "Medicaid") ///
+	label(3 "Medicare") label(4 "OOP") label(5 "Informal")) ///
 	saving(`x'_spending_diff_dem_stacked, replace) ///
 	xlabel(1 "6-7" 2 "5-6" 3 "4-5" 4 "3-4" 5 "2-3" 6 "1-2" 7 "0-1") ytitle("")
 
 	graph combine `x'_spending_diff_no_dem_stacked.gph `x'_spending_diff_dem_stacked.gph, ///
 	ycommon saving(`x'_spending_stacked_7yrs, replace)
-	graph export `x'_spending_stacked_7yrs.pdf, replace	
+	graph export `x'_spending_stacked_7yrs_nh`imp'.pdf, replace	
 }
 
 
 graph combine cum_spending_diff_no_dem_stacked.gph cum_spending_diff_dem_stacked.gph, ///
 ycommon saving(cum_spending_stacked_7yrs, replace) rows(1)
-graph export cum_spending_stacked_7yrs.pdf, replace
+graph export cum_spending_stacked_7yrs_nh`imp'.pdf, replace
 
 
 graph combine cum_spending_diff_no_dem_stacked.gph cum_spending_diff_dem_stacked.gph, ///
 ycommon saving(cum_spending_stacked_7yrs, replace) rows(1)
-graph export cum_spending_stacked_7yrs.pdf, replace
+graph export cum_spending_stacked_7yrs_nh`imp'.pdf, replace
 
 graph combine annu_spending_diff_no_dem_stacked.gph annu_spending_diff_dem_stacked.gph ///
 cum_spending_diff_no_dem_stacked.gph cum_spending_diff_dem_stacked.gph, ycommon ///
 saving(spending_stacked_7yrs, replace) rows(1) ysize(4) xsize(12)
-graph export spending_stacked_7yrs.pdf, replace
+graph export spending_stacked_7yrs_nh`imp'.pdf, replace
+restore
+}
+*export excel using "E:\data\burden_dementia\logs\graphs\graphs_data_20190214.xls", firstrow(variables) replace
 
-export excel using "E:\data\burden_dementia\logs\graphs\graphs_data_20190214.xls", firstrow(variables) replace
 
 H="Medicaid graphs"
 
@@ -10399,6 +10479,10 @@ save "`fdpath'/burden_dementia_sample_long.dta", replace
 
 
 H="changelog"
+02/26/19 - Fixed SNF days error and improved nursing home bucketing in Final Sample header.  Evan
+
+02/25/19 - Added SNF days and Nursing home nights buckets in Cleaning/Merging, Annual Calculations, and Final Sample headers. Evan
+
 02/13/19 - Corrected "MC Spending" header by pulling for 84 months of claims instead of 60. Evan
 
 02/08/19 - Added header "Charlson comorbodities" for comorbidities in the last year of life and amended "Model Medicaid spending" to bring in the predictions from the two-part model instead of the linear random effects model.  Evan

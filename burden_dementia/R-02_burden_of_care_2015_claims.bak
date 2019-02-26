@@ -1823,6 +1823,64 @@ run;
 
 
 
+H="SNF days"
+
+
+%macro snfnights (name=);
+
+data snf_&i(keep=bid_hrs_22 los);
+set proj_int.snf_meet_&name.;
+if &i.*365.25>=index_date-admit_date>=(&i.-1)*365.25 
+or &i.*365.25>=index_date-admit_date>=(&i.-1)*365.25
+or index_date-admit_date>=&i.*365.25>=index_date-disch_date; 
+if admit_date<index_date-&years.*365.25 then admit_date=index_date-&years.*365.25;
+if disch_date>index_date-(&years.-1)*365.25 then disch_date=index_date-(&years.-1)*365.25;
+los=disch_date-admit_date+1;
+run;
+
+proc sql;
+create table snf_&i.b as select distinct bid_hrs_22,
+sum(los) as n_snf_days_y&i.
+from snf_&i.;
+quit;
+
+
+%mend;
+
+
+
+/*need to set index dataset as snf 0 for the loop*/
+data snf_0c;
+set proj_int.index;
+run;
+
+/*run macros*/
+
+%macro runall(years=);
+%do i=1 %to &years.;
+%let l=%eval(&i.-1);
+
+%snfnights(name=%eval(12*&i.)m);
+
+proc sql;
+create table snf_&i.c as select * from
+snf_&l.c a
+left join 
+snf_&i.b b
+on a.bid_hrs_22=b.bid_hrs_22;
+quit;
+
+%end;
+
+
+%mend;
+
+%runall(years=7);
+
+data proj_int.snf_nights;
+set snf_7c;
+run;
+
 H="combine with interviews into one dataset"
 data index;
 set proj_int.index;
@@ -1840,7 +1898,10 @@ proj_int.mc_costs_yearly c
 on a.bid_hrs_22=c.bid_hrs_22 and a.index_date=c.index_date
 left join
 proj_int.charls_0d_n12m d
-on a.bid_hrs_22=d.bid_hrs_22 and a.index_date=d.index_date;
+on a.bid_hrs_22=d.bid_hrs_22 and a.index_date=d.index_date
+left join
+proj_int.snf_nights e
+on a.bid_hrs_22=e.bid_hrs_22 and a.index_date=e.index_date;
 quit;
 
 proc sql;
@@ -2768,6 +2829,12 @@ use $ooppath\oopme_final_2016.dta, clear
 rename *, l
 gen id=hhid+pn
 
+replace private_ltc=long_term_care if !missing(long_term_care)
+foreach x in mc_b private_ltc {
+	replace `x'_prem=`x'
+	drop `x'
+}
+
 merge m:1 id using "`index'", keepus(index_year index_date)
 keep if _m==3 // only keep oop data for people in cohort
 drop if total_oop==.
@@ -2813,7 +2880,7 @@ keep if iwtype==1
 
 gen nflag = 0
 
-foreach x of varlist total* {
+foreach x of varlist total* mc_b_prem private_ltc_prem nh_oop {
 
 rename `x' `x'_exit
 }
@@ -2826,11 +2893,12 @@ cd $datapath
 
 use r01_c.dta, clear
 cap drop _m
-merge 1:1 id year using "`oop'", keepus(total* ooptag)
+merge 1:1 id year using "`oop'", keepus(total* mc_b_prem private_ltc_prem nh_oop ooptag)
+
 drop if _m==2
 cap drop _m
 
-merge 1:1 id nflag using "`oop_exit'", keepus(total* ooptag)
+merge 1:1 id nflag using "`oop_exit'", keepus(total* mc_b_prem* private_ltc_prem* nh_oop* ooptag)
 
 drop if _m==2
 cap drop _m
@@ -2973,43 +3041,6 @@ duplicates drop id, force
 tempfile id
 save `id'
 
-// creating CPI-U 
-clear
-set obs 21
-gen obs = _n
-gen year = .
-gen cpi_rate = .
-
-forvalues i=1/21 {
-
-replace year = 2017 - `i' if obs==`i'
-
-}
-
-replace cpi_rate = 1 if year==2016
-replace cpi_rate=1.01262 if year==2015
-replace cpi_rate=1.01382 if year==2014
-replace cpi_rate=1.03026 if year==2013
-replace cpi_rate=1.04535 if year==2012
-replace cpi_rate=1.06699 if year==2011
-replace cpi_rate=1.10067 if year==2010
-replace cpi_rate=1.11872 if year==2009
-replace cpi_rate=1.11474 if year==2008
-replace cpi_rate=1.15754 if year==2007
-replace cpi_rate=1.19051 if year==2006
-replace cpi_rate=1.22891 if year==2005
-replace cpi_rate=1.27055 if year==2004
-replace cpi_rate=1.30439 if year==2003
-replace cpi_rate=1.33411 if year==2002
-replace cpi_rate=1.35521 if year==2001
-replace cpi_rate=1.39377 if year==2000
-replace cpi_rate=1.44062 if year==1999
-replace cpi_rate=1.47244 if year<=1998
-
-rename year c_ivw_year
-label var cpi_rate "Inflation adjustment factor"
-tempfile cpi
-save `cpi'
 
 // pull tracker
 use "E:\data\hrs_cleaned\restr_tracker_v2014.dta", clear
@@ -3058,21 +3089,17 @@ by id: carryforward stateusps, replace
 gsort id -c_ivw_year
 by id: carryforward stateusps, replace
 
-merge m:1 c_ivw_year using "`cpi'", keepus(cpi_rate)
-cap drop _m
 
 tempfile state
 save "`state'"
 
 rename c_ivw_year c_ivw_year_n1
 rename stateusps stateusps_n1
-rename cpi_rate cpi_rate_n1
 tempfile state_n1
 save `state_n1'
 
 rename c_ivw_year_n1 c_ivw_year_n2
 rename stateusps_n1 stateusps_n2 
-rename cpi_rate_n1 cpi_rate_n2
 tempfile state_n2
 save `state_n2'
 
@@ -3259,6 +3286,24 @@ replace `x'=0 if `x'!=1
 }
 } 
 
+preserve
+
+//bring in Genworth NH night cost
+import excel "E:\data\burden_dementia\ref_data\Cost Care Survey (Genworth-Metlife)\HHA_hourly_genworth.xlsx", ///
+sheet("Sheet5") firstrow clear 
+rename *, l
+drop e f
+rename year index_year
+rename state stateusps
+rename median genworth_nh_rate
+drop if missing(index_year)
+
+tempfile nhcosts
+save `nhcosts'
+
+restore
+merge m:1 index_year stateusps using `nhcosts'
+drop _m
 save R01_i.dta, replace
 
 
@@ -3571,10 +3616,19 @@ replace ivw_time = 1 if ivw_time==0 & nflag==0
 
 // Combining original OOP and imputed OOP into a single variable 
 
+//2/25/19-ebl-getting annual MC part B
 
-keep id death_cat nflag oop_cost hlp_cost_ivw n1_2_death c_ivw_year ivw_time
+foreach x in mc_b_prem private_ltc_prem nh_nights nh_oop {
+	replace `x'=`x'_exit if missing(`x')
+	replace `x'=0 if missing(`x')
+}
 
-reshape wide oop_cost hlp_cost_ivw c_ivw_year ivw_time, i(id) j(nflag)
+
+keep id death_cat nflag oop_cost hlp_cost_ivw n1_2_death c_ivw_year ivw_time ///
+mc_b_prem private_ltc_prem nh_nights nh_oop
+
+reshape wide oop_cost hlp_cost_ivw c_ivw_year ivw_time mc_b_prem private_ltc_prem ///
+nh_nights nh_oop, i(id) j(nflag)
 
 
 gen a = n1_2_death
@@ -3590,6 +3644,11 @@ gen e = ivw_time4
 
 gen oop_y1 = ((a*oop_cost0)/ivw_time0) + (((12-a)*oop_cost1)/ivw_time1) if death_cat<=2
 gen informal_y1 = ((a*hlp_cost_ivw0)/ivw_time0) + (((12-a)*hlp_cost_ivw1)/ivw_time1) if death_cat<=2
+
+foreach x in mc_b_prem private_ltc_prem nh_nights nh_oop {
+	gen `x'_y1=(a*`x'0)/ivw_time0 + (((12-a)*`x'1)/ivw_time1) if death_cat<=2
+	replace `x'_y1=((12*`x'0)/ivw_time0) if death_cat==3
+}
 
 replace oop_y1 = ((12*oop_cost0)/ivw_time0) if death_cat==3
 replace informal_y1 = ((12*hlp_cost_ivw0)/ivw_time0) if death_cat==3
@@ -3615,6 +3674,11 @@ replace oop_y2 = ((b*oop_cost1)/ivw_time1) + (((12-b)*oop_cost2)/ivw_time2) if b
 replace informal_y2 = ((b*hlp_cost_ivw1)/ivw_time1) if b>=12 & death_cat<3
 replace informal_y2 = ((b*hlp_cost_ivw1)/ivw_time1) + (((12-b)*hlp_cost_ivw2)/ivw_time2) if b<12 & death_cat<3
 
+foreach x in mc_b_prem private_ltc_prem nh_nights nh_oop {
+	gen `x'_y2=((a*`x'0)/ivw_time0) +  (((12-a)*`x'1)/ivw_time1) if death_cat==3
+	replace `x'_y2=((b*`x'1)/ivw_time1) if b>=12 & death_cat<3
+	replace `x'_y2=((b*`x'1)/ivw_time1) + (((12-b)*`x'2)/ivw_time2) if b<12 & death_cat<3
+}
 
 replace c = c-(12-b) if b<12 & death_cat<2 // if b<12, part of the year came from N2 and needs to be subtracted
 replace b = 0 if b<12 & death_cat<2 // recoding b to 0 to show that N1 interview will no longer contribute to cost
@@ -3630,6 +3694,10 @@ replace oop_y3 = ((b*oop_cost1)/ivw_time1) + (((12-b)*oop_cost2)/ivw_time2) if b
 gen informal_y3 = ((b*hlp_cost_ivw1)/ivw_time1) if b>=12
 replace informal_y3 = ((b*hlp_cost_ivw1)/ivw_time1) + (((12-b)*hlp_cost_ivw2)/ivw_time2) if b<12
 
+foreach x in mc_b_prem private_ltc_prem nh_nights nh_oop {
+	gen `x'_y3=((b*`x'1)/ivw_time1) if b>=12
+	replace `x'_y3=((b*`x'1)/ivw_time1) + (((12-b)*`x'2)/ivw_time2) if b<12
+}
 
 replace c = c-(12-b) if b<12 // if b<12, part of the year came from N2 and needs to be subtracted
 replace b = 0 if b<12 // recoding b to 0 to show that N1 interview will no longer contribute to cost
@@ -3651,6 +3719,11 @@ gen informal_y4 = ((b*hlp_cost_ivw1)/ivw_time1) + (((12-b)*hlp_cost_ivw2)/ivw_ti
 replace oop_y4 = ((b*oop_cost1)/ivw_time1) if b>=12
 replace informal_y4 = ((b*hlp_cost_ivw1)/ivw_time1) if b>=12
 
+foreach x in mc_b_prem private_ltc_prem nh_nights nh_oop {
+	gen `x'_y4=((b*`x'1)/ivw_time1) + (((12-b)*`x'2)/ivw_time2) if b>0 & b<=12
+	replace `x'_y4=((b*`x'1)/ivw_time1) if b>=12
+}
+
 gen tempflag = 1 if oop_y4!=.
 
 replace c = c-(12-b) if b>0 & b<12 & tempflag==1 // if b<12, part of the year came from N2 and needs to be subtracted
@@ -3665,6 +3738,12 @@ replace oop_y4 = ((c*oop_cost2)/ivw_time2) if c>12 & oop_y4==.
 
 replace informal_y4 = ((c*hlp_cost_ivw2)/ivw_time2) + (((12-c)*hlp_cost_ivw3)/ivw_time3) if c<=12 & informal_y4==.
 replace informal_y4 = ((c*hlp_cost_ivw2)/ivw_time2) if c>12 & informal_y4==.
+
+foreach x in mc_b_prem private_ltc_prem nh_nights nh_oop {
+replace `x'_y4 = ((c*`x'2)/ivw_time2) + (((12-c)*`x'3)/ivw_time3) if c<=12 & `x'_y4==.
+replace `x'_y4 = ((c*`x'2)/ivw_time2) if c>12 & `x'_y4==.
+
+}
 
 replace d = d - (12-c) if c<12 & tempflag==.
 replace c = 0 if c<12 & tempflag==.
@@ -3682,6 +3761,12 @@ gen informal_y5 = ((b*hlp_cost_ivw1)/ivw_time1) + (((12-b)*hlp_cost_ivw2)/ivw_ti
 replace oop_y5 = ((b*oop_cost1)/ivw_time1) if b>=12
 replace informal_y5 = ((b*hlp_cost_ivw1)/ivw_time1) if b>=12
 
+
+foreach x in mc_b_prem private_ltc_prem nh_nights nh_oop {
+	gen `x'_y5=((b*`x'1)/ivw_time1) + (((12-b)*`x'2)/ivw_time2) if b>0 & b<=12
+	replace `x'_y5=((b*`x'1)/ivw_time1) if b>=12
+}
+
 gen tempflag = 1 if oop_y5!=.
 
 replace c = c-(12-b) if b>0 & b<12 & tempflag==1 // if b<12, part of the year came from N2 and needs to be subtracted
@@ -3691,6 +3776,11 @@ replace b = b-12 if b>=12 & tempflag==1 // if b>=12, used a full year of data fr
 replace oop_y5 = ((c*oop_cost2)/ivw_time2) + (((12-c)*oop_cost3)/ivw_time3) if c<=12 & oop_y5==.
 replace oop_y5 = ((c*oop_cost2)/ivw_time2) if c>12 & oop_y5==.
 
+foreach x in mc_b_prem private_ltc_prem nh_nights nh_oop {
+
+replace `x'_y5 = ((c*`x'2)/ivw_time2) + (((12-c)*`x'3)/ivw_time3) if c<=12 & `x'_y5==.
+replace `x'_y5 = ((c*`x'2)/ivw_time2) if c>12 & `x'_y5==.
+}
 replace informal_y5 = ((c*hlp_cost_ivw2)/ivw_time2) + (((12-c)*hlp_cost_ivw3)/ivw_time3) if c<=12 & informal_y5==.
 replace informal_y5 = ((c*hlp_cost_ivw2)/ivw_time2) if c>12 & informal_y5==.
 
@@ -3706,6 +3796,11 @@ drop tempflag
 gen oop_y6 = ((b*oop_cost1)/ivw_time1) + (((12-b)*oop_cost2)/ivw_time2) if b>0 & b<=12
 gen informal_y6 = ((b*hlp_cost_ivw1)/ivw_time1) + (((12-b)*hlp_cost_ivw2)/ivw_time2) if b>0 & b<=12 
 
+foreach x in mc_b_prem private_ltc_prem nh_nights nh_oop {
+	gen `x'_y6=((b*`x'1)/ivw_time1) + (((12-b)*`x'2)/ivw_time2) if b>0 & b<=12
+	replace `x'_y6=((b*hlp_cost_ivw1)/ivw_time1) + (((12-b)*hlp_cost_ivw2)/ivw_time2) if b>0 & b<=12 
+}
+
 replace c = c-(12-b) if b>0 & b<12 & oop_y6!=. // if b<12, part of the year came from N2 and needs to be subtracted
 replace b = 0 if b<12 & oop_y6!=. // recoding b to 0 to show that N1 interview will no longer contribute to cost
 replace b = b-12 if b>=12 & oop_y6!=. // if b>=12, used a full year of data from N1
@@ -3714,6 +3809,10 @@ gen tempflag = 1 if c<=12 & oop_y6==.
 
 replace oop_y6 = ((c*oop_cost2)/ivw_time2) + (((12-c)*oop_cost3)/ivw_time3) if c<=12 & oop_y6==.
 replace informal_y6 = ((c*hlp_cost_ivw2)/ivw_time2) + (((12-c)*hlp_cost_ivw3)/ivw_time3) if c<=12 & informal_y6==.
+
+foreach x in mc_b_prem private_ltc_prem nh_nights nh_oop {
+replace `x'_y6 = ((c*`x'2)/ivw_time2) + (((12-c)*`x'3)/ivw_time3) if c<=12 & `x'_y6==.
+}
 
 replace d = d-(12-c) if c<12 & tempflag==1 // if b<12, part of the year came from N2 and needs to be subtracted
 replace d = 0 if d<0 // temporary fix. 
@@ -3724,6 +3823,12 @@ gen tempflag1 = 1 if oop_y6==.
 
 replace oop_y6 = ((d*oop_cost3)/ivw_time3) + (((12-d)*oop_cost4)/ivw_time4) if d<=12 & oop_y6==.
 replace oop_y6 = ((d*oop_cost3)/ivw_time3) if d>12 & oop_y6==.
+
+foreach x in mc_b_prem private_ltc_prem nh_nights nh_oop {
+replace `x'_y6 = ((d*`x'3)/ivw_time3) + (((12-d)*`x'4)/ivw_time4) if d<=12 & `x'_y6==.
+replace `x'_y6 = ((d*`x'3)/ivw_time3) if d>12 & `x'_y6==.
+}
+
 
 replace informal_y6 = ((d*hlp_cost_ivw3)/ivw_time3) + (((12-d)*hlp_cost_ivw4)/ivw_time4) if d<=12 & informal_y6==.
 replace informal_y6 = ((d*hlp_cost_ivw3)/ivw_time3) if d>12 & informal_y6==.
@@ -3749,8 +3854,14 @@ replace informal_y7 = ((12*hlp_cost_ivw2)/ivw_time2) if c>12
 replace informal_y7 = ((12*hlp_cost_ivw3)/ivw_time3) if d>12 & informal_y7==.
 replace informal_y7 = ((d*hlp_cost_ivw3)/ivw_time3) + (((12-d)*hlp_cost_ivw4)/ivw_time4) if d<=12 & informal_y7==.
 
+foreach x in mc_b_prem private_ltc_prem nh_nights nh_oop {
 
+gen `x'_y7 = ((c*`x'2)/ivw_time2) + (((12-c)*`x'3)/ivw_time3) if c>0 & c<=12 
+replace `x'_y7 = ((12*`x'2)/ivw_time2) if c>=12
 
+replace `x'_y7 = ((12*`x'3)/ivw_time3) if d>12 & `x'_y7==.
+replace `x'_y7 = ((d*`x'3)/ivw_time3) + (((12-d)*`x'4)/ivw_time4) if d<=12 & `x'_y7==.
+}
 
 /* Visual check */
 
@@ -3793,10 +3904,13 @@ save `predict'
 
 use R01_j.dta, clear
 
-merge m:1 id using R01_annualized.dta, keepus(oop_y* informal_y*)
+merge m:1 id using R01_annualized.dta, keepus(oop_y* informal_y* mc_b_prem_y* ///
+private_ltc_prem_y*)
 drop _m
 
-merge m:1 id using tot_paid_maid.dta, keepus(tot_paid_m*)
+merge m:1 id using tot_paid_maid.dta, keepus(tot_paid_m* tot_nf_days*)
+rename tot_nf_days_maid_n* tot_nf_days_y*
+
 drop if _m==2
 cap drop _m
 
@@ -3861,6 +3975,9 @@ forvalues i = 12(12)84 {
 
 
 rename tot_paid_by_mc_`i'm tot_paid_by_mc_y`y'
+
+//2/25/19-ebl-subtracting part b premium from mc expenditures
+replace tot_paid_by_mc_y`y'=tot_paid_by_mc_y`y'-mc_b_prem_y`y'
 
 label var tot_paid_by_mc_y`y' "Total Medicare Spending Y`y'"
 
@@ -9728,7 +9845,7 @@ cum_spending_diff_no_dem_stacked.gph cum_spending_diff_dem_stacked.gph, ycommon 
 saving(spending_stacked_7yrs, replace) rows(1) ysize(4) xsize(12)
 graph export spending_stacked_7yrs.pdf, replace
 
-export excel using "E:\data\burden_dementia\logs\graphs\graphs_data_20190214.xls", firstrow(varlabels)
+export excel using "E:\data\burden_dementia\logs\graphs\graphs_data_20190214.xls", firstrow(variables) replace
 
 H="Medicaid graphs"
 

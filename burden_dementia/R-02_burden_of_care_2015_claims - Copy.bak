@@ -2721,12 +2721,19 @@ foreach x of local noexit {
 replace no_exit = 1 if id=="`x'"
 }
 
+/*
+preserve
+keep if no_exit==1
+save noexit.dta, replace
+restore
+drop if no_exit==1
+*/
 
 
 gen year_ci = core_year 
 replace year_ci = index_year if nflag==0
 label var year_ci "core_year(if nflag>0) or index_year(if nflag=0)"
-gsort id -year 
+gsort id -year_ci // year = combined core_year & index_year
 by id: gen obs=_n
 
 cap drop nflag 
@@ -2741,9 +2748,7 @@ foreach x of local demlist {
 replace dem_cohort = 1 if id=="`x'"
 }
 
-gen core_4yr = index_date - c_ivw_date if obs==2
-replace core_4yr = 4 if core_4yr<=1460 & core_4yr>=0
-
+gen core_4yr = index_year - c_ivw_year if obs==2
 
 /* 
 
@@ -2784,6 +2789,15 @@ replace nocore4yr = 1 if id=="`x'"
 gsort id -year
 by id: gen diff = year_ci - year_ci[_n-1] // -4 or higher denotes a gap year
 
+replace diff = -4 if diff<=-3 & obs==2 & nocore4yr==. & no_exit==. // imputing an interview between N1 & death if N1>=3yrs prior to death
+expand 2 if diff==-4, gen(imputed) 
+replace year = year + 2 if imputed==1 // imputed core interview
+label var imputed "imputed core interview"
+
+drop if year > index_year & imputed==1 // dropping imputed cores after death
+drop if (index_year - c_ivw_year)<=2 & imputed==1 // dropping imputed cores if person died inbetween core and exit
+drop if exit_year_exit==year & imputed==1 // dropping core interviews imputed in exit years
+*keep if (index_year - c_ivw_year)==2 & imputed==1
 drop obs nflag
 
 gsort id -year
@@ -2802,122 +2816,227 @@ replace miss_core = 1 if id=="`x'"
 
 *drop if no_exit==1 & nflag==0 & imputed==1
 
-save R01_d.dta, replace
+save r01_c.dta, replace
+
+/**************** GET OOP DATA ********************/
+
+use r01_c.dta, clear
+
+keep if nflag==0 & no_exit==.
+keep id index_date index_year exit_year_exit year
+tempfile index
+save `index'
+
+use $ooppath\oopme_final_2016.dta, clear
+rename *, l
+gen id=hhid+pn
+
+replace private_ltc=long_term_care if !missing(long_term_care)
+foreach x in mc_b private_ltc {
+	replace `x'_prem=`x'
+	drop `x'
+}
+
+merge m:1 id using "`index'", keepus(index_year index_date)
+keep if _m==3 // only keep oop data for people in cohort
+drop if total_oop==.
+
+* Imputing the missing interviews (gap years) for OOP and then append to original dataset
+preserve
+tempfile oop_mer
+save `oop_mer' // original dataset, no imputed cores
+restore 
+
+gsort id -year
+by id: gen obs=_n
+keep if obs<=6 // (N1 - N4 + baseline + extra ivw)
+by id: gen diff = year - year[_n-1] // -4 or higher denotes a gap year
+replace diff = -4 if diff<=-4 & obs==2 // recoding people with >4 gap between exit and N1 to be 4yrs
+
+expand 2 if diff==-4, gen(ooptag) //created imputed interview
+replace year = year + 2 if ooptag==1
+gsort id -year
+cap drop obs
+by id: gen obs=_n
+
+by id: gen total_imp_a = total_oop[_n+1] if ooptag==1
+by id: gen total_imp_b = (total_oop[_n+1] + total_oop[_n-1])/2 if ooptag==1
+
+label var ooptag "imputed oop"
+keep if ooptag==1 // keep only imputed cores and then append to original dataset
+tempfile imputed
+save `imputed'
+
+use "`oop_mer'", clear
+
+append using "`imputed'"
+cap drop _m 
+preserve
+drop if iwtype==1 // dropping exit so it can be merged separately (see below)
+
+tempfile oop
+save `oop'
+restore 
+
+keep if iwtype==1
+
+gen nflag = 0
+
+foreach x of varlist total* mc_b_prem private_ltc_prem nh_oop {
+
+rename `x' `x'_exit
+}
+rename year exit_year_exit
+
+tempfile oop_exit
+save `oop_exit'
+
+cd $datapath 
+
+use r01_c.dta, clear
+cap drop _m
+merge 1:1 id year using "`oop'", keepus(total* mc_b_prem private_ltc_prem nh_oop ooptag)
+
+drop if _m==2
+cap drop _m
+
+merge 1:1 id nflag using "`oop_exit'", keepus(total* mc_b_prem* private_ltc_prem* nh_oop* ooptag)
+
+drop if _m==2
+cap drop _m
 
 
+save r01_d.dta, replace
 
-/********** Final Calculations For Sample Derivation *********/
+/************ Get Helper data ***********/
 
-use R01_d.dta, clear
+/* Helper hours imputation follows the same logic as the OOP, but structure is
+slighty different. Everyone has OOP data for their core ivw, so missing oop = missing core.
+But not everyone has helper data for their core, so missing helper != missing core */
+
+use r01_d.dta, clear
+
+*dropping the people missing consecutive cores before merging with helper data
+
+keep if miss_core==. & no_exit==. // keep only people not missing consecutive cores and have an exit
+keep id index_date index_year exit_year_exit year imputed nflag
+tempfile index
+save `index'
+
+
+use "E:\data\hrs_cleaned\helper_hours_2016.dta" , clear
+*gen id=hhid+pn 
+*rename year core_year
+//cap number of hours at 720 (24 hrs for 30 days) for spouses and other informal
+/*
+foreach x in s u {
+replace hlphrs_`x'=720 if hlphrs_`x'>720
+replace hlphrs_`x' = 0 if hlphrs_`x'==.
+}
+*/
+
+*replace hlphrs_i= 720 if hlphrs_i>=720 & hlphrs_i!=.
+
+merge m:1 id year using "`index'"
+drop if _m==1
+
+
+* Imputing 0 helper hours for interviews with no helper data 
+replace ivw_type = 2 if exit_year_exit==year //_m==2
+foreach x in i u s k {
+replace hlphrs_`x' = 0 if _m==2
+}
+*cap drop _m
+
+gsort id -year
+by id: gen obs=_n
+* Imputations, Method A (Carry forward) and Method B (Ave prior and later ivws to fill gap)
+
+foreach x in i u s k {
+
+*by id: gen hlphrs_`x'_a = hlphrs_`x'[_n+1] if imputed==1
+by id: gen hlphrs_`x'_b = (hlphrs_`x'[_n+1] + hlphrs_`x'[_n-1])/2 if imputed==1 // if there is no _n+1 then this returns missing
+
+}
+
+preserve
+drop if ivw_type==2
+tempfile help
+save `help'
+restore 
+
+keep if ivw_type==2
+
+foreach x of varlist hlphrs_* {
+
+rename `x' `x'_exit
+}
+
+tempfile hlp_exit 
+save `hlp_exit'
+
+use r01_d.dta, clear
+cap drop _m
+merge 1:1 id nflag using "`help'", keepus(hlphrs_*)
+drop if _m==2
+
+cap drop _m
+
+merge 1:1 id nflag using "`hlp_exit'", keepus(hlphrs_*) update
+
+drop if _m==2
+cap drop _m
+
+save r01_e.dta, replace
+
+/****** Imputing Interview dates for imputed core interviews ******/
+
+use r01_e.dta, clear
+
+*gen core_b4_death = 0
+*replace core_b4_death = 1 if nflag==1
 
 gsort id nflag
+cap drop ivw_date
+gen ivw_date = c_ivw_date
+replace ivw_date = index_date if nflag==0
+by id: gen old_ivw_date = ivw_date[_n-1] 
 
-by id: gen next_ivw_date = ivw_date[_n+1] // bringing forward date from prior core away from death
+gen new_ivw_days = old_ivw_date - c_ivw_date
+replace new_ivw_days = new_ivw_days/2
+replace new_ivw_days = 730 if imputed==1 & new_ivw_days>730 & nflag==1 ////// capping interview gap to 2yrs.. possible gap in coverage?
 
-format %td next_ivw_date
+replace new_ivw_days = ceil(new_ivw_days)
+replace ivw_date = c_ivw_date + new_ivw_days if imputed==1 //c_ivw is date for core prior to gap
+replace c_ivw_year = year(ivw_date)
+replace c_ivw_month = month(ivw_date)
+replace c_ivw_date = ivw_date if imputed==1
 
-gen n1_2_death = index_date - c_ivw_date if nflag==1
-replace n1_2_death = n1_2_death * 0.0329
-replace n1_2_death = ceil(n1_2_death)
-replace n1_2_death = 1 if n1_2_death<=0
+format %td ivw_date old_ivw_date
 
-gen core_b4_death = 0
-replace core_b4_death = 1 if nflag==1
+replace c_ivw_year=9999 if (miss_core==1 | no_exit==1) & c_ivw_year==. // need to create a value since cannot merge with missing values
+/*
+preserve
+keep if miss_core==1 | no_exit==1
+tempfile tempdrop
+save `tempdrop'
 
-gsort id -core_b4_death
+restore
+drop if miss_core==1 | no_exit==1
+*/
+* Get years before the interview to multiply by Genworth hourly rate  
+gen c_ivw_year_n0 = c_ivw_year
+replace c_ivw_year_n0 = index_year if nflag==0
+gen c_ivw_year_n1 = c_ivw_year_n0 - 1
+label var c_ivw_year_n1 "calendar year prior to ivw date"
+gen c_ivw_year_n2 = c_ivw_year_n0 - 2
+label var c_ivw_year_n2 "calendar year 2 yrs prior to ivw date"
 
-gen n1_ivw_date = c_ivw_date if nflag==1
-
-by id: carryforward n1_2_death n1_ivw_date, replace
-
-gen ivw_time = ivw_date - next_ivw_date
-replace ivw_time = ivw_time * 0.0329
-label var ivw_time "Months between previous ivw & current ivw"
-
-gen n1_2_ivw = n1_ivw_date - ivw_date
-replace n1_2_ivw = n1_2_ivw * 0.0329
-label var n1_2_ivw "Months between current ivw & N1 interview"
-
-gen last_core = 1 if ivw_time==. & nflag>0
-label var last_core "Last observable core, ivw_time imputed at 24 months"
-replace ivw_time = 24 if ivw_time==. & nflag>0
-
-sum ivw_time if nflag>0
-/*Average time between core ivws is 24 months. So if we subtract ivw date from death, 
-only need it to be >=60 since interview data extends ~24 months back */
-
-gen months_obs = n1_2_ivw + ivw_time + n1_2_death
-replace months_obs = ceil(months_obs) // round up to keep integers. Makes subsequent math easier
-label var months_obs "# of months person is observed in sample"
-
-gen hrs_gte_84m = 0
-replace hrs_gte_84m = 1 if months_obs>=83.5 & months_obs!=.
-label var hrs_gte_84m ">=84 months of HRS ivw data"
-
-gen hrs_gte_60m = 0
-replace hrs_gte_60m = 1 if months_obs>=60 & months_obs!=.
-
-levelsof id if hrs_gte_60m, local(moredata)
-foreach x of local moredata {
-replace hrs_gte_60m = 1 if id=="`x'"
-}
-
-gen hrs_lt_60m = .
-replace hrs_lt_60m = 1 if hrs_gte_60m==0
-label var hrs_lt_60m "<60m of HRS ivw data, to be dropped"
-
-
-
-levelsof id if hrs_gte_84m, local(havedata)
-foreach x of local havedata {
-replace hrs_gte_84m = 1 if id=="`x'"
-}
-
-gen hrs_lt_84m = .
-replace hrs_lt_84m = 1 if hrs_gte_84m==0
-label var hrs_lt_84m "<84 months of HRS ivw data, to be dropped"
-
-gen ffs_84m = 0
-replace ffs_84m = 1 if cont_ffs_n_mos>=84 & cont_ffs_n_mos!=. & nflag==0
-label var ffs_84m "84 months of continuous FFS prior to death"
-
-
-gen ffs_60m = 0
-replace ffs_60m = 1 if cont_ffs_n_mos>=60 & cont_ffs_n_mos!=. & nflag==0
-label var ffs_84m "60 months of continuous FFS prior to death"
-
-
-
-levelsof id if dem_cohort==0, local(demb)
-foreach x of local demb {
-replace dem_cohort=0 if id=="`x'"
-
-}
-
-levelsof id if dem_cohort==1, local(demc)
-foreach x of local demc {
-replace dem_cohort=1 if id=="`x'"
-}
-
-local samplevars age_lt_72 age_lt_70 no_exit miss_core no_core nocore4yr hrs_lt_84m hrs_lt_60m death_b4_core ffs_84m ffs_60m 
-
-foreach x of local samplevars {
-
-levelsof id if `x'==1, local(samp)
-
-foreach y of local samp {
-
-replace `x'=1 if id=="`y'"
-replace `x'=0 if `x'!=1
-
-}
-} 
-save R01_e.dta, replace
-
+save r01_f.dta, replace
 
 /************** Get State information *************/
 
-use R01_e.dta, clear
+use r01_f.dta, clear
 keep id
 
 duplicates drop id, force
@@ -2972,20 +3091,202 @@ by id: carryforward stateusps, replace
 gsort id -c_ivw_year
 by id: carryforward stateusps, replace
 
-gen nflag = 0
-gen index_year = c_ivw_year
 
 tempfile state
 save "`state'"
 
+rename c_ivw_year c_ivw_year_n1
+rename stateusps stateusps_n1
+tempfile state_n1
+save `state_n1'
 
-use R01_e.dta, clear
-merge m:1 id c_ivw_year using "`state'", keepus(stateusps)
+rename c_ivw_year_n1 c_ivw_year_n2
+rename stateusps_n1 stateusps_n2 
+tempfile state_n2
+save `state_n2'
+
+use R01_f.dta, clear
+merge m:1 id c_ivw_year using "`state'"
 drop if _m==2
-drop _m
-merge m:1 id index_year nflag using "`state'", keepus(stateusps) update
+cap drop _m
+merge m:1 id c_ivw_year_n1 using "`state_n1'"
 drop if _m==2
-drop _m
+cap drop _m
+merge m:1 id c_ivw_year_n2 using "`state_n2'"
+drop if _m==2
+cap drop _m
+
+save R01_g.dta, replace
+
+//merging with the Genworth/Metlife hourly home health aide cost. 
+import excel "E:\data\burden_dementia\ref_data\Cost Care Survey (Genworth-Metlife)\HHA_hourly_genworth.xlsx", sheet("Sheet1") firstrow clear
+
+rename A c_ivw_year
+rename B stateusps
+rename HomeHealthAideServicesHourly state_hha
+rename MedianHourlyRate hr_rate
+
+drop if c_ivw_year==.
+destring hr_rate, replace
+
+expand 2 if c_ivw_year==1998, gen(duptag)
+
+replace c_ivw_year = c_ivw_year - 1 if duptag==1
+cap drop duptag
+
+expand 2 if c_ivw_year==1997, gen(duptag)
+
+replace c_ivw_year = c_ivw_year - 1 if duptag==1
+drop duptag
+
+rename c_ivw_year c_ivw_year_n0
+
+tempfile rate
+save "`rate'" // hourly rate for calendar c_ivw_year of i
+
+rename c_ivw_year_n0 c_ivw_year_n1
+rename stateusps stateusps_n1
+rename state_hha state_hha_n1
+rename hr_rate hr_rate_n1
+
+tempfile rate_n1
+save "`rate_n1'"
+
+rename c_ivw_year_n1 c_ivw_year_n2
+rename stateusps_n1 stateusps_n2
+rename state_hha_n1 state_hha_n2
+rename hr_rate_n1 hr_rate_n2
+
+tempfile rate_n2
+save "`rate_n2'"
+
+use R01_g.dta, clear
+cap drop _m
+merge m:1 c_ivw_year_n0 stateusps using "`rate'"
+drop if _m==2
+cap drop _m
+merge m:1 c_ivw_year_n1 stateusps_n1 using "`rate_n1'"
+drop if _m==2
+cap drop _m
+merge m:1 c_ivw_year_n2 stateusps_n2 using "`rate_n2'"
+drop if _m==2
+cap drop _m
+
+save R01_h.dta, replace
+
+/********** Final Calculations For Sample Derivation *********/
+
+use R01_h.dta, clear
+
+gsort id nflag
+
+by id: gen next_ivw_date = ivw_date[_n+1] // bringing forward date from prior core away from death
+
+format %td next_ivw_date
+
+gen n1_2_death = index_date - c_ivw_date if nflag==1
+replace n1_2_death = n1_2_death * 0.0329
+replace n1_2_death = ceil(n1_2_death)
+replace n1_2_death = 24 if n1_2_death>=24 & n1_2_death!=.
+replace n1_2_death = 1 if n1_2_death<=0
+
+gen core_b4_death = 0
+replace core_b4_death = 1 if nflag==1
+
+gsort id -core_b4_death
+
+gen n1_ivw_date = c_ivw_date if nflag==1
+
+by id: carryforward n1_2_death n1_ivw_date, replace
+
+
+
+gen ivw_time = ivw_date - next_ivw_date
+replace ivw_time = ivw_time * 0.0329
+label var ivw_time "Months between previous ivw & current ivw"
+
+gen n1_2_ivw = n1_ivw_date - ivw_date
+replace n1_2_ivw = n1_2_ivw * 0.0329
+label var n1_2_ivw "Months between current ivw & N1 interview"
+
+
+
+gen last_core = 1 if ivw_time==. & nflag>0
+label var last_core "Last observable core, ivw_time imputed at 24 months"
+replace ivw_time = 24 if ivw_time==. & nflag>0
+
+sum ivw_time if nflag>0
+/*Average time between core ivws is 24 months. So if we subtract ivw date from death, 
+only need it to be >=60 since interview data extends ~24 months back */
+
+gen months_obs = n1_2_ivw + ivw_time + n1_2_death
+replace months_obs = ceil(months_obs) // round up to keep integers. Makes subsequent math easier
+label var months_obs "# of months person is observed in sample"
+
+gen hrs_gte_84m = 0
+replace hrs_gte_84m = 1 if months_obs>=83.5 & months_obs!=.
+label var hrs_gte_84m ">=84 months of HRS ivw data"
+
+gen hrs_gte_60m = 0
+replace hrs_gte_60m = 1 if months_obs>=60 & months_obs!=.
+
+levelsof id if hrs_gte_60m, local(moredata)
+foreach x of local moredata {
+replace hrs_gte_60m = 1 if id=="`x'"
+}
+
+gen hrs_lt_60m = .
+replace hrs_lt_60m = 1 if hrs_gte_60m==0
+label var hrs_lt_60m "<60m of HRS ivw data, to be dropped"
+
+
+
+levelsof id if hrs_gte_84m, local(havedata)
+foreach x of local havedata {
+replace hrs_gte_84m = 1 if id=="`x'"
+}
+
+gen hrs_lt_84m = .
+replace hrs_lt_84m = 1 if hrs_gte_84m==0
+label var hrs_lt_84m "<84 months of HRS ivw data, to be dropped"
+
+gen ffs_84m = 0
+replace ffs_84m = 1 if cont_ffs_n_mos>=84 & cont_ffs_n_mos!=. & nflag==0
+label var ffs_84m "84 months of continuous FFS prior to death"
+
+
+gen ffs_60m = 0
+replace ffs_60m = 1 if cont_ffs_n_mos>=60 & cont_ffs_n_mos!=. & nflag==0
+label var ffs_84m "60 months of continuous FFS prior to death"
+
+
+gen has_imputed = imputed
+label var has_imputed "Has an imputed core ivw"
+
+levelsof id if dem_cohort==0, local(demb)
+foreach x of local demb {
+replace dem_cohort=0 if id=="`x'"
+
+}
+
+levelsof id if dem_cohort==1, local(demc)
+foreach x of local demc {
+replace dem_cohort=1 if id=="`x'"
+}
+
+local samplevars age_lt_72 age_lt_70 no_exit miss_core no_core nocore4yr hrs_lt_84m hrs_lt_60m has_imputed death_b4_core ffs_84m ffs_60m 
+
+foreach x of local samplevars {
+
+levelsof id if `x'==1, local(samp)
+
+foreach y of local samp {
+
+replace `x'=1 if id=="`y'"
+replace `x'=0 if `x'!=1
+
+}
+} 
 
 preserve
 
@@ -2994,31 +3295,9 @@ import excel "E:\data\burden_dementia\ref_data\Cost Care Survey (Genworth-Metlif
 sheet("Sheet5") firstrow clear 
 rename *, l
 drop e f
-
-
-gen cpi_rate = 1 if year==2016
-replace cpi_rate=1.01262 if year==2015
-replace cpi_rate=1.01382 if year==2014
-replace cpi_rate=1.03026 if year==2013
-replace cpi_rate=1.04535 if year==2012
-replace cpi_rate=1.06699 if year==2011
-replace cpi_rate=1.10067 if year==2010
-replace cpi_rate=1.11872 if year==2009
-replace cpi_rate=1.11474 if year==2008
-replace cpi_rate=1.15754 if year==2007
-replace cpi_rate=1.19051 if year==2006
-replace cpi_rate=1.22891 if year==2005
-replace cpi_rate=1.27055 if year==2004
-replace cpi_rate=1.30439 if year==2003
-replace cpi_rate=1.33411 if year==2002
-replace cpi_rate=1.35521 if year==2001
-replace cpi_rate=1.39377 if year==2000
-replace cpi_rate=1.44062 if year==1999
-replace cpi_rate=1.47244 if year<=1998
-
 rename year index_year
 rename state stateusps
-gen genworth_nh_rate_cpi_adj=median*cpi_rate
+rename median genworth_nh_rate
 drop if missing(index_year)
 
 tempfile nhcosts
@@ -3026,7 +3305,6 @@ save `nhcosts'
 
 restore
 merge m:1 index_year stateusps using `nhcosts'
-drop if _m==2
 drop _m
 save R01_i.dta, replace
 
@@ -3068,10 +3346,17 @@ gen final_7yr = 1 if final==1
 label var final_7yr "7yr Sample Size, includes decedents w/imputed core"
 
 
+gen final_noimp = 0
+replace final_noimp = 1 if final==1 & has_imputed==0
+label var final_noimp "5yr Sample Size, excludes decedents w/imputed core"
+
 foreach x of varlist age_lt_72 hrs_lt_84m ffs_lt_84m {
 replace final_7yr = 0 if `x'==1
 }
 
+gen final_7yr_noimp = 0
+replace final_7yr_noimp = 1 if final_7yr==1 & has_imputed==0
+label var final_7yr_noimp "7yr Sample Size, excludes decedents w/imputed core"
 
 label var ffs_lt_60m "<60m continuous FFS prior to death"
 label var ffs_lt_84m "<84m continuous FFS prior to death"
@@ -3112,7 +3397,7 @@ local ++r
 mat rownames tab1 = `full'
 
 
-frmttable using `logpath'\Sample_Derivation.doc, replace statmat(tab1) ///
+frmttable using "E:\projects\burden_dementia\archive logs\Sample_Derivation.doc", replace statmat(tab1) ///
 varlabels title("Sample Derivation for R01 (Deceased 2004-2015, Age 72+)") ctitles("Reason for Exclusion" "All" "Dementia" "Non-Dementia") sdec(0) ///
 annotate(stars) asymbol(*,**)note("Death Date was determined by NDI, Medicare MBSF or HRS Exit in that order. Reasons for exclusion are NOT mutally exclusive.")
 
@@ -3121,9 +3406,9 @@ annotate(stars) asymbol(*,**)note("Death Date was determined by NDI, Medicare MB
 
 
 local full1 age_lt_70 death_b4_core no_exit miss_core no_core nocore4yr hrs_lt_60m ffs_lt_60m
-local full2 final 
+local full2 final final_noimp
 local full3 age_lt_72 hrs_lt_84m ffs_lt_84m 
-local full4 final_7yr 
+local full4 final_7yr final_7yr_noimp
 
 local rd: word count 1 `full1' `full2' `full3' `full4'
 
@@ -3205,7 +3490,7 @@ local ++r
 mat rownames tab1 = all `full1' `full2' `full3' `full4'
 
 
-frmttable using `logpath'\Sample_Derivation.doc, replace statmat(tab1) ///
+frmttable using "E:\projects\burden_dementia\archive logs\Sample_Derivation.doc", replace statmat(tab1) ///
 varlabels title("Sample Derivation for R01 (Deceased 2004-2015, Age 72+)") ctitles("Reason for Exclusion" "All" "Dementia" "Non-Dementia") sdec(0) ///
 annotate(stars) asymbol(*,**)note("Death Date was determined by NDI, Medicare MBSF or HRS Exit in that order. Reasons for exclusion are ARE mutally exclusive.")
 
@@ -3220,1089 +3505,376 @@ save R01_j.dta, replace
 
 
 H="Annual Calculations"
+
+/**************** calculations *********************/
+clear all
+capture log close
+
 global datapath "E:\data\burden_dementia\int_data"
-*local logpath "E:\data\burden_dementia\logs"
+local logpath "E:\data\burden_dementia\logs"
 global ooppath "E:\data\burden_dementia\oopdata"
 global output "E:\projects\burden_dementia\archive logs"
 
 
-/* Start with OOP dataset and then get interview dates for core and exit + death date */
+log using `logpath'\R01_annual_calculations.txt, text replace
 
-use $ooppath\oopme_final_2016.dta, clear
-rename *, l
-gen id=hhid+pn
-
-replace private_ltc=long_term_care if !missing(long_term_care)
-foreach x in mc_b private_ltc {
-	replace `x'_prem=`x'
-	drop `x'
-}
-
-
-
-rename year core_year
-merge 1:1 hhid pn core_year using "E:\data\hrs_cleaned\core_00_to_14.dta", keepus(c_ivw_date c_ivw_month c_ivw_year)
-gen core = 1 if _m==3
-gen exit_year = core_year if iwtype==1
-
-cap drop _m
-
-merge m:1 hhid pn exit_year using "E:\data\hrs_cleaned\exit_02_to_16_dt.dta", keepus(e_ivw_date)
-gen exit = 1 if _m==3
-drop if _m==2
-cap drop _m
-
-tempfile temp
-save `temp'
-
-use $datapath\R01_j.dta, clear
-keep if nflag==0
-tempfile ro1
-save `ro1'
-
-use `temp', clear
-
-merge m:1 id using "`ro1'", keepus(index_date index_month index_year final final_7yr dem_cohort n1_2_death)
-*keep if inrange(index_year,2004,2015)
-*drop if _m==1
-keep if _m==3
-
-drop if core_year<1998 // dropping core interviews earlier than 1998
-
-gsort id -core_year
-by id: gen nflag = _n-1
-
-/* dropping people with exit interviews before 2004 because earliest death year is 2004 */
-
-gen droplist = 0
-levelsof id if nflag==0 & iwtype==1 & exit_year<2004, local(drop) 
-
-foreach x of local drop {
-replace droplist = 1 if id=="`x'"
-}
-
-drop if droplist==1
-
-gen year = core_year
-drop _m
-merge 1:1 id year using "E:\data\hrs_cleaned\helper_hours_2016.dta", keepus(n_i hlphrs_i)
-drop if _m==2
-drop _m
-
-gsort id -year 
-by id: gen next_date = c_ivw_date[_n+1]
-format index_date next_date %td
-
-gen death2_n1 = index_date - next_date if nflag==0
-
-levelsof id if death2_n1<-30, local(drop)
-
-foreach x of local drop {
-replace droplist = 1 if id=="`x'"
-}
-drop if droplist==1
-
-replace death2_n1 = death2_n1 * 0.0329
-replace death2_n1 = ceil(death2_n1)
-replace death2_n1 = 1 if death2_n1==0
-replace months = death2_n1 if exit==1
-
-
-/* Capping OOP RX spending to $300/month to bring in line with Medicare Part D and
-previous OOP paper */
-
-replace rx_oop = 0 if rx_oop==.
-gen rx_per_mo = rx_oop/months
-replace rx_per_mo = 300 if rx_per_mo>0 & rx_per_mo!=.
-
-gen mod_rx_oop = rx_per_mo * months
-
-replace total_oop = total_oop - rx_oop + mod_rx_oop
-
-/* Modifying Helper HRS + Helper OOP to match Helper hours imputation in previous OOP paper */
-
-gsort id -year
-
-replace hlphrs_i = 720 if hlphrs_i>720 & hlphrs_i!=. // capping helperhrs reported to 24hrs(max)*30days per person
-
-by id: gen prev_help_hrs = 1 if hlphrs_i[_n+1]>0 & hlphrs_i[_n+1]!=. //check for helper hrs at prev ivw
-by id: gen prev_hrs = hlphrs_i[_n+1] if hlphrs_i[_n+1]>0
-by id: gen prev_oop_yes = 1 if helper_oop[_n+1]>0 & helper_oop[_n+1]!=.
-by id: gen prev_hlp_oop = (helper_oop[_n+1]/months[_n+1]) if helper_oop[_n+1]>0
-
-gen helper_oop_per_mo = helper_oop/months
-gen mod_helper_oop = helper_oop_per_mo * 4 if prev_oop_yes==.
-replace mod_helper_oop = (helper_oop_per_mo*4) + (months-4)*((helper_oop_per_mo+prev_hlp_oop)/2) if prev_oop_yes==1
-
-replace total_oop = total_oop - helper_oop + mod_helper_oop
-
-/* Creating approximate 2/4 year helper hours based on above fomula */
-
-gen total_hlp = hlphrs_i*4 if prev_help_hrs==.
-replace total_hlp = (hlphrs_i*4) + (months-4)*((hlphrs_i+prev_hrs)/2) if prev_help_hrs==1
-replace total_hlp = 0 if total_hlp==. // estimated total hours per interview
-
-
-
-/* Create year variables to merge helper hours with yearly genworth costs */
-
-gen c_ivw_year_n0 = c_ivw_year
-replace c_ivw_year_n0 = index_year if nflag==0
-gen c_ivw_year_n1 = c_ivw_year_n0 - 1
-label var c_ivw_year_n1 "calendar year prior to ivw date"
-gen c_ivw_year_n2 = c_ivw_year_n0 - 2
-label var c_ivw_year_n2 "calendar year 2 yrs prior to ivw date"
-gen c_ivw_year_n3 = c_ivw_year_n0 - 3
-label var c_ivw_year_n3 "calendar year 3 yrs prior to ivw date"
-gen c_ivw_year_n4 = c_ivw_year_n0 - 4
-label var c_ivw_year_n4 "calendar year 4 yrs prior to ivw date"
-gen c_ivw_year_n5 = c_ivw_year_n0 - 5
-label var c_ivw_year_n5 "calendar year 5 yrs prior to ivw date"
-
-cap drop stateusups
-
-save $datapath/R01_cost_int.dta, replace
-
-
-/************** Get State information from tracker to match with genworth *************/
 cd $datapath
 
-use r01_cost_int.dta, clear
-keep id
+use R01_j.dta, clear
 
-duplicates drop id, force
-tempfile id
-save `id'
+/*
+gen n1_2_death = index_date - c_ivw_date if nflag==1
+replace n1_2_death = n1_2_death * 0.0329
+replace n1_2_death = ceil(n1_2_death)
+replace n1_2_death = 24 if n1_2_death>=24 & n1_2_death!=.
+replace n1_2_death = 1 if n1_2_death<=0
 
-// creating CPI-U 
-clear
-set obs 21
-gen obs = _n
-gen year = .
-gen cpi_rate = .
+gen core_b4_death = 0
+replace core_b4_death = 1 if nflag==1
 
-forvalues i=1/21 {
+gsort id -core_b4_death
 
-replace year = 2017 - `i' if obs==`i'
+by id: carryforward n1_2_death, replace
+*/
+gen death_cat = .
+replace death_cat = 1 if n1_2_death<12
+replace death_cat = 2 if n1_2_death==12
+replace death_cat = 3 if n1_2_death>12
 
-}
-
-replace cpi_rate = 1 if year==2016
-replace cpi_rate=1.01262 if year==2015
-replace cpi_rate=1.01382 if year==2014
-replace cpi_rate=1.03026 if year==2013
-replace cpi_rate=1.04535 if year==2012
-replace cpi_rate=1.06699 if year==2011
-replace cpi_rate=1.10067 if year==2010
-replace cpi_rate=1.11872 if year==2009
-replace cpi_rate=1.11474 if year==2008
-replace cpi_rate=1.15754 if year==2007
-replace cpi_rate=1.19051 if year==2006
-replace cpi_rate=1.22891 if year==2005
-replace cpi_rate=1.27055 if year==2004
-replace cpi_rate=1.30439 if year==2003
-replace cpi_rate=1.33411 if year==2002
-replace cpi_rate=1.35521 if year==2001
-replace cpi_rate=1.39377 if year==2000
-replace cpi_rate=1.44062 if year==1999
-replace cpi_rate=1.47244 if year<=1998
-
-rename year c_ivw_year
-label var cpi_rate "Inflation adjustment factor"
-tempfile cpi
-save `cpi'
-
-// pull tracker
-use "E:\data\hrs_cleaned\restr_tracker_v2014.dta", clear
-drop id
-gen id=hhid+pn
-
-merge 1:1 id using "`id'"
-keep if _m==3
-
-keep hhid pn stateusps* zipcode*
-
-gen stateusps16 = stateusps14
-gen zipcode16 = zipcode14
-
-foreach x of varlist stateusps* {
-
-replace `x' = "" if `x'=="ZZ"
-
-}
-
-gen stateusps97=""
-gen stateusps99=""
-
-forvalues i= 1(2)15{
-gen stateusps`i'=""
-gen zipcode`i' = ""
-}
-
-forvalues i=0(2)8{
-rename stateusps0`i' stateusps`i'
-rename zipcode0`i' zipcode`i'
-}
-reshape long stateusps zipcode, i(hhid pn) j(c_ivw_year)
-
-forvalues i=0/99{
-qui replace c_ivw_year=200`i' if c_ivw_year==`i' & c_ivw_year<=9
-qui replace c_ivw_year=20`i' if c_ivw_year==`i' & inrange(c_ivw_year, 10,16)
-qui replace c_ivw_year=19`i' if c_ivw_year==`i' & c_ivw_year>=90
-}
-
-gen id= hhid+pn
-sort id c_ivw_year
-drop if id==""
-by id: carryforward stateusps, replace
-
-gsort id -c_ivw_year
-by id: carryforward stateusps, replace
-
-merge m:1 c_ivw_year using "`cpi'", keepus(cpi_rate)
-cap drop _m
-
-tempfile state
-save "`state'"
-
-
-rename c_ivw_year c_ivw_year_n1
-rename stateusps stateusps_n1
-rename cpi_rate cpi_rate_n1
-tempfile state_n1
-save `state_n1'
-
-rename c_ivw_year_n1 c_ivw_year_n2
-rename stateusps_n1 stateusps_n2 
-rename cpi_rate_n1 cpi_rate_n2
-tempfile state_n2
-save `state_n2'
-
-rename c_ivw_year_n2 c_ivw_year_n3
-rename stateusps_n2 stateusps_n3 
-rename cpi_rate_n2 cpi_rate_n3
-tempfile state_n3
-save `state_n3'
-
-rename c_ivw_year_n3 c_ivw_year_n4
-rename stateusps_n3 stateusps_n4
-rename cpi_rate_n3 cpi_rate_n4
-tempfile state_n4
-save `state_n4'
-
-rename c_ivw_year_n4 c_ivw_year_n5
-rename stateusps_n4 stateusps_n5
-rename cpi_rate_n4 cpi_rate_n5
-tempfile state_n5
-save `state_n5'
-
-
-
-use R01_cost_int.dta, clear
-merge m:1 id c_ivw_year using "`state'"
-drop if _m==2
-cap drop _m
-merge m:1 id c_ivw_year_n1 using "`state_n1'"
-drop if _m==2
-cap drop _m
-merge m:1 id c_ivw_year_n2 using "`state_n2'"
-drop if _m==2
-cap drop _m
-merge m:1 id c_ivw_year_n3 using "`state_n3'"
-drop if _m==2
-cap drop _m
-merge m:1 id c_ivw_year_n4 using "`state_n4'"
-drop if _m==2
-cap drop _m
-merge m:1 id c_ivw_year_n5 using "`state_n5'"
-drop if _m==2
-cap drop _m
-
-
-save R01_cost_intb.dta, replace
-
-//merging with the Genworth/Metlife hourly home health aide cost. 
-import excel "E:\data\burden_dementia\ref_data\Cost Care Survey (Genworth-Metlife)\HHA_hourly_genworth.xlsx", sheet("Sheet1") firstrow clear
-
-rename A c_ivw_year
-rename B stateusps
-rename HomeHealthAideServicesHourly state_hha
-rename MedianHourlyRate hr_rate
-
-drop if c_ivw_year==.
-destring hr_rate, replace
-
-expand 2 if c_ivw_year==1998, gen(duptag)
-
-replace c_ivw_year = c_ivw_year - 1 if duptag==1
-cap drop duptag
-
-expand 2 if c_ivw_year==1997, gen(duptag)
-
-replace c_ivw_year = c_ivw_year - 1 if duptag==1
-drop duptag
-
-rename c_ivw_year c_ivw_year_n0
-
-tempfile rate
-save "`rate'" // hourly rate for calendar c_ivw_year of i
-
-rename c_ivw_year_n0 c_ivw_year_n1
-rename stateusps stateusps_n1
-rename state_hha state_hha_n1
-rename hr_rate hr_rate_n1
-
-tempfile rate_n1
-save "`rate_n1'"
-
-rename c_ivw_year_n1 c_ivw_year_n2
-rename stateusps_n1 stateusps_n2
-rename state_hha_n1 state_hha_n2
-rename hr_rate_n1 hr_rate_n2
-
-tempfile rate_n2
-save "`rate_n2'"
-
-rename c_ivw_year_n2 c_ivw_year_n3
-rename stateusps_n2 stateusps_n3
-rename state_hha_n2 state_hha_n3
-rename hr_rate_n2 hr_rate_n3
-
-tempfile rate_n3
-save "`rate_n3'"
-
-rename c_ivw_year_n3 c_ivw_year_n4
-rename stateusps_n3 stateusps_n4
-rename state_hha_n3 state_hha_n4
-rename hr_rate_n3 hr_rate_n4
-
-tempfile rate_n4
-save "`rate_n4'"
-
-rename c_ivw_year_n4 c_ivw_year_n5
-rename stateusps_n4 stateusps_n5
-rename state_hha_n4 state_hha_n5
-rename hr_rate_n4 hr_rate_n5
-
-tempfile rate_n5
-save "`rate_n5'"
-
-
-use R01_cost_intb.dta, clear
-cap drop _m
-merge m:1 c_ivw_year_n0 stateusps using "`rate'"
-drop if _m==2
-cap drop _m
-merge m:1 c_ivw_year_n1 stateusps_n1 using "`rate_n1'"
-drop if _m==2
-cap drop _m
-merge m:1 c_ivw_year_n2 stateusps_n2 using "`rate_n2'"
-drop if _m==2
-cap drop _m
-merge m:1 c_ivw_year_n3 stateusps_n3 using "`rate_n3'"
-drop if _m==2
-cap drop _m
-merge m:1 c_ivw_year_n4 stateusps_n4 using "`rate_n4'"
-drop if _m==2
-cap drop _m
-merge m:1 c_ivw_year_n5 stateusps_n5 using "`rate_n5'"
-drop if _m==2
-cap drop _m
-
-
-save R01_cost_intc.dta, replace
-
-use R01_cost_intc.dta, replace
+cap drop mar_n0 mar_n1 mar_n2
+cap drop mar
 
 gen mar_n0 = . //months observed (aka "at risk") within a calendar year for helper hours cost imputation
 gen mar_n1 = .
 gen mar_n2 = .
-gen mar_n3 = .
-gen mar_n4 = .
-gen mar_n5 = .
 
-
-// exit ivw
 replace mar_n0 = index_month if nflag==0
-replace mar_n0 = death2_n1 if (death2_n1-mar_n0 < 0) & nflag==0 // if they died the same year as their N1 ivw, then
+replace mar_n0 = n1_2_death if (n1_2_death-mar_n0 < 0) & nflag==0 // if they died the same year as their N1 ivw, then
 
-replace mar_n1 = death2_n1 - mar_n0 if nflag==0
+replace mar_n1 = n1_2_death - mar_n0 if nflag==0
 replace mar_n1 = 0 if mar_n1<0 & nflag==0
 replace mar_n1 = 12 if (mar_n1>12 & mar_n1!=.) & nflag==0
 
-replace mar_n2 = death2_n1 - mar_n0 -mar_n1 if nflag==0
-replace mar_n2 = 0 if mar_n2<0 & nflag==0
-replace mar_n2 = 12 if (mar_n2>12 & mar_n2!=.) & nflag==0
+replace mar_n2 = n1_2_death - mar_n0 -mar_n1 if nflag==0
+replace mar_n2 = 0 if mar_n2<0
 
-replace mar_n3 = death2_n1 - mar_n0 -mar_n1 -mar_n2 if nflag==0
-replace mar_n3 = 0 if mar_n3<0 & nflag==0
-replace mar_n3 = 12 if (mar_n3>12 & mar_n3!=.) & nflag==0
-
-replace mar_n4 = death2_n1 - mar_n0 -mar_n1 -mar_n2 - mar_n3 if nflag==0
-replace mar_n4 = 0 if mar_n4<0 & nflag==0
-replace mar_n4 = 12 if (mar_n4>12 & mar_n4!=.) & nflag==0
-
-// core ivw
 
 replace mar_n0 = c_ivw_month if nflag>0
-replace mar_n1 = months - c_ivw_month if nflag>0
+replace mar_n1 = ivw_time - c_ivw_month if nflag>0
 replace mar_n1 = 0 if mar_n1<0 & nflag>0
 replace mar_n1 = 12 if (mar_n1>12 & mar_n1!=.) & nflag>0
 
-replace mar_n2 = months - 12 - c_ivw_month if nflag>0
+replace mar_n2 = ivw_time - 12 - c_ivw_month if nflag>0
 replace mar_n2 = 0 if mar_n2<0 & nflag>0
-replace mar_n2 = 12 if (mar_n2>12 & mar_n2!=.) & nflag>0
+*replace mar_n2 = 12 if (mar_n2>12 & mar_n2!=.) & nflag>0
 
-replace mar_n3 = months - 24 - c_ivw_month if nflag>0
-replace mar_n3 = 0 if mar_n3<0 & nflag>0
-replace mar_n3 = 12 if (mar_n3>12 & mar_n3!=.) & nflag>0
+gen mar = mar_n0+mar_n1+mar_n2
+corr mar n1_2_death if nflag==0
+corr mar ivw_time if nflag>0 // checks to see if months at risk (mar) = months between ivw
 
-replace mar_n4 = months - 36 - c_ivw_month if nflag>0
-replace mar_n4 = 0 if mar_n4<0 & nflag>0
-replace mar_n4 = 12 if (mar_n4>12 & mar_n4!=.) & nflag>0
+gsort id +nflag
 
-replace mar_n5 = months - 48 - c_ivw_month if nflag>0
-replace mar_n5 = 0 if mar_n5<0 & nflag>0
-replace mar_n5 = 12 if (mar_n5>12 & mar_n5!=.) & nflag>0
+gen hlp_cost = hlphrs_i
+replace hlp_cost = hlphrs_i_exit if nflag==0
+replace hlp_cost = hlphrs_i_b if imputed==1
 
+replace hlp_cost = 720 if hlp_cost>720 // capping hlphrs to 24 hours per day for each person
 
+by id: gen hlp_cost_n = hlp_cost[_n+1]
 
-// impute mean hourly rate for people missing states
+/* Helper hours are currently 30 day estimates. Will create ~2 year totals using the
+4 months at current ivw + remainder months*((current+previous)/2) */
+
+gen hlp_cost_ivw = .
+replace hlp_cost_ivw = n1_2_death*hlp_cost if n1_2_death<=4 & nflag==0
+replace hlp_cost_ivw = (4*hlp_cost) + (n1_2_death-4)*((hlp_cost+hlp_cost_n)/2) if n1_2_death>4 & nflag==0
+replace hlp_cost_ivw = (4*hlp_cost) + (ivw_time-4)*((hlp_cost+hlp_cost_n)/2) if nflag>0 & hlp_cost_n>0
+replace hlp_cost_ivw = (4*hlp_cost) if nflag>0 & (hlp_cost_n==0 | hlp_cost_n==.)
+
 
 egen hr_mean = mean(hr_rate)
 egen hr_mean_n1 = mean(hr_rate_n1)
 egen hr_mean_n2 = mean(hr_rate_n2)
-egen hr_mean_n3 = mean(hr_rate_n3)
-egen hr_mean_n4 = mean(hr_rate_n4)
-egen hr_mean_n5 = mean(hr_rate_n5)
 
 replace hr_rate = hr_mean if hr_rate==.
 replace hr_rate_n1 = hr_mean_n1 if hr_rate_n1==.
 replace hr_rate_n2 = hr_mean_n2 if hr_rate_n2==.
-replace hr_rate_n3 = hr_mean_n3 if hr_rate_n3==.
-replace hr_rate_n4 = hr_mean_n4 if hr_rate_n4==.
-replace hr_rate_n5 = hr_mean_n5 if hr_rate_n5==.
 
-foreach x of varlist mar_n0 mar_n1 mar_n2 mar_n3 mar_n4 mar_n5 hr_rate cpi_rate cpi_rate_n1 cpi_rate_n2 cpi_rate_n3 cpi_rate_n4 cpi_rate_n5 {
+foreach x of varlist hlp_cost_ivw  {
 
-replace `x' = 0 if `x'==.
+replace `x' = `x'/n1_2_death if nflag==0
+replace `x' = `x'/ivw_time if nflag>0
+replace `x' = (`x'*mar_n0*hr_rate) +  (`x'*mar_n1*hr_rate_n1) + (`x'*mar_n2*hr_rate_n2)
+
+}
+
+
+gen oop_cost = total_oop
+replace oop_cost = total_imp_b if imputed==1
+replace oop_cost = total_oop_exit if nflag==0
+
+replace ivw_time = ceil(ivw_time)
+replace ivw_time = 1 if ivw_time==0 & nflag==0
+
+// Combining original OOP and imputed OOP into a single variable 
+
+//2/25/19-ebl-getting annual MC part B
+
+foreach x in mc_b_prem private_ltc_prem nh_nights nh_oop {
+	replace `x'=`x'_exit if missing(`x')
+	replace `x'=0 if missing(`x')
 }
 
 
+keep id death_cat nflag oop_cost hlp_cost_ivw n1_2_death c_ivw_year ivw_time ///
+mc_b_prem private_ltc_prem nh_nights nh_oop
 
-foreach x of varlist total_hlp {
+reshape wide oop_cost hlp_cost_ivw c_ivw_year ivw_time mc_b_prem private_ltc_prem ///
+nh_nights nh_oop, i(id) j(nflag)
 
-replace `x' = `x'/months // average # of helpers per month after 4/20 split
-replace `x' = (`x'*mar_n0*hr_rate*cpi_rate) +  (`x'*mar_n1*hr_rate_n1*cpi_rate_n1) ///
- + (`x'*mar_n2*hr_rate_n2*cpi_rate_n2) +  (`x'*mar_n3*hr_rate_n3*cpi_rate_n3) + ///
- (`x'*mar_n4*hr_rate_n4*cpi_rate_n4) + (`x'*mar_n5*hr_rate_n5*cpi_rate_n5) // total helper cost per ivw
+
+gen a = n1_2_death
+gen b = ivw_time1
+gen c = ivw_time2
+gen d = ivw_time3
+gen e = ivw_time4
+
+*keep if death_cat<3
+
+/* Year 1 cost imputation */
+
+
+gen oop_y1 = ((a*oop_cost0)/ivw_time0) + (((12-a)*oop_cost1)/ivw_time1) if death_cat<=2
+gen informal_y1 = ((a*hlp_cost_ivw0)/ivw_time0) + (((12-a)*hlp_cost_ivw1)/ivw_time1) if death_cat<=2
+
+foreach x in mc_b_prem private_ltc_prem nh_nights nh_oop {
+	gen `x'_y1=(a*`x'0)/ivw_time0 + (((12-a)*`x'1)/ivw_time1) if death_cat<=2
+	replace `x'_y1=((12*`x'0)/ivw_time0) if death_cat==3
+}
+
+replace oop_y1 = ((12*oop_cost0)/ivw_time0) if death_cat==3
+replace informal_y1 = ((12*hlp_cost_ivw0)/ivw_time0) if death_cat==3
+
+replace b = b-(12-a) if death_cat<=2 // subtract the amount of months of N1 ivw that was used in Year 1
+replace a = a - 12 if death_cat==3
+replace a = 0 if death_cat<3
+
+/* Year 2 cost */
+
+
+gen oop_y2 = ((a*oop_cost0)/ivw_time0) +  (((12-a)*oop_cost1)/ivw_time1) if death_cat==3
+
+gen informal_y2 = ((a*hlp_cost_ivw0)/ivw_time0) +  (((12-a)*hlp_cost_ivw1)/ivw_time1) if death_cat==3
+
+
+replace b = b-(12-a) if death_cat==3
+
+replace oop_y2 = ((b*oop_cost1)/ivw_time1) if b>=12 & death_cat<3
+replace oop_y2 = ((b*oop_cost1)/ivw_time1) + (((12-b)*oop_cost2)/ivw_time2) if b<12 & death_cat<3
+
+
+replace informal_y2 = ((b*hlp_cost_ivw1)/ivw_time1) if b>=12 & death_cat<3
+replace informal_y2 = ((b*hlp_cost_ivw1)/ivw_time1) + (((12-b)*hlp_cost_ivw2)/ivw_time2) if b<12 & death_cat<3
+
+foreach x in mc_b_prem private_ltc_prem nh_nights nh_oop {
+	gen `x'_y2=((a*`x'0)/ivw_time0) +  (((12-a)*`x'1)/ivw_time1) if death_cat==3
+	replace `x'_y2=((b*`x'1)/ivw_time1) if b>=12 & death_cat<3
+	replace `x'_y2=((b*`x'1)/ivw_time1) + (((12-b)*`x'2)/ivw_time2) if b<12 & death_cat<3
+}
+
+replace c = c-(12-b) if b<12 & death_cat<2 // if b<12, part of the year came from N2 and needs to be subtracted
+replace b = 0 if b<12 & death_cat<2 // recoding b to 0 to show that N1 interview will no longer contribute to cost
+replace b = b-12 if b>=12 & death_cat<2 // if b>=12, used a full year of data from N1
+
+
+/* Year 3 cost */
+
+gen oop_y3 = ((b*oop_cost1)/ivw_time1) if b>=12
+replace oop_y3 = ((b*oop_cost1)/ivw_time1) + (((12-b)*oop_cost2)/ivw_time2) if b<12
+
+
+gen informal_y3 = ((b*hlp_cost_ivw1)/ivw_time1) if b>=12
+replace informal_y3 = ((b*hlp_cost_ivw1)/ivw_time1) + (((12-b)*hlp_cost_ivw2)/ivw_time2) if b<12
+
+foreach x in mc_b_prem private_ltc_prem nh_nights nh_oop {
+	gen `x'_y3=((b*`x'1)/ivw_time1) if b>=12
+	replace `x'_y3=((b*`x'1)/ivw_time1) + (((12-b)*`x'2)/ivw_time2) if b<12
+}
+
+replace c = c-(12-b) if b<12 // if b<12, part of the year came from N2 and needs to be subtracted
+replace b = 0 if b<12 // recoding b to 0 to show that N1 interview will no longer contribute to cost
+replace b = b-12 if b>=12 // if b>=12, used a full year of data from N1
+
+
+/* Year 4 cost */
+
+tab b
+tab ivw_time1 /* not sure why so many people have >24 months attributed to 1 interview
+there are weird cases e.g. 2010 core has a 2011 ivw date, so it ends up being ~ 3 years
+between 2008 core and 2010. But expecting those to be in the minority */
+
+*replace b = 12 if b>12 // need to remove and properly fix later
+
+gen oop_y4 = ((b*oop_cost1)/ivw_time1) + (((12-b)*oop_cost2)/ivw_time2) if b>0 & b<=12 // if b = 12 the second term is zero
+gen informal_y4 = ((b*hlp_cost_ivw1)/ivw_time1) + (((12-b)*hlp_cost_ivw2)/ivw_time2) if b>0 & b<=12 // if b = 12 the second term is zero
+
+replace oop_y4 = ((b*oop_cost1)/ivw_time1) if b>=12
+replace informal_y4 = ((b*hlp_cost_ivw1)/ivw_time1) if b>=12
+
+foreach x in mc_b_prem private_ltc_prem nh_nights nh_oop {
+	gen `x'_y4=((b*`x'1)/ivw_time1) + (((12-b)*`x'2)/ivw_time2) if b>0 & b<=12
+	replace `x'_y4=((b*`x'1)/ivw_time1) if b>=12
+}
+
+gen tempflag = 1 if oop_y4!=.
+
+replace c = c-(12-b) if b>0 & b<12 & tempflag==1 // if b<12, part of the year came from N2 and needs to be subtracted
+replace b = 0 if b<12 & tempflag==1 // recoding b to 0 to show that N1 interview will no longer contribute to cost
+replace b = b-12 if b>=12 & tempflag==1 // if b>=12, used a full year of data from N1
+
+tab b
+
+
+replace oop_y4 = ((c*oop_cost2)/ivw_time2) + (((12-c)*oop_cost3)/ivw_time3) if c<=12 & oop_y4==.
+replace oop_y4 = ((c*oop_cost2)/ivw_time2) if c>12 & oop_y4==.
+
+replace informal_y4 = ((c*hlp_cost_ivw2)/ivw_time2) + (((12-c)*hlp_cost_ivw3)/ivw_time3) if c<=12 & informal_y4==.
+replace informal_y4 = ((c*hlp_cost_ivw2)/ivw_time2) if c>12 & informal_y4==.
+
+foreach x in mc_b_prem private_ltc_prem nh_nights nh_oop {
+replace `x'_y4 = ((c*`x'2)/ivw_time2) + (((12-c)*`x'3)/ivw_time3) if c<=12 & `x'_y4==.
+replace `x'_y4 = ((c*`x'2)/ivw_time2) if c>12 & `x'_y4==.
 
 }
+
+replace d = d - (12-c) if c<12 & tempflag==.
+replace c = 0 if c<12 & tempflag==.
+replace c = c - 12 if c>=12 & tempflag==.
+
+drop tempflag
+
+/* Year 5 */
+
+tab b
+
+gen oop_y5 = ((b*oop_cost1)/ivw_time1) + (((12-b)*oop_cost2)/ivw_time2) if b>0 & b<=12
+gen informal_y5 = ((b*hlp_cost_ivw1)/ivw_time1) + (((12-b)*hlp_cost_ivw2)/ivw_time2) if b>0 & b<=12 
+
+replace oop_y5 = ((b*oop_cost1)/ivw_time1) if b>=12
+replace informal_y5 = ((b*hlp_cost_ivw1)/ivw_time1) if b>=12
 
 
 foreach x in mc_b_prem private_ltc_prem nh_nights nh_oop {
-	replace `x'=0 if missing(`x')
-	replace `x' = `x'/months
+	gen `x'_y5=((b*`x'1)/ivw_time1) + (((12-b)*`x'2)/ivw_time2) if b>0 & b<=12
+	replace `x'_y5=((b*`x'1)/ivw_time1) if b>=12
 }
 
-save R01_cost_intd.dta, replace
+gen tempflag = 1 if oop_y5!=.
 
-use R01_cost_intd.dta, replace
+replace c = c-(12-b) if b>0 & b<12 & tempflag==1 // if b<12, part of the year came from N2 and needs to be subtracted
+replace b = 0 if b<12 & tempflag==1 // recoding b to 0 to show that N1 interview will no longer contribute to cost
+replace b = b-12 if b>=12 & tempflag==1 // if b>=12, used a full year of data from N1
 
-cap drop hlp
+replace oop_y5 = ((c*oop_cost2)/ivw_time2) + (((12-c)*oop_cost3)/ivw_time3) if c<=12 & oop_y5==.
+replace oop_y5 = ((c*oop_cost2)/ivw_time2) if c>12 & oop_y5==.
 
-gen hlp = total_hlp / months
+foreach x in mc_b_prem private_ltc_prem nh_nights nh_oop {
 
-cap drop oop 
-gen oop = total_oop / months
-
-keep id core_year nflag oop hlp months final final_7yr dem_cohort index_year mc_b_prem private_ltc_prem nh_nights nh_oop
-
-reshape wide core_year oop hlp months mc_b_prem private_ltc_prem nh_nights nh_oop, i(id) j(nflag)
-
-forvalues i = 1/7 {
-
-foreach x in x in hlp oop mc_b_prem private_ltc_prem nh_nights nh_oop {
-
-gen `x'_y`i'=.
-
-}
-
-}
-// Annualized Costs - Year 1
-
-* start with oop at exit if months < 12. Subtract months - 12 so that it can be pulled from N1
-foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
-replace `x'_y1 = `x'0 * months0 if months0<12
-}
-
-replace months0 = months0 - 12 if months0<12
-
-* Pulling the leftover months from N1 (if exit < 12)
-foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
-replace `x'_y1 = `x'_y1 + (-months0)*`x'1 if months0<0
-}
-
-replace months1 = months1 + months0 if months0<0
-
-*Using full exit if exit months==12
-foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
-replace `x'_y1 = `x'0 * 12 if months0==12
-}
-
-replace months0 = 0 if months0==12
-
-* Using 12 months from exit if exit months>12
-foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
-replace `x'_y1 = `x'0 * 12 if months0>12 & months0!=.
-}
-
-replace months0 = months0 - 12 if months0>12 & months0!=.
-replace months0 = . if months0 <=0
-
-// Annualized Costs - Year 2
-
-* People with leftover oop exit data
-foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
-replace `x'_y2 = `x'0  * months0 if months0<12
-}
-
-replace months0 = months0 - 12 if months0<12
-
-
-foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
-replace `x'_y2 = `x'_y2 + (-months0)*`x'1 if months0<0
-}
-
-replace months1 = months1 + months0 if months0<0
-
-foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
-replace `x'_y2 = `x'0 * 12 if months0==12
-}
-
-replace months0 = months0 - 12 if months0==12
-
-foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
-replace `x'_y2 = `x'0 * 12 if months0>12 & months0!=.
-}
-
-replace months0 = months0 - 12 if months0>12 & months0!=.
-
-
-* People with no exit data leftover from y1
-
-gen noop = 1 if oop_y2==.
-
-foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
-replace `x'_y2 = `x'1 * months1 if months1<12 & noop==1
-}
-replace months1 = months1 - 12 if months1<12 & noop==1
-
-foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
-replace `x'_y2 = `x'_y2 + (-months1)*`x'2 if months1<0 & noop==1
-}
-
-replace months2 = months2 + months1 if months1<0 & noop==1
-
-foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
-replace `x'_y2 = `x'1 * 12 if months1==12 & noop==1
-}
-
-replace months1 = months1 - 12 if months1==12 & noop==1
-
-foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
-replace `x'_y2 = `x'1 * 12 if months1>12 & months1!=. & noop==1
-}
-replace months1 = months1 - 12 if months1>12 & months1!=. & noop==1
-replace months0 = . if months0<=0
-replace months1 = . if months1<=0
-drop noop
-
-// oop_y3
-
-* People with leftover oop exit data
-foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
-replace `x'_y3 =  `x'0 * months0 if months0<12
-}
-replace months0 = months0 - 12 if months0<12
-
-foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
-replace `x'_y3 = `x'_y3 + (-months0)*`x'1 if months0<0
-}
-replace months1 = months1 + months0 if months0<0
-
-foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
-replace `x'_y3 = `x'0 * 12 if months0==12
-}
-
-replace months0 = months0 - 12 if months0==12
-
-foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
-replace `x'_y3 =  `x'0 * 12 if months0>12 & months0!=.
-}
-
-replace months0 = months0 - 12 if months0>12 & months0!=.
-
-* People with leftover N1
-
-gen noop = 1 if oop_y3==.
-
-foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
-replace `x'_y3 =  `x'1 * months1 if months1<12 & noop==1
-}
-replace months1 = months1 - 12 if months1<12 & noop==1
-
-foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
-replace `x'_y3 =  `x'_y3 + (-months1)*`x'2 if months1<0 & noop==1
-}
-replace months2 = months2 + months1 if months1<0 & noop==1
-
-foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
-replace `x'_y3 =  `x'1 * 12 if months1==12 & noop==1
-}
-
-replace months1 = months1 - 12 if months1==12 & noop==1
-
-foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
-replace `x'_y3 =  `x'1 * 12 if months1>12 & months1!=. & noop==1
-}
-replace months1 = months1 - 12 if months1>12 & months1!=. & noop==1
-
-drop noop
-
-* People who exhausted N0 & N1
-
-gen noop = 1 if oop_y3==.
-
-foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
-replace `x'_y3 =   `x'2 * 12 if noop==1
-}
-replace months2 = months2 - 12 if noop==1
-
-replace months0 = . if months0<=0
-replace months1 = . if months1<=0
-replace months2 = . if months2<=0
-
-drop noop 
-
-// Annual Costs - Year 4
-
-
-* People with leftover oop exit data
-foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
-replace `x'_y4 =  `x'0 * months0 if months0<12
-}
-replace months0 = months0 - 12 if months0<12
-
-foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
-replace `x'_y4 =  `x'_y4 + (-months0)*`x'1 if months0<0
-}
-replace months1 = months1 + months0 if months0<0
-
-foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
-replace `x'_y4 =  `x'0 * 12 if months0==12
-}
-replace months0 = months0 - 12 if months0==12
-
-foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
-replace `x'_y4 =  `x'0 * 12 if months0>12 & months0!=.
-}
-replace months0 = months0 - 12 if months0>12 & months0!=.
-
-* People with leftover N1
-
-gen noop = 1 if oop_y4==.
-
-foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
-replace `x'_y4 =   `x'1 * months1 if months1<12 & noop==1
-}
-replace months1 = months1 - 12 if months1<12 & noop==1
-
-foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
-replace `x'_y4 =  `x'_y4 + (-months1)*`x'2 if months1<0 & noop==1
-}
-replace months2 = months2 + months1 if months1<0 & noop==1
-
-foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
-replace `x'_y4 =  `x'1 * 12 if months1==12 & noop==1
-}
-replace months1 = months1 - 12 if months1==12 & noop==1
-
-foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
-replace `x'_y4 =  `x'1 * 12 if months1>12 & months1!=. & noop==1
-}
-
-replace months1 = months1 - 12 if months1>12 & months1!=. & noop==1
-
-drop noop
-
-* People who exhausted N0 & N1
-
-gen noop = 1 if oop_y4==.
-
-foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
-replace `x'_y4 =  `x'2 * months2 if months2<12 & noop==1
-}
-
-replace months2 = months2 - 12 if months2<12 & noop==1
-
-foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
-replace `x'_y4 =  `x'_y4 + (-months2)*`x'3 if months2<0 & noop==1
-}
-replace months3 = months3 + months2 if months2<0 & noop==1
-
-foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
-replace `x'_y4 =  `x'2 * 12 if months2==12 & noop==1
-}
-replace months2 = months2 - 12 if months2==12 & noop==1
-
-foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
-replace `x'_y4 =  `x'2 * 12 if months2>12 & months2!=. & noop==1
-}
-
-replace months2 = months2 - 12 if months2>12 & months2!=. & noop==1
-
-replace months0 = . if months0<=0
-replace months1 = . if months1<=0
-replace months2 = . if months2<=0
-
-drop noop 
-
-
-// oop_y5
-
-* People with leftover oop exit data
-foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
-replace `x'_y5 =  `x'0 * months0 if months0<12
-}
-replace months0 = months0 - 12 if months0<12
-
-foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
-replace `x'_y5 =  `x'_y5 + (-months0)*`x'1 if months0<0
-}
-
-replace months1 = months1 + months0 if months0<0
-
-foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
-replace `x'_y5 =  `x'0 * 12 if months0==12
-}
-
-replace months0 = months0 - 12 if months0==12
-
-foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
-replace `x'_y5 =  `x'0 * 12 if months0>12 & months0!=.
-}
-replace months0 = months0 - 12 if months0>12 & months0!=.
-
-* People with leftover N1
-
-gen noop = 1 if oop_y5==.
-
-foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
-replace `x'_y5 =  `x'1 * months1 if months1<12 & noop==1
-}
-
-replace months1 = months1 - 12 if months1<12 & noop==1
-
-foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
-replace `x'_y5 =  `x'_y5 + (-months1)*`x'2 if months1<0 & noop==1
-}
-replace months2 = months2 + months1 if months1<0 & noop==1
-
-foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
-replace `x'_y5 =  `x'1 * 12 if months1==12 & noop==1
-}
-
-replace months1 = months1 - 12 if months1==12 & noop==1
-
-foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
-replace `x'_y5 =  `x'1 * 12 if months1>12 & months1!=. & noop==1
-}
-replace months1 = months1 - 12 if months1>12 & months1!=. & noop==1
-
-drop noop
-
-* People who exhausted N0 & N1
-
-gen noop = 1 if oop_y5==.
-
-foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
-replace `x'_y5 =  `x'2 * months2 if months2<12 & noop==1
-}
-replace months2 = months2 - 12 if months2<12 & noop==1
-
-foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
-replace `x'_y5 = `x'_y5 + (-months2)*`x'3 if months2<0 & noop==1
-}
-
-replace months3 = months3 + months2 if months2<0 & noop==1
-
-foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
-replace `x'_y5 = `x'2 * 12 if months2==12 & noop==1
-}
-
-replace months2 = months2 - 12 if months2==12 & noop==1
-
-foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
-replace `x'_y5 = `x'2 * 12  if months2>12 & months2!=. & noop==1
-}
-
-replace months2 = months2 - 12 if months2>12 & months2!=. & noop==1
-
-drop noop 
-
-* People who exhausted N0, N1 & N2
-
-gen noop = 1 if oop_y5==.
-
-foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
-replace `x'_y5 = `x'3 * 12 if noop==1
-}
-
-replace months3 = months3 - 12 if noop==1
-
-
-replace months0 = . if months0<=0
-replace months1 = . if months1<=0
-replace months2 = . if months2<=0
-replace months3 = . if months3<=0
-
-drop noop
-
-// oop_y6
-
-* People with leftover N1
-
-gen noop = 1 if oop_y6==.
-
-foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
-replace `x'_y6 = `x'1 * months1 if months1<12 & noop==1
-}
-
-replace months1 = months1 - 12 if months1<12 & noop==1
-
-foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
-replace `x'_y6 = `x'_y6 + (-months1)*`x'2 if months1<0 & noop==1
-}
-
-replace months2 = months2 + months1 if months1<0 & noop==1
-
-foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
-replace `x'_y6 = `x'1 * 12 if months1==12 & noop==1
-}
-
-replace months1 = months1 - 12 if months1==12 & noop==1
-
-foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
-replace `x'_y6 = `x'1 * 12 if months1>12 & months1!=. & noop==1
-}
-
-replace months1 = months1 - 12 if months1>12 & months1!=. & noop==1
-
-drop noop
-
-* People who exhausted N0 & N1
-
-gen noop = 1 if oop_y6==.
-
-
-foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
-replace `x'_y6 = `x'2 * months2 if months2<12 & noop==1
-}
-
-replace months2 = months2 - 12 if months2<12 & noop==1
-
-foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
-replace `x'_y6 = `x'_y6 + (-months2)*`x'3 if months2<0 & noop==1
-}
-
-replace months3 = months3 + months2 if months2<0 & noop==1
-
-foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
-replace `x'_y6 = `x'2 * 12 if months2==12 & noop==1
-}
-
-replace months2 = months2 - 12 if months2==12 & noop==1
-
-foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
-replace `x'_y6 = `x'2 * 12 if months2>12 & months2!=. & noop==1
-}
-
-replace months2 = months2 - 12 if months2>12 & months2!=. & noop==1
-
-drop noop 
-
-* People who exhausted N0, N1 & N2
-
-gen noop = 1 if oop_y6==.
-
-foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
-replace `x'_y6 = `x'3 * months3 if months3<12 & noop==1
-}
-replace months3 = months3 - 12 if months3<12 & noop==1
-
-foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
-replace `x'_y6 =  `x'_y6 + (-months3)*`x'4 if months3<0 & noop==1
-}
-
-replace months4 = months4 + months3 if months3<0 & noop==1
-
-foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
-replace `x'_y6 =  `x'3 * 12 if months3==12 & noop==1
-}
-
-
-replace months3 = months3 - 12 if months3==12 & noop==1
-
-foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
-replace `x'_y6 =  `x'3 * 12 if months3>12 & months3!=. & noop==1
+replace `x'_y5 = ((c*`x'2)/ivw_time2) + (((12-c)*`x'3)/ivw_time3) if c<=12 & `x'_y5==.
+replace `x'_y5 = ((c*`x'2)/ivw_time2) if c>12 & `x'_y5==.
 }
-
-replace months3 = months3 - 12 if months3>12 & months3!=. & noop==1
-
+replace informal_y5 = ((c*hlp_cost_ivw2)/ivw_time2) + (((12-c)*hlp_cost_ivw3)/ivw_time3) if c<=12 & informal_y5==.
+replace informal_y5 = ((c*hlp_cost_ivw2)/ivw_time2) if c>12 & informal_y5==.
 
-replace months0 = . if months0<=0
-replace months1 = . if months1<=0
-replace months2 = . if months2<=0
-replace months3 = . if months3<=0
+replace d = d - (12-c) if c<12 & tempflag==.
+replace c = 0 if c<12 & tempflag==.
+replace c = c - 12 if c>=12 & tempflag==.
 
-drop noop
+drop tempflag
 
-// Annual Costs - Year 7
+/* Year 6 */
 
-* People with leftover N1
 
-gen noop = 1 if oop_y7==.
+gen oop_y6 = ((b*oop_cost1)/ivw_time1) + (((12-b)*oop_cost2)/ivw_time2) if b>0 & b<=12
+gen informal_y6 = ((b*hlp_cost_ivw1)/ivw_time1) + (((12-b)*hlp_cost_ivw2)/ivw_time2) if b>0 & b<=12 
 
-foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
-replace `x'_y7 =  `x'1 * months1 if months1<12 & noop==1
+foreach x in mc_b_prem private_ltc_prem nh_nights nh_oop {
+	gen `x'_y6=((b*`x'1)/ivw_time1) + (((12-b)*`x'2)/ivw_time2) if b>0 & b<=12
+	replace `x'_y6=((b*hlp_cost_ivw1)/ivw_time1) + (((12-b)*hlp_cost_ivw2)/ivw_time2) if b>0 & b<=12 
 }
-
-replace months1 = months1 - 12 if months1<12 & noop==1
-
-foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
-replace `x'_y7 =`x'_y7 + (-months1)*`x'2 if months1<0 & noop==1
-}
-
-replace months2 = months2 + months1 if months1<0 & noop==1
 
-foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
-replace `x'_y7 = `x'1 * 12 if months1==12 & noop==1
-}
+replace c = c-(12-b) if b>0 & b<12 & oop_y6!=. // if b<12, part of the year came from N2 and needs to be subtracted
+replace b = 0 if b<12 & oop_y6!=. // recoding b to 0 to show that N1 interview will no longer contribute to cost
+replace b = b-12 if b>=12 & oop_y6!=. // if b>=12, used a full year of data from N1
 
-replace months1 = months1 - 12 if months1==12 & noop==1
+gen tempflag = 1 if c<=12 & oop_y6==.
 
+replace oop_y6 = ((c*oop_cost2)/ivw_time2) + (((12-c)*oop_cost3)/ivw_time3) if c<=12 & oop_y6==.
+replace informal_y6 = ((c*hlp_cost_ivw2)/ivw_time2) + (((12-c)*hlp_cost_ivw3)/ivw_time3) if c<=12 & informal_y6==.
 
-foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
-replace `x'_y7 = `x'1 * 12 if months1>12 & months1!=. & noop==1
+foreach x in mc_b_prem private_ltc_prem nh_nights nh_oop {
+replace `x'_y6 = ((c*`x'2)/ivw_time2) + (((12-c)*`x'3)/ivw_time3) if c<=12 & `x'_y6==.
 }
-
-replace months1 = months1 - 12 if months1>12 & months1!=. & noop==1
-
-drop noop
 
-* People who exhausted N0 & N1
+replace d = d-(12-c) if c<12 & tempflag==1 // if b<12, part of the year came from N2 and needs to be subtracted
+replace d = 0 if d<0 // temporary fix. 
+replace c = 0 if c<12 & tempflag==1
+replace c = c-12 if c>=12 & tempflag==1
 
-gen noop = 1 if oop_y7==.
-
-foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
-replace `x'_y7 = `x'2 * months2 if months2<12 & noop==1
-}
-replace months2 = months2 - 12 if months2<12 & noop==1
-
-foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
-replace `x'_y7 = `x'_y7 + (-months2)*`x'3 if months2<0 & noop==1
-}
-replace months3 = months3 + months2 if months2<0 & noop==1
+gen tempflag1 = 1 if oop_y6==.
 
-foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
-replace `x'_y7 =  `x'2 * 12 if months2==12 & noop==1
-}
-replace months2 = months2 - 12 if months2==12 & noop==1
+replace oop_y6 = ((d*oop_cost3)/ivw_time3) + (((12-d)*oop_cost4)/ivw_time4) if d<=12 & oop_y6==.
+replace oop_y6 = ((d*oop_cost3)/ivw_time3) if d>12 & oop_y6==.
 
-foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
-replace `x'_y7 =  `x'2 * 12 if months2>12 & months2!=. & noop==1
+foreach x in mc_b_prem private_ltc_prem nh_nights nh_oop {
+replace `x'_y6 = ((d*`x'3)/ivw_time3) + (((12-d)*`x'4)/ivw_time4) if d<=12 & `x'_y6==.
+replace `x'_y6 = ((d*`x'3)/ivw_time3) if d>12 & `x'_y6==.
 }
-
-replace months2 = months2 - 12 if months2>12 & months2!=. & noop==1
-
-drop noop 
 
-* People who exhausted N0, N1 & N2
 
-gen noop = 1 if oop_y7==.
+replace informal_y6 = ((d*hlp_cost_ivw3)/ivw_time3) + (((12-d)*hlp_cost_ivw4)/ivw_time4) if d<=12 & informal_y6==.
+replace informal_y6 = ((d*hlp_cost_ivw3)/ivw_time3) if d>12 & informal_y6==.
 
-foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
-replace `x'_y7 = `x'3 * months3 if months3<12 & noop==1
-}
-
-replace months3 = months3 - 12 if months3<12 & noop==1
+replace e = e-(12-d) if d<12 & tempflag1==1
+replace d = 0 if d<12 & tempflag1==1
+replace d = d-12 if d>=12 & tempflag1==1
 
-foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
-replace `x'_y7 =  `x'_y7 + (-months3)*`x'4 if months3<0 & noop==1
-}
-replace months4 = months4 + months3 if months3<0 & noop==1
+drop tempf*
 
-foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
-replace `x'_y7 = `x'3 * 12 if months3==12 & noop==1
-}
 
-replace months3 = months3 - 12 if months3==12 & noop==1
+/* Year 7 */
 
-foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
-replace `x'_y7 = `x'3 * 12 if months3>12 & months3!=. & noop==1
-}
+gen oop_y7 = ((c*oop_cost2)/ivw_time2) + (((12-c)*oop_cost3)/ivw_time3) if c>0 & c<=12 
+replace oop_y7 = ((12*oop_cost2)/ivw_time2) if c>=12
 
-replace months3 = months3 - 12 if months3>12 & months3!=. & noop==1
+replace oop_y7 = ((12*oop_cost3)/ivw_time3) if d>12 & oop_y7==.
+replace oop_y7 = ((d*oop_cost3)/ivw_time3) + (((12-d)*oop_cost4)/ivw_time4) if d<=12 & oop_y7==.
 
 
-replace months0 = . if months0<=0
-replace months1 = . if months1<=0
-replace months2 = . if months2<=0
-replace months3 = . if months3<=0
+gen informal_y7 = ((c*hlp_cost_ivw2)/ivw_time2) + (((12-c)*hlp_cost_ivw3)/ivw_time3) if c>0 & c<=12
+replace informal_y7 = ((12*hlp_cost_ivw2)/ivw_time2) if c>12
+replace informal_y7 = ((12*hlp_cost_ivw3)/ivw_time3) if d>12 & informal_y7==.
+replace informal_y7 = ((d*hlp_cost_ivw3)/ivw_time3) + (((12-d)*hlp_cost_ivw4)/ivw_time4) if d<=12 & informal_y7==.
 
-drop noop
-* People who exhausted N0, N1, N2 & N3
+foreach x in mc_b_prem private_ltc_prem nh_nights nh_oop {
 
-gen noop = 1 if oop_y7==.
+gen `x'_y7 = ((c*`x'2)/ivw_time2) + (((12-c)*`x'3)/ivw_time3) if c>0 & c<=12 
+replace `x'_y7 = ((12*`x'2)/ivw_time2) if c>=12
 
-foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
-replace `x'_y7 = `x'4 * 12 if noop==1
+replace `x'_y7 = ((12*`x'3)/ivw_time3) if d>12 & `x'_y7==.
+replace `x'_y7 = ((d*`x'3)/ivw_time3) + (((12-d)*`x'4)/ivw_time4) if d<=12 & `x'_y7==.
 }
-
-
-
 
-gen oop_7yr = oop_y1+ oop_y2+ oop_y3+ oop_y4+ oop_y5 + oop_y6 + oop_y7
-gen oop_6yr = oop_y1+ oop_y2+ oop_y3+ oop_y4+ oop_y5 + oop_y6
-gen oop_5yr = oop_y1+ oop_y2+ oop_y3+ oop_y4+ oop_y5
-gen oop_4yr = oop_y1+ oop_y2+ oop_y3+ oop_y4
-gen oop_3yr = oop_y1+ oop_y2+ oop_y3
-gen oop_2yr = oop_y1+ oop_y2
+/* Visual check */
 
-ttest oop_5yr, by(dem_cohort)
-ttest oop_5yr if final_7yr==1, by(dem_cohort)
-ttest oop_7yr if final_7yr==1, by(dem_cohort)
+foreach x of varlist oop_y* informal_y* {
 
-forvalues i = 1/7 {
-
-rename hlp_y`i' informal_y`i'
+sum `x' 
 }
-
-
-gen informal_7yr = informal_y1+ informal_y2+ informal_y3+ informal_y4+ informal_y5 + informal_y6 + informal_y7
-gen informal_6yr = informal_y1+ informal_y2+ informal_y3+ informal_y4+ informal_y5 + informal_y6
-gen informal_5yr = informal_y1+ informal_y2+ informal_y3+ informal_y4+ informal_y5
-gen informal_4yr = informal_y1+ informal_y2+ informal_y3+ informal_y4
-gen informal_3yr = informal_y1+ informal_y2+ informal_y3
-gen informal_2yr = informal_y1+ informal_y2
-
-ttest informal_5yr, by(dem_cohort)
-ttest informal_5yr if final_7yr==1, by(dem_cohort)
-ttest informal_7yr if final_7yr==1, by(dem_cohort)
 
 save R01_annualized.dta, replace
 
+log close
 
 
 
@@ -4334,7 +3906,7 @@ save `predict'
 
 use R01_j.dta, clear
 
-merge m:1 id using R01_annualized.dta, keepus(oop_5yr oop_7yr informal_5yr informal_7yr oop_y* informal_y* mc_b_prem_y* ///
+merge m:1 id using R01_annualized.dta, keepus(oop_y* informal_y* mc_b_prem_y* ///
 private_ltc_prem_y* nh_nights_y* nh_oop_y*)
 drop _m
 
@@ -4362,28 +3934,23 @@ forvalues i=1/7 {
 	foreach x in nh_nights n_snf_days private_ltc_prem nh_oop tot_nf_days {
 		replace `x'_y`i'=0 if missing(`x'_y`i')
 }
-	replace nh_oop_y`i'=365*genworth if nh_oop_y`i'>365*genworth
 	replace nh_nights_y`i'=365 if nh_nights_y`i'>365 
 	gen imputed_nh_costs_a_y`i'=0
 	gen imputed_nh_costs_b_y`i'=(nh_nights_y`i'-n_snf_days_y`i'-tot_nf_days_y`i'- ///
 	(.8*private_ltc_prem_y`i'+nh_oop_y`i')/genworth)*genworth ///
-	if champus_exit==1 | private_ltc_prem_y`i'>0 | ltc_ins_exit==1
-	replace imputed_nh_costs_b_y`i'=0 if !champus_exit & !private_ltc_prem_y`i' 
+	if champus_exit==1 | private_ltc_prem_y`i'>0
+	replace imputed_nh_costs_b_y`i'=0 if !champus_exit & !private_ltc_prem_y`i'
 	gen imputed_nh_costs_c_y`i'=(nh_nights_y`i'-n_snf_days_y`i'-tot_nf_days_y`i'- ///
-	(.8*private_ltc_prem_y`i'+nh_oop_y`i')/genworth)*genworth	
-	gen imputed_nh_costs_d_y`i'=(nh_nights_y`i'-n_snf_days_y`i'-tot_nf_days_y`i'- ///
 	(.8*private_ltc_prem_y`i'+nh_oop_y`i')/genworth)*genworth
-	foreach x in a b c d {
-		if "`x'"!="c" replace imputed_nh_costs_`x'_y`i'=0 if imputed_nh_costs_`x'_y`i'<0
+	foreach x in a b c {
+		replace imputed_nh_costs_`x'_y`i'=0 if imputed_nh_costs_`x'_y`i'<0
 		//2/26/19-ebl-for now, just replacing with mean imputation for Medicaid
 		sum imputed_nh_costs_`x'_y`i' if !ind_mcaid_imputed & nh_nights
 		replace imputed_nh_costs_`x'_y`i'=r(mean) if ind_mcaid_imputed==1 & nh_nights
 }
-	replace imputed_nh_costs_b_y`i'=0 if !champus_exit & !private_ltc_prem_y`i' & ltc_ins_exit!=1
 	label var imputed_nh_costs_a_y`i' "Imputed NH Costs, year `i': Conservative (0 for all)"
 	label var imputed_nh_costs_b_y`i' "Imputed NH Costs, year `i': Moderate (only for those with LTC/VA coverage)"
-	label var imputed_nh_costs_c_y`i' "Imputed NH Costs, year `i': SR nights as gold standard (all, allows negative values for SR nights)"
-	label var imputed_nh_costs_d_y`i' "Imputed NH Costs, year `i': Comprehensive (imputed for all, no negative values)"
+	label var imputed_nh_costs_c_y`i' "Imputed NH Costs, year `i': Comprehensive (imputed for all)"
 	gen unat_nights`i'=imputed_nh_costs_c_y`i'/genworth
 	label var unat_nights`i' "Unattributed NH nights, year `i': Comprehensive"
 	
@@ -4433,11 +4000,6 @@ label var tot_paid_maid_n5 "Total Medicaid Spending Y5"
 label var tot_paid_maid_n6 "Total Medicaid Spending Y6"
 label var tot_paid_maid_n7 "Total Medicaid Spending Y7"
 
-label var oop_5yr "Cumulative 5yr OOP"
-label var oop_7yr "Cumulative 7yr OOP"
-label var informal_5yr "Cumulative 5yr informal"
-label var informal_7yr "Cumulative 7yr informal"
-
 forvalues i = 1/7 {
 rename tot_paid_maid_n`i' tot_paid_maid_y`i'
 }
@@ -4463,19 +4025,21 @@ save $final\R01_final.dta, replace
 
 preserve 
 keep if nflag==0
-keep if final==1
 
 gen all = 1
+gen no_impute= 2
+replace no_impute  = 0 if has_imputed==1
 
 local ivars female white black other hospice_exit nhres_exit married_exit reschil_d_exit resspouse_exit livealone_exit adl_independent_exit adl_severe_exit medicare_exit medicareb_exit medicaid_exit champus_exit ffs_7yr ffs_6yr ffs_5yr ffs_4yr ffs_3yr ffs_2yr ffs_1yr
 
 local medcost age_at_death tot_paid_maid_y1 tot_paid_maid_y2 tot_paid_maid_y3 tot_paid_maid_y4 tot_paid_maid_y5 tot_paid_maid_y6 tot_paid_maid_y7 tot_paid_by_mc_y1 tot_paid_by_mc_y2 tot_paid_by_mc_y3 tot_paid_by_mc_y4 tot_paid_by_mc_y5 tot_paid_by_mc_y6 tot_paid_by_mc_y7 ///
-oop_y1 oop_y2 oop_y3 oop_y4 oop_y5 oop_y6 oop_y7 oop_5yr oop_7yr informal_y1 informal_y2 informal_y3 informal_y4 informal_y5 informal_y6 informal_y7 informal_5yr informal_7yr
+oop_y1 oop_y2 oop_y3 oop_y4 oop_y5 oop_y6 oop_y7 informal_y1 informal_y2 informal_y3 informal_y4 informal_y5 informal_y6 informal_y7 
+
 
 local rd: word count `ivars' `medcost' 1
 
-mat tab1=J(`rd', 3,.)
-mat stars=J(`rd',3,0)
+mat tab1=J(`rd', 6,.)
+mat stars=J(`rd',6,0)
 local r = 1
 
 foreach x of local ivars {
@@ -4492,6 +4056,20 @@ mat tab1[`r',3] = r(mean)*100
 
 tab `x' dem_cohort if all==1, chi2
 mat stars[`r',2] = (r(p)<.01) + (r(p)<0.05)
+
+
+sum `x' if no_impute==2
+
+mat tab1[`r',4] = r(mean)*100
+
+sum `x' if no_impute==2 & dem_cohort==1
+mat tab1[`r',5] = r(mean)*100
+
+sum `x' if no_impute==2 & dem_cohort==0
+mat tab1[`r',6] = r(mean)*100
+
+tab `x' dem_cohort if no_impute==2, chi2
+mat stars[`r',5] = (r(p)<.01) + (r(p)<0.05)
 
 
 local ++r
@@ -4513,6 +4091,20 @@ ttest `x' if all==1, by(dem_cohort)
 mat stars[`r',2] = (r(p)<.01) + (r(p)<.05)
 
 
+sum `x' if no_impute==2
+
+mat tab1[`r',4] = r(mean)
+
+sum `x' if no_impute==2 & dem_cohort==1
+mat tab1[`r',5] = r(mean)
+
+sum `x' if no_impute==2 & dem_cohort==0
+mat tab1[`r',6] = r(mean) 
+
+ttest `x' if no_impute==2, by(dem_cohort)
+mat stars[`r',5] = (r(p)<.01) + (r(p)<.05)
+
+
 
 local ++r
 }
@@ -4526,30 +4118,40 @@ mat tab1[`r',2] = r(N)
 
 sum nflag if all==1 & dem_cohort==0
 mat tab1[`r',3] = r(N)
+
+sum nflag if no_impute==2
+mat tab1[`r',4] = r(N)
+
+sum nflag if no_impute==2 & dem_cohort==1
+mat tab1[`r',5] = r(N)
+
+sum nflag if no_impute==2 & dem_cohort==0
+mat tab1[`r',6] = r(N)
+
 
 
 
 mat rownames tab1 = `ivars' `medcost' N
 
 frmttable using "E:\projects\burden_dementia\archive logs\R01_Table1.doc", replace statmat(tab1) ///
-varlabels title("Summary Statistics For R01 Sample (Deceased 2004-2015, Age 70+ at Death, 5yr Cont. FFS)") ctitles("", "All","Dementia","No Dementia") sdec(2) ///
-annotate(stars) asymbol(*,**)note("All costs have been inflation adjusted to 2016 dollars. <0.05*, p<0.01**")
+varlabels title("Summary Statistics For R01 Sample (Deceased 2004-2015, Age 72+ at Death)") ctitles("", "", "Full Sample", "", "Excludes Decedents", " w/Imputated Core", "" \"Variables", "All","Dementia","No Dementia", "All","Dementia","No Dementia"  ) sdec(2) ///
+vlines(01001001) annotate(stars) asymbol(*,**)note("All costs have been inflation adjusted to 2016 dollars. <0.05*, p<0.01**")
 
 /* FFS Only */
 
 
-keep if final_7yr==1
+keep if ffs_7yr==1
 
 local ivars female white black other hospice_exit nhres_exit married_exit reschil_d_exit resspouse_exit livealone_exit adl_independent_exit adl_severe_exit medicare_exit medicareb_exit medicaid_exit champus_exit ffs_7yr ffs_6yr ffs_5yr ffs_4yr ffs_3yr ffs_2yr ffs_1yr
 
 local medcost age_at_death tot_paid_maid_y1 tot_paid_maid_y2 tot_paid_maid_y3 tot_paid_maid_y4 tot_paid_maid_y5 tot_paid_maid_y6 tot_paid_maid_y7 tot_paid_by_mc_y1 tot_paid_by_mc_y2 tot_paid_by_mc_y3 tot_paid_by_mc_y4 tot_paid_by_mc_y5 tot_paid_by_mc_y6 tot_paid_by_mc_y7 ///
-oop_y1 oop_y2 oop_y3 oop_y4 oop_y5 oop_y6 oop_y7 oop_5yr oop_7yr informal_y1 informal_y2 informal_y3 informal_y4 informal_y5 informal_y6 informal_y7 informal_5yr informal_7yr
+oop_y1 oop_y2 oop_y3 oop_y4 oop_y5 oop_y6 oop_y7 informal_y1 informal_y2 informal_y3 informal_y4 informal_y5 informal_y6 informal_y7 
 
 
 local rd: word count `ivars' `medcost' 1
 
-mat tab1=J(`rd', 3,.)
-mat stars=J(`rd',3,0)
+mat tab1=J(`rd', 6,.)
+mat stars=J(`rd',6,0)
 local r = 1
 
 foreach x of local ivars {
@@ -4566,6 +4168,20 @@ mat tab1[`r',3] = r(mean)*100
 
 tab `x' dem_cohort if all==1, chi2
 mat stars[`r',2] = (r(p)<.01) + (r(p)<0.05)
+
+
+sum `x' if no_impute==2
+
+mat tab1[`r',4] = r(mean)*100
+
+sum `x' if no_impute==2 & dem_cohort==1
+mat tab1[`r',5] = r(mean)*100
+
+sum `x' if no_impute==2 & dem_cohort==0
+mat tab1[`r',6] = r(mean)*100
+
+tab `x' dem_cohort if no_impute==2, chi2
+mat stars[`r',5] = (r(p)<.01) + (r(p)<0.05)
 
 
 local ++r
@@ -4587,6 +4203,20 @@ ttest `x' if all==1, by(dem_cohort)
 mat stars[`r',2] = (r(p)<.01) + (r(p)<.05)
 
 
+sum `x' if no_impute==2
+
+mat tab1[`r',4] = r(mean)
+
+sum `x' if no_impute==2 & dem_cohort==1
+mat tab1[`r',5] = r(mean)
+
+sum `x' if no_impute==2 & dem_cohort==0
+mat tab1[`r',6] = r(mean) 
+
+ttest `x' if no_impute==2, by(dem_cohort)
+mat stars[`r',5] = (r(p)<.01) + (r(p)<.05)
+
+
 
 local ++r
 }
@@ -4601,13 +4231,23 @@ mat tab1[`r',2] = r(N)
 sum nflag if all==1 & dem_cohort==0
 mat tab1[`r',3] = r(N)
 
+sum nflag if no_impute==2
+mat tab1[`r',4] = r(N)
+
+sum nflag if no_impute==2 & dem_cohort==1
+mat tab1[`r',5] = r(N)
+
+sum nflag if no_impute==2 & dem_cohort==0
+mat tab1[`r',6] = r(N)
+
+
 
 
 mat rownames tab1 = `ivars' `medcost' N
 
 frmttable using "E:\projects\burden_dementia\archive logs\R01_Table1.doc", addtable statmat(tab1) ///
-varlabels title("Summary Statistics For R01 Sample (Deceased 2004-2015, Age 72+ at Death & 7yrs Cont. FFS)") ctitles("", "All","Dementia","No Dementia") sdec(2) ///
-annotate(stars) asymbol(*,**)note("All costs have been inflation adjusted to 2016 dollars. <0.05*, p<0.01**")
+varlabels title("Summary Statistics For R01 Sample (Deceased 2004-2015, Age 72+ at Deat, 7yrs Continuous FFS)") ctitles("", "", "Full Sample", "", "Excludes Decedents", " w/Imputated Core", "" \"Variables", "All","Dementia","No Dementia", "All","Dementia","No Dementia"  ) sdec(2) ///
+vlines(01001001) annotate(stars) asymbol(*,**)note("All costs have been inflation adjusted to 2016 dollars. <0.05*, p<0.01**")
 
 
 H="***************"
@@ -10566,9 +10206,6 @@ graphs you don't need, and/or dropping anything not needed from the varlist
 */
 
 /*loop through each type of NH night imputation*/
-
-set trace off
-
 foreach imp in a b c {
 use "E:\data\serious_ill\int_data\core_ids_1yr_criteria_5.dta", clear
 sort id core_year
@@ -10640,7 +10277,7 @@ nh cumnh wi_mc {
 		gen `x'_ul=`x'+1.96*se_`x'
 		gen `x'_ll=`x'-1.96*se_`x'
 }
-/*
+
 foreach x in mc mcaid oop informal nh all {
 	twoway (rarea `x'_ul `x'_ll year if dem_cohort==0, astyle(ci)) ///
 	(rarea `x'_ul `x'_ll year if dem_cohort==1, astyle(ci)) ///
@@ -10669,7 +10306,7 @@ legend(label(1 "MC, No-D") label(2 "MC-D") label(3 "WIMC, No-D") label(4 "WIMC-D
 xlabel(1 "6-7" 2 "5-6" 3 "4-5" 4 "3-4" 5 "2-3" 6 "1-2" 7 "0-1") ytitle("")
 graph save annu_`x'_spending_over_time_wi.gph, replace
 graph export annu_`x'_spending_over_time_wi_nh`imp'.pdf, replace
-*/
+
 
 foreach x in mc mcaid oop informal all nh {
 	rename `x' annu`x'
@@ -10680,35 +10317,35 @@ preserve
 
 
 
-graph bar annumcaid annunh annumc annuoop annuinf, over(dem_cohort)  over(year) ///
+graph bar annumca annunh annumc annuoop annuinf, over(dem_cohort)  over(year) ///
 stack saving(annu_stack_1, replace) percent 
 graph export annu_stack_1_nh`imp'.pdf, replace
 
-graph bar  annunh annumcaid annumc annuoop annuinformal if dem_cohort==0, over(year) stack percent ///
+graph bar  annunh annumca annumc annuoop annuinf if dem_cohort==0, over(year) stack percent ///
 saving(annu_stack_no_dem, replace)  title("No dementia" "Annual") ///
 legend(label(2 "Medicaid") label(3 "Medicare") label(4 "OOP") label(5 "Informal") ///
-	label(1 "Imputed NH Cost")) //legend(row(1))
-graph bar annunh annumcaid annumc annuoop annuinformal if dem_cohort==1,over(year)  ///
+	label(1 "Imputed NH Cost")) 
+graph bar annunh annumca annumc annuoop annuinf if dem_cohort==1,over(year)  ///
 saving(annu_stack_dem, replace) stack percent title("Dementia" "Annual") ///
 legend(label(2 "Medicaid") label(3 "Medicare") label(4 "OOP") label(5 "Informal") ///
 	label(1 "Imputed NH Cost")) 
 
-graph bar cumnh cummcaid  cummc cumoop cuminformal if dem_cohort==0,over(year)  ///
+graph bar cumnh cummca  cummc cumoop cuminf if dem_cohort==0,over(year)  ///
 saving(cum_stack_no_dem, replace) stack percent  title("No dementia" "Cumulative") ///
 legend(label(2 "Medicaid") label(3 "Medicare") label(4 "OOP") label(5 "Informal") ///
 	label(1 "Imputed NH Cost")) 
-graph bar cumnh  cummcaid cummc cumoop cuminformal if dem_cohort==1,over(year)  ///
+graph bar cumnh  cummca cummc cumoop cuminf if dem_cohort==1,over(year)  ///
 saving(cum_stack_dem, replace) stack percent  title("Dementia" "Cumulative") ///
 legend(label(2 "Medicaid") label(3 "Medicare") label(4 "OOP") label(5 "Informal") ///
 	label(1 "Imputed NH Cost")) 
 
 graph combine annu_stack_no_dem.gph annu_stack_dem.gph cum_stack_no_dem.gph cum_stack_dem.gph, ///
-rows(1) xsize(12) ysize(4)  ycommon 
+rows(1) xsize(12) ysize(4)  ycommon
 graph save stacked_percentage_bars_7yrs.gph, replace
 graph export stacked_percentage_bars_7yrs_nh`imp'.pdf, replace
 
 
-tokenize informal oop mc mcaid  nh
+tokenize inf oop mc mca  nh
 forvalues i=2/5 {
 	replace annu``i''=annu``=`i'-1''+annu``i''
 	replace cum``i''=cum``=`i'-1''+cum``i''
@@ -10717,7 +10354,7 @@ forvalues i=2/5 {
 foreach x in annu cum {
 	twoway (area `x'nh year if dem_cohort==0)  (area `x'mcaid year if dem_cohort==0) ///
 	(area `x'mc year if dem_cohort==0) ///
-	(area `x'oop year if dem_cohort==0) (area `x'informal year if dem_cohort==0), ///
+	(area `x'oop year if dem_cohort==0) (area `x'inf year if dem_cohort==0), ///
 	title("No Dementia") legend(label(1 "Imputed NH Cost") label(2 "Medicaid") ///
 	label(3 "Medicare") label(4 "OOP") label(5 "Informal")) ///
 	saving(`x'_spending_diff_no_dem_stacked, replace) ///
@@ -10725,7 +10362,7 @@ foreach x in annu cum {
 
 	twoway (area `x'nh year if dem_cohort==1)  (area `x'mcaid year if dem_cohort==1) ///
 	(area `x'mc year if dem_cohort==1) ///
-	(area `x'oop year if dem_cohort==1) (area `x'informal year if dem_cohort==1), ///
+	(area `x'oop year if dem_cohort==1) (area `x'inf year if dem_cohort==1), ///
 	title("Dementia") legend(label(1 "Imputed NH Cost")label(2 "Medicaid") ///
 	label(3 "Medicare") label(4 "OOP") label(5 "Informal")) ///
 	saving(`x'_spending_diff_dem_stacked, replace) ///
@@ -10750,8 +10387,6 @@ graph combine annu_spending_diff_no_dem_stacked.gph annu_spending_diff_dem_stack
 cum_spending_diff_no_dem_stacked.gph cum_spending_diff_dem_stacked.gph, ycommon ///
 saving(spending_stacked_7yrs, replace) rows(1) ysize(4) xsize(12)
 graph export spending_stacked_7yrs_nh`imp'.pdf, replace
-
-drop *se_* *ul *ll
 export excel using "E:\data\burden_dementia\logs\graphs\graphs_data.xls", ///
 firstrow(variables) sheet(`imp', replace) 
 restore
@@ -11310,8 +10945,6 @@ save "`fdpath'/burden_dementia_sample_long.dta", replace
 
 
 H="changelog"
-02/27/19 - Added 4th bucket (SR nights is gold standard) to unattributed NH costs in Final Sample & Table 1 header and updated 7 year graphs to run for all 4. Evan
-
 02/26/19 - Updated 7 year graphs to include nursing home imputations and CIs. Evan
 
 02/26/19 - Fixed SNF days error and improved nursing home bucketing in Final Sample header.  Evan

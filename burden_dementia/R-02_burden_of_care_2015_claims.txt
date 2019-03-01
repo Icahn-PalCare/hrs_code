@@ -1916,7 +1916,7 @@ quit;
 
 proc export data=proj_int.decedent_dataset outfile="E:\data\burden_dementia\int_data\decedent_dataset.dta" replace; run;
 
-H="Model Medicaid spending"
+H="Model Medicaid spending & NH nights"
 set more off
 capture log close
 version 15
@@ -1946,7 +1946,7 @@ gen ivw_date=c_ivw_date
 replace ivw_date=e_ivw_date if missing(ivw_date)
 replace ivw_date=td(01jan2016) if missing(ivw_date)
 gen ivw_year=year(ivw_date)
-
+replace nh_nights=nh_nights_exit if missing(nh_nights)
 tempfile hrs
 save `hrs'
 
@@ -2007,11 +2007,11 @@ by bid, sort: egen ly=max(year)
 drop if ly<2004
 foreach x in ffs hmo php pccm {
 	gen `x'exp=mdcd_`x'_amt*rate
-	label var `x'exp "Annual `x' Medicaid Expenditures (2016$)
+	label var `x'exp "Annual `x' Medicaid Expenditures (2016$)"
 }
 egen mcaidexp=rowtotal(*exp)
-label var mcaidexp "Total Annual Medicaid Expenditures (2016$)
-keep id bid *exp year
+label var mcaidexp "Total Annual Medicaid Expenditures (2016$)"
+keep id bid *exp mdcd_nf_days_all year
 tempfile mcaid
 save `mcaid'
 
@@ -2025,7 +2025,7 @@ rename *, l
 tempfile xwalk
 save `xwalk'
 
-use bid start_dt ab_mo_cnt hmo_mo buyin_mo using basf_1998_2015 if buyin_mo>=1 & ab_mo_cnt>=1 & hmo_mo==0, clear
+use bid start_dt ab_mo_cnt hmo_mo buyin_mo snf_covdys using basf_1998_2015 if buyin_mo>=1 & ab_mo_cnt>=1 & hmo_mo==0, clear
 gen year=year(start_dt)
 drop start_dt
 by bid, sort: egen ly=max(year)
@@ -2037,7 +2037,7 @@ save `mbsf'
 
 foreach x in dm hh hs ip snf op pb {
 	di "`x'"
-	use bid_hrs_22 pmt_amt admit_date using `x'_1998_2015
+	use bid_hrs_22 pmt_amt admit_date disch_date using `x'_1998_2015
 	gen year=year(admit_date)
 	merge m:1 bid year using `mbsf', keep(match)
 	gen rate=1 if year==2016
@@ -2230,11 +2230,93 @@ foreach x in  re two tpt {
 
 log close
 
+
+
 twopm mcaidexp mcexp `modelvars', firstpart(logit) secondpart(regress)
 
 predict pmcaid
 gen ind_mcaid_imputed=missing(mcaidexp) & !missing(pmcaid)
 replace mcaidexp=pmcaid if missing(mcaidexp)
+
+local modelvars nhres age age2 black  ///
+ab_mo m_no_mcaid adl_independent married medicaid 
+
+local modelvars nhres age age2 black  ///
+ind_hs_educ ab_mo m_no_mcaid adl_independent married medicaid ///
+ivw_type proxy year generous
+
+//predict medicaid nights
+replace nh_nights=0 if missing(nh_nights)
+replace nh_nights=365 if nh_nights>365
+
+
+
+twopm mdcd_nf_days_all snf_covdys nh_nights `modelvars' if testsamp==1 & nh_nights, ///
+firstpart(logit) secondpart(regress)
+predict ptwopnhn
+
+twopm mdcd_nf_days_all snf_covdys nh_nights `modelvars' if testsamp==1 & nh_nights, ///
+firstpart(logit) secondpart(glm, fam(gamma) link(log))
+predict ptwopnhnglm
+
+poisson mdcd_nf_days_all snf_covdys nh_nights `modelvars' if testsamp==1 & nh_nights
+predict ppois
+
+
+local modelvars nhres age   ///
+ab_mo m_no_mcaid adl_independent   ///
+ivw_type proxy 
+
+/*
+cap program drop hplogitLL
+
+program hplogitLL
+	args lnf beta1 beta2 
+	qui tempvar pi mu
+	qui gen double `mu' = exp(`beta1')
+	qui gen double `pi' = exp(`beta2')
+	qui replace `lnf'	= cond($ML_y1=0, ln(`pi'/(1+`pi')), ln(1/(1+`pi')) - `mu' ///
+	 + $ML_y1 * `beta1' - lngamma($ML_y1+1) - ln(1-exp(-`mu')))
+end
+
+ml model lf hplogitLL (cnd: count = child camper persons) ///
+(logit:count_nonzero=child camper persons) ///
+ml maximize, search(on) nolog title("hplogit") difficult
+predict xb1, eq(#1)
+predict xb2, eq(#2)
+generate phat2= 1/(1+exp(xb2))
+generate tyhat2=exp(xb1)
+gen yhat2=phat2*tyhat2
+*/
+
+local modelvars nhres married c.age##c.age black ///
+ab_mo m_no_mcaid adl_independent medicaid ivw_type proxy 
+poisson mdcd_nf_days_all snf_covdys nh_nights `modelvars' if testsamp==1 & nh_nights ///
+& mdcd_nf_days_all
+predict pnb
+
+zinb mdcd_nf_days_all snf_covdys nh_nights `modelvars' if testsamp==1 & nh_nights, ///
+inflate(  snf_covdys nh_nights `modelvars')
+predict pzinb
+
+logit mdcd_nf_days_all snf_covdys nh_nights `modelvars' if testsamp==1 & nh_nights 
+predict plogit
+
+
+poisson mdcd_nf_days_all snf_covdys nh_nights `modelvars' if testsamp==1 & nh_nights ///
+& mdcd_nf_days_all
+predict ppoisson
+
+gen phurdle=plogit*ppoisson
+
+poisson mdcd_nf_days_all snf_covdys nh_nights `modelvars' if testsamp==1 & nh_nights
+
+twopm mdcd_nf_days_all snf_covdys nh_nights `modelvars' if nh_nights , ///
+firstpart(logit) secondpart(glm, fam(gamma) link(log))
+predict pnhfinal
+
+replace mdcd_nf_days_all=pnhfinal if missing(mdcd_nf_days_all) 
+
 
 save E:\data\burden_dementia\int_data\\predicted_annual_medicaid_costs.dta, replace
 
@@ -2300,14 +2382,23 @@ proc export data=r01_b outfile="E:\data\burden_dementia\int_data\medicaid_cost_h
 
 H="Calculate SNF/HH Medicaid cost+days "
 use "E:\data\burden_dementia\int_data\predicted_annual_medicaid_costs.dta", clear
+merge m:1 id using "E:\data\burden_dementia\int_data\decedent_dataset.dta", ///
+keep(match) keepusing(index*) nogen
 
+drop _*
 forvalues i=1/12 {
 	gen _`i'=mcaidexp/12
 }
 
 gen _name_="paid_maid"
 
-keep id year _* ind_mcaid_imp
+expand 2, gen(dup)
+forvalues i=1/12 {
+	replace _`i'=mdcd_nf_days_all/12 if dup==1
+}
+replace _name_="nf_days_maid" if dup==1
+
+keep id year _* ind_mcaid_imp index*
 
 tempfile pmcaid
 save `pmcaid'
@@ -2350,7 +2441,7 @@ forvalues p = 1/12 {
 replace _`p' = _`p'*rate if cost==1
 }
 
-merge m:1 id year using `pmcaid', gen(pmcaidm)
+merge m:1 id year _name_ using `pmcaid', gen(pmcaidm) update
 
 /*Flag year markers, n1=[0,-12], n2=[-12,-24], n3=[-24,-36], etc. */
 
@@ -2456,7 +2547,8 @@ foreach x of local namevars {
 
 use tot_paid_maid.dta, clear
 cap drop _m 
-merge 1:1 id using "E:\data\burden_dementia\int_data\tot_`x'.dta", keepus(tot_`x'_n1 tot_`x'_n2 tot_`x'_n3 tot_`x'_n4 tot_`x'_n5 tot_`x'_n6 tot_`x'_n7)
+merge 1:1 id using "E:\data\burden_dementia\int_data\tot_`x'.dta", ///
+keepus(tot_`x'_n1 tot_`x'_n2 tot_`x'_n3 tot_`x'_n4 tot_`x'_n5 tot_`x'_n6 tot_`x'_n7)
 save tot_paid_maid.dta, replace
 }
 
@@ -4375,9 +4467,6 @@ forvalues i=1/7 {
 	(.8*private_ltc_prem_y`i'+nh_oop_y`i')/genworth)*genworth
 	foreach x in a b c d {
 		if "`x'"!="c" replace imputed_nh_costs_`x'_y`i'=0 if imputed_nh_costs_`x'_y`i'<0
-		//2/26/19-ebl-for now, just replacing with mean imputation for Medicaid
-		sum imputed_nh_costs_`x'_y`i' if !ind_mcaid_imputed & nh_nights
-		replace imputed_nh_costs_`x'_y`i'=r(mean) if ind_mcaid_imputed==1 & nh_nights
 }
 	replace imputed_nh_costs_b_y`i'=0 if !champus_exit & !private_ltc_prem_y`i' & ltc_ins_exit!=1
 	label var imputed_nh_costs_a_y`i' "Imputed NH Costs, year `i': Conservative (0 for all)"
@@ -11310,6 +11399,8 @@ save "`fdpath'/burden_dementia_sample_long.dta", replace
 
 
 H="changelog"
+02/28/19 - Added model of Medicaid Nursing Home nights into the Model and Calculate Medicaid headers and removed mean imputation from the Final sample header. Evan
+
 02/27/19 - Added 4th bucket (SR nights is gold standard) to unattributed NH costs in Final Sample & Table 1 header and updated 7 year graphs to run for all 4. Evan
 
 02/26/19 - Updated 7 year graphs to include nursing home imputations and CIs. Evan

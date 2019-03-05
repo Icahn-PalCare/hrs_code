@@ -2249,8 +2249,7 @@ ivw_type proxy year generous
 replace nh_nights=0 if missing(nh_nights)
 replace nh_nights=365 if nh_nights>365
 
-hplogit mdcd_nf_days_all snf_covdys nh_nights `modelvars' if testsamp==1 & nh_nights
-predict phurdle
+
 
 twopm mdcd_nf_days_all snf_covdys nh_nights `modelvars' if testsamp==1 & nh_nights, ///
 firstpart(logit) secondpart(regress)
@@ -2263,12 +2262,52 @@ predict ptwopnhnglm
 poisson mdcd_nf_days_all snf_covdys nh_nights `modelvars' if testsamp==1 & nh_nights
 predict ppois
 
-nbreg mdcd_nf_days_all snf_covdys nh_nights `modelvars' if testsamp==1 & nh_nights
-predict pnb
 
 local modelvars nhres age   ///
 ab_mo m_no_mcaid adl_independent   ///
 ivw_type proxy 
+
+/*
+cap program drop hplogitLL
+
+program hplogitLL
+	args lnf beta1 beta2 
+	qui tempvar pi mu
+	qui gen double `mu' = exp(`beta1')
+	qui gen double `pi' = exp(`beta2')
+	qui replace `lnf'	= cond($ML_y1=0, ln(`pi'/(1+`pi')), ln(1/(1+`pi')) - `mu' ///
+	 + $ML_y1 * `beta1' - lngamma($ML_y1+1) - ln(1-exp(-`mu')))
+end
+
+ml model lf hplogitLL (cnd: count = child camper persons) ///
+(logit:count_nonzero=child camper persons) ///
+ml maximize, search(on) nolog title("hplogit") difficult
+predict xb1, eq(#1)
+predict xb2, eq(#2)
+generate phat2= 1/(1+exp(xb2))
+generate tyhat2=exp(xb1)
+gen yhat2=phat2*tyhat2
+*/
+
+local modelvars nhres married c.age##c.age black ///
+ab_mo m_no_mcaid adl_independent medicaid ivw_type proxy 
+poisson mdcd_nf_days_all snf_covdys nh_nights `modelvars' if testsamp==1 & nh_nights ///
+& mdcd_nf_days_all
+predict pnb
+
+zinb mdcd_nf_days_all snf_covdys nh_nights `modelvars' if testsamp==1 & nh_nights, ///
+inflate(  snf_covdys nh_nights `modelvars')
+predict pzinb
+
+logit mdcd_nf_days_all snf_covdys nh_nights `modelvars' if testsamp==1 & nh_nights 
+predict plogit
+
+
+poisson mdcd_nf_days_all snf_covdys nh_nights `modelvars' if testsamp==1 & nh_nights ///
+& mdcd_nf_days_all
+predict ppoisson
+
+gen phurdle=plogit*ppoisson
 
 poisson mdcd_nf_days_all snf_covdys nh_nights `modelvars' if testsamp==1 & nh_nights
 
@@ -2343,6 +2382,9 @@ proc export data=r01_b outfile="E:\data\burden_dementia\int_data\medicaid_cost_h
 
 H="Calculate SNF/HH Medicaid cost+days "
 use "E:\data\burden_dementia\int_data\predicted_annual_medicaid_costs.dta", clear
+merge m:1 id using "E:\data\burden_dementia\int_data\decedent_dataset.dta", ///
+keep(match) keepusing(index*) nogen
+
 drop _*
 forvalues i=1/12 {
 	gen _`i'=mcaidexp/12
@@ -2356,7 +2398,7 @@ forvalues i=1/12 {
 }
 replace _name_="nf_days_maid" if dup==1
 
-keep id year _* ind_mcaid_imp
+keep id year _* ind_mcaid_imp index*
 
 tempfile pmcaid
 save `pmcaid'
@@ -2399,7 +2441,7 @@ forvalues p = 1/12 {
 replace _`p' = _`p'*rate if cost==1
 }
 
-merge m:1 id year _name_ using `pmcaid', gen(pmcaidm)
+merge m:1 id year _name_ using `pmcaid', gen(pmcaidm) update
 
 /*Flag year markers, n1=[0,-12], n2=[-12,-24], n3=[-24,-36], etc. */
 
@@ -2505,7 +2547,8 @@ foreach x of local namevars {
 
 use tot_paid_maid.dta, clear
 cap drop _m 
-merge 1:1 id using "E:\data\burden_dementia\int_data\tot_`x'.dta", keepus(tot_`x'_n1 tot_`x'_n2 tot_`x'_n3 tot_`x'_n4 tot_`x'_n5 tot_`x'_n6 tot_`x'_n7)
+merge 1:1 id using "E:\data\burden_dementia\int_data\tot_`x'.dta", ///
+keepus(tot_`x'_n1 tot_`x'_n2 tot_`x'_n3 tot_`x'_n4 tot_`x'_n5 tot_`x'_n6 tot_`x'_n7)
 save tot_paid_maid.dta, replace
 }
 

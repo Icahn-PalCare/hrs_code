@@ -3120,6 +3120,9 @@ restore
 merge m:1 index_year stateusps using `nhcosts'
 drop if _m==2
 drop _m
+//nat'l median in 2016 was $225, so replace with that if missing(state)
+destring genworth_nh_rate_cpi_adj, replace
+replace genworth_nh_rate_cpi_adj=225 if missing(genworth_nh_rate_cpi_adj)
 save R01_i.dta, replace
 
 
@@ -3423,15 +3426,21 @@ by id: gen prev_oop_yes = 1 if helper_oop[_n+1]>0 & helper_oop[_n+1]!=.
 by id: gen prev_hlp_oop = (helper_oop[_n+1]/months[_n+1]) if helper_oop[_n+1]>0
 
 gen helper_oop_per_mo = helper_oop/months
-gen mod_helper_oop = helper_oop_per_mo * 4 if prev_oop_yes==.
-replace mod_helper_oop = (helper_oop_per_mo*4) + (months-4)*((helper_oop_per_mo+prev_hlp_oop)/2) if prev_oop_yes==1
+gen mod_helper_oop = helper_oop_per_mo * 4 if prev_oop_yes==. & months>=4
+replace mod_helper_oop = helper_oop_per_mo * months if months<4
+replace mod_helper_oop = (helper_oop_per_mo*4) + (months-4)*((helper_oop_per_mo+prev_hlp_oop)/2) ///
+if prev_oop_yes==1 & months>=4
+*replace mod_helper_oop = 
 
 replace total_oop = total_oop - helper_oop + mod_helper_oop
 
 /* Creating approximate 2/4 year helper hours based on above fomula */
 
-gen total_hlp = hlphrs_i*4 if prev_help_hrs==.
-replace total_hlp = (hlphrs_i*4) + (months-4)*((hlphrs_i+prev_hrs)/2) if prev_help_hrs==1
+gen total_hlp = hlphrs_i*4 if prev_help_hrs==. & months>=4
+replace total_hlp=hlphrs_i*months if months<4
+replace total_hlp = (hlphrs_i*4) + (months-4)*((hlphrs_i+prev_hrs)/2) ///
+if prev_help_hrs==1 & months>=4
+
 replace total_hlp = 0 if total_hlp==. // estimated total hours per interview
 
 
@@ -3551,14 +3560,16 @@ by id: carryforward stateusps, replace
 gsort id -c_ivw_year
 by id: carryforward stateusps, replace
 
+gen e_ivw_year=c_ivw_year
 merge m:1 c_ivw_year using "`cpi'", keepus(cpi_rate)
 cap drop _m
 
+rename c_ivw_year c_ivw_year_n0
 tempfile state
 save "`state'"
 
 
-rename c_ivw_year c_ivw_year_n1
+rename c_ivw_year_n0 c_ivw_year_n1
 rename stateusps stateusps_n1
 rename cpi_rate cpi_rate_n1
 tempfile state_n1
@@ -3591,7 +3602,15 @@ save `state_n5'
 
 
 use R01_cost_int.dta, clear
-merge m:1 id c_ivw_year using "`state'"
+/*
+gen e_ivw_year=year(e_ivw_date)
+replace e_ivw_year=exit_year if missing(e_ivw_year)
+merge m:1 id e_ivw_year using "`state'"
+drop if _m==2
+drop _m
+*/
+
+merge m:1 id c_ivw_year_n0 using "`state'"
 drop if _m==2
 cap drop _m
 merge m:1 id c_ivw_year_n1 using "`state_n1'"
@@ -3633,6 +3652,9 @@ expand 2 if c_ivw_year==1997, gen(duptag)
 
 replace c_ivw_year = c_ivw_year - 1 if duptag==1
 drop duptag
+
+//3/6/19-ebl-was not merging with exit data, so we were missing those years
+gen e_ivw_year=c_ivw_year
 
 rename c_ivw_year c_ivw_year_n0
 
@@ -3685,6 +3707,11 @@ cap drop _m
 merge m:1 c_ivw_year_n0 stateusps using "`rate'"
 drop if _m==2
 cap drop _m
+/*
+merge m:1 e_ivw_year stateusps using "`rate'"
+drop if _m==2
+cap drop _m
+*/
 merge m:1 c_ivw_year_n1 stateusps_n1 using "`rate_n1'"
 drop if _m==2
 cap drop _m
@@ -3760,22 +3787,16 @@ replace mar_n5 = 12 if (mar_n5>12 & mar_n5!=.) & nflag>0
 
 
 // impute mean hourly rate for people missing states
+//3/5/19-ebl-replace with national median in 2016
+//3/6/19-ebl-hopefully fixed the merging issue with exits, so there shouldn't be missingness, leaving commented out for now
+/*
+foreach x in "" _n1 _n2 _n3 _n4 _n5 {
+	replace cpi_rate`x'=1 if missing(cpi_rate`x')
+	replace hr_rate`x'=20.25 if missing(hr_rate`x')
+}
 
-egen hr_mean = mean(hr_rate)
-egen hr_mean_n1 = mean(hr_rate_n1)
-egen hr_mean_n2 = mean(hr_rate_n2)
-egen hr_mean_n3 = mean(hr_rate_n3)
-egen hr_mean_n4 = mean(hr_rate_n4)
-egen hr_mean_n5 = mean(hr_rate_n5)
-
-replace hr_rate = hr_mean if hr_rate==.
-replace hr_rate_n1 = hr_mean_n1 if hr_rate_n1==.
-replace hr_rate_n2 = hr_mean_n2 if hr_rate_n2==.
-replace hr_rate_n3 = hr_mean_n3 if hr_rate_n3==.
-replace hr_rate_n4 = hr_mean_n4 if hr_rate_n4==.
-replace hr_rate_n5 = hr_mean_n5 if hr_rate_n5==.
-
-foreach x of varlist mar_n0 mar_n1 mar_n2 mar_n3 mar_n4 mar_n5 hr_rate cpi_rate cpi_rate_n1 cpi_rate_n2 cpi_rate_n3 cpi_rate_n4 cpi_rate_n5 {
+*/
+foreach x of varlist mar_n0 mar_n1 mar_n2 mar_n3 mar_n4 mar_n5 hr_rate hr_rate_n1 hr_rate_n2 hr_rate_n3 hr_rate_n4 hr_rate_n5 cpi_rate cpi_rate_n1 cpi_rate_n2 cpi_rate_n3 cpi_rate_n4 cpi_rate_n5 {
 
 replace `x' = 0 if `x'==.
 }
@@ -11399,6 +11420,10 @@ save "`fdpath'/burden_dementia_sample_long.dta", replace
 
 
 H="changelog"
+03/06/19 - Corrected a merge where the Genworth and CPI weren't merging correctly with the exit in "Annual Calculations" header. Evan
+
+03/05/19 - Altered formula for helpers to reflect times when months<4, because it was resulting in a few negatives, and changed Genworth rates to Medians in 2016 where state was missing. Evan
+
 02/28/19 - Added model of Medicaid Nursing Home nights into the Model and Calculate Medicaid headers and removed mean imputation from the Final sample header. Evan
 
 02/27/19 - Added 4th bucket (SR nights is gold standard) to unattributed NH costs in Final Sample & Table 1 header and updated 7 year graphs to run for all 4. Evan

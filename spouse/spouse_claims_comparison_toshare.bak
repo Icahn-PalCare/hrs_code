@@ -1114,7 +1114,7 @@ cad=0;
 		then comorbi_16=1;
 	*Lymphoma;
 	if (substr(dx,1,3)='200' or
-		substr(dx,1,4)='201' or
+		substr(dx,1,3)='201' or
 		substr(dx,1,4)='2020' or
 		substr(dx,1,4)='2021' or
 		substr(dx,1,4)='2022' or
@@ -6875,6 +6875,8 @@ frmttable using table_1_omari, addtable  statmat(tabl) ctitles("Core" "Women" ""
 
 
 H="Table 2"
+//appendix table 1 and table 1 from the paper
+
 use "E:\data\hrs_cleaned\core_00_to_14.dta", clear
 sort id core_year
 by id: gen s_remarried=resspouse[_n+1]==1 if !missing(resspouse[_n+1])
@@ -6891,12 +6893,195 @@ capture log close
 
 
 
+local datapath "E:\data\spouse_claims\spouse_claims_comparison\int_data\"
+local logpath "E:\data\spouse_claims\spouse_claims_comparison\logs\"
+
+cd `logpath'
+*use `datapath'\spouse_cem1_xtra_vars, clear
+use "E:\data\spouse_claims\spouse_claims_comparison\final_data\spouse_claims_comparison_sample_omari.dta", clear
+drop s_remarried
+merge 1:1 s_id core_year using `marriage', nogen keep(match master)
+drop *demme*
+cap drop id
+gen id=r_id
+merge 1:1 id core_year using "E:\data\hrs_public_2012\dementia\pdem_withvarnames_ebl.dta", ///
+keep(match master) gen(rdemmerge) keepusing(pdem)
+replace id=s_hhid+s_pn
+*gen r_pdem_gt50=pdem>=.5 if !missing(pdem)
+/*setting dem to zero if missing pdem (age<65), unless there's a report of dementia or memory problems*/
+replace r_pdem=1 if r_memory==1 & missing(r_pdem)
+replace r_pdem=0 if missing(r_pdem)
+drop pdem
+merge 1:1 id core_year using "E:\data\hrs_public_2012\dementia\pdem_withvarnames_ebl.dta", ///
+keep(match master) gen(sdemmerge) keepusing(pdem)
+*gen s_pdem_gt50=pdem>=.5 if !missing(pdem)
+drop pdem id
+
+drop ragecat sagecat
+
+
+foreach x in r s {
+	local r "Respondent/Decedent"
+	local s "Spouse"
+	gen `x'agecat=1 if `x'_age_at_core<55
+	replace `x'agecat=2 if inrange(`x'_age_at_core,55,64)
+	replace `x'agecat=3 if inrange(`x'_age_at_core,65,74)
+	replace `x'agecat=4 if inrange(`x'_age_at_core,75,84)
+	replace `x'agecat=5 if inrange(`x'_age_at_core,85,150)
+	label define `x'agecat 1 "``x'' age: <55" 2 "``x'' age: 55-64" ///
+	3 "``x'' age: 65-74" 4 "``x'' age: 75-84" 5 "``x'' age: 85+"
+	label values `x'agecat `x'agecat
+	levelsof `x'agecat, local(levels)
+	local `x'agecat 
+	foreach l of local levels {
+		gen `x'agecat`l'=`x'agecat==`l' if !missing(`x'agecat)
+		local lab : label `x'agecat `l'
+		label var `x'agecat`l' "`lab'"
+		local `x'agecat ``x'agecat' `x'agecat`l'
+}
+
+}
+
+local match `ragecat' r_comorb_cat2 r_comorb_cat3 r_adl_independent_core ///
+r_srh_g r_srh_v `sagecat' ///
+nw2 nw3 nw4 s_comorb_cat2 s_comorb_cat3 ///
+s_female s_black s_hisp s_adl_independent_core s_pf ///
+r_nhres r_adl_iadl_sp_helper r_cesd_tot s_cesd_tot s_nhres
+
+foreach s in r s {
+	label var `s'_comorb_cat2 "`s' comorbidity mild"
+	label var `s'_comorb_cat3 "`s' comorbidity moderate/severe"
+}
+label var s_northeast "Northeast"
+label var s_midwest "Midwest"
+label var s_west "West"
+label var s_south "South"
+label var nw1 "Networth quartile, low"
+local rivars1 `ragecat' r_comorb_cat2 r_comorb_cat3 r_adl_independent_core ///
+r_srh_pf r_pdem_gt50
+local rivars2 
+local rivars3
+local rcvars1 r_age_at_core
+local rcvars2 
+local rcvars3
+local scvars1 s_age_at_core
+local scvars2 
+local scvars3 
+local sivars1 `sagecat' s_female s_hseduc s_comorb_cat2 s_comorb_cat3 ///
+s_female s_black s_hisp 
+ 
+local anv
+*local rivars2 
+local rivars3
+
+local vars Respondent_vars `rcvars1' `rivars1' `rcvars2'  `rivars2' `rcvars3' `rivars3' ///
+"--" "Spouse Vars" `scvars1' `sivars1' `scvars2' `sivars2' `scvars3' `sivars3'
+local rows `vars' N
+
+local rn : word count `rows'
+di "`rn'"
+mat tab1=J(`rn',6,.)
+mat stars=J(`rn',6,0)
+local r=1
+local c=1
+gen weight=1
+foreach b in bonnet {
+log using pstests.txt, text replace
+
+foreach time in 0 1 {
+if `time'==1 replace weight=cem_weights_1
+svyset [pw=weight]
+foreach group in "0" "1" {
+	foreach s in r s {
+		local r=`r'+1
+		foreach round in 1 2 3 {
+			foreach x of local `s'cvars`round' {
+				qui sum `x' if inlist(ind_,`group') [aw=weight]
+				local `x'`group'=r(mean)
+				local sd`x'`group'=r(sd)^2
+				mat tab1[`r',`c']=r(mean) 
+				*mat tab1[`r',`c'+1]=r(sd)
+				if "`group'"=="1" {
+/*					svy: reg `x' ind_
+					test ind_ 
+					mat tab1[`r',`c'+1]=r(p)
+					mat stars[`r',`c'+1]=(r(p)<.05)+(r(p)<.01)*/
+					mat tab1[`r',`c'+1]=abs((``x'1'-``x'0')/sqrt((`sd`x'1'+`sd`x'0')/2))					
+}
+				local r=`r'+1
+}
+			foreach x of local `s'ivars`round' {
+				qui sum `x' if inlist(ind_,`group') [aw=weight]
+				mat tab1[`r',`c']=r(mean)*100
+				local `x'`group'=r(mean)
+				if "`group'"=="1" {
+					/*svy: tab `x' ind_
+					mat tab1[`r',`c'+1]=e(p_Pear)
+					mat stars[`r',`c'+1]=(e(p_Pear)<.05)+(e(Pear)<.01)*/
+					mat tab1[`r',`c'+1]=abs((``x'1'-``x'0')/sqrt((``x'1'*(1-``x'1')+``x'0'*(1-``x'0'))/2))				
+}
+				local r=`r'+1
+}
+}
+		if "`s'"=="r" local r=`r'+1
+}
+	sum n if inlist(ind_,`group')
+	mat tab1[`r',`c']=r(N)
+	local c=`c'+1
+	if "`group'"=="1" local c=`c'+1
+	local r=1
+}
+*keep if cem_ma==1
+
 local datapath "E:\data\spouse_claims\spouse_claims_comparison\final_data\"
 local logpath "E:\data\spouse_claims\spouse_claims_comparison\logs\"
 
 cd `logpath'
+use `datapath'\spouse_claims_comparison_sample_omari, clear
+
+gen weight=1
+
+drop ragecat sagecat
 
 
+foreach x in r s {
+	local r "Respondent/Decedent"
+	local s "Spouse"
+	gen `x'agecat=1 if `x'_age_at_core<55
+	replace `x'agecat=2 if inrange(`x'_age_at_core,55,64)
+	replace `x'agecat=3 if inrange(`x'_age_at_core,65,74)
+	replace `x'agecat=4 if inrange(`x'_age_at_core,75,84)
+	replace `x'agecat=5 if inrange(`x'_age_at_core,85,150)
+	label define `x'agecat 1 "``x'' age: <55" 2 "``x'' age: 55-64" ///
+	3 "``x'' age: 65-74" 4 "``x'' age: 75-84" 5 "``x'' age: 85+"
+	label values `x'agecat `x'agecat
+	levelsof `x'agecat, local(levels)
+
+
+	foreach l of local levels {
+		gen `x'agecat`l'=`x'agecat==`l' if !missing(`x'agecat)
+		local lab : label `x'agecat `l'
+		label var `x'agecat`l' "`lab'"
+		*local `x'agecat ``x'agecat' `x'agecat`l'
+}
+}
+gen ragecat1=0
+local r=1
+}
+mat rownames tab1=`rows'
+
+
+frmttable using table_1_omari, replace statmat(tab1) ///
+title("Matching variables, before and after match (pre FFS determination)") ///
+ctitles("" "" "Pre match" "" "" "Post match" "" \ "" "Control" "Survivors" "Std Diff" "Control" ///
+"Survivors" "Std Diff") varlabels sdec(2)
+
+}
+
+local datapath "E:\data\spouse_claims\spouse_claims_comparison\final_data\"
+local logpath "E:\data\spouse_claims\spouse_claims_comparison\logs\"
+
+cd `logpath'
 use `datapath'\spouse_claims_comparison_sample_omari, clear
 
 drop *remarried
@@ -6929,19 +7114,6 @@ foreach x in r s {
 
 }
 
-foreach m in 6 12 24 {
-	foreach p in "" p {
-		foreach x in `sutil' op_paid_by_mc_wi_ {
-			gen `x'`p'`m'm=0	
-				forvalues i=1/`m' {
-					replace `x'`p'`m'm=`x'`p'`m'm+`x'm`i'`p' if !missing(`x'm`i'`p')
-}
-}
-*		gen ip_admit_ind_`m'm`p'=n_ip_admit_`p'`m'm>0 if !missing(n_ip_admit_`p'`m'm)
-}
-}	
-
-
 
 local match `ragecat' r_comorb_cat2 r_comorb_cat3 r_adl_independent_core ///
 r_srh_g r_srh_v `sagecat' ///
@@ -6952,32 +7124,38 @@ gen s_died_1yr=s_death_date-index_date<366
 gen s_died_2yr=s_death_date-index_date<731
 label var s_died_1yr "Spouse death <=365 days after index"
 label var s_died_2yr "Spouse death <=730 days after index"
-
-local coutcomes1 tot_paid_by_mc_wi_24m tot_paid_by_mc_wi_p24m ///
- ip_paid_by_mc_wi_24m ip_paid_by_mc_wi_p24m op_paid_by_mc_wi_24m op_paid_by_mc_wi_p24m n_hospd_24m n_hospd_p24m 
+local rivars1 `ragecat' r_white r_black r_hisp r_hseduc r_medicaid r_medigap r_champus ///
+r_comorb_cat1 r_comorb_cat2 r_comorb_cat3 r_adl_independent_core ///
+r_srh_pf  // r_nhres 
+local rivars2 r_adl_iadl_sp_helper r_cod_dem r_cod_cancer r_cod_heart final_ill
+local rivars3
+local rcvars1 
+local rcvars2 r_cesd_tot
+local rcvars3
+local scvars1
+local scvars2 s_networth_adj /*s_cesd_tot*/
+local scvars3 
+local sivars1 `sagecat' s_female s_white s_black s_hisp  s_hseduc 
+local sivars2 nw1 s_medicaid s_medigap s_champus s_adl_iadl_sp_helper ///
+s_pdem_gt50 s_comorb_cat1 s_comorb_cat2 s_comorb_cat3 ///
+s_adl_independent_core s_srh_pf s_remarried ///
+//s_nhres
+local sivars3 s_northeast s_midwest s_west s_south eol_spend_quart1 ///
+eol_spend_quart2 eol_spend_quart3 eol_spend_quart4
+local coutcomes1 tot_paid_by_mc_wi_12m tot_paid_by_mc_wi_p12m ///
+ ip_paid_by_mc_wi_12m ip_paid_by_mc_wi_p12m n_hospd_12m n_hospd_p12m 
 local coutcomes2
 local coutcomes3
-local ioutcomes1 ip_admit_ind_24m ip_admit_ind_p24m s_died_1yr s_died_2yr
+local ioutcomes1 ip_admit_ind_12m ip_admit_ind_p12m s_died_1yr s_died_2yr
 local ioutcomes2
 local ioutcomes3
 
 
-
-foreach x of varlist ip_admit_ind* {
-replace `x'=`x'>=1 if !missing(`x')
-}
-foreach x in tot_paid_by_mc_wi_ ip_paid_by_mc_wi_ op_paid_by_mc_wi_ n_hospd_ ///
-ip_admit_ind_ {
-	replace `x'24m=. if cont_ffs_n_mos<24
-	replace `x'p24m=. if index_year>=2011 | cont_ffs_p_mos<12
-}
-replace s_died_2yr=. if year(index_date)>2010
 foreach s in r s {
 	label var `s'_comorb_cat1 "`s' comorbidity: none"
 	label var `s'_comorb_cat2 "`s' comorbidity: mild"
 	label var `s'_comorb_cat3 "`s' comorbidity: moderate/severe"
 }
-
 
 label var s_northeast "Northeast"
 label var s_midwest "Midwest"
@@ -6992,114 +7170,83 @@ label var n_hospd_12m "Total Hospital days 12m prior to index"
 label var n_hospd_p12m "Total Hospital days 12m post index"
 label var ip_admit_ind_12m "Ind. any IP admit 12m prior to index"
 label var ip_admit_ind_p12m "Ind. any IP admit 12m post index"
-label var tot_paid_by_mc_wi_24m "Total Paid by MC 24m prior to index"
-label var tot_paid_by_mc_wi_p24m "Total Paid by MC 24m post index"
-label var ip_paid_by_mc_wi_24m "IP Paid by MC 24m prior to index"
-label var ip_paid_by_mc_wi_p24m "IP Paid by MC 24m post index"
-label var op_paid_by_mc_wi_24m "OP Paid by MC 24m prior to index"
-label var op_paid_by_mc_wi_p24m "OP Paid by MC 24m post index"
-label var n_hospd_24m "Total Hospital days 24m prior to index"
-label var n_hospd_p24m "Total Hospital days 24m post index"
-label var ip_admit_ind_24m "Ind. any IP admit 24m prior to index"
-label var ip_admit_ind_p24m "Ind. any IP admit 24m post index"
-local vars Utilization `coutcomes1' `coutcomes2' `coutcomes3' `ioutcomes1' `ioutcomes2' `ioutcomes3'
+local vars Respondent_vars `rcvars1' `rivars1' `rcvars2'  `rivars2' `rcvars3' `rivars3' ///
+"--" "Spouse Vars" `scvars1' `sivars1' `scvars2' `sivars2' `scvars3' `sivars3' ///
+"--" "Utilization" `coutcomes1' `coutcomes2' `coutcomes3' `ioutcomes1' `ioutcomes2' `ioutcomes3'
 local rows `vars' N
-local replace replace
-
-cap drop r_cod_other
-
-gen r_cod_other = 0
-replace r_cod_other = 1 if r_cod==4
-
-gen group1=1
-gen group2=1 if cem_matched_2==1 //spouse is primary cg
-gen group3=1 if cem_matched_3==1 //spouse non-primary cg
-gen group4=1 if cem_matched_4==1 // R cause of death dementia
-gen group5=1 if cem_matched_5==1 // R cause of death cancer
-gen group6=1 if cem_matched_6==1 // R cause of death Heart
-gen group7=1 if cem_matched_7==1 // R cause of death Other
-gen group8=1 if cem_matched_8==1  // R duration of final less than a month
-gen group9=1 if cem_matched_9==1 // duration of final illness >=1 month
-
-foreach group2 in 1 2 3 4 5 6 7 8 9 {
-	if `group2'==1 local group3 "Full Sample"
-	if `group2'==2 local group3 "Spouse Primary Caregiver"
-	if `group2'==3 local group3 "Spouse Non-Primary Caregiver"
-	if `group2'==4 local group3 "Cause of death Dementia"
-	if `group2'==5 local group3 "Cause of death Cancer"
-	if `group2'==6 local group3 "Cause of death Heart" 
-	if `group2'==7 local group3 "Cause of death Other" 
-        if `group2'==8 local group3 "Final illness <1 month"
-	if `group2'==9 local group3 "Final illness >=1 month"
-	di "`group3'"
 
 foreach time in 2 1 0 {
-local rn : word count `rows' 
+local rn : word count `rows'
 di "`rn'"
 local loc `time'
 di `loc'
-mat tab1`loc'=J(`rn'+6,3,.)
-mat stars`loc'=J(`rn'+6,3,0)
+mat tab1`loc'=J(`rn',3,.)
+mat stars`loc'=J(`rn',3,0)
 local r=1
 local c=1
 
 
 preserve
 
-keep if group`group2'==1
-foreach this in "" p {
-qui sum tot_paid_by_mc_wi_`this'24m
-local denom`this'=r(N)
-}
 if `time'<2 keep if s_female==`time'
 local table addtable
 
 foreach b in bonnet {
 
-svyset [pw=cem_weights_`group2']
+svyset [pw=cem_weights_1]
 foreach group in "0" "1" {
-	local names
+	foreach s in r s {
+		local r=`r'+1
+		foreach round in 1 2 3 {
+			foreach x of local `s'cvars`round' {
+				qui sum `x' if inlist(ind_,`group') [aw=cem_weights_1]
+				mat tab1`loc'[`r',`c']=r(mean) 
+				local `x'`group'=r(mean)
+				local sd`x'`group'=r(sd)^2
+				*mat tab1`loc'[`r',`c'+1]=r(sd)
+				if "`group'"=="1" {
+/*					svy: reg `x' ind_
+					test ind_ 
+					mat tab1[`r',`c'+1]=r(p)
+					mat stars[`r',`c'+1]=(r(p)<.05)+(r(p)<.01)*/
+					mat tab1`loc'[`r',`c'+1]=abs((``x'1'-``x'0')/sqrt((`sd`x'1'+`sd`x'0')/2))					
+}
+				local r=`r'+1
+}
+			foreach x of local `s'ivars`round' {
+				qui sum `x' if inlist(ind_,`group') [aw=cem_weights_1]
+				mat tab1`loc'[`r',`c']=r(mean)*100
+				local `x'`group'=r(mean)
+				if "`group'"=="1" {
+					/*svy: tab `x' ind_
+					mat tab1[`r',`c'+1]=e(p_Pear)
+					mat stars[`r',`c'+1]=(e(p_Pear)<.05)+(e(Pear)<.01)*/
+					mat tab1`loc'[`r',`c'+1]=abs((``x'1'-``x'0')/sqrt((``x'1'*(1-``x'1')+``x'0'*(1-``x'0'))/2))				
+
+}
+				local r=`r'+1
+}
+}
+		local r=`r'+1
+}	
 	local r=`r'+1
 	foreach round in 1 2 3 {
 		foreach x of local coutcomes`round' {
-			qui sum `x' if inlist(ind_,`group') [aw=cem_weights_`group2'], d
-			mat tab1`loc'[`r',`c']=r(mean)
-			local names `names' `x'
-			if strpos("`x'","tot_paid") {
-				mat tab1`loc'[`r'+1,`c']=r(p25)
-				mat tab1`loc'[`r'+2,`c']=r(p50)
-				mat tab1`loc'[`r'+3,`c']=r(p75)
-				local r=`r'+3
-				local names `names' p25 median p75
-}
+			qui sum `x' if inlist(ind_,`group') [aw=cem_weights_1]
+			mat tab1`loc'[`r',`c']=r(mean) 
+			*mat tab1`loc'[`r',`c'+1]=r(sd)
 			if "`group'"=="1" {
-				if strpos("`x'","paid") {
-					glm `x' ind_ [iw=cem_weights_`group2'], link(log) fam(gamma)
-					test ind_n1_ivw
-				*	mat tab1`loc'[`r'-3,`c'+1]=r(p)
-				*	mat stars`loc'[`r'-3,`c'+1]=(r(p)<.05)+(r(p)<.01)
-					mat tab1`loc'[`r',`c'+1]=r(p)
-					mat stars`loc'[`r',`c'+1]=(r(p)<.05)+(r(p)<.01)
-				
-}
-				else {
-					zinb `x' ind_ [iw=cem_weights_`group2'], inflate(ind_)
-*					test [`x']ind_n1_ivw
-					test ind_n1_ivw
-					mat tab1`loc'[`r',`c'+1]=r(p)
-					mat stars`loc'[`r',`c'+1]=(r(p)<.05)+(r(p)<.01)
-					/*test [inflate]ind_n1_ivw
-					mat tab1`loc'[`r'+1,`c'+1]=r(p)
-					mat stars`loc'[`r'+1,`c'+1]=(r(p)<.05)+(r(p)<.01)*/
-}					
+				svy: reg `x' ind_
+				test ind_ 
+				mat tab1`loc'[`r',`c'+1]=r(p)
+				mat stars`loc'[`r',`c'+1]=(r(p)<.05)+(r(p)<.01)
 }
 			local r=`r'+1
 }
 		foreach x of local ioutcomes`round' {
-		local names `names' `x'
-			qui sum `x' if inlist(ind_,`group') [aw=cem_weights_`group2']
+			qui sum `x' if inlist(ind_,`group') [aw=cem_weights_1]
 			mat tab1`loc'[`r',`c']=r(mean)*100
-			if "`group'"=="1"/* & strpos("`x'","died")*/ {
+			if "`group'"=="1" {
 				svy: tab `x' ind_
 				mat tab1`loc'[`r',`c'+1]=e(p_Pear)
 				mat stars`loc'[`r',`c'+1]=(e(p_Pear)<.05)+(e(Pear)<.01)
@@ -7114,46 +7261,101 @@ foreach group in "0" "1" {
 	if "`group'"=="1" local c=`c'+1
 	local r=1
 }
-di "`names'"
-mat rownames tab1`loc'=Utilization `names' N
+mat rownames tab1`loc'=`rows'
 }
-
-
 restore
 
+}
+
+frmttable using table_1_omari, addtable statmat(tab12) ///
+title("Sample Characteristics, after match") ///
+ctitles("" "Control" "Survivors" "Std Diff") varlabels sdec(2) ///
+note(Characteristics after dropping those without a match after FFS and reweighting)
 
 /*
-frmttable using utilization_tables_srh_pdem, `replace' statmat(tab12) ///
-title("Utilization among `group'") ///
-ctitles("" "Control" "Survivors" "P") varlabels sdec(2) ///
-note(Characteristics after dropping those without a match after FFS and reweighting)
-*/
-/*
-frmttable using utilization_tables_srh_pdem, addtable statmat(tab10) merge(tab11) ///
-title("Utilization among `group',") ///
+frmttable using table_1_omari, addtable statmat(tab10) merge(tab11) ///
+title("Sample Characteristics, after match") ///
 ctitles("" "" "Male Spouses" "" "" "Female Spouses" "" \ "" "Control" "Survivors" "P" "Control" ///
 "Survivors" "P") varlabels sdec(2)
 */
-}
 frmttable, statmat(tab10) store(tab0) ///
-title("Utilization among `group3',") ///
+title("Sample Characteristics, after match") ///
 /*ctitles("" "" "Male Spouses" "" "" "Female Spouses" "" \ "" "Control" "Survivors" "P" "Control" ///
 "Survivors" "P")*/ varlabels sdec(2)
 frmttable, statmat(tab11) store(tab1) ///
-title("Utilization among `group3',") ///
+title("Sample Characteristics, after match") ///
 /*ctitles("" "" "Male Spouses" "" "" "Female Spouses" "" \ "" "Control" "Survivors" "P" "Control" ///
 "Survivors" "P")*/ varlabels sdec(2)
 
+frmttable using table_1_omari, addtable replay(tab0) merge(tab1) ///
+title("Sample Characteristics, after match by gender") ///
+ctitles("" "" "Male Spouses" "" "" "Female Spouses" "" \ "" "Control" "Survivors" "Std Diff" "Control" ///
+"Survivors" "Std Diff") varlabels sdec(2)
 
-frmttable using table_2_omari_new, `replace' replay(tab0) merge(tab1) ///
-title("Utilization among `group3', by gender (n=`denom' pre index, `denomp' post index)") ///
-ctitles("" "" "Male Spouses" "" "" "Female Spouses" "" \ "" "Control" "Survivors" "P" "Control" ///
-"Survivors" "P") varlabels sdec(2) ///
-note("P-values from bivariate GLM with gamma family and log link for expenditures, negative binomial for hospital days, logistic regression for binary variables" ///
-"All use clustered standard errors at spouse ID" ///
-"Restricted to those with 24m FFS Medicare pre-index and FFS 24m or until death post index (2010 or earlier)")
-local replace addtable 
+foreach g in "0,1" 0 1 {
+preserve
+keep if inlist(s_female,`g')
+if "`g'"=="0" local group ", Male spouse only"
+if "`g'"=="1" local group ", Female spouses only"
+mat tabl=J(17,4,.)
+local r=1
+local c=1
+
+
+foreach j in 0 1 {
+	sum s_female if ind_==`j'
+	local denom=r(N)
+forvalues i=22(-3)1 {
+	sum s_female if cont_ffs_n_mos>=`i' & ind_==`j'
+	mat tabl[`r',`c']=r(N)
+	mat tabl[`r',`c'+1]=(r(N)/`denom')*100
+	local r=`r'+1
 }
+	sum s_female if part_ab_at_index==1 & hmo_d_at_index==0 & ind_==`j'
+	mat tabl[`r',`c']=r(N)
+	mat tabl[`r',`c'+1]=(r(N)/`denom')*100
+	local r=`r'+1
+
+forvalues i=1(3)24 {
+	sum s_female if cont_ffs_p_mos>=`i' & ind_==`j'
+	mat tabl[`r',`c']=r(N)
+	mat tabl[`r',`c'+1]=(r(N)/`denom')*100
+	local r=`r'+1
+}
+local r=1
+local c=`c'+2
+}
+mat rownames tabl="22-24" "19-21" "16-18" "13-15" "10-12" "7-9" "4-6" "-1-3" ///
+"at index" "+1-3" "4-6" "7-9" "10-12" "13-15" "16-18" "19-21" "22-24"
+
+frmttable using table_1_omari, addtable statmat(tabl) title("FFS sample size at different periods`group'") ///
+ctitles("Time frame" "N Controls w/ FFS" "% of total" ///
+"N Survivors with FFS" "% of total") sdec(0,1,0,1) ///
+note("FFS determined at closest point in period to death")
+restore
+}
+
+mat tabl=J(6,4,.)
+local r=1 
+local c=1
+
+forvalues i=2000(2)2010 {
+	foreach g in  1 0 {
+		foreach ind in 0 1 {
+			sum s_female if s_female==`g' & ind_==`ind' & core_year==`i'
+			mat tabl[`r',`c']=r(N)
+			local c=`c'+1
+}
+}
+	local c=1
+	local r=`r'+1
+}
+
+mat rownames tabl=2000 2002 2004 2006 2008 2010 
+
+
+frmttable using table_1_omari, addtable  statmat(tabl) ctitles("Core" "Women" "" "Men" ""\"" "Matched" ///
+"Bereaved" "Matched" "Bereaved") sdec(0) title("Sample by core year")
 
 
 H="Table 3"

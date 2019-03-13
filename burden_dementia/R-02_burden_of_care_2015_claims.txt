@@ -2313,9 +2313,26 @@ poisson mdcd_nf_days_all snf_covdys nh_nights `modelvars' if testsamp==1 & nh_ni
 
 twopm mdcd_nf_days_all snf_covdys nh_nights `modelvars' if nh_nights , ///
 firstpart(logit) secondpart(glm, fam(gamma) link(log))
-predict pnhfinal
 
-replace mdcd_nf_days_all=pnhfinal if missing(mdcd_nf_days_all) 
+predict p2plog
+
+drop plogit pnb
+
+logit mdcd_nf_days_all snf_covdys nh_nights `modelvars' if  nh_nights 
+predict plogit
+
+nbreg mdcd_nf_days_all snf_covdys nh_nights `modelvars' if  nh_nights ///
+& mdcd_nf_days_all, dispersion(mean)
+predict pnb1
+
+nbreg mdcd_nf_days_all snf_covdys nh_nights `modelvars' if  nh_nights ///
+& mdcd_nf_days_all, dispersion(constant)
+predict pnb2
+
+gen phnb1=plogit*pnb1
+gen phnb2=plogit*pnb2
+
+replace mdcd_nf_days_all=phnb1 if missing(mdcd_nf_days_all) 
 
 
 save E:\data\burden_dementia\int_data\\predicted_annual_medicaid_costs.dta, replace
@@ -3095,18 +3112,8 @@ replace cpi_rate=1.03026 if year==2013
 replace cpi_rate=1.04535 if year==2012
 replace cpi_rate=1.06699 if year==2011
 replace cpi_rate=1.10067 if year==2010
-replace cpi_rate=1.11872 if year==2009
-replace cpi_rate=1.11474 if year==2008
-replace cpi_rate=1.15754 if year==2007
-replace cpi_rate=1.19051 if year==2006
-replace cpi_rate=1.22891 if year==2005
-replace cpi_rate=1.27055 if year==2004
-replace cpi_rate=1.30439 if year==2003
-replace cpi_rate=1.33411 if year==2002
-replace cpi_rate=1.35521 if year==2001
-replace cpi_rate=1.39377 if year==2000
-replace cpi_rate=1.44062 if year==1999
-replace cpi_rate=1.47244 if year<=1998
+replace cpi_rate=1.11872 if year<=2009
+
 
 rename year index_year
 rename state stateusps
@@ -3495,7 +3502,7 @@ replace cpi_rate=1.03026 if year==2013
 replace cpi_rate=1.04535 if year==2012
 replace cpi_rate=1.06699 if year==2011
 replace cpi_rate=1.10067 if year==2010
-replace cpi_rate=1.11872 if year==2009
+replace cpi_rate=1.11872 if year<=2009/*
 replace cpi_rate=1.11474 if year==2008
 replace cpi_rate=1.15754 if year==2007
 replace cpi_rate=1.19051 if year==2006
@@ -3507,7 +3514,7 @@ replace cpi_rate=1.35521 if year==2001
 replace cpi_rate=1.39377 if year==2000
 replace cpi_rate=1.44062 if year==1999
 replace cpi_rate=1.47244 if year<=1998
-
+*/
 rename year c_ivw_year
 label var cpi_rate "Inflation adjustment factor"
 tempfile cpi
@@ -3805,11 +3812,8 @@ replace `x' = 0 if `x'==.
 
 foreach x of varlist total_hlp {
 
-replace `x' = `x'/months // average # of helpers per month after 4/20 split
-replace `x' = (`x'*mar_n0*hr_rate*cpi_rate) +  (`x'*mar_n1*hr_rate_n1*cpi_rate_n1) ///
- + (`x'*mar_n2*hr_rate_n2*cpi_rate_n2) +  (`x'*mar_n3*hr_rate_n3*cpi_rate_n3) + ///
- (`x'*mar_n4*hr_rate_n4*cpi_rate_n4) + (`x'*mar_n5*hr_rate_n5*cpi_rate_n5) // total helper cost per ivw
-
+*replace `x' = `x'/months // average # of helpers per month after 4/20 split
+replace `x' = (`x'*hr_rate*cpi_rate) 
 }
 
 
@@ -8675,6 +8679,43 @@ rename `x'_7yr `x'_7yrb
 
 save R01_annualized_b.dta, replace
 
+use R01_annualized_b.dta, replace
+
+merge 1:1 id using R01_annualized.dta
+
+
+local ivars informal_y1 informal_y2 informal_y3 informal_y4 informal_y5 informal_y6 informal_y7 informal_5yr informal_7yr
+local ivars2 informal_y1b informal_y2b informal_y3b informal_y4b informal_y5b informal_y6b informal_y7b informal_5yrb informal_7yrb
+
+local rd: word count `ivars'
+
+mat tab1=J(`rd',2,.)
+
+local r = 1
+
+foreach x of local ivars {
+
+sum `x'
+mat tab1[`r',1] = r(mean)
+
+local ++r
+}
+
+local r = 1
+
+foreach x of local ivars2 {
+
+sum `x'
+mat tab1[`r',2] = r(mean)
+
+local ++r 
+}
+mat rownames tab1 = `ivars'
+
+frmttable using "E:\data\burden_dementia\logs\R01_costs.doc", replace statmat(tab1) ///
+varlabels title("Annualized ") ctitles("", "Complicated method ","Simple Method") sdec(2) ///
+note("All costs have been inflation adjusted to 2016 dollars")
+
 
 
 
@@ -11610,6 +11651,10 @@ save "`fdpath'/burden_dementia_sample_long.dta", replace
 
 
 H="changelog"
+03/12/19 - Also adjusted CPI for NH costs from Genworth. Evan
+
+03/12/19 - Removed CPI and HR rate adjustments for informal costs in years prior to 2009, and also scrapped "months-at-risk" approach in favor of sticking to calendar year. Omari
+
 03/06/19 - Corrected a merge where the Genworth and CPI weren't merging correctly with the exit in "Annual Calculations" header. Evan
 
 03/05/19 - Altered formula for helpers to reflect times when months<4, because it was resulting in a few negatives, and changed Genworth rates to Medians in 2016 where state was missing. Evan

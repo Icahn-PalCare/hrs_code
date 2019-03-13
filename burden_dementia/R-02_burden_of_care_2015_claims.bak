@@ -3495,7 +3495,7 @@ replace cpi_rate=1.03026 if year==2013
 replace cpi_rate=1.04535 if year==2012
 replace cpi_rate=1.06699 if year==2011
 replace cpi_rate=1.10067 if year==2010
-replace cpi_rate=1.11872 if year==2009
+replace cpi_rate=1.11872 if year<=2009/*
 replace cpi_rate=1.11474 if year==2008
 replace cpi_rate=1.15754 if year==2007
 replace cpi_rate=1.19051 if year==2006
@@ -3507,7 +3507,7 @@ replace cpi_rate=1.35521 if year==2001
 replace cpi_rate=1.39377 if year==2000
 replace cpi_rate=1.44062 if year==1999
 replace cpi_rate=1.47244 if year<=1998
-
+*/
 rename year c_ivw_year
 label var cpi_rate "Inflation adjustment factor"
 tempfile cpi
@@ -3805,11 +3805,8 @@ replace `x' = 0 if `x'==.
 
 foreach x of varlist total_hlp {
 
-replace `x' = `x'/months // average # of helpers per month after 4/20 split
-replace `x' = (`x'*mar_n0*hr_rate*cpi_rate) +  (`x'*mar_n1*hr_rate_n1*cpi_rate_n1) ///
- + (`x'*mar_n2*hr_rate_n2*cpi_rate_n2) +  (`x'*mar_n3*hr_rate_n3*cpi_rate_n3) + ///
- (`x'*mar_n4*hr_rate_n4*cpi_rate_n4) + (`x'*mar_n5*hr_rate_n5*cpi_rate_n5) // total helper cost per ivw
-
+*replace `x' = `x'/months // average # of helpers per month after 4/20 split
+replace `x' = (`x'*hr_rate*cpi_rate) 
 }
 
 
@@ -7572,6 +7569,13 @@ use $ooppath\oopme_final_2016.dta, clear
 rename *, l
 gen id=hhid+pn
 
+replace private_ltc=long_term_care if !missing(long_term_care)
+foreach x in mc_b private_ltc {
+	replace `x'_prem=`x'
+	drop `x'
+}
+
+
 
 rename year core_year
 merge 1:1 hhid pn core_year using "E:\data\hrs_cleaned\core_00_to_14.dta", keepus(c_ivw_date c_ivw_month c_ivw_year)
@@ -7595,7 +7599,7 @@ save `ro1'
 
 use `temp', clear
 
-merge m:1 id using "`ro1'", keepus(index_date index_month index_year final final_7yr dem_cohort)
+merge m:1 id using "`ro1'", keepus(index_date index_month index_year final final_7yr dem_cohort n1_2_death)
 *keep if inrange(index_year,2004,2015)
 *drop if _m==1
 keep if _m==3
@@ -7664,15 +7668,21 @@ by id: gen prev_oop_yes = 1 if helper_oop[_n+1]>0 & helper_oop[_n+1]!=.
 by id: gen prev_hlp_oop = (helper_oop[_n+1]/months[_n+1]) if helper_oop[_n+1]>0
 
 gen helper_oop_per_mo = helper_oop/months
-gen mod_helper_oop = helper_oop_per_mo * 4 if prev_oop_yes==.
-replace mod_helper_oop = (helper_oop_per_mo*4) + (months-4)*((helper_oop_per_mo+prev_hlp_oop)/2) if prev_oop_yes==1
+gen mod_helper_oop = helper_oop_per_mo * 4 if prev_oop_yes==. & months>=4
+replace mod_helper_oop = helper_oop_per_mo * months if months<4
+replace mod_helper_oop = (helper_oop_per_mo*4) + (months-4)*((helper_oop_per_mo+prev_hlp_oop)/2) ///
+if prev_oop_yes==1 & months>=4
+*replace mod_helper_oop = 
 
 replace total_oop = total_oop - helper_oop + mod_helper_oop
 
 /* Creating approximate 2/4 year helper hours based on above fomula */
 
-gen total_hlp = hlphrs_i*4 if prev_help_hrs==.
-replace total_hlp = (hlphrs_i*4) + (months-4)*((hlphrs_i+prev_hrs)/2) if prev_help_hrs==1
+gen total_hlp = hlphrs_i*4 if prev_help_hrs==. & months>=4
+replace total_hlp=hlphrs_i*months if months<4
+replace total_hlp = (hlphrs_i*4) + (months-4)*((hlphrs_i+prev_hrs)/2) ///
+if prev_help_hrs==1 & months>=4
+
 replace total_hlp = 0 if total_hlp==. // estimated total hours per interview
 
 
@@ -7691,6 +7701,8 @@ gen c_ivw_year_n4 = c_ivw_year_n0 - 4
 label var c_ivw_year_n4 "calendar year 4 yrs prior to ivw date"
 gen c_ivw_year_n5 = c_ivw_year_n0 - 5
 label var c_ivw_year_n5 "calendar year 5 yrs prior to ivw date"
+
+cap drop stateusups
 
 save $datapath/R01_cost_int.dta, replace
 
@@ -7790,14 +7802,16 @@ by id: carryforward stateusps, replace
 gsort id -c_ivw_year
 by id: carryforward stateusps, replace
 
+gen e_ivw_year=c_ivw_year
 merge m:1 c_ivw_year using "`cpi'", keepus(cpi_rate)
 cap drop _m
 
+rename c_ivw_year c_ivw_year_n0
 tempfile state
 save "`state'"
 
 
-rename c_ivw_year c_ivw_year_n1
+rename c_ivw_year_n0 c_ivw_year_n1
 rename stateusps stateusps_n1
 rename cpi_rate cpi_rate_n1
 tempfile state_n1
@@ -7830,7 +7844,15 @@ save `state_n5'
 
 
 use R01_cost_int.dta, clear
-merge m:1 id c_ivw_year using "`state'"
+/*
+gen e_ivw_year=year(e_ivw_date)
+replace e_ivw_year=exit_year if missing(e_ivw_year)
+merge m:1 id e_ivw_year using "`state'"
+drop if _m==2
+drop _m
+*/
+
+merge m:1 id c_ivw_year_n0 using "`state'"
 drop if _m==2
 cap drop _m
 merge m:1 id c_ivw_year_n1 using "`state_n1'"
@@ -7872,6 +7894,9 @@ expand 2 if c_ivw_year==1997, gen(duptag)
 
 replace c_ivw_year = c_ivw_year - 1 if duptag==1
 drop duptag
+
+//3/6/19-ebl-was not merging with exit data, so we were missing those years
+gen e_ivw_year=c_ivw_year
 
 rename c_ivw_year c_ivw_year_n0
 
@@ -7924,6 +7949,11 @@ cap drop _m
 merge m:1 c_ivw_year_n0 stateusps using "`rate'"
 drop if _m==2
 cap drop _m
+/*
+merge m:1 e_ivw_year stateusps using "`rate'"
+drop if _m==2
+cap drop _m
+*/
 merge m:1 c_ivw_year_n1 stateusps_n1 using "`rate_n1'"
 drop if _m==2
 cap drop _m
@@ -7996,24 +8026,25 @@ replace mar_n5 = months - 48 - c_ivw_month if nflag>0
 replace mar_n5 = 0 if mar_n5<0 & nflag>0
 replace mar_n5 = 12 if (mar_n5>12 & mar_n5!=.) & nflag>0
 
+
+
 // impute mean hourly rate for people missing states
+//3/5/19-ebl-replace with national median in 2016
+//3/6/19-ebl-hopefully fixed the merging issue with exits, so there shouldn't be missingness, leaving commented out for now
+/*
+foreach x in "" _n1 _n2 _n3 _n4 _n5 {
+	replace cpi_rate`x'=1 if missing(cpi_rate`x')
+	replace hr_rate`x'=20.25 if missing(hr_rate`x')
+}
 
-egen hr_mean = mean(hr_rate)
-egen hr_mean_n1 = mean(hr_rate_n1)
-egen hr_mean_n2 = mean(hr_rate_n2)
-egen hr_mean_n3 = mean(hr_rate_n3)
-egen hr_mean_n4 = mean(hr_rate_n4)
-egen hr_mean_n5 = mean(hr_rate_n5)
+*/
+foreach x of varlist mar_n0 mar_n1 mar_n2 mar_n3 mar_n4 mar_n5 hr_rate hr_rate_n1 hr_rate_n2 hr_rate_n3 hr_rate_n4 hr_rate_n5 cpi_rate cpi_rate_n1 cpi_rate_n2 cpi_rate_n3 cpi_rate_n4 cpi_rate_n5 {
 
-replace hr_rate = hr_mean if hr_rate==.
-replace hr_rate_n1 = hr_mean_n1 if hr_rate_n1==.
-replace hr_rate_n2 = hr_mean_n2 if hr_rate_n2==.
-replace hr_rate_n3 = hr_mean_n3 if hr_rate_n3==.
-replace hr_rate_n4 = hr_mean_n4 if hr_rate_n4==.
-replace hr_rate_n5 = hr_mean_n5 if hr_rate_n5==.
-
+replace `x' = 0 if `x'==.
+}
 
 
+/*
 foreach x of varlist total_hlp {
 
 replace `x' = `x'/months // average # of helpers per month after 4/20 split
@@ -8022,66 +8053,101 @@ replace `x' = (`x'*mar_n0*hr_rate*cpi_rate) +  (`x'*mar_n1*hr_rate_n1*cpi_rate_n
  (`x'*mar_n4*hr_rate_n4*cpi_rate_n4) + (`x'*mar_n5*hr_rate_n5*cpi_rate_n5) // total helper cost per ivw
 
 }
+*/
+
+foreach x of varlist total_hlp {
+
+*replace `x' = `x'/months // average # of helpers per month after 4/20 split
+replace `x' = (`x'*hr_rate*cpi_rate) 
+}
 
 
+foreach x in mc_b_prem private_ltc_prem nh_nights nh_oop {
+	replace `x'=0 if missing(`x')
+	replace `x' = `x'/months
+}
 
-gen hlp_per_mo = total_hlp / months
+save R01_cost_intd.dta, replace
 
+use R01_cost_intd.dta, replace
 
-gen oop_per_mo = total_oop / months
+cap drop hlp
 
-keep id core_year nflag oop_per_mo hlp_per_mo months final final_7yr dem_cohort index_year
+gen hlp = total_hlp / months
 
-reshape wide core_year oop_per_mo months, i(id) j(nflag)
+cap drop oop 
+gen oop = total_oop / months
+
+keep id core_year nflag oop hlp months final final_7yr dem_cohort index_year mc_b_prem private_ltc_prem nh_nights nh_oop
+
+reshape wide core_year oop hlp months mc_b_prem private_ltc_prem nh_nights nh_oop, i(id) j(nflag)
 
 forvalues i = 1/7 {
 
-gen oop_y`i' = .
-gen hlp_y`i' = .
+foreach x in x in hlp oop mc_b_prem private_ltc_prem nh_nights nh_oop {
+
+gen `x'_y`i'=.
+
 }
 
-// oop_y1
+}
+// Annualized Costs - Year 1
 
 * start with oop at exit if months < 12. Subtract months - 12 so that it can be pulled from N1
+foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
+replace `x'_y1 = `x'0 * months0 if months0<12
+}
 
-replace oop_y1 = oop_per_mo0 * months0 if months0<12
-replace hlp_y1 = hlp_per_mo0 * months0 if months0<12
 replace months0 = months0 - 12 if months0<12
 
 * Pulling the leftover months from N1 (if exit < 12)
-replace oop_y1 = oop_y1 + (-months0)*oop_per_mo1 if months0<0
-replace hlp_y1 = hlp_y1 + (-months0)*hlp_per_mo1 if months0<0
+foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
+replace `x'_y1 = `x'_y1 + (-months0)*`x'1 if months0<0
+}
+
 replace months1 = months1 + months0 if months0<0
 
 *Using full exit if exit months==12
-replace oop_y1 = oop_per_mo0 * 12 if months0==12
-replace hlp_y1 = hlp_per_mo0 * 12 if months0==12
+foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
+replace `x'_y1 = `x'0 * 12 if months0==12
+}
+
 replace months0 = 0 if months0==12
 
 * Using 12 months from exit if exit months>12
-replace oop_y1 = oop_per_mo0 * 12 if months0>12 & months0!=.
-replace hlp_y1 = hlp_per_mo0 * 12 if months0>12 & months0!=.
-replace months0 = months0 - 12 if months0>12 & months0!=.
+foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
+replace `x'_y1 = `x'0 * 12 if months0>12 & months0!=.
+}
 
+replace months0 = months0 - 12 if months0>12 & months0!=.
 replace months0 = . if months0 <=0
 
-// oop_y2
+// Annualized Costs - Year 2
 
 * People with leftover oop exit data
-replace oop_y2 = oop_per_mo0 * months0 if months0<12
-replace hlp_y2 = hlp_per_mo0 * months0 if months0<12
+foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
+replace `x'_y2 = `x'0  * months0 if months0<12
+}
+
 replace months0 = months0 - 12 if months0<12
 
-replace oop_y2 = oop_y2 + (-months0)*oop_per_mo1 if months0<0
-replace hlp_y2 = hlp_y2 + (-months0)*hlp_per_mo1 if months0<0
+
+foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
+replace `x'_y2 = `x'_y2 + (-months0)*`x'1 if months0<0
+}
+
 replace months1 = months1 + months0 if months0<0
 
-replace oop_y2 = oop_per_mo0 * 12 if months0==12
-replace hlp_y2 = hlp_per_mo0 * 12 if months0==12
+foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
+replace `x'_y2 = `x'0 * 12 if months0==12
+}
+
 replace months0 = months0 - 12 if months0==12
 
-replace oop_y2 = oop_per_mo0 * 12 if months0>12 & months0!=.
-replace hlp_y2 = hlp_per_mo0 * 12 if months0>12 & months0!=.
+foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
+replace `x'_y2 = `x'0 * 12 if months0>12 & months0!=.
+}
+
 replace months0 = months0 - 12 if months0>12 & months0!=.
 
 
@@ -8089,22 +8155,27 @@ replace months0 = months0 - 12 if months0>12 & months0!=.
 
 gen noop = 1 if oop_y2==.
 
-replace oop_y2 = oop_per_mo1 * months1 if months1<12 & noop==1
-replace hlp_y2 = hlp_per_mo1 * months1 if months1<12 & noop==1
+foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
+replace `x'_y2 = `x'1 * months1 if months1<12 & noop==1
+}
 replace months1 = months1 - 12 if months1<12 & noop==1
 
-replace oop_y2 = oop_y2 + (-months1)*oop_per_mo2 if months1<0 & noop==1
-replace hlp_y2 = hlp_y2 + (-months1)*hlp_per_mo2 if months1<0 & noop==1
+foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
+replace `x'_y2 = `x'_y2 + (-months1)*`x'2 if months1<0 & noop==1
+}
+
 replace months2 = months2 + months1 if months1<0 & noop==1
 
-replace oop_y2 = oop_per_mo1 * 12 if months1==12 & noop==1
-replace hlp_y2 = hlp_per_mo1 * 12 if months1==12 & noop==1
+foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
+replace `x'_y2 = `x'1 * 12 if months1==12 & noop==1
+}
+
 replace months1 = months1 - 12 if months1==12 & noop==1
 
-replace oop_y2 = oop_per_mo1 * 12 if months1>12 & months1!=. & noop==1
-replace hlp_y2 = hlp_per_mo1 * 12 if months1>12 & months1!=. & noop==1
+foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
+replace `x'_y2 = `x'1 * 12 if months1>12 & months1!=. & noop==1
+}
 replace months1 = months1 - 12 if months1>12 & months1!=. & noop==1
-
 replace months0 = . if months0<=0
 replace months1 = . if months1<=0
 drop noop
@@ -8112,40 +8183,51 @@ drop noop
 // oop_y3
 
 * People with leftover oop exit data
-replace oop_y3 = oop_per_mo0 * months0 if months0<12
-replace hlp_y3 = hlp_per_mo0 * months0 if months0<12
+foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
+replace `x'_y3 =  `x'0 * months0 if months0<12
+}
 replace months0 = months0 - 12 if months0<12
 
-replace oop_y3 = oop_y3 + (-months0)*oop_per_mo1 if months0<0
-replace hlp_y3 = hlp_y3 + (-months0)*hlp_per_mo1 if months0<0
+foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
+replace `x'_y3 = `x'_y3 + (-months0)*`x'1 if months0<0
+}
 replace months1 = months1 + months0 if months0<0
 
-replace oop_y3 = oop_per_mo0 * 12 if months0==12
-replace hlp_y3 = hlp_per_mo0 * 12 if months0==12
+foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
+replace `x'_y3 = `x'0 * 12 if months0==12
+}
+
 replace months0 = months0 - 12 if months0==12
 
-replace oop_y3 = oop_per_mo0 * 12 if months0>12 & months0!=.
-replace hlp_y3 = hlp_per_mo0 * 12 if months0>12 & months0!=.
+foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
+replace `x'_y3 =  `x'0 * 12 if months0>12 & months0!=.
+}
+
 replace months0 = months0 - 12 if months0>12 & months0!=.
 
 * People with leftover N1
 
 gen noop = 1 if oop_y3==.
 
-replace oop_y3 = oop_per_mo1 * months1 if months1<12 & noop==1
-replace hlp_y3 = hlp_per_mo1 * months1 if months1<12 & noop==1
+foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
+replace `x'_y3 =  `x'1 * months1 if months1<12 & noop==1
+}
 replace months1 = months1 - 12 if months1<12 & noop==1
 
-replace oop_y3 = oop_y3 + (-months1)*oop_per_mo2 if months1<0 & noop==1
-replace hlp_y3 = hlp_y3 + (-months1)*hlp_per_mo2 if months1<0 & noop==1
+foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
+replace `x'_y3 =  `x'_y3 + (-months1)*`x'2 if months1<0 & noop==1
+}
 replace months2 = months2 + months1 if months1<0 & noop==1
 
-replace oop_y3 = oop_per_mo1 * 12 if months1==12 & noop==1
-replace hlp_y3 = hlp_per_mo1 * 12 if months1==12 & noop==1
+foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
+replace `x'_y3 =  `x'1 * 12 if months1==12 & noop==1
+}
+
 replace months1 = months1 - 12 if months1==12 & noop==1
 
-replace oop_y3 = oop_per_mo1 * 12 if months1>12 & months1!=. & noop==1
-replace hlp_y3 = hlp_per_mo1 * 12 if months1>12 & months1!=. & noop==1
+foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
+replace `x'_y3 =  `x'1 * 12 if months1>12 & months1!=. & noop==1
+}
 replace months1 = months1 - 12 if months1>12 & months1!=. & noop==1
 
 drop noop
@@ -8154,8 +8236,9 @@ drop noop
 
 gen noop = 1 if oop_y3==.
 
-replace oop_y3 = oop_per_mo2 * 12 if noop==1
-replace hlp_y3 = hlp_per_mo2 * 12 if noop==1
+foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
+replace `x'_y3 =   `x'2 * 12 if noop==1
+}
 replace months2 = months2 - 12 if noop==1
 
 replace months0 = . if months0<=0
@@ -8164,43 +8247,53 @@ replace months2 = . if months2<=0
 
 drop noop 
 
-// oop_y4
+// Annual Costs - Year 4
+
 
 * People with leftover oop exit data
-replace oop_y4 = oop_per_mo0 * months0 if months0<12
-replace hlp_y4 = hlp_per_mo0 * months0 if months0<12
+foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
+replace `x'_y4 =  `x'0 * months0 if months0<12
+}
 replace months0 = months0 - 12 if months0<12
 
-replace oop_y4 = oop_y4 + (-months0)*oop_per_mo1 if months0<0
-replace hlp_y4 = hlp_y4 + (-months0)*hlp_per_mo1 if months0<0
+foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
+replace `x'_y4 =  `x'_y4 + (-months0)*`x'1 if months0<0
+}
 replace months1 = months1 + months0 if months0<0
 
-replace oop_y4 = oop_per_mo0 * 12 if months0==12
-replace hlp_y4 = hlp_per_mo0 * 12 if months0==12
+foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
+replace `x'_y4 =  `x'0 * 12 if months0==12
+}
 replace months0 = months0 - 12 if months0==12
 
-replace oop_y4 = oop_per_mo0 * 12 if months0>12 & months0!=.
-replace hlp_y4 = hlp_per_mo0 * 12 if months0>12 & months0!=.
+foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
+replace `x'_y4 =  `x'0 * 12 if months0>12 & months0!=.
+}
 replace months0 = months0 - 12 if months0>12 & months0!=.
 
 * People with leftover N1
 
 gen noop = 1 if oop_y4==.
 
-replace oop_y4 = oop_per_mo1 * months1 if months1<12 & noop==1
-replace hlp_y4 = hlp_per_mo1 * months1 if months1<12 & noop==1
+foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
+replace `x'_y4 =   `x'1 * months1 if months1<12 & noop==1
+}
 replace months1 = months1 - 12 if months1<12 & noop==1
 
-replace oop_y4 = oop_y4 + (-months1)*oop_per_mo2 if months1<0 & noop==1
-replace hlp_y4 = hlp_y4 + (-months1)*hlp_per_mo2 if months1<0 & noop==1
+foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
+replace `x'_y4 =  `x'_y4 + (-months1)*`x'2 if months1<0 & noop==1
+}
 replace months2 = months2 + months1 if months1<0 & noop==1
 
-replace oop_y4 = oop_per_mo1 * 12 if months1==12 & noop==1
-replace hlp_y4 = hlp_per_mo1 * 12 if months1==12 & noop==1
+foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
+replace `x'_y4 =  `x'1 * 12 if months1==12 & noop==1
+}
 replace months1 = months1 - 12 if months1==12 & noop==1
 
-replace oop_y4 = oop_per_mo1 * 12 if months1>12 & months1!=. & noop==1
-replace hlp_y4 = hlp_per_mo1 * 12 if months1>12 & months1!=. & noop==1
+foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
+replace `x'_y4 =  `x'1 * 12 if months1>12 & months1!=. & noop==1
+}
+
 replace months1 = months1 - 12 if months1>12 & months1!=. & noop==1
 
 drop noop
@@ -8209,20 +8302,26 @@ drop noop
 
 gen noop = 1 if oop_y4==.
 
-replace oop_y4 = oop_per_mo2 * months2 if months2<12 & noop==1
-replace hlp_y4 = hlp_per_mo2 * months2 if months2<12 & noop==1
+foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
+replace `x'_y4 =  `x'2 * months2 if months2<12 & noop==1
+}
+
 replace months2 = months2 - 12 if months2<12 & noop==1
 
-replace oop_y4 = oop_y4 + (-months2)*oop_per_mo3 if months2<0 & noop==1
-replace hlp_y4 = hlp_y4 + (-months2)*hlp_per_mo3 if months2<0 & noop==1
+foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
+replace `x'_y4 =  `x'_y4 + (-months2)*`x'3 if months2<0 & noop==1
+}
 replace months3 = months3 + months2 if months2<0 & noop==1
 
-replace oop_y4 = oop_per_mo2 * 12 if months2==12 & noop==1
-replace hlp_y4 = hlp_per_mo2 * 12 if months2==12 & noop==1
+foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
+replace `x'_y4 =  `x'2 * 12 if months2==12 & noop==1
+}
 replace months2 = months2 - 12 if months2==12 & noop==1
 
-replace oop_y4 = oop_per_mo2 * 12 if months2>12 & months2!=. & noop==1
-replace hlp_y4 = hlp_per_mo2 * 12 if months2>12 & months2!=. & noop==1
+foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
+replace `x'_y4 =  `x'2 * 12 if months2>12 & months2!=. & noop==1
+}
+
 replace months2 = months2 - 12 if months2>12 & months2!=. & noop==1
 
 replace months0 = . if months0<=0
@@ -8235,40 +8334,52 @@ drop noop
 // oop_y5
 
 * People with leftover oop exit data
-replace oop_y5 = oop_per_mo0 * months0 if months0<12
-replace hlp_y5 = hlp_per_mo0 * months0 if months0<12
+foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
+replace `x'_y5 =  `x'0 * months0 if months0<12
+}
 replace months0 = months0 - 12 if months0<12
 
-replace oop_y5 = oop_y5 + (-months0)*oop_per_mo1 if months0<0
-replace hlp_y5 = hlp_y5 + (-months0)*hlp_per_mo1 if months0<0
+foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
+replace `x'_y5 =  `x'_y5 + (-months0)*`x'1 if months0<0
+}
+
 replace months1 = months1 + months0 if months0<0
 
-replace oop_y5 = oop_per_mo0 * 12 if months0==12
-replace hlp_y5 = hlp_per_mo0 * 12 if months0==12
+foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
+replace `x'_y5 =  `x'0 * 12 if months0==12
+}
+
 replace months0 = months0 - 12 if months0==12
 
-replace oop_y5 = oop_per_mo0 * 12 if months0>12 & months0!=.
-replace hlp_y5 = hlp_per_mo0 * 12 if months0>12 & months0!=.
+foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
+replace `x'_y5 =  `x'0 * 12 if months0>12 & months0!=.
+}
 replace months0 = months0 - 12 if months0>12 & months0!=.
 
 * People with leftover N1
 
 gen noop = 1 if oop_y5==.
 
-replace oop_y5 = oop_per_mo1 * months1 if months1<12 & noop==1
-replace hlp_y5 = hlp_per_mo1 * months1 if months1<12 & noop==1
+foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
+replace `x'_y5 =  `x'1 * months1 if months1<12 & noop==1
+}
+
 replace months1 = months1 - 12 if months1<12 & noop==1
 
-replace oop_y5 = oop_y5 + (-months1)*oop_per_mo2 if months1<0 & noop==1
-replace hlp_y5 = hlp_y5 + (-months1)*hlp_per_mo2 if months1<0 & noop==1
+foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
+replace `x'_y5 =  `x'_y5 + (-months1)*`x'2 if months1<0 & noop==1
+}
 replace months2 = months2 + months1 if months1<0 & noop==1
 
-replace oop_y5 = oop_per_mo1 * 12 if months1==12 & noop==1
-replace hlp_y5 = hlp_per_mo1 * 12 if months1==12 & noop==1
+foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
+replace `x'_y5 =  `x'1 * 12 if months1==12 & noop==1
+}
+
 replace months1 = months1 - 12 if months1==12 & noop==1
 
-replace oop_y5 = oop_per_mo1 * 12 if months1>12 & months1!=. & noop==1
-replace hlp_y5 = hlp_per_mo1 * 12 if months1>12 & months1!=. & noop==1
+foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
+replace `x'_y5 =  `x'1 * 12 if months1>12 & months1!=. & noop==1
+}
 replace months1 = months1 - 12 if months1>12 & months1!=. & noop==1
 
 drop noop
@@ -8277,20 +8388,27 @@ drop noop
 
 gen noop = 1 if oop_y5==.
 
-replace oop_y5 = oop_per_mo2 * months2 if months2<12 & noop==1
-replace hlp_y5 = hlp_per_mo2 * months2 if months2<12 & noop==1
+foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
+replace `x'_y5 =  `x'2 * months2 if months2<12 & noop==1
+}
 replace months2 = months2 - 12 if months2<12 & noop==1
 
-replace oop_y5 = oop_y5 + (-months2)*oop_per_mo3 if months2<0 & noop==1
-replace hlp_y5 = hlp_y5 + (-months2)*hlp_per_mo3 if months2<0 & noop==1
+foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
+replace `x'_y5 = `x'_y5 + (-months2)*`x'3 if months2<0 & noop==1
+}
+
 replace months3 = months3 + months2 if months2<0 & noop==1
 
-replace oop_y5 = oop_per_mo2 * 12 if months2==12 & noop==1
-replace hlp_y5 = hlp_per_mo2 * 12 if months2==12 & noop==1
+foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
+replace `x'_y5 = `x'2 * 12 if months2==12 & noop==1
+}
+
 replace months2 = months2 - 12 if months2==12 & noop==1
 
-replace oop_y5 = oop_per_mo2 * 12 if months2>12 & months2!=. & noop==1
-replace hlp_y5 = hlp_per_mo2 * 12 if months2>12 & months2!=. & noop==1
+foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
+replace `x'_y5 = `x'2 * 12  if months2>12 & months2!=. & noop==1
+}
+
 replace months2 = months2 - 12 if months2>12 & months2!=. & noop==1
 
 drop noop 
@@ -8299,8 +8417,10 @@ drop noop
 
 gen noop = 1 if oop_y5==.
 
-replace oop_y5 = oop_per_mo3 * 12 if noop==1
-replace hlp_y5 = hlp_per_mo3 * 12 if noop==1
+foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
+replace `x'_y5 = `x'3 * 12 if noop==1
+}
+
 replace months3 = months3 - 12 if noop==1
 
 
@@ -8317,20 +8437,28 @@ drop noop
 
 gen noop = 1 if oop_y6==.
 
-replace oop_y6 = oop_per_mo1 * months1 if months1<12 & noop==1
-replace hlp_y6 = hlp_per_mo1 * months1 if months1<12 & noop==1
+foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
+replace `x'_y6 = `x'1 * months1 if months1<12 & noop==1
+}
+
 replace months1 = months1 - 12 if months1<12 & noop==1
 
-replace oop_y6 = oop_y6 + (-months1)*oop_per_mo2 if months1<0 & noop==1
-replace hlp_y6 = hlp_y6 + (-months1)*hlp_per_mo2 if months1<0 & noop==1
+foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
+replace `x'_y6 = `x'_y6 + (-months1)*`x'2 if months1<0 & noop==1
+}
+
 replace months2 = months2 + months1 if months1<0 & noop==1
 
-replace oop_y6 = oop_per_mo1 * 12 if months1==12 & noop==1
-replace hlp_y6 = hlp_per_mo1 * 12 if months1==12 & noop==1
+foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
+replace `x'_y6 = `x'1 * 12 if months1==12 & noop==1
+}
+
 replace months1 = months1 - 12 if months1==12 & noop==1
 
-replace oop_y6 = oop_per_mo1 * 12 if months1>12 & months1!=. & noop==1
-replace hlp_y6 = hlp_per_mo1 * 12 if months1>12 & months1!=. & noop==1
+foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
+replace `x'_y6 = `x'1 * 12 if months1>12 & months1!=. & noop==1
+}
+
 replace months1 = months1 - 12 if months1>12 & months1!=. & noop==1
 
 drop noop
@@ -8339,20 +8467,29 @@ drop noop
 
 gen noop = 1 if oop_y6==.
 
-replace oop_y6 = oop_per_mo2 * months2 if months2<12 & noop==1
-replace hlp_y6 = hlp_per_mo2 * months2 if months2<12 & noop==1
+
+foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
+replace `x'_y6 = `x'2 * months2 if months2<12 & noop==1
+}
+
 replace months2 = months2 - 12 if months2<12 & noop==1
 
-replace oop_y6 = oop_y6 + (-months2)*oop_per_mo3 if months2<0 & noop==1
-replace hlp_y6 = hlp_y6 + (-months2)*hlp_per_mo3 if months2<0 & noop==1
+foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
+replace `x'_y6 = `x'_y6 + (-months2)*`x'3 if months2<0 & noop==1
+}
+
 replace months3 = months3 + months2 if months2<0 & noop==1
 
-replace oop_y6 = oop_per_mo2 * 12 if months2==12 & noop==1
-replace hlp_y6 = hlp_per_mo2 * 12 if months2==12 & noop==1
+foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
+replace `x'_y6 = `x'2 * 12 if months2==12 & noop==1
+}
+
 replace months2 = months2 - 12 if months2==12 & noop==1
 
-replace oop_y6 = oop_per_mo2 * 12 if months2>12 & months2!=. & noop==1
-replace hlp_y6 = hlp_per_mo2 * 12 if months2>12 & months2!=. & noop==1
+foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
+replace `x'_y6 = `x'2 * 12 if months2>12 & months2!=. & noop==1
+}
+
 replace months2 = months2 - 12 if months2>12 & months2!=. & noop==1
 
 drop noop 
@@ -8361,20 +8498,28 @@ drop noop
 
 gen noop = 1 if oop_y6==.
 
-replace oop_y6 = oop_per_mo3 * months3 if months3<12 & noop==1
-replace hlp_y6 = hlp_per_mo3 * months3 if months3<12 & noop==1
+foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
+replace `x'_y6 = `x'3 * months3 if months3<12 & noop==1
+}
 replace months3 = months3 - 12 if months3<12 & noop==1
 
-replace oop_y6 = oop_y6 + (-months3)*oop_per_mo4 if months3<0 & noop==1
-replace hlp_y6 = hlp_y6 + (-months3)*hlp_per_mo4 if months3<0 & noop==1
+foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
+replace `x'_y6 =  `x'_y6 + (-months3)*`x'4 if months3<0 & noop==1
+}
+
 replace months4 = months4 + months3 if months3<0 & noop==1
 
-replace oop_y6 = oop_per_mo3 * 12 if months3==12 & noop==1
-replace hlp_y6 = hlp_per_mo3 * 12 if months3==12 & noop==1
+foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
+replace `x'_y6 =  `x'3 * 12 if months3==12 & noop==1
+}
+
+
 replace months3 = months3 - 12 if months3==12 & noop==1
 
-replace oop_y6 = oop_per_mo3 * 12 if months3>12 & months3!=. & noop==1
-replace hlp_y6 = hlp_per_mo3 * 12 if months3>12 & months3!=. & noop==1
+foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
+replace `x'_y6 =  `x'3 * 12 if months3>12 & months3!=. & noop==1
+}
+
 replace months3 = months3 - 12 if months3>12 & months3!=. & noop==1
 
 
@@ -8385,26 +8530,35 @@ replace months3 = . if months3<=0
 
 drop noop
 
-// oop_y7
+// Annual Costs - Year 7
 
 * People with leftover N1
 
 gen noop = 1 if oop_y7==.
 
-replace oop_y7 = oop_per_mo1 * months1 if months1<12 & noop==1
-replace hlp_y7 = hlp_per_mo1 * months1 if months1<12 & noop==1
+foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
+replace `x'_y7 =  `x'1 * months1 if months1<12 & noop==1
+}
+
 replace months1 = months1 - 12 if months1<12 & noop==1
 
-replace oop_y7 = oop_y7 + (-months1)*oop_per_mo2 if months1<0 & noop==1
-replace hlp_y7 = hlp_y7 + (-months1)*hlp_per_mo2 if months1<0 & noop==1
+foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
+replace `x'_y7 =`x'_y7 + (-months1)*`x'2 if months1<0 & noop==1
+}
+
 replace months2 = months2 + months1 if months1<0 & noop==1
 
-replace oop_y7 = oop_per_mo1 * 12 if months1==12 & noop==1
-replace hlp_y7 = hlp_per_mo1 * 12 if months1==12 & noop==1
+foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
+replace `x'_y7 = `x'1 * 12 if months1==12 & noop==1
+}
+
 replace months1 = months1 - 12 if months1==12 & noop==1
 
-replace oop_y7 = oop_per_mo1 * 12 if months1>12 & months1!=. & noop==1
-replace hlp_y7 = hlp_per_mo1 * 12 if months1>12 & months1!=. & noop==1
+
+foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
+replace `x'_y7 = `x'1 * 12 if months1>12 & months1!=. & noop==1
+}
+
 replace months1 = months1 - 12 if months1>12 & months1!=. & noop==1
 
 drop noop
@@ -8413,20 +8567,25 @@ drop noop
 
 gen noop = 1 if oop_y7==.
 
-replace oop_y7 = oop_per_mo2 * months2 if months2<12 & noop==1
-replace hlp_y7 = hlp_per_mo2 * months2 if months2<12 & noop==1
+foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
+replace `x'_y7 = `x'2 * months2 if months2<12 & noop==1
+}
 replace months2 = months2 - 12 if months2<12 & noop==1
 
-replace oop_y7 = oop_y7 + (-months2)*oop_per_mo3 if months2<0 & noop==1
-replace hlp_y7 = hlp_y7 + (-months2)*hlp_per_mo3 if months2<0 & noop==1
+foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
+replace `x'_y7 = `x'_y7 + (-months2)*`x'3 if months2<0 & noop==1
+}
 replace months3 = months3 + months2 if months2<0 & noop==1
 
-replace oop_y7 = oop_per_mo2 * 12 if months2==12 & noop==1
-replace hlp_y7 = hlp_per_mo2 * 12 if months2==12 & noop==1
+foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
+replace `x'_y7 =  `x'2 * 12 if months2==12 & noop==1
+}
 replace months2 = months2 - 12 if months2==12 & noop==1
 
-replace oop_y7 = oop_per_mo2 * 12 if months2>12 & months2!=. & noop==1
-replace hlp_y7 = hlp_per_mo2 * 12 if months2>12 & months2!=. & noop==1
+foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
+replace `x'_y7 =  `x'2 * 12 if months2>12 & months2!=. & noop==1
+}
+
 replace months2 = months2 - 12 if months2>12 & months2!=. & noop==1
 
 drop noop 
@@ -8435,20 +8594,27 @@ drop noop
 
 gen noop = 1 if oop_y7==.
 
-replace oop_y7 = oop_per_mo3 * months3 if months3<12 & noop==1
-replace hlp_y7 = hlp_per_mo3 * months3 if months3<12 & noop==1
+foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
+replace `x'_y7 = `x'3 * months3 if months3<12 & noop==1
+}
+
 replace months3 = months3 - 12 if months3<12 & noop==1
 
-replace oop_y7 = oop_y7 + (-months3)*oop_per_mo4 if months3<0 & noop==1
-replace hlp_y7 = hlp_y7 + (-months3)*hlp_per_mo4 if months3<0 & noop==1
+foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
+replace `x'_y7 =  `x'_y7 + (-months3)*`x'4 if months3<0 & noop==1
+}
 replace months4 = months4 + months3 if months3<0 & noop==1
 
-replace oop_y7 = oop_per_mo3 * 12 if months3==12 & noop==1
-replace hlp_y7 = hlp_per_mo3 * 12 if months3==12 & noop==1
+foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
+replace `x'_y7 = `x'3 * 12 if months3==12 & noop==1
+}
+
 replace months3 = months3 - 12 if months3==12 & noop==1
 
-replace oop_y7 = oop_per_mo3 * 12 if months3>12 & months3!=. & noop==1
-replace hlp_y7 = hlp_per_mo3 * 12 if months3>12 & months3!=. & noop==1
+foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
+replace `x'_y7 = `x'3 * 12 if months3>12 & months3!=. & noop==1
+}
+
 replace months3 = months3 - 12 if months3>12 & months3!=. & noop==1
 
 
@@ -8458,6 +8624,16 @@ replace months2 = . if months2<=0
 replace months3 = . if months3<=0
 
 drop noop
+* People who exhausted N0, N1, N2 & N3
+
+gen noop = 1 if oop_y7==.
+
+foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
+replace `x'_y7 = `x'4 * 12 if noop==1
+}
+
+
+
 
 gen oop_7yr = oop_y1+ oop_y2+ oop_y3+ oop_y4+ oop_y5 + oop_y6 + oop_y7
 gen oop_6yr = oop_y1+ oop_y2+ oop_y3+ oop_y4+ oop_y5 + oop_y6
@@ -8472,7 +8648,8 @@ ttest oop_7yr if final_7yr==1, by(dem_cohort)
 
 forvalues i = 1/7 {
 
-rename hlp_y`i' informal_y`i'
+rename oop_y`i' oop_y`i'b
+rename hlp_y`i' informal_y`i'b
 }
 
 
@@ -8486,6 +8663,53 @@ gen informal_2yr = informal_y1+ informal_y2
 ttest informal_5yr, by(dem_cohort)
 ttest informal_5yr if final_7yr==1, by(dem_cohort)
 ttest informal_7yr if final_7yr==1, by(dem_cohort)
+
+foreach x in oop informal {
+
+rename `x'_5yr `x'_5yrb
+rename `x'_7yr `x'_7yrb
+}
+
+save R01_annualized_b.dta, replace
+
+use R01_annualized_b.dta, replace
+
+merge 1:1 id using R01_annualized.dta
+
+
+local ivars informal_y1 informal_y2 informal_y3 informal_y4 informal_y5 informal_y6 informal_y7 informal_5yr informal_7yr
+local ivars2 informal_y1b informal_y2b informal_y3b informal_y4b informal_y5b informal_y6b informal_y7b informal_5yrb informal_7yrb
+
+local rd: word count `ivars'
+
+mat tab1=J(`rd',2,.)
+
+local r = 1
+
+foreach x of local ivars {
+
+sum `x'
+mat tab1[`r',1] = r(mean)
+
+local ++r
+}
+
+local r = 1
+
+foreach x of local ivars2 {
+
+sum `x'
+mat tab1[`r',2] = r(mean)
+
+local ++r 
+}
+mat rownames tab1 = `ivars'
+
+frmttable using "E:\data\burden_dementia\logs\R01_costs.doc", replace statmat(tab1) ///
+varlabels title("Annualized ") ctitles("", "Complicated method ","Simple Method") sdec(2) ///
+note("All costs have been inflation adjusted to 2016 dollars")
+
+
 
 
 H="Experimental - Comparison of 5yr vs 7yr Sample"
@@ -11420,6 +11644,8 @@ save "`fdpath'/burden_dementia_sample_long.dta", replace
 
 
 H="changelog"
+03/12/19 - Removed CPI and HR rate adjustments for informal costs in years prior to 2009, and also scrapped "months-at-risk" approach in favor of sticking to calendar year. Omari
+
 03/06/19 - Corrected a merge where the Genworth and CPI weren't merging correctly with the exit in "Annual Calculations" header. Evan
 
 03/05/19 - Altered formula for helpers to reflect times when months<4, because it was resulting in a few negatives, and changed Genworth rates to Medians in 2016 where state was missing. Evan

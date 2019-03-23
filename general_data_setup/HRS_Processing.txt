@@ -11816,7 +11816,96 @@ log using "`logpath'\6a_HRS_exit_clean_part5.txt", text replace
 
 cd `datapath'
 
-use exit_02_16_clean4.dta
+/* In order to cap the number of nh_nights reported at exit, we are going to use date of
+their ivw prior to death and their death date. The cap will be the difference between
+these two, and for those who report continuous enrollment at exit, their value will 
+be the cap */
+
+/* First get HRS restricted ivw date file */
+
+use core_98_14_clean_merge.dta, clear 
+rename nhres nhres_n1
+save core_98_14_ivwdates.dta, replace 
+
+use exit_02_16_clean4.dta, clear
+save exit_02_16_ivwdates.dta, replace
+
+use "E:\data\hrs_restricted_2014\Received\rdoi2014\stata\RDOI2014.dta", clear
+
+gen id = HHID + PN
+
+
+
+
+local r = 2014
+local s = 2015
+
+
+
+foreach x in O N M L K J H G F {
+preserve
+keep id `x'IWMONTH `x'IWDAY `x'IWYEAR 
+gen core_year = .
+gen last_ivw_date = .
+replace `x'IWDAY = 15 if `x'IWDAY==.
+replace core_year = `r' if `x'IWYEAR==`r' | `x'IWYEAR==`s' 
+replace last_ivw_date = mdy(`x'IWMONTH,`x'IWDAY,`x'IWYEAR)
+format last_ivw_date %td 
+save ivw_`r'.dta, replace
+use core_98_14_ivwdates.dta, replace 
+merge 1:1 id core_year using ivw_`r'.dta, update replace
+drop if _m==2
+drop _m
+save core_98_14_ivwdates.dta, replace
+
+restore, preserve
+
+keep id `x'IWMONTH `x'IWDAY `x'IWYEAR 
+gen exit_year = .
+gen e_ivw_date = .
+replace `x'IWDAY = 15 if `x'IWDAY==.
+replace exit_year = `r' if `x'IWYEAR==`r' | `x'IWYEAR==`s' 
+replace e_ivw_date = mdy(`x'IWMONTH,`x'IWDAY,`x'IWYEAR)
+format e_ivw_date %td 
+save e_`r'.dta, replace
+use exit_02_16_ivwdates.dta, replace 
+merge 1:1 id exit_year using e_`r'.dta, update replace
+drop if _m==2
+drop _m
+save exit_02_16_ivwdates.dta, replace 
+
+restore
+
+
+local r = `r' - 2
+local s = `s' - 2
+
+}
+
+use core_98_14_ivwdates.dta, replace 
+
+gsort id -core_year
+by id: keep if _n==1
+
+save core_98_14_ivwdates.dta, replace 
+
+use exit_02_16_ivwdates.dta, clear
+
+merge 1:1 id using "E:\data\hrs_cleaned\death_date_2015.dta", keepus(death_all death_source)
+drop if _m==2
+drop _m
+
+merge 1:1 id using core_98_14_ivwdates.dta, keepus(last_ivw_date nhres_n1)
+drop if _m==2
+drop _m
+
+gen n1_2_death = death_all - last_ivw_date
+
+replace n1_2_death = . if n1_2_death<0
+
+
+gen nh_start = mdy(nhres_start_mo,1,nhres_start_yr)
+format nh_start %td
 
 tab exit_year, missing
 
@@ -11921,6 +12010,7 @@ replace nh_nights_exit=730 if nh_nights_exit==996
 replace nh_nights_exit=. if (inlist(sn116,998,999)|inlist(tn116,998,999)| ///
  inlist(un116,998,999)|inlist(vn116,998,999)|inlist(wn116,998,999)|inlist(xn116,998,999)| ///
  inlist(yn116,998,999)|inlist(zn116,998,999))
+
 sum nh_nights_exit if (0<nh_nights_exit & nh_nights_exit!=730), detail
 tab nh_nights_exit exit_year, missing
 
@@ -11940,11 +12030,21 @@ tab nh_mos_exit exit_year, missing
 sum nh_mos_exit, detail
 
 replace nh_nights_exit=ceil(30.5*nh_mos_exit) if nh_mos_exit!=.
-replace nh_nights_exit=730 if nh_nights_exit>730
+replace nh_nights_exit = death_all - nh_start if nh_nights_exit==.
+replace nh_nights_exit = n1_2_death if nh_nights_exit==. & nhres_n1==1 & (nhres==1 | nhres_2yr_exit==1) //treating people who were NH res at N1 & exit, but no date or # of nights as being continuous until death
+replace nh_nights_exit = n1_2_death if nh_nights_exit<0 & nhres_n1==1 & (nhres==1 | nhres_2yr_exit==1) //treating people who were NH res at N1 & exit, but no date or # of nights as being continuous until death
+
+
+replace nh_nights_exit = n1_2_death if nh_nights_exit>n1_2_death & nh_nights_exit!=. //capping # of nights to time from N1 to death 
+
+*replace nh_nights_exit=730 if nh_nights_exit>730 
+
 replace nh_nights_exit=0 if (nhres_2yr_exit==0&nhres==0)
+replace nh_nights_exit = . if nh_nights_exit<0
 sum nh_nights_exit, detail
 sum nh_nights_exit if(nhres_2yr_exit!=0|nhres==1), detail
 tab nh_nights_exit exit_year, missing
+
 
 drop nh_mos_exit
 

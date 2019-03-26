@@ -1870,6 +1870,93 @@ save exit_02_16.dta, replace
 log close
 
 
+H="Create Core Interview dates dataset"
+/*to get the core interview date from restricted file 
+Uses 2012 restricted dataset
+
+Saves this version of the clean core interviews to the 
+hrs_cleaned folder: 'E:\data\hrs_cleaned';
+*/
+
+/*2012 restricted files*/
+/*raw data as received from HRS*/
+libname rest_raw "E:\data\hrs_restricted_2014\raw";
+/*working data that is being processed*/
+libname rest_wk "E:\data\hrs_restricted_2014";
+
+/*HRS temporary data files*/
+libname hrs_int "E:\data\hrs_cleaned\working";
+
+data IVWDATE ;
+set rest_raw.doi2014;
+run;
+
+proc freq data=IVWDATE;
+table miwyear;
+run;
+
+/*convert STATA HRS core dataset to SAS
+RG PC Filepath
+proc import 
+datafile="E:\data\hrs_cleaned\working\core_98_14_nw_tics_oldv.dta" 
+out=hrs_int.core_00_14_nw_tics replace;
+run; */
+
+
+%macro ivwdate(w=,year=);
+
+data ivwdate1_&w;
+set IVWDATE;
+keep hhid pn core_year &w.IWMONTH &w.IWDAY &w.IWyear ;
+core_year=&year;
+run;
+
+data ivwdate2_&w;
+set ivwdate1_&w;
+rename &w.IWMONTH=c_ivw_month;
+rename &w.IWDAY=c_ivw_day;
+rename &w.IWyear=c_ivw_year;
+run;
+%mend;
+
+%ivwdate(w=F,year=1998);
+%ivwdate(w=G,year=2000);
+%ivwdate(w=H,year=2002);
+%ivwdate(w=J,year=2004);
+%ivwdate(w=K,year=2006);
+%ivwdate(w=L,year=2008);
+%ivwdate(w=M,year=2010);
+%ivwdate(w=N,year=2012);
+%ivwdate(w=O,year=2014);
+
+data ivw_9814;
+set ivwdate2_F ivwdate2_G ivwdate2_H ivwdate2_J ivwdate2_K ivwdate2_L ivwdate2_M ivwdate2_N ivwdate2_O;
+label c_ivw_day='Interview day'
+c_ivw_month='Interview month'
+c_ivw_year='Interview year';
+if c_ivw_day=. then do;
+	c_ivw_day=15;
+	c_ivw_day_imp=1;
+	end;
+run;
+
+proc sort data=ivw_9814 nodupkey; by hhid pn core_year ; run;
+
+data ivw_9814;
+set ivw_9814;
+length id $9 hhid $6 pn $3;
+id=hhid||pn;
+c_ivw_date=mdy(c_ivw_month,c_ivw_day,c_ivw_year);
+format c_ivw_date date9.;
+label c_ivw_date="Core Interview Date";
+run;
+
+proc freq data=ivw_9814; tables c_ivw_date / missprint; run;
+
+proc sort data=ivw_9814 nodupkey; by id core_year; run;
+
+proc export data=ivw_9814 outfile="E:\data\hrs_cleaned\working\ivw_9814.dta" dbms=stata replace; run;
+
 H="1998-2004 Core Variable Cleaning"
 /*The core dataset must be cleaned in two separate datasets and then merged because
 of the number of variables
@@ -1905,6 +1992,15 @@ log using "`logpath'\2_HRS_Core_00_04_clean1-LOG.txt", text replace
 cd `datapath'
 
 use core_98_04.dta
+
+merge 1:1 id core_year using "E:\data\hrs_cleaned\working\ivw_9814.dta", keepus(c_ivw_date)
+drop if _m==2
+drop _m
+
+gsort id -core_year
+by id: gen days_be_core = c_ivw_date - c_ivw_date[_n+1]
+
+
 
 *********************************************************************************
 // Proxy for core interview
@@ -2424,6 +2520,9 @@ Variable coded here is in nights, convert months * 30.5 = number of nights,
 continuous = 365*2 = 730
 Some respondants report values greater than 2 years, in those cases, cap at 730 days / 2 years
 */
+gen nh_start = mdy(nhres_start_mo,1,nhres_start_yr)
+
+
 gen nh_nights=.
 replace nh_nights=f2301 if (core_year==1998 & f2302==.)
 replace nh_nights=g2573 if (core_year==2000 & g2574==.)
@@ -2445,7 +2544,9 @@ tab nh_mos core_year, missing
 sum nh_mos, detail
 
 replace nh_nights=ceil(30.5*nh_mos) if nh_mos!=.
-replace nh_nights=730 if nh_nights>730
+
+replace nh_nights=days_be_core if nh_nights>days_be_core  & nh_nights!=. // capping nh_nights by maximum number of days since last ivw
+replace nh_nights = c_ivw_date - nh_start if nh_nights==.
 replace nh_nights=0 if nhres_2yr==0
 sum nh_nights, detail
 sum nh_nights if(nhres_2yr==1), detail
@@ -2997,6 +3098,8 @@ tab help_friends, missing
 tab help_friends_hours core_year,missing
 tab help_friends core_year,missing
 tab help_friends help_friends_hours, missing
+
+drop c_ivw_date days_be_core nh_start
 
 save core_98_04_clean1.dta, replace
 
@@ -5398,6 +5501,15 @@ cd `datapath'
 
 use core_06_14.dta
 
+
+merge 1:1 id core_year using "E:\data\hrs_cleaned\working\ivw_9814.dta", keepus(c_ivw_date)
+drop if _m==2
+drop _m
+
+gsort id -core_year
+by id: gen days_be_core = c_ivw_date - c_ivw_date[_n+1]
+
+
 *********************************************************************************
 // Proxy for core interview
 *********************************************************************************
@@ -5911,6 +6023,8 @@ replace nh_nights=. if inlist(kn116,998,999)|inlist(ln116,998,999)|inlist(mn116,
 sum nh_nights, detail
 sum nh_nights if core_year==2014 & nh_nights<730
 
+gen nh_start = mdy(nhres_start_mo,1,nhres_start_yr)
+
 gen nh_mos=.
 replace nh_mos= kn117 if (core_year==2006 & kn116==.)
 replace nh_mos= ln117 if (core_year==2008 & ln116==.)
@@ -5924,7 +6038,8 @@ sum nh_mos, detail
 sum nh_mos if core_year==2012
 
 replace nh_nights=ceil(30.5*nh_mos) if nh_mos!=.
-replace nh_nights=730 if nh_nights>730
+replace nh_nights=days_be_core if nh_nights>days_be_core  & nh_nights!=. // capping nh_nights by maximum number of days since last ivw
+replace nh_nights = c_ivw_date - nh_start if nh_nights==.
 replace nh_nights=0 if nhres_2yr==0
 sum nh_nights, detail
 sum nh_nights if(nhres_2yr==1), detail
@@ -6385,6 +6500,8 @@ tab help_friends, missing
 tab help_friends_hours core_year,missing
 tab help_friends core_year,missing
 tab help_friends help_friends_hours, missing
+
+drop c_ivw_date days_be_core nh_start
 
 save core_06_14_clean1.dta, replace
 
@@ -12887,7 +13004,7 @@ libname rest_wk "E:\data\hrs_restricted_2014";
 libname hrs_int "E:\data\hrs_cleaned\working";
 
 data IVWDATE ;
-set rest_raw.doi2014;
+set rest_raw.rdoi2014;
 run;
 
 proc freq data=IVWDATE;
@@ -13351,300 +13468,11 @@ ods rtf close;
 
 proc export data=hrs_cln.core_00_to_14 outfile="E:\data\hrs_cleaned\core_00_to_14.dta" replace; run;
 
-proc export data=hrs_cln.exit_02_to_14_dt outfile="E:\data\hrs_cleaned\exit_02_to_14_dt.dta" replace; run;
+proc export data=hrs_cln.exit_02_to_16_dt outfile="E:\data\hrs_cleaned\exit_02_to_16_dt.dta" replace; run;
 
 proc export data=hrs_cln.restr_tracker_v2014 outfile="E:\data\hrs_cleaned\restr_tracker_v2014.dta" replace; run;
 
 H="*************************"
-
-
-H="Exit - variable cleaning - nursing home - experimental"
-/*Part 5 of cleaning exit variables
-Questions relate to nursing home use */
-
-capture log close
-
-clear all
-set more off
-
-//Amy's PC
-local logpath E:\data\hrs_cleaned\logs
-local datapath E:\data\hrs_cleaned\working
-
-//RG PC
-//local logpath C:\HRS\hrs_cleaned\logs
-//local datapath C:\HRS\hrs_cleaned\working
-
-*log using "`logpath'\6a_HRS_exit_clean_part5.txt", text replace
-
-cd `datapath'
-
-/* In order to cap the number of nh_nights reported at exit, we are going to use date of
-their ivw prior to death and their death date. The cap will be the difference between
-these two, and for those who report continuous enrollment at exit, their value will 
-be the cap */
-
-/* First get HRS restricted ivw date file */
-
-use core_98_14_clean_merge.dta, clear 
-save core_98_14_ivwdates.dta, replace 
-
-use exit_02_16_clean4.dta, clear
-save exit_02_16_ivwdates.dta, replace
-
-use "E:\data\hrs_restricted_2014\Received\rdoi2014\stata\RDOI2014.dta", clear
-
-gen id = HHID + PN
-
-
-
-
-local r = 2014
-local s = 2015
-
-
-
-foreach x in O N M L K J H G F {
-preserve
-keep id `x'IWMONTH `x'IWDAY `x'IWYEAR 
-gen core_year = .
-gen last_ivw_date = .
-replace `x'IWDAY = 15 if `x'IWDAY==.
-replace core_year = `r' if `x'IWYEAR==`r' | `x'IWYEAR==`s' 
-replace last_ivw_date = mdy(`x'IWMONTH,`x'IWDAY,`x'IWYEAR)
-format last_ivw_date %td 
-save ivw_`r'.dta, replace
-use core_98_14_ivwdates.dta, replace 
-merge 1:1 id core_year using ivw_`r'.dta, update replace
-drop if _m==2
-drop _m
-save core_98_14_ivwdates.dta, replace
-
-restore, preserve
-
-keep id `x'IWMONTH `x'IWDAY `x'IWYEAR 
-gen exit_year = .
-gen e_ivw_date = .
-replace `x'IWDAY = 15 if `x'IWDAY==.
-replace exit_year = `r' if `x'IWYEAR==`r' | `x'IWYEAR==`s' 
-replace e_ivw_date = mdy(`x'IWMONTH,`x'IWDAY,`x'IWYEAR)
-format e_ivw_date %td 
-save e_`r'.dta, replace
-use exit_02_16_ivwdates.dta, replace 
-merge 1:1 id exit_year using e_`r'.dta, update replace
-drop if _m==2
-drop _m
-save exit_02_16_ivwdates.dta, replace 
-
-restore
-
-
-local r = `r' - 2
-local s = `s' - 2
-
-}
-
-use core_98_14_ivwdates.dta, replace 
-
-gsort id -core_year
-by id: keep if _n==1
-
-save core_98_14_ivwdates.dta, replace 
-
-use exit_02_16_ivwdates.dta, clear
-
-merge 1:1 id using "E:\data\hrs_cleaned\death_date_2015.dta", keepus(death_all)
-drop if _m==2
-drop _m
-
-merge 1:1 id using core_98_14_ivwdates.dta, keepus(last_ivw_date)
-drop if _m==2
-drop _m
-
-gen n1_2_death = death_all - last_ivw_date
-replace n1_2_death = . if n1_2_death<-30
-replace n1_2_death = 1 if n1_2_death<=0
-
-
-gen nh_start = mdy(nhres_start_mo,15,nhres_start_yr)
-
-tab exit_year, missing
-
-*********************************************************************************
-// Nursing home residence at time of death - variable nhres processed in Part 1
-*********************************************************************************
-tab nhres exit_year, missing
-
-*********************************************************************************
-// Nursing home in past 2 years, excluding stay at time of death - exit interview
-*********************************************************************************
-/*
-2002 Exit 	SN114
-2004 Exit 	TN114
-2006 Exit 	UN114
-2008 Exit 	VN114
-2010 Exit 	WN114
-2012 Exit 	XN114
-2014 Exit 	YN114
-*/
-generate nhres_2yr_exit = .
-replace nhres_2yr_exit = 1 if ((sn114==1)| (tn114==1)| (un114==1)| (vn114==1)| ///
- (wn114==1)| (xn114==1)| (yn114==1)| (zn114==1))
-replace nhres_2yr_exit = 0 if ((sn114==5)| (tn114==5)| (un114==5)| (vn114==5)| ///
- (wn114==5)| (xn114==5)| (yn114==5)| (zn114==5))
-label variable nhres_2yr_exit "Nursing Home Resident in 2 years prior to death (excludes final stay)"
-//label define nhres_2yr_exit 0 "No" 1 "Yes", modify
-//label values nhres_2yr_exit nhres_2yr_exit 
-tab nhres_2yr_exit exit_year, missing
-
-*********************************************************************************
-// Number of times in a nursing home in past 2 years - exit interview
-*********************************************************************************
-/* 2004-2012: Inlcuding final stay, number of times patient overnight in a hn?
-2002: Excluding final stay, number of times patient?
-2002 values for this and count of nights therefore have more missingness than 
-other years since they were skipped if didn't have a nh stay that was not
-the stay in which R died
-2002 Exit 	SN115
-2004 Exit 	TN115
-2006 Exit 	UN115
-2008 Exit 	VN115
-2010 Exit 	WN115
-2012 Exit 	XN115
-2014 Exit 	YN115
-*/
-generate nh_stays_exit = .
-replace nh_stays_exit = sn115 if exit_year==2002
-replace nh_stays_exit = tn115 if exit_year==2004
-replace nh_stays_exit = un115 if exit_year==2006
-replace nh_stays_exit = vn115 if exit_year==2008
-replace nh_stays_exit = wn115 if exit_year==2010
-replace nh_stays_exit = xn115 if exit_year==2012
-replace nh_stays_exit = yn115 if exit_year==2014
-replace nh_stays_exit = zn115 if exit_year==2016
-replace nh_stays_exit = 0 if (nhres_2yr_exit ==0&nhres==0)
-replace nh_stays_exit = . if inlist(nh_stays,98,99)
-label variable nh_stays_exit "Number of times a patient in NH 2 years before death"
-tab nh_stays_exit exit_year,missing
-sum nh_stays_exit if nh_stays_exit != 0
-
-*********************************************************************************
-// Total nursing home nights in the last 2 years - exit interview
-*********************************************************************************
-/*Nights response:
-2002 Exit 	SN116
-2004 Exit 	TN116
-2006 Exit 	UN116
-2008 Exit 	VN116
-2010 Exit 	WN116
-2012 Exit 	XN116
-2014 Exit 	YN116
-996 = continuous since last core interview; 998, 999 = dont know / refused
-Months response:
-2002 Exit 	SN117
-2004 Exit 	TN117
-2006 Core 	KN117
-2008 Core 	LN117
-2010 Core 	MN117
-2010 Exit 	WN117
-2012 Core 	NN117
-2012 Exit 	XN117
-2014 Core 	ON117
-2014 Exit 	YN117
-98, 99 = dont know / refused
-Variable coded here is in nights, convert months * 30.5 = number of nights,
-continuous = 365*2 = 730
-Some respondants report values greater than 2 years, in those cases, cap at 730 days / 2 years
-
-See note above re. skip pattern for 2002 resulting in lower counts of days for that year
-*/
-gen nh_nights_exit=.
-replace nh_nights_exit= sn116 if (exit_year==2002 & sn117==.)
-replace nh_nights_exit= tn116 if (exit_year==2004 & tn117==.)
-replace nh_nights_exit= un116 if (exit_year==2006 & un117==.)
-replace nh_nights_exit= vn116 if (exit_year==2008 & vn117==.)
-replace nh_nights_exit= wn116 if (exit_year==2010 & wn117==.)
-replace nh_nights_exit= xn116 if (exit_year==2012 & xn117==.)
-replace nh_nights_exit= yn116 if (exit_year==2014 & yn117==.)
-replace nh_nights_exit= zn116 if (exit_year==2016 & zn117==.)
-replace nh_nights_exit=730 if nh_nights_exit==996
-replace nh_nights_exit=. if (inlist(sn116,998,999)|inlist(tn116,998,999)| ///
- inlist(un116,998,999)|inlist(vn116,998,999)|inlist(wn116,998,999)|inlist(xn116,998,999)| ///
- inlist(yn116,998,999)|inlist(zn116,998,999))
-
-sum nh_nights_exit if (0<nh_nights_exit & nh_nights_exit!=730), detail
-tab nh_nights_exit exit_year, missing
-
-gen nh_mos_exit=.
-replace nh_mos_exit= sn117 if (exit_year==2002 & sn116==.)
-replace nh_mos_exit= tn117 if (exit_year==2004 & tn116==.)
-replace nh_mos_exit= un117 if (exit_year==2006 & un116==.)
-replace nh_mos_exit= vn117 if (exit_year==2008 & vn116==.)
-replace nh_mos_exit= wn117 if (exit_year==2010 & wn116==.)
-replace nh_mos_exit= xn117 if (exit_year==2012 & xn116==.)
-replace nh_mos_exit= yn117 if (exit_year==2014 & yn116==.)
-replace nh_mos_exit= zn117 if (exit_year==2016 & zn116==.)
-replace nh_mos_exit=. if (inlist(sn117,98,99)|inlist(tn117,98,99)| ///
- inlist(un117,98,99)|inlist(vn117,98,99)|inlist(wn117,98,99) |inlist(xn117,98,99)| ///
- inlist(yn117,98,99) |inlist(zn117,98,99))
-tab nh_mos_exit exit_year, missing
-sum nh_mos_exit, detail
-
-replace nh_nights_exit=ceil(30.5*nh_mos_exit) if nh_mos_exit!=.
-replace nh_nights_exit = e_ivw_date - nh_start if nh_nights_exit==.
-
-replace nh_nights_exit = n1_2_death if nh_nights_exit>n1_2_death & nh_nights_exit!=. //capping # of nights to time from N1 to death 
-
-*replace nh_nights_exit=730 if nh_nights_exit>730 
-
-replace nh_nights_exit=0 if (nhres_2yr_exit==0&nhres==0)
-sum nh_nights_exit, detail
-sum nh_nights_exit if(nhres_2yr_exit!=0|nhres==1), detail
-tab nh_nights_exit exit_year, missing
-
-
-drop nh_mos_exit
-
-*********************************************************************************
-// Nursing home covered by insurance - core interview
-// missing if no nursing home
-// 2014 discontinued
-*********************************************************************************
-gen nh_ins_exit = .
-replace nh_ins_exit = 1 if ((sn118==1)|(tn118==1)|(un118==1)|(vn118==1)|(wn118==1)| ///
- (xn118==1))
-replace nh_ins_exit = 2 if ((sn118==3)|(tn118==3)|(un118==3)|(vn118==3)|(wn118==3)| ///
- (xn118==3))
-replace nh_ins_exit = 3 if ((sn118==5)|(tn118==5)|(un118==5)|(vn118==5)|(wn118==5)| ///
- (xn118==5))
-replace nh_ins_exit = 4 if (inlist(sn118,7,8,9)|inlist(tn118,7,8,9)| inlist(un118,7,8,9)| ///
-  inlist(vn118,7,8,9)|inlist(wn118,7,8,9) |inlist(xn118,7,8,9))
-la var nh_ins_exit "Nursing home covered by insurance (no 2014)"
-// la define nh_ins_exit 1 "Fully covered by insurance" 2 ///
-// "Partially covered (or covered w/ copay)" 3 "Not covered" 4 "Unknown, not provided"
-// la val nh_ins_exit nh_ins_exit
-tab nh_ins_exit exit_year, missing
-
-//check for duplicate ids
-sort id
-quietly by id: gen dup = cond(_N==1,0,_n)
-drop if dup>1
-drop dup
-
-//drop raw variables
-keep id  hhid pn exit_year proxy_exit female marital married* marital* medicare ///
-medicareb ltc_ins ///
-medicaid champus hmo medigap catinsur nhres* hospice freqrelg child gchil allchil ///
-reschil reschil_d resspouse hhm livealone location loc_hosp icu vent dialysis dec_* ///
-dexp eoldec capacity duration adapp adprob decmaker lwill lw_* hcp discuss advdir ///
-eolplan adl* days_bed_ill iadl* hh_worker cancer* psych* *_hrs delirium_exit depr_exit /// 
-nhres_2yr_exit nh_stays_exit nh_nights_exit nh_ins_exit hosp
-
-save exit_02_16_clean.dta, replace
-
-saveold exit_02_16_clean_oldv.dta, replace version(12)
-
-log close
 
 
 H="Chaneglog"

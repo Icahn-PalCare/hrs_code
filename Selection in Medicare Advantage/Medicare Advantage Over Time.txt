@@ -1,0 +1,194 @@
+= V4 Outline MultiLine NoSorting TabWidth=30
+
+H="Medicare Advantage Over Time"
+/* 
+********************HEADING******************** 
+
+Project Name: Medicare Advantage Over Time
+
+Date Started: 4/5/19
+
+Primary Investigator: Ankuda/Bollens-Lund
+Funding Source:
+
+Created by: EBL
+
+Primary Analyst: EBL
+Secondary Analyst: CKA
+
+Datasets Used: HRS & Claims
+
+Simple Outline: Looking at the change in Medicare FFS v Advantage population over time
+
+Dataset outline-
+One observation per person per year, matched to characteristics from the 
+in-year or previous interview
+
+Variables-
+Demographics
+ Age
+ Sex
+ Race/ethnicity
+
+Function
+ ADLs
+ Caregiving
+ Probable Dementia
+
+Social
+ Wealth
+ Education
+ Household composition, kids nearby
+ Social network size
+ 
+Regional characteristics
+ Region
+ Rurality/urbanicity
+ Dartmouth Atlas health system characteristics and regional health care use
+ Regional SES
+ 
+Differences by star rating
+ Above characterists: snapshot vs. over time
+
+
+*/
+ 
+//STATA
+// Global Macros use $ symbol to be called. 
+
+//resources
+global medipath "E:\data\CMS_DUA_51675_2014\Merged\Stata"
+global hrspath "E:\data\hrs_cleaned"
+global refpath "E:\data\Selection in Medicare Advantage\MA over time\Ref Docs"
+
+//Data 
+global intpath "E:\data\Selection in Medicare Advantage\MA over time\Data\int_data"
+global datapath "E:\data\Selection in Medicare Advantage\MA over time\Data\final_data"
+
+//output path
+global outpath "E:\data\Selection in Medicare Advantage\MA over time\Output\In Progress"
+global logpath "E:\data\Selection in Medicare Advantage\MA over time\Output\Logs"
+
+
+
+
+H="Dataset setup"
+//get vars needed from the MBSF
+
+use ${medipath}\basf_1998_2015.dta, clear
+gen year=year(start_dt)
+local mbsfvars bid year a_mo b_mo hmo_mo metro ind_ma
+
+//use simple month counts for FFS--assume part A all the time (.5% of ppl have fewer months of A coverage than B)
+gen ind_ma=inlist(hmo_mo,1,12)
+label var ind_ma "1+ Month of non-FFS MC in calendar year"
+
+keep `mbsfvars' 
+
+tempfile mbsf
+save `mbsf'
+
+//start with core, add exit for death year 
+
+//4/5/19-ebl-we should think about the exact structuring of this so it's most appropriate
+	
+use "${hrspath}\core_00_to_14.dta", clear
+append using "${hrspath}\exit_02_to_16_dt.dta"
+
+
+/*get list of variables we may want to look at, renaming exit for consistency
+note-education, race, and age come from the tracker rather than the ivw*/
+
+local keepvars id hhid pn ivw_date wave_year ivw_type adl_dependent married wgtr //add things as we get to them-ebl
+
+rename c_ivw_date ivw_date
+replace ivw_date=e_ivw_date if missing(ivw_date)
+
+gen wave_year=core_year
+replace wave_year=exit_year if missing(wave_year)
+label var wave_year "Year of wave (core or exit)"
+
+gen ivw_type=!missing(e_ivw_date)
+label define ivw_type 0 "Core" 1 "Exit"
+label values ivw_type ivw_type
+
+gen adl_dependent=adl_independent_core==0 
+replace adl_dependent=adl_independent=0 if !missing(adl_independent)
+label var adl_dependent "ADL dependent"
+
+replace married=married_or_part if missing(married)
+
+keep `keepvars'
+
+tempfile hrs
+save `hrs'
+
+use "${hrspath}\restr_tracker_v2014.dta", clear
+
+local trackvars id hhid pn gender birth_date hisp_eth white black other_na_api_race ///
+degree state zip stratum secu wave_year
+
+drop id 
+gen id=hhid+pn
+
+forvalues i=92(2)98 {
+	rename *`i' *19`i'
+}
+
+foreach i in 00 02 04 06 08 10 12 14 {
+	rename *`i' *20`i'
+}
+
+//we have location from the MBSF, but use these for now
+rename zipcode* zip*
+rename stateusps* state*
+
+reshape long zip state, i(hhid pn) j(wave_year)
+
+keep `trackvars'
+merge 1:1 hhid pn wave_year using `hrs', gen(trackm) keep(match using)
+
+//bring forward for exit
+sort id wave_year
+foreach x of varlist `trackvars' wgtr {
+	by id: replace `x'=`x'[_n-1] if missing(`x')
+}
+
+/*may well want to do this later
+//need to expand to merge with MBSF annually
+expand 2, gen(new)
+gen year=wave_year
+replace year=year+1 if new==1
+drop new
+*/
+gen year=wave_year
+
+merge m:1 hhid pn using "${medipath}\xref2015medicare.dta", ///
+keep(match) keepusing(BID) nogen
+rename *, l
+
+merge 1:1 bid year using `mbsf', keep(match) nogen
+
+//create age as of end of the year & restrict to 65+
+gen age=year-year(birth_date)
+drop if age<65
+
+//female from gender
+gen female=gender-1
+
+//hs+ from degree
+gen educ_hs=degree>=1 if !missing(degree)
+label var educ_hs "Indicator HS Diploma (incl. GED)"
+
+preserve
+collapse ind_ma female married educ_hs age adl_dependent [pw=wgtr], by(year)
+
+foreach x in ind_ma female married educ_hs adl_dependent age {
+	twoway connected `x' year, name(`x', replace) title(`x')
+}
+
+graph combine ind_ma female married educ_hs adl_dependent age
+
+
+H="change log"
+4/5/19-EBL-started this code and did first pass of data setup

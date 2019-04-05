@@ -458,8 +458,9 @@ proc export data=mcare_annual outfile="E:\data\HBMC_HRS\int_data\medicare_carrie
 
 /* Medicare home health */
 
-data hrs_hh (keep = bid_hrs_22 admit_date disch_date admit_year);
+data hrs_hh (keep = bid_hrs_22 admit_date disch_date admit_year per_part_b);
 set medcare.hh_1998_2015;
+if typesrvc = "2" then per_part_b = 1;
 run;
 
 proc sql;
@@ -471,13 +472,16 @@ quit;
 
 proc sql; /*unique people per year */
 create table hrs_hh_annual as select bid_hrs_22, core_year,
-count(admit_year ne .) as hh_claim
+count(admit_year ne .) as num_hh_claim,
+count(per_part_b) as per_part_b
 from hrs_hh2 group by bid_hrs_22, core_year;
 quit;
 
 data hrs_hh_annual;
 set hrs_hh_annual;
 hh_claim = 1;
+hh_part_b = 0;
+if per_part_b>0 then hh_part_b = 1;
 run;
 
 proc sort data=hrs_hh_annual nodupkey; by bid_hrs_22 core_year; run;
@@ -487,7 +491,7 @@ proc export data=hrs_hh_annual outfile="E:\data\HBMC_HRS\int_data\medicare_hh_an
 /* Merge back with HRS dataset */
 
 proc sql;
-create table hh_join as select a.*, b.*, c.cpt_flag, c.both_flag, d.hh_claim
+create table hh_join as select a.*, b.*, c.cpt_flag, c.both_flag, d.hh_claim, d.num_hh_claim, d.per_part_b
 from hrs_firstdem2 a 
 left join hh_annual2 b
 on a.bid_hrs_23=b.bid_hrs_23 and a.core_year=b.core_year
@@ -957,8 +961,8 @@ note("Each Year represents a HRS core interview, which occurs every 2 years. Mis
 
 
 H="NHATS - Sample Pull"
-libname claims "E:\nhats\data\20190326\Cumulative";
-*libname cyears "E:\nhats\data\20180625 NHATS CMS Data\Cumulative";
+libname claims "E:\nhats\data\NHATS CMS DUA 28016\Merged\SAS";
+libname cumu "E:\nhats\data\NHATS CMS DUA 28016\Cumulative";
 
 *proc import datafile="E:\nhats\data\Projects\IAH\final_data\iah_wave1-5.dta" out=iv_mb2 dbms=stata replace; run; 
 
@@ -966,31 +970,38 @@ libname claims "E:\nhats\data\20190326\Cumulative";
 
 /* Checking for HH/SNF within 7 days of disch_date */
 
-data nhats_hh;
+data nhats_hh (keep = bene_id admit_year admit_date disch_date clm_srvc_clsfctn_type_cd per_part_b)  ;
 set claims.hh_09_17;
 admit_year = year(admit_date);
+if clm_srvc_clsfctn_type_cd="2" then per_part_b = 1;
 run;
+
+proc freq data=nhats_hh; tables clm_srvc_clsfctn_type_cd; run;
+
 
 
 proc sql; /*unique people per year */
 create table nhats_hh_annual as select bene_id, admit_year,
-count(admit_year ne .) as hh_claim,
-count(clm_srvc_clsfctn_type_cd="2") as hh_part_b
+count(admit_year ne .) as num_hh_claim,
+count(per_part_b) as per_part_b
+/* clm_hha_tot_visit_cnt as clm_hha_tot_visit_cnt */
 from nhats_hh group by bene_id, admit_year;
 quit;
 
 
-proc freq data=nhats_hh_annual; tables hh_part_b; run;
+proc freq data=nhats_hh_annual; tables per_part_b; run;
 
 proc sort data=nhats_hh_annual out=nhats_hh_total nodupkey; by bene_id; run; /* unique people */
 
-/* For 2009-17, everyone who has a hh_claim also has a hh_part_b claim */
+
 data nhats_hh_annual;
 set nhats_hh_annual;
 hh_claim = 1;
-hh_part_b = 1;
+hh_part_b = 0;
+if per_part_b>0 then hh_part_b = 1;
 run;
 
+proc freq data=nhats_hh_annual; tables hh_claim hh_part_b; run;
 /*
 proc sql;
 create table nhats_hh_annual2 as select distinct admit_year,
@@ -1050,7 +1061,7 @@ run;
 proc sort data=carrier1 nodupkey; by bene_id clm_id; run;
 
 data carrierline (keep = bene_id clm_id LINE_PLACE_OF_SRVC_CD cptcodes);
-set claims.bcarrier_line_j_09_17;
+set cumu.bcarrier_line_j_09_17;
 cptcodes = input(compress(hcpcs_cd,'ABCDEFGHIJKLMNOPQRSTUVWXYZ/',),8.);
 run;
 
@@ -2819,17 +2830,6 @@ varlabels title("NHATS 2008-2016: Unique respondents across years") ctitles("Yea
 H="***************************"
 
 
-H="Changelog"
-3/04/19 - Removed censored/LFU from death classification, and reran tables. Omari
-
-3/01/19 - More tweaks to Sample Size and logitudinal followup. Omari.
-
-2/26/19 - Added 6m FFS restriction to both NHATS and HRS tables.
-
-2/25/19 - Created Incident Dementia tables for HRS + NHATS to show followup data and unique people with HBMC. Omari
-
-2/22/19 - Produced Sample Size tables for NHATS and HRS. Omari
-
 H="Create IAH Flags"
 libname hrs 'E:\data\hrs_cleaned';
 libname maid 'E:\data\CMS_DUA_51675_2014\Medicaid_merged';
@@ -3008,3 +3008,15 @@ on a.id=b.id and a.c_ivw_date=b.c_ivw_date;
 quit;
 
 proc export data=core_hh outfile="E:\data\HBMC_HRS\core_0014_hbmc.dta" dbms=stata replace; run;
+
+
+H="Changelog"
+3/04/19 - Removed censored/LFU from death classification, and reran tables. Omari
+
+3/01/19 - More tweaks to Sample Size and logitudinal followup. Omari.
+
+2/26/19 - Added 6m FFS restriction to both NHATS and HRS tables.
+
+2/25/19 - Created Incident Dementia tables for HRS + NHATS to show followup data and unique people with HBMC. Omari
+
+2/22/19 - Produced Sample Size tables for NHATS and HRS. Omari

@@ -458,8 +458,9 @@ proc export data=mcare_annual outfile="E:\data\HBMC_HRS\int_data\medicare_carrie
 
 /* Medicare home health */
 
-data hrs_hh (keep = bid_hrs_22 admit_date disch_date admit_year);
+data hrs_hh (keep = bid_hrs_22 admit_date disch_date admit_year per_part_b);
 set medcare.hh_1998_2015;
+if typesrvc = "2" then per_part_b = 1;
 run;
 
 proc sql;
@@ -471,13 +472,16 @@ quit;
 
 proc sql; /*unique people per year */
 create table hrs_hh_annual as select bid_hrs_22, core_year,
-count(admit_year ne .) as hh_claim
+count(admit_year ne .) as num_hh_claim,
+count(per_part_b) as per_part_b
 from hrs_hh2 group by bid_hrs_22, core_year;
 quit;
 
 data hrs_hh_annual;
 set hrs_hh_annual;
 hh_claim = 1;
+hh_part_b = 0;
+if per_part_b>0 then hh_part_b = 1;
 run;
 
 proc sort data=hrs_hh_annual nodupkey; by bid_hrs_22 core_year; run;
@@ -487,7 +491,7 @@ proc export data=hrs_hh_annual outfile="E:\data\HBMC_HRS\int_data\medicare_hh_an
 /* Merge back with HRS dataset */
 
 proc sql;
-create table hh_join as select a.*, b.*, c.cpt_flag, c.both_flag, d.hh_claim
+create table hh_join as select a.*, b.*, c.cpt_flag, c.both_flag, d.hh_claim, d.num_hh_claim, d.per_part_b
 from hrs_firstdem2 a 
 left join hh_annual2 b
 on a.bid_hrs_23=b.bid_hrs_23 and a.core_year=b.core_year
@@ -1490,6 +1494,8 @@ varlabels title("NHATS 2011-2016: HBMC Per Person Wave") ctitles("Variables", "C
 note("HBMC = Medicare or Self Report")
 
 H="NHATS - Sample Size Table Mod"
+/********* NHATS ***********/ 
+
 use "E:\nhats\data\Projects\serious_ill\int_data\serious_ill_int_dataset1.dta", clear
 
 gen ffs_6m = 0
@@ -1591,6 +1597,123 @@ mat rownames tab1 ="2011" "2012" "2013" "2014" "2015" "2016" "2017" "Unique Peop
 frmttable using `logpath'\NHATS_P01_SampleSize_`date'.doc, replace statmat(tab1) ///
 varlabels title("Community Dwelling NHATS 2011-2016: Prevelance/Cross-Section ") ctitles("Year", "Full Sample", "Dementia (N)", "Dementia + 6m FFS", "Self Report or Claims HBMC", "Medicare HH", "Medicare HH Part B", "HBMC + HH" "HBMC, no HH", "Total # of HHA episodes", "Ave. # of HHA episodes", "% of HHA episodes Part B") sdec(0,0,0,0,0,0,0,0,0,2,2) ///
 note("Utilization/Self Report restricted to Dementia + 6m FFS. Full Sample restricted to community dwelling. Ave # of HHA episodes is conditional on having a HHA episode.")
+
+/******* HRS *****************/
+
+use "E:\data\HBMC_HRS\int_data\hrs_p01.dta", replace
+
+cap drop _m
+merge 1:1 id core_year using "E:\data\hrs_public_2014\dementia\pdem_withvarnames_00_14.dta", keepus(pdem)
+keep if nhres==0
+
+
+gen dementia = 0
+replace dementia = 1 if pdem>=0.5 & pdem!=.
+
+replace both_flag = 0
+replace hh_claim = 0 if hh_claim==.
+replace num_hh_claim = 0 if num_hh_claim==.
+replace per_part_b = 0 if per_part_b==.
+replace hh_part_b = 0 if hh_part_b==.
+replace both_flag = 1 if cpt_flag==1 
+
+drop _m
+
+local logpath "E:\data\HBMC_HRS\logs"
+local date=subinstr("$S_DATE"," ","_",.)
+
+gen all = 1
+
+gen index_date = c_ivw_date
+
+drop if c_ivw_date==.
+merge 1:1 id index_date using "E:\data\HBMC_HRS\int_data\ffs_before.dta", keepus(cont_ffs_n_mos)
+drop _m
+
+gen both_hbmc = 0
+replace both_hbmc = 1 if both_flag==1
+
+
+gen hbmc_hh = 0
+replace hbmc_hh = 1 if both_hbmc==1 & hh_claim==1
+
+gen hbmc_nohh = 0
+replace hbmc_nohh = 1 if both_hbmc==1 & hh_claim==0
+
+
+gen ffs_6m = 0
+replace ffs_6m = 1 if cont_ffs_n_mos>=6 & cont_ffs_n_mos!=.
+label var ffs_6m "Has >=6m of Medicare FFS prior to ivw"
+
+gen has_medicare = 0
+replace has_medicare = 1 if bid_hrs_22!=""
+label var has_medicare "Has Medicare Claims"
+
+
+gen dem_ffs = 0
+replace dem_ffs = 1 if dementia==1 & ffs_6m==1
+
+
+foreach x of varlist hh_claim both_hbmc hh_claim hh_part_b hbmc_hh hbmc_nohh num_hh_claim num_hh_claim per_part_b {
+replace `x' = 0 if dem_ffs==0
+}
+
+
+local cvars all dementia dem_ffs both_hbmc hh_claim hh_part_b hbmc_hh hbmc_nohh num_hh_claim num_hh_claim per_part_b
+local full: word count `cvars'
+mat tab1=J(10,`full',.)
+local r = 1
+local c = 1
+
+forvalues i=1998(2)2014 {
+
+	foreach x of local cvars {
+	
+sum `x' if core_year==`i'
+mat tab1[`r',`c'] = r(sum)
+
+local ++c
+}
+
+local c = 1
+local ++r
+}
+preserve
+
+collapse (sum) num_hh_claim per_part_b, by(id)
+tempfile coll
+save `coll'
+restore
+
+collapse (max) all dementia dem_ffs both_hbmc hh_claim hh_part_b hbmc_hh hbmc_nohh, by(id)
+merge 1:1 id using `coll'
+
+local c = 1
+foreach x of local cvars {
+	
+sum `x' 
+mat tab1[`r',`c'] = r(sum)
+
+local ++c
+}
+
+forvalues i = 1/10 {
+
+mat tab1[`i',10] = tab1[`i',10]/tab1[`i',5]
+mat tab1[`i',11] = ((tab1[`i',11]/tab1[`i',9])*100)
+}
+
+
+
+mat rownames tab1 = "1998" "2000" "2002" "2004" "2006" "2008" "2010" "2012" "2014" "Unqiue People"
+
+frmttable using `logpath'\BOTH_P01_SampleSize_`date'.doc, addtable statmat(tab1) ///
+varlabels title("HRS 1998-2014 with Community Dwelling + Dementia: Prevalence Sample Size") ///
+ctitles("Year", "Full Sample", "Dementia (N)", "Dementia + 6m FFS", "Medicare HBMC", "Medicare HH", "Medicare HH Part B", "HBMC + HH" "HBMC, no HH", "Total # of HHA episodes", "Ave. # of HHA episodes", "% of HHA episodes Part B") sdec(0,0,0,0,0,0,0,0,0,2,2) ///
+
+
+
+
 
 H="********Outdated: Do not run*************"
 
@@ -2826,17 +2949,6 @@ varlabels title("NHATS 2008-2016: Unique respondents across years") ctitles("Yea
 H="***************************"
 
 
-H="Changelog"
-3/04/19 - Removed censored/LFU from death classification, and reran tables. Omari
-
-3/01/19 - More tweaks to Sample Size and logitudinal followup. Omari.
-
-2/26/19 - Added 6m FFS restriction to both NHATS and HRS tables.
-
-2/25/19 - Created Incident Dementia tables for HRS + NHATS to show followup data and unique people with HBMC. Omari
-
-2/22/19 - Produced Sample Size tables for NHATS and HRS. Omari
-
 H="Create IAH Flags"
 libname hrs 'E:\data\hrs_cleaned';
 libname maid 'E:\data\CMS_DUA_51675_2014\Medicaid_merged';
@@ -3015,3 +3127,15 @@ on a.id=b.id and a.c_ivw_date=b.c_ivw_date;
 quit;
 
 proc export data=core_hh outfile="E:\data\HBMC_HRS\core_0014_hbmc.dta" dbms=stata replace; run;
+
+
+H="Changelog"
+3/04/19 - Removed censored/LFU from death classification, and reran tables. Omari
+
+3/01/19 - More tweaks to Sample Size and logitudinal followup. Omari.
+
+2/26/19 - Added 6m FFS restriction to both NHATS and HRS tables.
+
+2/25/19 - Created Incident Dementia tables for HRS + NHATS to show followup data and unique people with HBMC. Omari
+
+2/22/19 - Produced Sample Size tables for NHATS and HRS. Omari

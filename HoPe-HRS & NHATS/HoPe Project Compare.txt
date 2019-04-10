@@ -1,0 +1,1335 @@
+= V4 Outline MultiLine NoSorting TabWidth=30
+
+H="Pull dialysis codes for HRS"
+libname serill 'E:\data\serious_ill\final_data';
+libname proj_int 'E:\data\HoPe-HRS & NHATS';
+libname medi 'E:\data\cms_DUA_24548_2012';
+
+data hrs(keep=id bid_hrs_21 c_ivw_date_n0 core_year_n0 c_ivw_year_n0);
+set serill.n0_n1_p1_p2_x_criteria_2010;
+bid_hrs_21=bid_hrs;
+run;
+
+%macro getmeet(source=);
+
+proc sql;
+create table &source.meet as select * from
+hrs a
+left join 
+medi.&source._2000_2012 b
+on a.bid_hrs_21=b.bid_hrs_21 and b.admit_date<=a.c_ivw_date_n0<=b.admit_date+365;
+quit;
+
+%mend;
+
+%getmeet(source=mp);
+%getmeet(source=op);
+
+data mp(keep=bid_hrs_21 id core_year_n0 prcdr);
+set mpmeet(keep=bid_hrs_21 id core_year_n0 prcdr_cd01-prcdr_cd25);
+array dx prcdr_cd01-prcdr_cd25;
+do over dx;
+prcdr=dx;
+output;
+end;
+run;
+data mp2(drop=prcdr);
+set mp;
+dial=0;
+if (substr(prcdr,1,4) in('3995','5498') and dial=0) then dial=1;
+if dial=1;
+run;
+
+proc sort data=mp2 out=mp3 nodup;
+by bid_hrs_21;
+run;
+data op(keep=bid_hrs_21 id core_year_n0 prcdr);
+set opmeet(keep=bid_hrs_21 id core_year_n0 hcpscd01-hcpscd45);
+array dx hcpscd01-hcpscd45;
+do over dx;
+prcdr=dx;
+output;
+end;
+run;
+data op2(drop=prcdr);
+set op;
+dial=0;
+if (substr(prcdr,1,5) in('90935','90937','90999','90945','90947','G0257') and dial=0) then dial=1;
+if dial=1;
+run;
+
+proc sort data=op2 out=op3 nodup;
+by bid_hrs_21;
+run;
+
+data dial;
+set mp3 op3;
+run;
+
+proc sort data=dial out=dial2a nodup;
+by bid_hrs_21;
+run;
+%macro getmeet(source=);
+
+proc sql;
+create table &source.pmeet as select * from
+hrs a
+left join 
+medi.&source._2000_2012 b
+on a.bid_hrs_21=b.bid_hrs_21 and b.admit_date>=a.c_ivw_date_n0>=b.admit_date-365;
+quit;
+%mend;
+%getmeet(source=mp);
+%getmeet(source=op);
+
+
+data ed_op_1;
+	set oppmeet;
+	ed_op=0;
+	array list RVCNTR01-RVCNTR45;
+	do over list;
+	if list >= 450 and list < 460 and ed_op=0 then  
+	ed_op = 1;
+	end;
+run;
+
+proc sql;
+create table ed_op_2 as select distinct bid_hrs_21,
+count(case when ed_op=1 then ed_op else . end)
+	as n_ed_op_visits_p12m
+	from ed_op_1 group by bid_hrs_21;
+quit;
+%macro admissions(days=,suffix=);
+
+
+data ip_&days._2;
+set mppmeet;
+if icarecnt=. then icarecnt=0; /*medpar intensive care day count*/
+if CRNRYDAY=. then CRNRYDAY=0; /*medpar coronary day count*/
+icu_days=icarecnt+CRNRYDAY;
+em_urgent_admit=0; /*Urgent , emergent admissions from admission type*/
+if type_adm in (1,2) then em_urgent_admit=1;
+em_admit=0;
+if type_adm=1 then em_admit=1;
+urgent_admit=0;
+if type_adm=2 then urgent_admit=1;
+elect_admit=0;
+if type_adm=3 then elect_admit=1;
+ind_ed_charge=0; /*ED charges as another indicator of ED use*/
+if ER_AMT>0 & ER_AMT~=. then ind_ed_charge=1;
+if ER_AMT=0 | ER_AMT=. then ind_ed_charge=0;
+
+adj_los=disch_date-admit_date;
+if disch_date-admit_date=0 then adj_los=1;
+run;
+
+proc sort data=ip_&days._2;
+by BID_hrs_21;
+run;
+
+proc sql;
+create table ip_&days._3 as select distinct BID_hrs_21,
+/*total ICU days*/
+sum(icu_days) as icu_days_&suffix. label="total icu days &suffix. post core ivw",
+/*count of IP admissions, all types*/
+count(*) as n_ip_admit_&suffix. label="total n of hospital admit &suffix. post core ivw",
+count(case when icu_days>0 then 1 else . end) as n_icu_stays_&suffix. 
+	label="ICU stays 12m post ivw",
+/*total Hospital LOS*/
+sum(adj_los) as n_hospd_&suffix. label="total hospital days &suffix. post core ivw",
+/*count urgent or emergency admissions*/
+count(case when em_urgent_admit=1 then em_urgent_admit else . end) as n_em_urgent_admit_&suffix. 
+	label="total n of urgent/emergent hospital admit &suffix. post core ivw",
+/*count of emergency admissions, from admission type code*/
+count(case when em_admit=1 then em_admit else . end) as n_em_admit_&suffix. 
+	label="total n of emergent hospital admit &suffix. post core ivw",
+/*count of urgent admissions, from admission type code*/
+count(case when urgent_admit=1 then urgent_admit else . end) as n_urgent_admit_&suffix. 
+	label="total n of urgent hospital admit &suffix. post core ivw",
+/*count of elective admissions, from admission type code*/
+count(case when elect_admit=1 then elect_admit else . end) as n_elect_admit_&suffix. 
+	label="total n of elective hospital admit &suffix. post core ivw",
+/*count of admissions with any ED charges*/
+count(case when ind_ed_charge=1 then ind_ed_charge else . end) as n_ED_ip_&suffix. 
+	label="total n of ED visits with subsequent admit &suffix. post core ivw"
+
+ from ip_&days._2 group by BID_hrs_21;
+quit;
+
+data ip_&days._4;
+set ip_&days._3;
+if icu_days_&suffix.>n_hospd_&suffix. then icu_days_&suffix.=n_hospd_&suffix.;
+run;
+
+%mend;
+
+
+%admissions(days=365,suffix=p12m);
+
+
+%macro admissions(days=,suffix=);
+
+
+data ip_&days._2;
+set mpmeet;
+if icarecnt=. then icarecnt=0; /*medpar intensive care day count*/
+if CRNRYDAY=. then CRNRYDAY=0; /*medpar coronary day count*/
+icu_days=icarecnt+CRNRYDAY;
+em_urgent_admit=0; /*Urgent , emergent admissions from admission type*/
+if type_adm in (1,2) then em_urgent_admit=1;
+em_admit=0;
+if type_adm=1 then em_admit=1;
+urgent_admit=0;
+if type_adm=2 then urgent_admit=1;
+elect_admit=0;
+if type_adm=3 then elect_admit=1;
+ind_ed_charge=0; /*ED charges as another indicator of ED use*/
+if ER_AMT>0 & ER_AMT~=. then ind_ed_charge=1;
+if ER_AMT=0 | ER_AMT=. then ind_ed_charge=0;
+
+adj_los=disch_date-admit_date;
+if disch_date-admit_date=0 then adj_los=1;
+run;
+
+proc sort data=ip_&days._2;
+by BID_hrs_21;
+run;
+
+proc sql;
+create table ip_&days._3 as select distinct BID_hrs_21,
+count(case when icu_days>0 then 1 else . end) as n_icu_stays_&suffix. 
+	label="ICU stays &suffix. pre ivw"
+ from ip_&days._2 group by BID_hrs_21;
+quit;
+
+data ip_&days._5;
+set ip_&days._3;
+run;
+
+%mend;
+%admissions(days=365,suffix=12m);
+
+proc sql;
+create table dial2 as select * from 
+hrs a 
+left join 
+dial2a b 
+on a.bid_hrs_21=b.bid_hrs_21
+left join 
+ed_op_2 c
+on a.bid_hrs_21=c.bid_hrs_21
+left join
+ip_365_4 d
+on a.bid_hrs_21=d.bid_hrs_21
+left join
+ip_365_5 e
+on a.bid_hrs_21=e.bid_hrs_21;
+quit;
+
+proc export data=dial2 outfile='E:\data\HoPe-HRS & NHATS\hrs_dialysis.dta' replace; run;
+
+
+H="Pull Dartmouth codes for HRS"
+libname serill 'E:\data\serious_ill\final_data';
+libname serint 'E:\data\serious_ill\int_data';
+libname proj_int 'E:\data\HoPe-HRS & NHATS';
+libname medi 'E:\data\cms_DUA_24548_2012';
+
+data hrs(keep=id bid_hrs_21 c_ivw_date_n0 core_year_n0 c_ivw_year_n0);
+set serill.n0_n1_p1_p2_x_criteria_2010;
+bid_hrs_21=bid_hrs;
+run;
+
+proc sql;
+create table dx_0_1yr as select * from
+hrs a
+left join 
+serint.dx_0_1yr b
+on a.bid_hrs_21=b.bid_hrs_21 and a.core_year_n0=b.core_year;
+run;
+
+
+/*Add indicator variables for the Dartmouth chronic diseases */
+
+/*Dartmouth code
+
+This program reads through the diagnosis codes of patient abstract records in a hospital
+    file and identifies whether the record belongs to one (or more) of 9 different chronic 
+	diseases from the Dartmouth Index.  The groups are identified by using the Enhanced ICD-9-CM
+    diagnosis codes from pdf "List of ICD-9_CM codes by Chronic Disease Category 
+	(Nine chronic conditions used in the dartmouth atlas of health care 2008) from March 3, 2008*/
+
+
+/****************************************************************************/
+/* Rename variables macro                                                   */
+/****************************************************************************/
+
+%macro rename(lib,dsn,pre);
+options pageno=1 nodate;
+proc contents data=&lib..&dsn;
+title "Before Renaming All Variables";
+run;
+proc sql noprint;
+select nvar into :num_vars
+from dictionary.tables
+where libname="&LIB" and
+memname="&DSN";
+select distinct(name) into :var1-
+:var%TRIM(%LEFT(&num_vars))
+from dictionary.columns
+where libname="&LIB" and
+memname="&DSN";
+quit;
+run;
+proc datasets library=&LIB;
+modify &DSN;
+rename
+%do i=1 %to &num_vars;
+&&var&i=&&var&i.._&pre 
+%end;
+;
+quit;
+run;
+options pageno=1 nodate;
+proc contents data=&lib..&dsn;
+title "After Renaming All Variables";
+run;
+%mend rename;
+
+
+%macro dartmouth(range1=,range2=);
+
+data dx_dartmouth;
+set dx_&range1._&range2.(rename=(diag=dx_0));
+dx=trim(left(dx_0));
+
+if dx~="" then do;
+
+*initialize variables;
+   dartmouth_1=0;
+   dartmouth_1a=0;
+   dartmouth_1b=0;
+   dartmouth_2=0;
+   dartmouth_3=0;
+   dartmouth_4=0;
+   dartmouth_5=0;
+   dartmouth_6=0;
+      dartmouth_7=0;
+	     dartmouth_8=0;
+		    dartmouth_9=0;
+			   dartmouth_10=0;
+			      dartmouth_11=0;
+				     dartmouth_12=0;
+					    dartmouth_13=0;
+						   dartmouth_14=0;
+						      dartmouth_15=0;
+							     dartmouth_16=0;
+								    dartmouth_17=0;
+
+*do over dx;
+	*Cancer with poor prognosis;
+	if (substr(dx,1,4) in('1500','1501','1502','1503','1504','1505','1508','1509','1510','1511','1512',
+			 	'1513','1514','1515','1516','1518','1519','1550','1551','1552','1570','1571',
+			 	'1572','1573','1574','1578','1579','1580','1588','1589','1620','1622','1623',
+			 	'1624','1625','1628','1629','1630','1631','1638','1639','1830','1832','1833',
+			 	'1834','1835','1838','1839','1910','1911','1912','1913','1914','1915','1916',
+			 	'1917','1918','1919','2890') 
+		or substr(dx,1,5) in('20400','20410','20420','20480','20490','20500','20510',
+				'20520','20530','20580','20590','20600','20610','20620','20680','20690','20700',
+				'20710','20720','20780','20800','20810','20820','20880'))
+               and dartmouth_1a=0
+               then dartmouth_1a=1;
+	*Metastatic Cancer;
+	if (substr(dx,1,4) in('1960','1961','1962','1963','1965','1966','1968','1969','1970','1971','1972',
+				'1973','1974','1975','1976','1977','1978','1980','1981','1982','1983','1984',
+				'1985','1986','1987','1990','1991') or 
+		substr(dx,1,5) in('19881','19882','19889'))
+				and dartmouth_1b=0
+				then dartmouth_1b=1;
+	*Malignant Cancer, Leukemia;
+	if dartmouth_1a=1 or dartmouth_1b=1 then dartmouth_1=1;
+	*COPD;
+	if (substr(dx,1,3) in('494','496','501','515') or
+		substr(dx,1,4) in('4911,4918,4919,4920,4928,4940,4941,5064') or
+		substr(dx,1,5) in('49120,49121,49122,49310,49311,49312,49320,49321,49322,49390,49391,49392'))
+				and dartmouth_2=0
+				then dartmouth_2=1;
+	*CAD;
+	if (substr(dx,1,3)='412' or
+		substr(dx,1,4) in('4111','4118','4130','4139','4140','4148','4149') or
+		substr(dx,1,5) in('41181','41189','41400','41401','41402','41403','41404','41405','41406','41407'))
+				and dartmouth_3=0
+				then dartmouth_3=1;
+	*CHF;
+	if (substr(dx,1,4) in('4280','4281','4282','4283','4284','4289') or
+		substr(dx,1,5) in('42820','42821','42822','42823','42830','42831','42832','42833','42840','42841',
+								'42842','42843','40201','40211','40291','39891','40401','40403','40411','40491',
+								'40493'))
+				and dartmouth_4=0
+				then dartmouth_4=1;
+	*PVD;
+	if (substr(dx,1,4) in('4400','4401','4403','4408','4409','4410','4411','4412','4413','4414','4415','4416',
+								'4417','4419','4439') or
+		substr(dx,1,5) in('44020','44021','44022','44023','44024','44029','44030','44031','44032','44100','44101','44102','44103'))
+				and dartmouth_5=0
+				then dartmouth_5=1;
+	*Severe Chronic Liver Disease;
+	if substr(dx,1,4) in('5712','5715','5716','5723')
+				and dartmouth_6=0
+				then dartmouth_6=1;
+	*Diabetes w/ End Organ Damage;
+	if ((substr(dx,1,3)='250' and substr(dx,4,1) in('4','5','6','7','9') and substr(dx,5,1) in('0','1','2','3')) or
+		substr(dx,1,4)='3572' or
+		substr(dx,1,5) in('36641','36201','36202'))
+				and dartmouth_7=0
+				then dartmouth_7=1;
+	*Renal Failure;
+	if (substr(dx,1,3)='585' or
+		substr(dx,1,4) in('5851','5852','5853','5854','5855','5856','5859','V451','V560','V568') or
+		substr(dx,1,5) in('40301','40311','40391'))
+				and dartmouth_8=0
+				then dartmouth_8=1;
+	*Dementia;
+	if (substr(dx,1,3)='797' or
+		substr(dx,1,4) in('2900','2903','2908','2909','2940','2941','2948','2949','3310','3312') or
+		substr(dx,1,5) in('29101','29011','29012','29013','29020','29021','29040','29041','29042',
+								'29043','29410','29411'))
+				and dartmouth_9=0
+				then dartmouth_9=1;
+
+end;
+
+run;
+
+/*get count of each comorbidity for each id-core year combination*/
+proc sql;
+create table cha_test1 as
+select distinct bid_hrs_21,core_year_n0,
+sum(dartmouth_1a) as dmouth_a,
+sum(dartmouth_1b) as dmouth_b,
+sum(dartmouth_1) as cha_1,
+sum(dartmouth_2) as cha_2,
+sum(dartmouth_3) as cha_3,
+sum(dartmouth_4) as cha_4,
+sum(dartmouth_5) as cha_5,
+sum(dartmouth_6) as cha_6,
+sum(dartmouth_7) as cha_7,
+sum(dartmouth_8) as cha_8,
+sum(dartmouth_9) as cha_9
+from dx_dartmouth
+group by bid_hrs_21,core_year_n0;
+quit;
+
+/*convert counts of diagnoses for each comorbidity to indicator variables*/ 
+data dartmouth_1(keep=bid_hrs_21 core_year_n0 dmouth_1-dmouth_9 dmouth_index dmouth_index_wt);
+set cha_test1;
+array list_cha cha_1-cha_9;
+array list_cha_bin dmouth_1-dmouth_9 ;
+
+do over list_cha;
+  list_cha_bin=0;
+
+  if list_cha>0 then do;
+    list_cha_bin=1;
+   end;
+
+end;
+/*replace cancer subtypes with indicators*/
+if dmouth_a>1 then dmouth_a=1;
+if dmouth_b>1 then dmouth_b=1;
+/*note this dmouth_index count count is not weighted for morbidity*/
+dmouth_index=dmouth_1+dmouth_2+dmouth_3+dmouth_4+dmouth_5+dmouth_6+dmouth_7+dmouth_8+dmouth_9;
+
+
+label dmouth_a ="Poor prognosis cancer, Dartmouth";
+label dmouth_b ="Metastatic cancer, Dartmouth";
+label dmouth_1 ="Malignant Cancer or Leukemia, Dartmouth";
+label dmouth_2 ="Chronic Pulmonary Disease, Dartmouth";
+label dmouth_3 ="CAD, Dartmouth";
+label dmouth_4 ="CHF, Dartmouth";
+label dmouth_5 ="PVD, Dartmouth";
+label dmouth_6 ="Severe Chronic Liver Disease, Dartmouth";
+label dmouth_7 ="Diabetes w/ End Organ Damage, Dartmouth";
+label dmouth_8 ="Renal Failure, Dartmouth";
+label dmouth_9 ="Dementia, Dartmouth";
+label dmouth_index ="Count Chronic Diseases, Dartmouth";
+
+run;
+
+/*merge into list of obs with ffs mc 6m prior to ivw*/
+proc sort data=dartmouth_1 out=test nodupkey;
+by bid_hrs_21 core_year_n0;
+run;
+
+
+
+%rename(WORK,TEST,&range1._&range2);
+
+data dmouth_&range1._&range2.(rename =(bid_hrs_21_&range1._&range2=bid_hrs_21
+core_year_n0_&range1._&range2=core_year_n0));
+set test;
+keep bid_hrs_21_&range1._&range2 dmouth: core_year_n0:;
+run;
+proc sort data=dmouth_&range1._&range2.;
+by bid_hrs_21 core_year_n0;
+run;
+
+%mend;
+
+*%dartmouth(range1=0, range2=6m);
+%dartmouth(range1=0, range2=1yr);
+
+
+
+proc export data=dmouth_0_1yr outfile='E:\data\HoPe-HRS & NHATS\hrs_dmouth.dta' replace; run;
+
+
+H="Pull dialysis codes for NHATS"
+libname serill 'E:\nhats\data\projects\serious_ill\int_data';
+libname proj_int 'E:\data\HoPe-HRS & NHATS';
+libname medi 'E:\nhats\data\CMS_DUA_28016\Merged';
+
+
+
+data nhats(keep=spid bene_id ivw_date ivw_year);
+set serill.serious_ill_int_dataset1;
+if wave=1;
+run;
+
+%macro getmeet(source=);
+
+proc sql;
+create table &source.meet as select * from
+nhats a
+left join 
+medi.&source._06_14 b
+on a.bene_id=b.bene_id and b.admit_date<=a.ivw_date<=b.admit_date+365;
+quit;
+
+%mend;
+
+%getmeet(source=ip);
+%macro getmeet(source=);
+
+proc sql;
+create table &source.meet as select * from
+nhats a
+left join 
+medi.&source._09_14 b
+on a.bene_id=b.bene_id and b.admit_date<=a.ivw_date<=b.admit_date+365;
+quit;
+
+%mend;
+%getmeet(source=op);
+proc contents data=medi.op_09_14; run;
+data ip(keep=bene_id spid prcdr ivw_year);
+set ipmeet(keep=bene_id spid ivw_year icd_prcdr_cd1-icd_prcdr_cd25);
+array dx icd_prcdr_cd1-icd_prcdr_cd25;
+do over dx;
+prcdr=dx;
+output;
+end;
+run;
+data ip2(drop=prcdr);
+set ip;
+dial=0;
+if (substr(prcdr,1,4) in('3995','5498') and dial=0) then dial=1;
+if dial=1;
+run;
+
+proc sort data=ip2 out=ip3 nodup;
+by bene_id;
+run;
+data op(keep=bene_id spid ivw_year prcdr);
+set opmeet(keep=bene_id spid ivw_year hcpcscd1-hcpcscd146);
+array dx hcpcscd1-hcpcscd146;
+do over dx;
+prcdr=dx;
+output;
+end;
+run;
+data op2(drop=prcdr);
+set op;
+dial=0;
+if (substr(prcdr,1,5) in('90935','90937','90999','90945','90947','G0257') and dial=0) then dial=1;
+if dial=1;
+run;
+
+proc sort data=op2 out=op3 nodup;
+by bene_id;
+run;
+
+data dial;
+set mp3 op3;
+run;
+
+proc sort data=dial out=dial2 nodup;
+by bene_id;
+run;
+
+proc export data=dial2 outfile='E:\data\HoPe-HRS & NHATS\nhats_dialysis.dta' replace; run;
+
+
+H="table in stata"
+/* use nhats and hrs serious illness datasets--compare to Omari's tables
+
+Type of SMI, Charlson comorbs, admit & # ip stays, ED visits, ICU stays*/
+cd "E:\data\HoPe-HRS & NHATS\"
+use "E:\nhats\data\projects\serious_ill\final_data\serious_ill_nhats_sample.dta" if ///
+wave==1 & (criteria_smi==1 | dmouth_index>=3) & !missing(charls_index_0_1yr) & sp_ivw==1, clear
+merge 1:m spid using nhats_dialysis.dta, nogen keep(match master)
+
+gen charls_cat1=charls_index_0_1yr<3
+gen charls_cat2=inrange(charls_index_0_1yr,3,6)
+gen charls_cat3=inrange(charls_index_0_1yr,7,25)
+label var charls_cat1 "0-2 Charlson"
+label var charls_cat2 "3-6 Charlson"
+label var charls_cat3 "7+ Charlson"
+drop charls_inde*
+
+foreach x of varlist charls* {
+local charls `charls' `x'
+}
+local charls `charls' female age
+drop smi_count smi_ge3 smi_nh_ind smi_and_adl 
+gen smi_multi=dmouth_index>=3
+label var smi_multi "Multimorbidity (3+ Dartmouth)"
+
+foreach x of varlist smi* {
+local smi `smi' `x'
+}
+drop ind_icu
+foreach x in 12m p12m {
+egen n_ed_`x'=rowtotal(n_ed_op_visits_`x' n_ed_ip_`x')
+replace n_ed_`x'=0 if missing(n_ed_`x')
+label var n_ed_`x' "# ED visits (OP or IP) `x'"
+gen ind_ed_`x'=n_ed_`x'>0 & !missing(n_ed_`x')
+label var ind_ed_`x' "Ind ED visit (OP or IP) `x'"
+gen ind_icu_`x'=icu_days_`x'>0 & !missing(icu_days_`x')
+label var ind_icu_`x' "Ind ICU stay `x'"
+}
+
+
+local coutcomes1 n_ip_admit_12m n_ip_admit_p12m n_ed_12m n_ed_p12m ///
+n_icu_stays_12m n_icu_stays_p12m icu_days_12m icu_days_p12m
+
+foreach x in dm hh hs {
+gen ind_`x'=`x'_paid_by_mc_12m!=0 & !missing(`x'_paid_by_mc_12m)
+}
+label var ind_dm "Indicator any DME use 12m post ivw"
+label var ind_hh "Indicator any HH use 12m post ivw"
+label var ind_hs "Indicator any hospice use 12m post ivw"
+
+gen ind_no_hc=tot_paid_by_mc_12m==0
+label var ind_no_hc "No MC expenditures 12m post ivw"
+
+local ioutcomes1 ind_hosp_adm_12m ind_hosp_adm_p12m ind_ed_12m ind_ed_p12m ///
+ind_icu_12m ind_icu_p12m 
+local ioutcomes2 ind_dm ind_hh ind_hs ind_no_hc died_12
+
+
+foreach y in smi charls {
+local rn : word count ``y'' 1 
+
+mat tab`y'=J(`rn',1,.)
+local r=1
+local c=1
+
+foreach x of local `y' {
+	qui sum `x' [aw=anfinw]
+	if r(mean)*r(N)>=11 | r(mean)==0 mat tab`y'[`r',`c']=r(mean)*100
+	if "`x'"=="age" mat tab`y'[`r',`c']=r(mean)
+	local r=`r'+1
+}
+
+mat tab`y'[`r',`c']=r(N)
+mat rownames tab`y'=``y'' N
+
+frmttable, statmat(tab`y') varlabels ctitles("" "NHATS") store(nhats`y')
+
+}
+
+local rn : word count `ioutcomes1' `coutcomes1' `coutcomes1' `ioutcomes2' 1
+
+mat tabout=J(`rn',1,.)
+local r=1
+local c=1
+local names
+
+foreach x of local ioutcomes1 {
+	qui sum `x'
+	mat tabout[`r',`c']=r(mean)*100
+	local r=`r'+1
+	local names `names' `x'
+}
+foreach x of local coutcomes1 {
+	local names `names' `x' max
+	qui sum `x'
+	mat tabout[`r',`c']=r(mean)
+	local r=`r'+1
+	mat tabout[`r',`c']=r(max)
+	local r=`r'+1
+}
+foreach x of local ioutcomes2 {
+	qui sum `x'
+	mat tabout[`r',`c']=r(mean)*100
+	local r=`r'+1
+	local names `names' `x'
+}
+
+mat tabout[`r',`c']=r(N)
+
+mat rownames tabout=`names' N
+
+frmttable, statmat(tabout) varlabels ctitles("" "NHATS") store(nhatsutil) ///
+sdec(2\2\2\2\2\2\2\0\2\0\2\0\2\0\2\0\2\0\2\0\2\0\2\2\2\2\2\0)
+tempfile nhats
+save `nhats'
+use "E:\data\serious_ill\final_data\n0_n1_p1_p2_x_criteria_2010.dta" if !nhres_n0 ///
+& wgtr_n0!=0, clear
+merge 1:1 id using "E:\data\hrs_cleaned\death_date_2012.dta", nogen keep(match master) ///
+keepusing(death_all)
+drop *n1 *p1 *_x
+rename *_n0 *
+rename bid_hrs bid_hrs_21
+rename age_at_core age
+merge 1:1 bid_hrs_21 using hrs_dialysis, nogen keep(match master)
+merge 1:1 bid_hrs_21 using hrs_dmouth, nogen keep(match master)
+keep if criteria_smi==1 | dmouth_index>=3
+local charls
+local smi
+gen charls_cat1=charls_index_0_1yr<3
+gen charls_cat2=inrange(charls_index_0_1yr,3,6)
+gen charls_cat3=inrange(charls_index_0_1yr,7,25)
+label var charls_cat1 "0-2 Charlson"
+label var charls_cat2 "3-6 Charlson"
+label var charls_cat3 "7+ Charlson"
+drop charls_inde*
+
+foreach x of varlist charls* {
+local charls `charls' `x'
+}
+local charls `charls' female age
+drop smi_count smi_ge3 smi_nh_ind smi_and_adl smi_helper 
+gen smi_multi=dmouth_index>=3 & !missing(dmouth_index)
+label var smi_multi "Multimorbidity (3+ Dartmouth)"
+
+foreach x of varlist smi* {
+local smi `smi' `x'
+}
+
+foreach x in 12m p12m {
+egen n_ed_`x'=rowtotal(n_ed_op_visits_`x' n_ed_ip_`x')
+replace n_ed_`x'=0 if missing(n_ed_`x')
+label var n_ed_`x' "# ED visits (OP or IP) `x'"
+gen ind_ed_`x'=n_ed_`x'>0 & !missing(n_ed_`x')
+label var ind_ed_`x' "Ind ED visit (OP or IP) `x'"
+gen ind_icu_`x'=icu_days_`x'>0 & !missing(icu_days_`x')
+label var ind_icu_`x' "Ind ICU stay `x'"
+}
+
+gen died_12=death_all-c_ivw_date<=365
+label var died_12 "Died within 12m of ivw"
+
+local coutcomes1 n_ip_admit_12m n_ip_admit_p12m n_ed_12m n_ed_p12m ///
+n_icu_stays_12m n_icu_stays_p12m icu_days_12m icu_days_p12m
+
+foreach x in dm hh hs {
+gen ind_`x'=`x'_paid_by_mc_12m!=0 & !missing(`x'_paid_by_mc_12m)
+}
+label var ind_dm "Indicator any DME use 12m post ivw"
+label var ind_hh "Indicator any HH use 12m post ivw"
+label var ind_hs "Indicator any hospice use 12m post ivw"
+gen ind_no_hc=tot_paid_by_mc_12m==0
+label var ind_no_hc "No MC expenditures 12m post ivw"
+
+local ioutcomes1 ind_hosp_adm_12m ind_hosp_adm_p12m ind_ed_12m ind_ed_p12m ///
+ind_icu_12m ind_icu_p12m 
+local ioutcomes2 ind_dm ind_hh ind_hs ind_no_hc died_12
+
+foreach y in smi charls {
+local rn : word count ``y'' 1 
+
+mat tab=J(`rn',1,.)
+local r=1
+local c=1
+
+foreach x of local `y' {
+	qui sum `x' [aw=wgtr]
+	if r(mean)*r(N)>=11 | r(mean)==0 mat tab[`r',`c']=r(mean)*100
+	if "`x'"=="age" mat tab[`r',`c']=r(mean)
+	local r=`r'+1
+}
+
+mat tab[`r',`c']=r(N)
+mat rownames tab=``y'' N
+
+frmttable, statmat(tab) varlabels ctitles("" "HRS") store(hrs`y')
+
+}
+
+local rn : word count `ioutcomes1' `coutcomes1' `coutcomes1' `ioutcomes2' 1
+
+mat tab=J(`rn',1,.)
+local r=1
+local c=1
+local names
+
+foreach x of local ioutcomes1 {
+	qui sum `x' [aw=wgtr]
+	mat tab[`r',`c']=r(mean)*100
+	local r=`r'+1
+	local names `names' `x'
+}
+foreach x of local coutcomes1 {
+	local names `names' `x' max
+	qui sum `x' [aw=wgtr]
+	mat tab[`r',`c']=r(mean)
+	local r=`r'+1
+	mat tab[`r',`c']=r(max)
+	local r=`r'+1
+}
+foreach x of local ioutcomes2 {
+	qui sum `x' [aw=wgtr]
+	mat tab[`r',`c']=r(mean)*100
+	local r=`r'+1
+	local names `names' `x'
+}
+
+mat tab[`r',`c']=r(N)
+
+mat rownames tab=`names' N
+
+frmttable, statmat(tab) varlabels ctitles("" "HRS") store(hrsutil) ///
+sdec(2\2\2\2\2\2\2\0\2\0\2\0\2\0\2\0\2\0\2\0\2\0\2\2\2\2\2\0)
+
+frmttable using "HoPe comparison.rtf", ///
+replace statmat(tabsmi) merge(hrssmi) varlabels ///
+note("Wave 1 NHATS community-dwelling with 12m FFS & a SMI or multimorbidity, weighted" ///
+"2010 Wave HRS community-dwelling with 12m FFS & a SMI or multimorbidity, weighted" ///
+"Multimorbidity defined as 3+ Dartmouth conditions") ///
+title("HoPe Project Compare: Diagnosis Distribution, 12m Look Back From Interview") ///
+ ctitles("" "NHATS")
+
+frmttable using "HoPe comparison.rtf", ///
+addtable statmat(tabcharls) merge(hrscharls) varlabels ///
+ctitles("" "NHATS") ///
+title("HoPe Project Compare: Charlson Comorbidities")
+
+frmttable using "HoPe comparison.rtf", ///
+addtable statmat(tabout) merge(hrsutil) varlabels ///
+sdec(2\2\2\2\2\2\2\0\2\0\2\0\2\0\2\0\2\0\2\0\2\0\2\2\2\2\2\0) ctitles("" "NHATS") ///
+title("HoPe Project Compare: Utilization")
+append using `nhats'
+
+
+H="not dementia/no dialysis patients"
+/* use nhats and hrs serious illness datasets--compare to Omari's tables
+
+Type of SMI, Charlson comorbs, admit & # ip stays, ED visits, ICU stays*/
+cd "E:\data\HoPe-HRS & NHATS\"
+use "E:\nhats\data\projects\serious_ill\final_data\serious_ill_nhats_sample.dta" if ///
+wave==1 & (criteria_smi==1 | dmouth_index>=3) & !missing(charls_index_0_1yr) ///
+& sp_ivw==1, clear
+merge 1:m spid using nhats_dialysis.dta, nogen keep(match master)
+drop if smi_canc==1
+drop if smi_hiv==1 
+gen charls_cat1=charls_index_0_1yr<3
+gen charls_cat2=inrange(charls_index_0_1yr,3,6)
+gen charls_cat3=inrange(charls_index_0_1yr,7,25)
+label var charls_cat1 "0-2 Charlson"
+label var charls_cat2 "3-6 Charlson"
+label var charls_cat3 "7+ Charlson"
+drop charls_inde*
+
+foreach x of varlist charls* {
+local charls `charls' `x'
+}
+local charls `charls' female age
+replace dmouth_index=dmouth_index-dmouth_9
+drop if (smi_count==1 & smi_dem==1 & dmouth_index<3)  | dial==1
+drop smi_count smi_ge3 smi_nh_ind smi_and_adl 
+gen smi_multi=dmouth_index>=3
+label var smi_multi "Multimorbidity (3+ Dartmouth)"
+
+foreach x of varlist smi* {
+local smi `smi' `x'
+}
+drop ind_icu
+foreach x in 12m p12m {
+egen n_ed_`x'=rowtotal(n_ed_op_visits_`x' n_ed_ip_`x')
+replace n_ed_`x'=0 if missing(n_ed_`x')
+label var n_ed_`x' "# ED visits (OP or IP) `x'"
+gen ind_ed_`x'=n_ed_`x'>0 & !missing(n_ed_`x')
+label var ind_ed_`x' "Ind ED visit (OP or IP) `x'"
+gen ind_icu_`x'=icu_days_`x'>0 & !missing(icu_days_`x')
+label var ind_icu_`x' "Ind ICU stay `x'"
+}
+
+
+local coutcomes1 n_ip_admit_12m n_ip_admit_p12m n_ed_12m n_ed_p12m ///
+n_icu_stays_12m n_icu_stays_p12m icu_days_12m icu_days_p12m
+
+foreach x in dm hh hs {
+gen ind_`x'=`x'_paid_by_mc_12m!=0 & !missing(`x'_paid_by_mc_12m)
+}
+label var ind_dm "Indicator any DME use 12m post ivw"
+label var ind_hh "Indicator any HH use 12m post ivw"
+label var ind_hs "Indicator any hospice use 12m post ivw"
+
+gen ind_no_hc=tot_paid_by_mc_12m==0
+label var ind_no_hc "No MC expenditures 12m post ivw"
+
+local ioutcomes1 ind_hosp_adm_12m ind_hosp_adm_p12m ind_ed_12m ind_ed_p12m ///
+ind_icu_12m ind_icu_p12m 
+local ioutcomes2 ind_dm ind_hh ind_hs ind_no_hc died_12
+
+
+foreach y in smi charls {
+local rn : word count ``y'' 1 
+
+mat tab`y'=J(`rn',1,.)
+local r=1
+local c=1
+
+foreach x of local `y' {
+	qui sum `x' [aw=anfinw]
+	if r(mean)*r(N)>=11 | r(mean)==0 mat tab`y'[`r',`c']=r(mean)*100
+	if "`x'"=="age" mat tab`y'[`r',`c']=r(mean)
+	local r=`r'+1
+}
+
+mat tab`y'[`r',`c']=r(N)
+mat rownames tab`y'=``y'' N
+
+frmttable, statmat(tab`y') varlabels ctitles("" "NHATS") store(nhats`y')
+
+}
+
+local rn : word count `ioutcomes1' `coutcomes1' `coutcomes1' `ioutcomes2' 1
+
+mat tabout=J(`rn',1,.)
+local r=1
+local c=1
+local names
+
+foreach x of local ioutcomes1 {
+	qui sum `x'
+	mat tabout[`r',`c']=r(mean)*100
+	local r=`r'+1
+	local names `names' `x'
+}
+foreach x of local coutcomes1 {
+	local names `names' `x' max
+	qui sum `x'
+	mat tabout[`r',`c']=r(mean)
+	local r=`r'+1
+	mat tabout[`r',`c']=r(max)
+	local r=`r'+1
+}
+foreach x of local ioutcomes2 {
+	qui sum `x'
+	mat tabout[`r',`c']=r(mean)*100
+	local r=`r'+1
+	local names `names' `x'
+}
+
+mat tabout[`r',`c']=r(N)
+
+mat rownames tabout=`names' N
+
+frmttable, statmat(tabout) varlabels ctitles("" "NHATS") store(nhatsutil) ///
+sdec(2\2\2\2\2\2\2\0\2\0\2\0\2\0\2\0\2\0\2\0\2\0\2\2\2\2\2\0)
+
+use "E:\data\serious_ill\final_data\n0_n1_p1_p2_x_criteria_2010.dta" if !nhres_n0 ///
+& wgtr_n0!=0, clear
+merge 1:1 id using "E:\data\hrs_cleaned\death_date_2012.dta", nogen keep(match master) ///
+keepusing(death_all)
+drop *n1 *p1 *_x
+rename *_n0 *
+rename bid_hrs bid_hrs_21
+rename age_at_core age
+merge 1:1 bid_hrs_21 using hrs_dialysis, nogen keep(match master)
+merge 1:1 bid_hrs_21 using hrs_dmouth, nogen keep(match master)
+replace dmouth_index=dmouth_index-dmouth_9
+drop if (smi_count==1 & smi_dem==1 & dmouth_index<3)  | dial==1
+keep if criteria_smi==1 | dmouth_index>=3
+local charls
+local smi
+gen charls_cat1=charls_index_0_1yr<3
+gen charls_cat2=inrange(charls_index_0_1yr,3,6)
+gen charls_cat3=inrange(charls_index_0_1yr,7,25)
+label var charls_cat1 "0-2 Charlson"
+label var charls_cat2 "3-6 Charlson"
+label var charls_cat3 "7+ Charlson"
+drop charls_inde*
+
+foreach x of varlist charls* {
+local charls `charls' `x'
+}
+local charls `charls' female age
+drop smi_count smi_ge3 smi_nh_ind smi_and_adl smi_helper 
+gen smi_multi=dmouth_index>=3 & !missing(dmouth_index)
+label var smi_multi "Multimorbidity (3+ Dartmouth)"
+
+foreach x of varlist smi* {
+local smi `smi' `x'
+}
+
+foreach x in 12m p12m {
+egen n_ed_`x'=rowtotal(n_ed_op_visits_`x' n_ed_ip_`x')
+replace n_ed_`x'=0 if missing(n_ed_`x')
+label var n_ed_`x' "# ED visits (OP or IP) `x'"
+gen ind_ed_`x'=n_ed_`x'>0 & !missing(n_ed_`x')
+label var ind_ed_`x' "Ind ED visit (OP or IP) `x'"
+gen ind_icu_`x'=icu_days_`x'>0 & !missing(icu_days_`x')
+label var ind_icu_`x' "Ind ICU stay `x'"
+}
+
+gen died_12=death_all-c_ivw_date<=365
+label var died_12 "Died within 12m of ivw"
+
+local coutcomes1 n_ip_admit_12m n_ip_admit_p12m n_ed_12m n_ed_p12m ///
+n_icu_stays_12m n_icu_stays_p12m icu_days_12m icu_days_p12m
+
+foreach x in dm hh hs {
+gen ind_`x'=`x'_paid_by_mc_12m!=0 & !missing(`x'_paid_by_mc_12m)
+}
+label var ind_dm "Indicator any DME use 12m post ivw"
+label var ind_hh "Indicator any HH use 12m post ivw"
+label var ind_hs "Indicator any hospice use 12m post ivw"
+gen ind_no_hc=tot_paid_by_mc_12m==0
+label var ind_no_hc "No MC expenditures 12m post ivw"
+
+local ioutcomes1 ind_hosp_adm_12m ind_hosp_adm_p12m ind_ed_12m ind_ed_p12m ///
+ind_icu_12m ind_icu_p12m 
+local ioutcomes2 ind_dm ind_hh ind_hs ind_no_hc died_12
+
+foreach y in smi charls {
+local rn : word count ``y'' 1 
+
+mat tab=J(`rn',1,.)
+local r=1
+local c=1
+
+foreach x of local `y' {
+	qui sum `x' [aw=wgtr]
+	if r(mean)*r(N)>=11 | r(mean)==0 mat tab[`r',`c']=r(mean)*100
+	if "`x'"=="age" mat tab[`r',`c']=r(mean)
+	local r=`r'+1
+}
+
+mat tab[`r',`c']=r(N)
+mat rownames tab=``y'' N
+
+frmttable, statmat(tab) varlabels ctitles("" "HRS") store(hrs`y')
+
+}
+
+local rn : word count `ioutcomes1' `coutcomes1' `coutcomes1' `ioutcomes2' 1
+
+mat tab=J(`rn',1,.)
+local r=1
+local c=1
+local names
+
+foreach x of local ioutcomes1 {
+	qui sum `x' [aw=wgtr]
+	mat tab[`r',`c']=r(mean)*100
+	local r=`r'+1
+	local names `names' `x'
+}
+foreach x of local coutcomes1 {
+	local names `names' `x' max
+	qui sum `x' [aw=wgtr]
+	mat tab[`r',`c']=r(mean)
+	local r=`r'+1
+	mat tab[`r',`c']=r(max)
+	local r=`r'+1
+}
+foreach x of local ioutcomes2 {
+	qui sum `x' [aw=wgtr]
+	mat tab[`r',`c']=r(mean)*100
+	local r=`r'+1
+	local names `names' `x'
+}
+
+mat tab[`r',`c']=r(N)
+
+mat rownames tab=`names' N
+
+frmttable, statmat(tab) varlabels ctitles("" "HRS") store(hrsutil) ///
+sdec(2\2\2\2\2\2\2\0\2\0\2\0\2\0\2\0\2\0\2\0\2\0\2\2\2\2\2\0)
+
+frmttable using "HoPe comparison noqualdemnondial.rtf", ///
+replace statmat(tabsmi) merge(hrssmi) varlabels ///
+note("Wave 1 NHATS community-dwelling with 12m FFS & a SMI or multimorbidity (excluding dementia), weighted" ///
+"2010 Wave HRS community-dwelling with 12m FFS & a SMI or multimorbidity  (excluding dementia), weighted" ///
+"All dialysis patients excluded" ///
+"Multimorbidity defined as 3+ Dartmouth conditions") ///
+title("HoPe Project Compare: Diagnosis Distribution, 12m Look Back From Interview") ///
+ ctitles("" "NHATS")
+
+frmttable using "HoPe comparison noqualdemnondial.rtf", ///
+addtable statmat(tabcharls) merge(hrscharls) varlabels ///
+ctitles("" "NHATS") ///
+title("HoPe Project Compare: Charlson Comorbidities")
+
+frmttable using "HoPe comparison noqualdemnondial.rtf", ///
+addtable statmat(tabout) merge(hrsutil) varlabels ///
+sdec(2\2\2\2\2\2\2\0\2\0\2\0\2\0\2\0\2\0\2\0\2\0\2\2\2\2\2\0) ctitles("" "NHATS") ///
+title("HoPe Project Compare: Utilization")
+
+
+H="excl cancer & aids patients"
+/* use nhats and hrs serious illness datasets--compare to Omari's tables
+
+Type of SMI, Charlson comorbs, admit & # ip stays, ED visits, ICU stays*/
+cd "E:\data\HoPe-HRS & NHATS\"
+use "E:\nhats\data\projects\serious_ill\final_data\serious_ill_nhats_sample.dta" if ///
+wave==1 & (criteria_smi==1 | dmouth_index>=3) & !missing(charls_index_0_1yr) ///
+& sp_ivw==1, clear
+merge 1:m spid using nhats_dialysis.dta, nogen keep(match master)
+drop if smi_canc==1
+drop if smi_hiv==1 
+gen charls_cat1=charls_index_0_1yr<3
+gen charls_cat2=inrange(charls_index_0_1yr,3,6)
+gen charls_cat3=inrange(charls_index_0_1yr,7,25)
+label var charls_cat1 "0-2 Charlson"
+label var charls_cat2 "3-6 Charlson"
+label var charls_cat3 "7+ Charlson"
+drop charls_inde*
+
+foreach x of varlist charls* {
+local charls `charls' `x'
+}
+local charls `charls' female age
+drop smi_count smi_ge3 smi_nh_ind smi_and_adl 
+gen smi_multi=dmouth_index>=3
+label var smi_multi "Multimorbidity (3+ Dartmouth)"
+
+foreach x of varlist smi* {
+local smi `smi' `x'
+}
+drop ind_icu
+foreach x in 12m p12m {
+egen n_ed_`x'=rowtotal(n_ed_op_visits_`x' n_ed_ip_`x')
+replace n_ed_`x'=0 if missing(n_ed_`x')
+label var n_ed_`x' "# ED visits (OP or IP) `x'"
+gen ind_ed_`x'=n_ed_`x'>0 & !missing(n_ed_`x')
+label var ind_ed_`x' "Ind ED visit (OP or IP) `x'"
+gen ind_icu_`x'=icu_days_`x'>0 & !missing(icu_days_`x')
+label var ind_icu_`x' "Ind ICU stay `x'"
+}
+
+
+local coutcomes1 n_ip_admit_12m n_ip_admit_p12m n_ed_12m n_ed_p12m ///
+n_icu_stays_12m n_icu_stays_p12m icu_days_12m icu_days_p12m
+
+foreach x in dm hh hs {
+gen ind_`x'=`x'_paid_by_mc_12m!=0 & !missing(`x'_paid_by_mc_12m)
+}
+label var ind_dm "Indicator any DME use 12m post ivw"
+label var ind_hh "Indicator any HH use 12m post ivw"
+label var ind_hs "Indicator any hospice use 12m post ivw"
+
+gen ind_no_hc=tot_paid_by_mc_12m==0
+label var ind_no_hc "No MC expenditures 12m post ivw"
+
+local ioutcomes1 ind_hosp_adm_12m ind_hosp_adm_p12m ind_ed_12m ind_ed_p12m ///
+ind_icu_12m ind_icu_p12m 
+local ioutcomes2 ind_dm ind_hh ind_hs ind_no_hc died_12
+
+
+foreach y in smi charls {
+local rn : word count ``y'' 1 
+
+mat tab`y'=J(`rn',1,.)
+local r=1
+local c=1
+
+foreach x of local `y' {
+	qui sum `x' [aw=anfinw]
+	if r(mean)*r(N)>=11 | r(mean)==0 mat tab`y'[`r',`c']=r(mean)*100
+	if "`x'"=="age" mat tab`y'[`r',`c']=r(mean)
+	local r=`r'+1
+}
+
+mat tab`y'[`r',`c']=r(N)
+mat rownames tab`y'=``y'' N
+
+frmttable, statmat(tab`y') varlabels ctitles("" "NHATS") store(nhats`y')
+
+}
+
+local rn : word count `ioutcomes1' `coutcomes1' `coutcomes1' `ioutcomes2' 1
+
+mat tabout=J(`rn',1,.)
+local r=1
+local c=1
+local names
+
+foreach x of local ioutcomes1 {
+	qui sum `x'
+	mat tabout[`r',`c']=r(mean)*100
+	local r=`r'+1
+	local names `names' `x'
+}
+foreach x of local coutcomes1 {
+	local names `names' `x' max
+	qui sum `x'
+	mat tabout[`r',`c']=r(mean)
+	local r=`r'+1
+	mat tabout[`r',`c']=r(max)
+	local r=`r'+1
+}
+foreach x of local ioutcomes2 {
+	qui sum `x'
+	mat tabout[`r',`c']=r(mean)*100
+	local r=`r'+1
+	local names `names' `x'
+}
+
+mat tabout[`r',`c']=r(N)
+
+mat rownames tabout=`names' N
+
+frmttable, statmat(tabout) varlabels ctitles("" "NHATS") store(nhatsutil) ///
+sdec(2\2\2\2\2\2\2\0\2\0\2\0\2\0\2\0\2\0\2\0\2\0\2\2\2\2\2\0)
+
+use "E:\data\serious_ill\final_data\n0_n1_p1_p2_x_criteria_2010.dta" if !nhres_n0 ///
+& wgtr_n0!=0, clear
+merge 1:1 id using "E:\data\hrs_cleaned\death_date_2012.dta", nogen keep(match master) ///
+keepusing(death_all)
+drop *n1 *p1 *_x
+rename *_n0 *
+drop if smi_canc==1 | smi_hiv==1
+rename bid_hrs bid_hrs_21
+rename age_at_core age
+merge 1:1 bid_hrs_21 using hrs_dialysis, nogen keep(match master)
+merge 1:1 bid_hrs_21 using hrs_dmouth, nogen keep(match master)
+keep if criteria_smi==1 | dmouth_index>=3
+local charls
+local smi
+gen charls_cat1=charls_index_0_1yr<3
+gen charls_cat2=inrange(charls_index_0_1yr,3,6)
+gen charls_cat3=inrange(charls_index_0_1yr,7,25)
+label var charls_cat1 "0-2 Charlson"
+label var charls_cat2 "3-6 Charlson"
+label var charls_cat3 "7+ Charlson"
+drop charls_inde*
+
+foreach x of varlist charls* {
+local charls `charls' `x'
+}
+local charls `charls' female age
+drop smi_count smi_ge3 smi_nh_ind smi_and_adl smi_helper 
+gen smi_multi=dmouth_index>=3 & !missing(dmouth_index)
+label var smi_multi "Multimorbidity (3+ Dartmouth)"
+
+foreach x of varlist smi* {
+local smi `smi' `x'
+}
+
+foreach x in 12m p12m {
+egen n_ed_`x'=rowtotal(n_ed_op_visits_`x' n_ed_ip_`x')
+replace n_ed_`x'=0 if missing(n_ed_`x')
+label var n_ed_`x' "# ED visits (OP or IP) `x'"
+gen ind_ed_`x'=n_ed_`x'>0 & !missing(n_ed_`x')
+label var ind_ed_`x' "Ind ED visit (OP or IP) `x'"
+gen ind_icu_`x'=icu_days_`x'>0 & !missing(icu_days_`x')
+label var ind_icu_`x' "Ind ICU stay `x'"
+}
+
+gen died_12=death_all-c_ivw_date<=365
+label var died_12 "Died within 12m of ivw"
+
+local coutcomes1 n_ip_admit_12m n_ip_admit_p12m n_ed_12m n_ed_p12m ///
+n_icu_stays_12m n_icu_stays_p12m icu_days_12m icu_days_p12m
+
+foreach x in dm hh hs {
+gen ind_`x'=`x'_paid_by_mc_12m!=0 & !missing(`x'_paid_by_mc_12m)
+}
+label var ind_dm "Indicator any DME use 12m post ivw"
+label var ind_hh "Indicator any HH use 12m post ivw"
+label var ind_hs "Indicator any hospice use 12m post ivw"
+gen ind_no_hc=tot_paid_by_mc_12m==0
+label var ind_no_hc "No MC expenditures 12m post ivw"
+
+local ioutcomes1 ind_hosp_adm_12m ind_hosp_adm_p12m ind_ed_12m ind_ed_p12m ///
+ind_icu_12m ind_icu_p12m 
+local ioutcomes2 ind_dm ind_hh ind_hs ind_no_hc died_12
+
+foreach y in smi charls {
+local rn : word count ``y'' 1 
+
+mat tab=J(`rn',1,.)
+local r=1
+local c=1
+
+foreach x of local `y' {
+	qui sum `x' [aw=wgtr]
+	if r(mean)*r(N)>=11 | r(mean)==0 mat tab[`r',`c']=r(mean)*100
+	if "`x'"=="age" mat tab[`r',`c']=r(mean)
+	local r=`r'+1
+}
+
+mat tab[`r',`c']=r(N)
+mat rownames tab=``y'' N
+
+frmttable, statmat(tab) varlabels ctitles("" "HRS") store(hrs`y')
+
+}
+
+local rn : word count `ioutcomes1' `coutcomes1' `coutcomes1' `ioutcomes2' 1
+
+mat tab=J(`rn',1,.)
+local r=1
+local c=1
+local names
+
+foreach x of local ioutcomes1 {
+	qui sum `x' [aw=wgtr]
+	mat tab[`r',`c']=r(mean)*100
+	local r=`r'+1
+	local names `names' `x'
+}
+foreach x of local coutcomes1 {
+	local names `names' `x' max
+	qui sum `x' [aw=wgtr]
+	mat tab[`r',`c']=r(mean)
+	local r=`r'+1
+	mat tab[`r',`c']=r(max)
+	local r=`r'+1
+}
+foreach x of local ioutcomes2 {
+	qui sum `x' [aw=wgtr]
+	mat tab[`r',`c']=r(mean)*100
+	local r=`r'+1
+	local names `names' `x'
+}
+
+mat tab[`r',`c']=r(N)
+
+mat rownames tab=`names' N
+
+frmttable, statmat(tab) varlabels ctitles("" "HRS") store(hrsutil) ///
+sdec(2\2\2\2\2\2\2\0\2\0\2\0\2\0\2\0\2\0\2\0\2\0\2\2\2\2\2\0)
+
+frmttable using "HoPe comparison noncancernonhiv.rtf", ///
+replace statmat(tabsmi) merge(hrssmi) varlabels ///
+note("Wave 1 NHATS community-dwelling with 12m FFS & a SMI or multimorbidity, weighted" ///
+"2010 Wave HRS community-dwelling with 12m FFS & a SMI or multimorbidity, weighted" ///
+"Multimorbidity defined as 3+ Dartmouth conditions") ///
+title("HoPe Project Compare: Diagnosis Distribution, 12m Look Back From Interview") ///
+ ctitles("" "NHATS")
+
+frmttable using "HoPe comparison noncancernonhiv.rtf", ///
+addtable statmat(tabcharls) merge(hrscharls) varlabels ///
+ctitles("" "NHATS") ///
+title("HoPe Project Compare: Charlson Comorbidities")
+
+frmttable using "HoPe comparison noncancernonhiv.rtf", ///
+addtable statmat(tabout) merge(hrsutil) varlabels ///
+sdec(2\2\2\2\2\2\2\0\2\0\2\0\2\0\2\0\2\0\2\0\2\0\2\2\2\2\2\0) ctitles("" "NHATS") ///
+title("HoPe Project Compare: Utilization")

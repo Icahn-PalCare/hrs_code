@@ -5883,7 +5883,56 @@ label var tot_paid_by_mc_y`y' "Total Medicare Spending Y`y'"
 local ++y
 }
 
+//get annual 3+ Elixhauser, dementia & baseline/per-ivw dementia
 
+
+sort id nflag
+forvalues i=1/7 {
+	gen comorb_ge3_y`i'=inrange(comorb_all_`=(`i'-1)*12',3,31) if nflag==0
+	label var comorb_ge3_y`i' "3+ Elixhauser comorbidities, `=`i'-1'-`i' years pre-death"
+	rename comorb_31_`=(`i'-1)*12' comorb_31_y`i'
+	replace comorb_31_y`i'=0 if missing(comorb_31_y`i') & nflag==0
+	label var comorb_31_y`i' "Indicator dementia from claims, `=`i'-1'-`i' years pre-death"
+
+}
+
+forvalues i=1/9 {
+	gen prob_dem`i'=inrange(pdem,0.5,1) if !missing(pdem) & inrange((index_date-ivw_date)/365.25,`=`i'-1',`i')
+	by id: egen prob_dem_y`i'=max(prob_dem`i')
+	by id: egen pdem_y`i'=max(cond(inrange((index_date-ivw_date)/365.25,`=`i'-1',`i'),pdem,.))
+	drop prob_dem`i'
+}
+
+gen prob_dem=inrange(pdem,0.5,1) if !missing(pdem)
+gen t2d=index_date-ivw_date
+by id: egen mint2d=min(abs(index_date-ivw_date/365.25)-7)
+gen ind_baseline=mint2d==index_date-ivw_date
+gen m2d=t2d/30.42
+gen adl_dependent=!adl_independent_core
+foreach x in smoke_curr married medicaid adl_dependent srh_pf prob_dem pdem m2d {
+	by id: egen `x'_baseline=max(cond(ind_baseline==1,`x',.))
+}
+
+/*
+carryforward age_at_death female married hseduc smoke_curr medicaid adl_dependent ///
+srh_pf prob_dem_baseline pdem_baseline cum* race, replace
+gen prob_dem_baseline=prob_dem_y9
+gen pdem_baseline=pdem_y9
+foreach x in pdem prob_dem {
+	replace `x'_baseline=`x'_y8 if !missing(`x'_y8)
+	//replace `x'_baseline=.
+	foreach i in 7 6 {
+	replace `x'_baseline=`x'_y`i' if !missing(`x'_y`i') ///
+	 & missing(`x'_baseline)
+}
+forvalues i=8(-1)1 {
+	replace `x'_y`i'=`x'_y`=`i'+1' if missing(`x'_y`i')
+}
+//note--50 people's baseline is year 6, so missing year 7
+replace `x'_y7=`x'_baseline if missing(`x'_y7)
+drop `x'_y8 `x'_y9
+}
+*/
 
 save $final\R01_final.dta, replace
 
@@ -12214,6 +12263,353 @@ restore
 
 H="Table 1"
 
+import excel "E:\data\hrs_restricted_2014\Ref Docs\Medicaid generosity.xlsx", sheet("Sheet1") firstrow case(lower) clear
+rename location stateusps
+tempfile generosity
+save `generosity'
+
+clear all
+capture log close
+
+global datapath "E:\data\burden_dementia\int_data"
+global final "E:\data\burden_dementia\final_data"
+local logpath "E:\data\burden_dementia\logs"
+global ooppath "E:\data\burden_dementia\oopdata"
+global output "E:\projects\burden_dementia\archive logs"
+
+cd $datapath
+
+use "E:\data\burden_dementia\int_data\predicted_annual_medicaid_costs.dta", clear
+
+rename year index_year
+
+tempfile predict
+save `predict'
+
+
+use R01_j.dta, clear
+
+merge m:1 id using R01_annualized.dta, keepus(oop_5yr oop_7yr informal_5yr informal_7yr oop_y* informal_y* mc_b_prem_y* ///
+private_ltc_prem_y* nh_nights_y* nh_oop_y*)
+drop _m
+
+merge m:1 id using tot_paid_maid.dta, keepus(tot_paid_m* tot_nf_days*)
+rename tot_nf_days_maid_n* tot_nf_days_y*
+
+drop if _m==2
+cap drop _m
+
+merge m:1 id index_year using `predict', keepus(buyin_mo generous ind_mcaid_imp)
+drop if _m==2
+cap drop _m
+
+drop generous
+merge m:1 stateusps using `generosity', gen(gm)
+drop if gm==2
+
+destring genworth_nh, replace
+
+sort id nflag
+by id: egen anychampus=max(champus)
+replace champus_exit=anychampus if missing(champus_exit)
+
+forvalues i=1/7 {
+	foreach x in nh_nights n_snf_days private_ltc_prem nh_oop tot_nf_days {
+		replace `x'_y`i'=0 if missing(`x'_y`i')
+}
+	replace nh_oop_y`i'=365*genworth if nh_oop_y`i'>365*genworth
+	replace nh_nights_y`i'=365 if nh_nights_y`i'>365 
+	gen imputed_nh_costs_a_y`i'=0
+	gen imputed_nh_costs_b_y`i'=(nh_nights_y`i'-n_snf_days_y`i'-tot_nf_days_y`i'- ///
+	(.8*private_ltc_prem_y`i'+nh_oop_y`i')/genworth)*genworth ///
+	if champus_exit==1 | private_ltc_prem_y`i'>0 | ltc_ins_exit==1
+	replace imputed_nh_costs_b_y`i'=0 if !champus_exit & !private_ltc_prem_y`i' 
+	gen imputed_nh_costs_c_y`i'=(nh_nights_y`i'-n_snf_days_y`i'-tot_nf_days_y`i'- ///
+	(.8*private_ltc_prem_y`i'+nh_oop_y`i')/genworth)*genworth	
+	gen imputed_nh_costs_d_y`i'=(nh_nights_y`i'-n_snf_days_y`i'-tot_nf_days_y`i'- ///
+	(.8*private_ltc_prem_y`i'+nh_oop_y`i')/genworth)*genworth
+	foreach x in a b c d {
+		if "`x'"!="c" replace imputed_nh_costs_`x'_y`i'=0 if imputed_nh_costs_`x'_y`i'<0
+}
+	replace imputed_nh_costs_b_y`i'=0 if !champus_exit & !private_ltc_prem_y`i' & ltc_ins_exit!=1
+	label var imputed_nh_costs_a_y`i' "Imputed NH Costs, year `i': Conservative (0 for all)"
+	label var imputed_nh_costs_b_y`i' "Imputed NH Costs, year `i': Moderate (only for those with LTC/VA coverage)"
+	label var imputed_nh_costs_c_y`i' "Imputed NH Costs, year `i': SR nights as gold standard (all, allows negative values for SR nights)"
+	label var imputed_nh_costs_d_y`i' "Imputed NH Costs, year `i': Comprehensive (imputed for all, no negative values)"
+	gen unat_nights`i'=imputed_nh_costs_c_y`i'/genworth
+	label var unat_nights`i' "Unattributed NH nights, year `i': Comprehensive"
+	
+}
+
+
+gen ffs_7yr = 0 
+replace ffs_7yr = 1 if cont_ffs_n_mos>=84 & cont_ffs_n_mos!=.
+
+gen ffs_6yr = 0 
+replace ffs_6yr = 1 if cont_ffs_n_mos>=72 & cont_ffs_n_mos!=.
+
+gen ffs_5yr = 0
+replace ffs_5yr = 1 if cont_ffs_n_mos>=60 & cont_ffs_n_mos!=.
+
+gen ffs_4yr = 0
+replace ffs_4yr = 1 if cont_ffs_n_mos>=48 & cont_ffs_n_mos!=.
+
+gen ffs_3yr = 0
+replace ffs_3yr = 1 if cont_ffs_n_mos>=36 & cont_ffs_n_mos!=.
+
+gen ffs_2yr = 0
+replace ffs_2yr = 1 if cont_ffs_n_mos>=24 & cont_ffs_n_mos!=.
+
+gen ffs_1yr = 0
+replace ffs_1yr = 1 if cont_ffs_n_mos>=12 & cont_ffs_n_mos!=.
+
+
+gen white = 0
+replace white = 1 if race==1 & hisp_eth==0
+
+gen black = 0
+replace black = 1 if race==2 & hisp_eth==0
+
+gen other = 0 
+replace other = 1 if white==0 & black==0 & hisp_eth==0
+
+label var white "Non-Hispanic White"
+label var black "Non-Hispanic Black"
+label var other "Non-Hispanic Other"
+
+label var tot_paid_maid_n1 "Total Medicaid Spending Y1"
+label var tot_paid_maid_n2 "Total Medicaid Spending Y2"
+label var tot_paid_maid_n3 "Total Medicaid Spending Y3"
+label var tot_paid_maid_n4 "Total Medicaid Spending Y4"
+label var tot_paid_maid_n5 "Total Medicaid Spending Y5"
+label var tot_paid_maid_n6 "Total Medicaid Spending Y6"
+label var tot_paid_maid_n7 "Total Medicaid Spending Y7"
+
+label var oop_5yr "Cumulative 5yr OOP"
+label var oop_7yr "Cumulative 7yr OOP"
+label var informal_5yr "Cumulative 5yr informal"
+label var informal_7yr "Cumulative 7yr informal"
+
+forvalues i = 1/7 {
+rename tot_paid_maid_n`i' tot_paid_maid_y`i'
+}
+
+local y = 1
+forvalues i = 12(12)84 {
+
+
+
+rename tot_paid_by_mc_`i'm tot_paid_by_mc_y`y'
+
+//2/25/19-ebl-subtracting part b premium from mc expenditures
+replace tot_paid_by_mc_y`y'=tot_paid_by_mc_y`y'-mc_b_prem_y`y'
+
+label var tot_paid_by_mc_y`y' "Total Medicare Spending Y`y'"
+
+local ++y
+}
+
+//get annual 3+ Elixhauser, dementia & baseline/per-ivw dementia
+
+
+sort id nflag
+forvalues i=1/7 {
+	gen comorb_ge3_y`i'=inrange(comorb_all_`=(`i'-1)*12',3,31) if nflag==0
+	label var comorb_ge3_y`i' "3+ Elixhauser comorbidities, `=`i'-1'-`i' years pre-death"
+	rename comorb_31_`=(`i'-1)*12' comorb_31_y`i'
+	replace comorb_31_y`i'=0 if missing(comorb_31_y`i') & nflag==0
+	label var comorb_31_y`i' "Indicator dementia from claims, `=`i'-1'-`i' years pre-death"
+
+}
+
+forvalues i=1/9 {
+	gen prob_dem`i'=inrange(pdem,0.5,1) if !missing(pdem) & inrange((index_date-ivw_date)/365.25,`=`i'-1',`i')
+	by id: egen prob_dem_y`i'=max(prob_dem`i')
+	by id: egen pdem_y`i'=max(cond(inrange((index_date-ivw_date)/365.25,`=`i'-1',`i'),pdem,.))
+	drop prob_dem`i'
+}
+
+gen prob_dem=inrange(pdem,0.5,1) if !missing(pdem)
+gen t2d=index_date-ivw_date
+by id: egen mint2d=min(abs(index_date-ivw_date-7*365.25))
+gen ind_baseline=floor(mint2d)==floor(abs(index_date-ivw_date-7*365.25))
+gen m2d=t2d/30.42
+gen adl_dependent=!adl_independent_core
+foreach x in smoke_curr married medicaid adl_dependent srh_pf prob_dem pdem m2d {
+	by id: egen `x'_baseline=max(cond(ind_baseline==1,`x',.))
+}
+
+/*
+carryforward age_at_death female married hseduc smoke_curr medicaid adl_dependent ///
+srh_pf prob_dem_baseline pdem_baseline cum* race, replace
+gen prob_dem_baseline=prob_dem_y9
+gen pdem_baseline=pdem_y9
+foreach x in pdem prob_dem {
+	replace `x'_baseline=`x'_y8 if !missing(`x'_y8)
+	//replace `x'_baseline=.
+	foreach i in 7 6 {
+	replace `x'_baseline=`x'_y`i' if !missing(`x'_y`i') ///
+	 & missing(`x'_baseline)
+}
+forvalues i=8(-1)1 {
+	replace `x'_y`i'=`x'_y`=`i'+1' if missing(`x'_y`i')
+}
+//note--50 people's baseline is year 6, so missing year 7
+replace `x'_y7=`x'_baseline if missing(`x'_y7)
+drop `x'_y8 `x'_y9
+}
+*/
+
+save $final\R01_final.dta, replace
+
+preserve 
+keep if nflag==0
+keep if final==1
+
+gen all = 1
+
+local ivars female white black other hospice_exit nhres_exit married_exit reschil_d_exit resspouse_exit livealone_exit adl_independent_exit adl_severe_exit medicare_exit medicareb_exit medicaid_exit champus_exit ffs_7yr ffs_6yr ffs_5yr ffs_4yr ffs_3yr ffs_2yr ffs_1yr
+
+local medcost age_at_death tot_paid_maid_y1 tot_paid_maid_y2 tot_paid_maid_y3 tot_paid_maid_y4 tot_paid_maid_y5 tot_paid_maid_y6 tot_paid_maid_y7 tot_paid_by_mc_y1 tot_paid_by_mc_y2 tot_paid_by_mc_y3 tot_paid_by_mc_y4 tot_paid_by_mc_y5 tot_paid_by_mc_y6 tot_paid_by_mc_y7 ///
+oop_y1 oop_y2 oop_y3 oop_y4 oop_y5 oop_y6 oop_y7 oop_5yr oop_7yr informal_y1 informal_y2 informal_y3 informal_y4 informal_y5 informal_y6 informal_y7 informal_5yr informal_7yr
+
+local rd: word count `ivars' `medcost' 1
+
+mat tab1=J(`rd', 3,.)
+mat stars=J(`rd',3,0)
+local r = 1
+
+foreach x of local ivars {
+
+sum `x' if all==1
+
+mat tab1[`r',1] = r(mean)*100
+
+sum `x' if all==1 & dem_cohort==1
+mat tab1[`r',2] = r(mean)*100
+
+sum `x' if all==1 & dem_cohort==0
+mat tab1[`r',3] = r(mean)*100
+
+tab `x' dem_cohort if all==1, chi2
+mat stars[`r',2] = (r(p)<.01) + (r(p)<0.05)
+
+
+local ++r
+}
+
+foreach x of local medcost {
+
+sum `x' if all==1 
+
+mat tab1[`r',1] = r(mean)
+
+sum `x' if all==1 & dem_cohort==1
+mat tab1[`r',2] = r(mean)
+
+sum `x' if all==1 & dem_cohort==0
+mat tab1[`r',3] = r(mean) 
+
+ttest `x' if all==1, by(dem_cohort)
+mat stars[`r',2] = (r(p)<.01) + (r(p)<.05)
+
+
+
+local ++r
+}
+
+
+sum nflag if all==1
+mat tab1[`r',1] = r(N)
+
+sum nflag if all==1 & dem_cohort==1
+mat tab1[`r',2] = r(N)
+
+sum nflag if all==1 & dem_cohort==0
+mat tab1[`r',3] = r(N)
+
+
+
+mat rownames tab1 = `ivars' `medcost' N
+
+frmttable using "E:\projects\burden_dementia\archive logs\R01_Table1.doc", replace statmat(tab1) ///
+varlabels title("Summary Statistics For R01 Sample (Deceased 2004-2015, Age 70+ at Death, 5yr Cont. FFS)") ctitles("", "All","Dementia","No Dementia") sdec(2) ///
+annotate(stars) asymbol(*,**)note("All costs have been inflation adjusted to 2016 dollars. <0.05*, p<0.01**")
+
+/* FFS Only */
+
+
+keep if final_7yr==1
+
+local ivars female white black other hospice_exit nhres_exit married_exit reschil_d_exit resspouse_exit livealone_exit adl_independent_exit adl_severe_exit medicare_exit medicareb_exit medicaid_exit champus_exit ffs_7yr ffs_6yr ffs_5yr ffs_4yr ffs_3yr ffs_2yr ffs_1yr
+
+local medcost age_at_death tot_paid_maid_y1 tot_paid_maid_y2 tot_paid_maid_y3 tot_paid_maid_y4 tot_paid_maid_y5 tot_paid_maid_y6 tot_paid_maid_y7 tot_paid_by_mc_y1 tot_paid_by_mc_y2 tot_paid_by_mc_y3 tot_paid_by_mc_y4 tot_paid_by_mc_y5 tot_paid_by_mc_y6 tot_paid_by_mc_y7 ///
+oop_y1 oop_y2 oop_y3 oop_y4 oop_y5 oop_y6 oop_y7 oop_5yr oop_7yr informal_y1 informal_y2 informal_y3 informal_y4 informal_y5 informal_y6 informal_y7 informal_5yr informal_7yr
+
+
+local rd: word count `ivars' `medcost' 1
+
+mat tab1=J(`rd', 3,.)
+mat stars=J(`rd',3,0)
+local r = 1
+
+foreach x of local ivars {
+
+sum `x' if all==1
+
+mat tab1[`r',1] = r(mean)*100
+
+sum `x' if all==1 & dem_cohort==1
+mat tab1[`r',2] = r(mean)*100
+
+sum `x' if all==1 & dem_cohort==0
+mat tab1[`r',3] = r(mean)*100
+
+tab `x' dem_cohort if all==1, chi2
+mat stars[`r',2] = (r(p)<.01) + (r(p)<0.05)
+
+
+local ++r
+}
+
+foreach x of local medcost {
+
+sum `x' if all==1 
+
+mat tab1[`r',1] = r(mean)
+
+sum `x' if all==1 & dem_cohort==1
+mat tab1[`r',2] = r(mean)
+
+sum `x' if all==1 & dem_cohort==0
+mat tab1[`r',3] = r(mean) 
+
+ttest `x' if all==1, by(dem_cohort)
+mat stars[`r',2] = (r(p)<.01) + (r(p)<.05)
+
+
+
+local ++r
+}
+
+
+sum nflag if all==1
+mat tab1[`r',1] = r(N)
+
+sum nflag if all==1 & dem_cohort==1
+mat tab1[`r',2] = r(N)
+
+sum nflag if all==1 & dem_cohort==0
+mat tab1[`r',3] = r(N)
+
+
+
+mat rownames tab1 = `ivars' `medcost' N
+
+frmttable using "E:\projects\burden_dementia\archive logs\R01_Table1.doc", addtable statmat(tab1) ///
+varlabels title("Summary Statistics For R01 Sample (Deceased 2004-2015, Age 72+ at Death & 7yrs Cont. FFS)") ctitles("", "All","Dementia","No Dementia") sdec(2) ///
+annotate(stars) asymbol(*,**)note("All costs have been inflation adjusted to 2016 dollars. <0.05*, p<0.01**")
+
 
 H="7 year graphs"
 /*note--it takes forever to run through the whole thing, but if you don't need
@@ -13238,6 +13634,8 @@ save "`fdpath'/burden_dementia_sample_long.dta", replace
 
 
 H="changelog"
+04/16/19 - Added "Table 1" header
+
 04/12/19 - Added "annual diagnoses before" and Elishuaser headers. Evan
 
 04/11/19 - Added table with p-values. Evan 

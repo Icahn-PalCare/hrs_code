@@ -8309,7 +8309,8 @@ drop if droplist==1
 
 gen year = core_year
 drop _m
-merge 1:1 id year using "E:\data\hrs_cleaned\helper_hours_2016.dta", keepus(n_i hlphrs_i)
+merge 1:1 id year using "E:\data\hrs_cleaned\helper_hours_2016.dta", ///
+keepus(n_i n_s n_k n_f hlphrs_i hlphrs_s hlphrs_k hlphrs_f)
 drop if _m==2
 drop _m
 
@@ -8347,10 +8348,23 @@ replace total_oop = total_oop - rx_oop + mod_rx_oop
 
 gsort id -year
 
-replace hlphrs_i = 720 if hlphrs_i>720 & hlphrs_i!=. // capping helperhrs reported to 24hrs(max)*30days per person
+foreach x in i s k f {
+	replace hlphrs_`x' = 720 if hlphrs_`x'>720 & hlphrs_`x'!=. // capping helperhrs reported to 24hrs(max)*30days per person
+	replace hlphrs_`x'=0 if hlphrs_`x'==.
+	replace hlphrs_`x'=hlphrs_i if hlphrs_`x'>hlphrs_i
+}
 
-by id: gen prev_help_hrs = 1 if hlphrs_i[_n+1]>0 & hlphrs_i[_n+1]!=. //check for helper hrs at prev ivw
-by id: gen prev_hrs = hlphrs_i[_n+1] if hlphrs_i[_n+1]>0
+gen hlphrs_ns=hlphrs_i-hlphrs_s
+gen hlphrs_oth=hlphrs_i-hlphrs_s-hlphrs_k
+gen hlphrs_oth_flag=hlphrs_oth<0
+replace hlphrs_oth=0 if hlphrs_oth<0
+
+foreach x in i s k f ns oth {
+	by id: gen prev_help_hrs_`x' = 1 if hlphrs_i[_n+1]>0 & hlphrs_i[_n+1]!=. //check for helper hrs at prev ivw
+	by id: gen prev_hrs_`x' = hlphrs_`x'[_n+1] if hlphrs_i[_n+1]>0
+}
+
+
 by id: gen prev_oop_yes = 1 if helper_oop[_n+1]>0 & helper_oop[_n+1]!=.
 by id: gen prev_hlp_oop = (helper_oop[_n+1]/months[_n+1]) if helper_oop[_n+1]>0
 
@@ -8364,14 +8378,15 @@ if prev_oop_yes==1 & months>=4
 replace total_oop = total_oop - helper_oop + mod_helper_oop
 
 /* Creating approximate 2/4 year helper hours based on above fomula */
+foreach x in i s k f ns oth {
 
-gen total_hlp = hlphrs_i*4 if prev_help_hrs==. & months>=4
-replace total_hlp=hlphrs_i*months if months<4
-replace total_hlp = (hlphrs_i*4) + (months-4)*((hlphrs_i+prev_hrs)/2) ///
-if prev_help_hrs==1 & months>=4
+	gen total_hlp_`x' = hlphrs_`x'*4 if prev_help_hrs_i==. & months>=4
+	replace total_hlp_`x'=hlphrs_`x'*months if months<4
+	replace total_hlp_`x' = (hlphrs_`x'*4) + (months-4)*((hlphrs_`x'+prev_hrs_`x')/2) ///
+	if prev_help_hrs_i==1 & months>=4
 
-replace total_hlp = 0 if total_hlp==. // estimated total hours per interview
-
+	replace total_hlp_`x' = 0 if total_hlp_`x'==. // estimated total hours per interview
+}
 
 
 /* Create year variables to merge helper hours with yearly genworth costs */
@@ -8732,7 +8747,7 @@ replace `x' = 0 if `x'==.
 
 
 
-foreach x of varlist total_hlp {
+foreach x of varlist total_hlp* {
 
 *replace `x' = `x'/months // average # of helpers per month after 4/20 split
 replace `x' = (`x'*hr_rate*cpi_rate) 
@@ -8749,19 +8764,20 @@ save R01_cost_intd.dta, replace
 use R01_cost_intd.dta, replace
 
 cap drop hlp
+foreach x in i s k f ns oth {
 
-gen hlp = total_hlp / months
-
+gen hlp_`x' = total_hlp_`x' / months
+}
 cap drop oop 
 gen oop = total_oop / months
 
-keep id core_year nflag oop hlp months final final_7yr dem_cohort index_year mc_b_prem private_ltc_prem nh_nights nh_oop
+keep id core_year nflag oop hlp_* months final final_7yr dem_cohort index_year mc_b_prem private_ltc_prem nh_nights nh_oop
 
-reshape wide core_year oop hlp months mc_b_prem private_ltc_prem nh_nights nh_oop, i(id) j(nflag)
+reshape wide core_year oop hlp_i hlp_s hlp_k hlp_f hlp_ns hlp_oth months mc_b_prem private_ltc_prem nh_nights nh_oop, i(id) j(nflag)
 
 forvalues i = 1/7 {
 
-foreach x in x in hlp oop mc_b_prem private_ltc_prem nh_nights nh_oop {
+foreach x in x in hlp_i hlp_s hlp_k hlp_f hlp_ns hlp_oth oop mc_b_prem private_ltc_prem nh_nights nh_oop {
 
 gen `x'_y`i'=.
 
@@ -8771,28 +8787,28 @@ gen `x'_y`i'=.
 // Annualized Costs - Year 1
 
 * start with oop at exit if months < 12. Subtract months - 12 so that it can be pulled from N1
-foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
+foreach x in oop hlp_i hlp_s hlp_k hlp_f hlp_ns hlp_oth mc_b_prem private_ltc_prem nh_nights nh_oop {
 replace `x'_y1 = `x'0 * months0 if months0<12
 }
 
 replace months0 = months0 - 12 if months0<12
 
 * Pulling the leftover months from N1 (if exit < 12)
-foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
+foreach x in oop hlp_i hlp_s hlp_k hlp_f hlp_ns hlp_oth mc_b_prem private_ltc_prem nh_nights nh_oop {
 replace `x'_y1 = `x'_y1 + (-months0)*`x'1 if months0<0
 }
 
 replace months1 = months1 + months0 if months0<0
 
 *Using full exit if exit months==12
-foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
+foreach x in oop hlp_i hlp_s hlp_k hlp_f hlp_ns hlp_oth mc_b_prem private_ltc_prem nh_nights nh_oop {
 replace `x'_y1 = `x'0 * 12 if months0==12
 }
 
 replace months0 = 0 if months0==12
 
 * Using 12 months from exit if exit months>12
-foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
+foreach x in oop hlp_i hlp_s hlp_k hlp_f hlp_ns hlp_oth mc_b_prem private_ltc_prem nh_nights nh_oop {
 replace `x'_y1 = `x'0 * 12 if months0>12 & months0!=.
 }
 
@@ -8802,26 +8818,26 @@ replace months0 = . if months0 <=0
 // Annualized Costs - Year 2
 
 * People with leftover oop exit data
-foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
+foreach x in oop hlp_i hlp_s hlp_k hlp_f hlp_ns hlp_oth mc_b_prem private_ltc_prem nh_nights nh_oop {
 replace `x'_y2 = `x'0  * months0 if months0<12
 }
 
 replace months0 = months0 - 12 if months0<12
 
 
-foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
+foreach x in oop hlp_i hlp_s hlp_k hlp_f hlp_ns hlp_oth mc_b_prem private_ltc_prem nh_nights nh_oop {
 replace `x'_y2 = `x'_y2 + (-months0)*`x'1 if months0<0
 }
 
 replace months1 = months1 + months0 if months0<0
 
-foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
+foreach x in oop hlp_i hlp_s hlp_k hlp_f hlp_ns hlp_oth mc_b_prem private_ltc_prem nh_nights nh_oop {
 replace `x'_y2 = `x'0 * 12 if months0==12
 }
 
 replace months0 = months0 - 12 if months0==12
 
-foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
+foreach x in oop hlp_i hlp_s hlp_k hlp_f hlp_ns hlp_oth mc_b_prem private_ltc_prem nh_nights nh_oop {
 replace `x'_y2 = `x'0 * 12 if months0>12 & months0!=.
 }
 
@@ -8832,24 +8848,24 @@ replace months0 = months0 - 12 if months0>12 & months0!=.
 
 gen noop = 1 if oop_y2==.
 
-foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
+foreach x in oop hlp_i hlp_s hlp_k hlp_f hlp_ns hlp_oth mc_b_prem private_ltc_prem nh_nights nh_oop {
 replace `x'_y2 = `x'1 * months1 if months1<12 & noop==1
 }
 replace months1 = months1 - 12 if months1<12 & noop==1
 
-foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
+foreach x in oop hlp_i hlp_s hlp_k hlp_f hlp_ns hlp_oth mc_b_prem private_ltc_prem nh_nights nh_oop {
 replace `x'_y2 = `x'_y2 + (-months1)*`x'2 if months1<0 & noop==1
 }
 
 replace months2 = months2 + months1 if months1<0 & noop==1
 
-foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
+foreach x in oop hlp_i hlp_s hlp_k hlp_f hlp_ns hlp_oth mc_b_prem private_ltc_prem nh_nights nh_oop {
 replace `x'_y2 = `x'1 * 12 if months1==12 & noop==1
 }
 
 replace months1 = months1 - 12 if months1==12 & noop==1
 
-foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
+foreach x in oop hlp_i hlp_s hlp_k hlp_f hlp_ns hlp_oth mc_b_prem private_ltc_prem nh_nights nh_oop {
 replace `x'_y2 = `x'1 * 12 if months1>12 & months1!=. & noop==1
 }
 replace months1 = months1 - 12 if months1>12 & months1!=. & noop==1
@@ -8860,23 +8876,23 @@ drop noop
 // oop_y3
 
 * People with leftover oop exit data
-foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
+foreach x in oop hlp_i hlp_s hlp_k hlp_f hlp_ns hlp_oth mc_b_prem private_ltc_prem nh_nights nh_oop {
 replace `x'_y3 =  `x'0 * months0 if months0<12
 }
 replace months0 = months0 - 12 if months0<12
 
-foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
+foreach x in oop hlp_i hlp_s hlp_k hlp_f hlp_ns hlp_oth mc_b_prem private_ltc_prem nh_nights nh_oop {
 replace `x'_y3 = `x'_y3 + (-months0)*`x'1 if months0<0
 }
 replace months1 = months1 + months0 if months0<0
 
-foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
+foreach x in oop hlp_i hlp_s hlp_k hlp_f hlp_ns hlp_oth mc_b_prem private_ltc_prem nh_nights nh_oop {
 replace `x'_y3 = `x'0 * 12 if months0==12
 }
 
 replace months0 = months0 - 12 if months0==12
 
-foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
+foreach x in oop hlp_i hlp_s hlp_k hlp_f hlp_ns hlp_oth mc_b_prem private_ltc_prem nh_nights nh_oop {
 replace `x'_y3 =  `x'0 * 12 if months0>12 & months0!=.
 }
 
@@ -8886,23 +8902,23 @@ replace months0 = months0 - 12 if months0>12 & months0!=.
 
 gen noop = 1 if oop_y3==.
 
-foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
+foreach x in oop hlp_i hlp_s hlp_k hlp_f hlp_ns hlp_oth mc_b_prem private_ltc_prem nh_nights nh_oop {
 replace `x'_y3 =  `x'1 * months1 if months1<12 & noop==1
 }
 replace months1 = months1 - 12 if months1<12 & noop==1
 
-foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
+foreach x in oop hlp_i hlp_s hlp_k hlp_f hlp_ns hlp_oth mc_b_prem private_ltc_prem nh_nights nh_oop {
 replace `x'_y3 =  `x'_y3 + (-months1)*`x'2 if months1<0 & noop==1
 }
 replace months2 = months2 + months1 if months1<0 & noop==1
 
-foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
+foreach x in oop hlp_i hlp_s hlp_k hlp_f hlp_ns hlp_oth mc_b_prem private_ltc_prem nh_nights nh_oop {
 replace `x'_y3 =  `x'1 * 12 if months1==12 & noop==1
 }
 
 replace months1 = months1 - 12 if months1==12 & noop==1
 
-foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
+foreach x in oop hlp_i hlp_s hlp_k hlp_f hlp_ns hlp_oth mc_b_prem private_ltc_prem nh_nights nh_oop {
 replace `x'_y3 =  `x'1 * 12 if months1>12 & months1!=. & noop==1
 }
 replace months1 = months1 - 12 if months1>12 & months1!=. & noop==1
@@ -8913,7 +8929,7 @@ drop noop
 
 gen noop = 1 if oop_y3==.
 
-foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
+foreach x in oop hlp_i hlp_s hlp_k hlp_f hlp_ns hlp_oth mc_b_prem private_ltc_prem nh_nights nh_oop {
 replace `x'_y3 =   `x'2 * 12 if noop==1
 }
 replace months2 = months2 - 12 if noop==1
@@ -8928,22 +8944,22 @@ drop noop
 
 
 * People with leftover oop exit data
-foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
+foreach x in oop hlp_i hlp_s hlp_k hlp_f hlp_ns hlp_oth mc_b_prem private_ltc_prem nh_nights nh_oop {
 replace `x'_y4 =  `x'0 * months0 if months0<12
 }
 replace months0 = months0 - 12 if months0<12
 
-foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
+foreach x in oop hlp_i hlp_s hlp_k hlp_f hlp_ns hlp_oth mc_b_prem private_ltc_prem nh_nights nh_oop {
 replace `x'_y4 =  `x'_y4 + (-months0)*`x'1 if months0<0
 }
 replace months1 = months1 + months0 if months0<0
 
-foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
+foreach x in oop hlp_i hlp_s hlp_k hlp_f hlp_ns hlp_oth mc_b_prem private_ltc_prem nh_nights nh_oop {
 replace `x'_y4 =  `x'0 * 12 if months0==12
 }
 replace months0 = months0 - 12 if months0==12
 
-foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
+foreach x in oop hlp_i hlp_s hlp_k hlp_f hlp_ns hlp_oth mc_b_prem private_ltc_prem nh_nights nh_oop {
 replace `x'_y4 =  `x'0 * 12 if months0>12 & months0!=.
 }
 replace months0 = months0 - 12 if months0>12 & months0!=.
@@ -8952,22 +8968,22 @@ replace months0 = months0 - 12 if months0>12 & months0!=.
 
 gen noop = 1 if oop_y4==.
 
-foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
+foreach x in oop hlp_i hlp_s hlp_k hlp_f hlp_ns hlp_oth mc_b_prem private_ltc_prem nh_nights nh_oop {
 replace `x'_y4 =   `x'1 * months1 if months1<12 & noop==1
 }
 replace months1 = months1 - 12 if months1<12 & noop==1
 
-foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
+foreach x in oop hlp_i hlp_s hlp_k hlp_f hlp_ns hlp_oth mc_b_prem private_ltc_prem nh_nights nh_oop {
 replace `x'_y4 =  `x'_y4 + (-months1)*`x'2 if months1<0 & noop==1
 }
 replace months2 = months2 + months1 if months1<0 & noop==1
 
-foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
+foreach x in oop hlp_i hlp_s hlp_k hlp_f hlp_ns hlp_oth mc_b_prem private_ltc_prem nh_nights nh_oop {
 replace `x'_y4 =  `x'1 * 12 if months1==12 & noop==1
 }
 replace months1 = months1 - 12 if months1==12 & noop==1
 
-foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
+foreach x in oop hlp_i hlp_s hlp_k hlp_f hlp_ns hlp_oth mc_b_prem private_ltc_prem nh_nights nh_oop {
 replace `x'_y4 =  `x'1 * 12 if months1>12 & months1!=. & noop==1
 }
 
@@ -8979,23 +8995,23 @@ drop noop
 
 gen noop = 1 if oop_y4==.
 
-foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
+foreach x in oop hlp_i hlp_s hlp_k hlp_f hlp_ns hlp_oth mc_b_prem private_ltc_prem nh_nights nh_oop {
 replace `x'_y4 =  `x'2 * months2 if months2<12 & noop==1
 }
 
 replace months2 = months2 - 12 if months2<12 & noop==1
 
-foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
+foreach x in oop hlp_i hlp_s hlp_k hlp_f hlp_ns hlp_oth mc_b_prem private_ltc_prem nh_nights nh_oop {
 replace `x'_y4 =  `x'_y4 + (-months2)*`x'3 if months2<0 & noop==1
 }
 replace months3 = months3 + months2 if months2<0 & noop==1
 
-foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
+foreach x in oop hlp_i hlp_s hlp_k hlp_f hlp_ns hlp_oth mc_b_prem private_ltc_prem nh_nights nh_oop {
 replace `x'_y4 =  `x'2 * 12 if months2==12 & noop==1
 }
 replace months2 = months2 - 12 if months2==12 & noop==1
 
-foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
+foreach x in oop hlp_i hlp_s hlp_k hlp_f hlp_ns hlp_oth mc_b_prem private_ltc_prem nh_nights nh_oop {
 replace `x'_y4 =  `x'2 * 12 if months2>12 & months2!=. & noop==1
 }
 
@@ -9011,24 +9027,24 @@ drop noop
 // oop_y5
 
 * People with leftover oop exit data
-foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
+foreach x in oop hlp_i hlp_s hlp_k hlp_f hlp_ns hlp_oth mc_b_prem private_ltc_prem nh_nights nh_oop {
 replace `x'_y5 =  `x'0 * months0 if months0<12
 }
 replace months0 = months0 - 12 if months0<12
 
-foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
+foreach x in oop hlp_i hlp_s hlp_k hlp_f hlp_ns hlp_oth mc_b_prem private_ltc_prem nh_nights nh_oop {
 replace `x'_y5 =  `x'_y5 + (-months0)*`x'1 if months0<0
 }
 
 replace months1 = months1 + months0 if months0<0
 
-foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
+foreach x in oop hlp_i hlp_s hlp_k hlp_f hlp_ns hlp_oth mc_b_prem private_ltc_prem nh_nights nh_oop {
 replace `x'_y5 =  `x'0 * 12 if months0==12
 }
 
 replace months0 = months0 - 12 if months0==12
 
-foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
+foreach x in oop hlp_i hlp_s hlp_k hlp_f hlp_ns hlp_oth mc_b_prem private_ltc_prem nh_nights nh_oop {
 replace `x'_y5 =  `x'0 * 12 if months0>12 & months0!=.
 }
 replace months0 = months0 - 12 if months0>12 & months0!=.
@@ -9037,24 +9053,24 @@ replace months0 = months0 - 12 if months0>12 & months0!=.
 
 gen noop = 1 if oop_y5==.
 
-foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
+foreach x in oop hlp_i hlp_s hlp_k hlp_f hlp_ns hlp_oth mc_b_prem private_ltc_prem nh_nights nh_oop {
 replace `x'_y5 =  `x'1 * months1 if months1<12 & noop==1
 }
 
 replace months1 = months1 - 12 if months1<12 & noop==1
 
-foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
+foreach x in oop hlp_i hlp_s hlp_k hlp_f hlp_ns hlp_oth mc_b_prem private_ltc_prem nh_nights nh_oop {
 replace `x'_y5 =  `x'_y5 + (-months1)*`x'2 if months1<0 & noop==1
 }
 replace months2 = months2 + months1 if months1<0 & noop==1
 
-foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
+foreach x in oop hlp_i hlp_s hlp_k hlp_f hlp_ns hlp_oth mc_b_prem private_ltc_prem nh_nights nh_oop {
 replace `x'_y5 =  `x'1 * 12 if months1==12 & noop==1
 }
 
 replace months1 = months1 - 12 if months1==12 & noop==1
 
-foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
+foreach x in oop hlp_i hlp_s hlp_k hlp_f hlp_ns hlp_oth mc_b_prem private_ltc_prem nh_nights nh_oop {
 replace `x'_y5 =  `x'1 * 12 if months1>12 & months1!=. & noop==1
 }
 replace months1 = months1 - 12 if months1>12 & months1!=. & noop==1
@@ -9065,24 +9081,24 @@ drop noop
 
 gen noop = 1 if oop_y5==.
 
-foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
+foreach x in oop hlp_i hlp_s hlp_k hlp_f hlp_ns hlp_oth mc_b_prem private_ltc_prem nh_nights nh_oop {
 replace `x'_y5 =  `x'2 * months2 if months2<12 & noop==1
 }
 replace months2 = months2 - 12 if months2<12 & noop==1
 
-foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
+foreach x in oop hlp_i hlp_s hlp_k hlp_f hlp_ns hlp_oth mc_b_prem private_ltc_prem nh_nights nh_oop {
 replace `x'_y5 = `x'_y5 + (-months2)*`x'3 if months2<0 & noop==1
 }
 
 replace months3 = months3 + months2 if months2<0 & noop==1
 
-foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
+foreach x in oop hlp_i hlp_s hlp_k hlp_f hlp_ns hlp_oth mc_b_prem private_ltc_prem nh_nights nh_oop {
 replace `x'_y5 = `x'2 * 12 if months2==12 & noop==1
 }
 
 replace months2 = months2 - 12 if months2==12 & noop==1
 
-foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
+foreach x in oop hlp_i hlp_s hlp_k hlp_f hlp_ns hlp_oth mc_b_prem private_ltc_prem nh_nights nh_oop {
 replace `x'_y5 = `x'2 * 12  if months2>12 & months2!=. & noop==1
 }
 
@@ -9094,7 +9110,7 @@ drop noop
 
 gen noop = 1 if oop_y5==.
 
-foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
+foreach x in oop hlp_i hlp_s hlp_k hlp_f hlp_ns hlp_oth mc_b_prem private_ltc_prem nh_nights nh_oop {
 replace `x'_y5 = `x'3 * 12 if noop==1
 }
 
@@ -9114,25 +9130,25 @@ drop noop
 
 gen noop = 1 if oop_y6==.
 
-foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
+foreach x in oop hlp_i hlp_s hlp_k hlp_f hlp_ns hlp_oth mc_b_prem private_ltc_prem nh_nights nh_oop {
 replace `x'_y6 = `x'1 * months1 if months1<12 & noop==1
 }
 
 replace months1 = months1 - 12 if months1<12 & noop==1
 
-foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
+foreach x in oop hlp_i hlp_s hlp_k hlp_f hlp_ns hlp_oth mc_b_prem private_ltc_prem nh_nights nh_oop {
 replace `x'_y6 = `x'_y6 + (-months1)*`x'2 if months1<0 & noop==1
 }
 
 replace months2 = months2 + months1 if months1<0 & noop==1
 
-foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
+foreach x in oop hlp_i hlp_s hlp_k hlp_f hlp_ns hlp_oth mc_b_prem private_ltc_prem nh_nights nh_oop {
 replace `x'_y6 = `x'1 * 12 if months1==12 & noop==1
 }
 
 replace months1 = months1 - 12 if months1==12 & noop==1
 
-foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
+foreach x in oop hlp_i hlp_s hlp_k hlp_f hlp_ns hlp_oth mc_b_prem private_ltc_prem nh_nights nh_oop {
 replace `x'_y6 = `x'1 * 12 if months1>12 & months1!=. & noop==1
 }
 
@@ -9145,25 +9161,25 @@ drop noop
 gen noop = 1 if oop_y6==.
 
 
-foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
+foreach x in oop hlp_i hlp_s hlp_k hlp_f hlp_ns hlp_oth mc_b_prem private_ltc_prem nh_nights nh_oop {
 replace `x'_y6 = `x'2 * months2 if months2<12 & noop==1
 }
 
 replace months2 = months2 - 12 if months2<12 & noop==1
 
-foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
+foreach x in oop hlp_i hlp_s hlp_k hlp_f hlp_ns hlp_oth mc_b_prem private_ltc_prem nh_nights nh_oop {
 replace `x'_y6 = `x'_y6 + (-months2)*`x'3 if months2<0 & noop==1
 }
 
 replace months3 = months3 + months2 if months2<0 & noop==1
 
-foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
+foreach x in oop hlp_i hlp_s hlp_k hlp_f hlp_ns hlp_oth mc_b_prem private_ltc_prem nh_nights nh_oop {
 replace `x'_y6 = `x'2 * 12 if months2==12 & noop==1
 }
 
 replace months2 = months2 - 12 if months2==12 & noop==1
 
-foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
+foreach x in oop hlp_i hlp_s hlp_k hlp_f hlp_ns hlp_oth mc_b_prem private_ltc_prem nh_nights nh_oop {
 replace `x'_y6 = `x'2 * 12 if months2>12 & months2!=. & noop==1
 }
 
@@ -9175,25 +9191,25 @@ drop noop
 
 gen noop = 1 if oop_y6==.
 
-foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
+foreach x in oop hlp_i hlp_s hlp_k hlp_f hlp_ns hlp_oth mc_b_prem private_ltc_prem nh_nights nh_oop {
 replace `x'_y6 = `x'3 * months3 if months3<12 & noop==1
 }
 replace months3 = months3 - 12 if months3<12 & noop==1
 
-foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
+foreach x in oop hlp_i hlp_s hlp_k hlp_f hlp_ns hlp_oth mc_b_prem private_ltc_prem nh_nights nh_oop {
 replace `x'_y6 =  `x'_y6 + (-months3)*`x'4 if months3<0 & noop==1
 }
 
 replace months4 = months4 + months3 if months3<0 & noop==1
 
-foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
+foreach x in oop hlp_i hlp_s hlp_k hlp_f hlp_ns hlp_oth mc_b_prem private_ltc_prem nh_nights nh_oop {
 replace `x'_y6 =  `x'3 * 12 if months3==12 & noop==1
 }
 
 
 replace months3 = months3 - 12 if months3==12 & noop==1
 
-foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
+foreach x in oop hlp_i hlp_s hlp_k hlp_f hlp_ns hlp_oth mc_b_prem private_ltc_prem nh_nights nh_oop {
 replace `x'_y6 =  `x'3 * 12 if months3>12 & months3!=. & noop==1
 }
 
@@ -9213,26 +9229,26 @@ drop noop
 
 gen noop = 1 if oop_y7==.
 
-foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
+foreach x in oop hlp_i hlp_s hlp_k hlp_f hlp_ns hlp_oth mc_b_prem private_ltc_prem nh_nights nh_oop {
 replace `x'_y7 =  `x'1 * months1 if months1<12 & noop==1
 }
 
 replace months1 = months1 - 12 if months1<12 & noop==1
 
-foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
+foreach x in oop hlp_i hlp_s hlp_k hlp_f hlp_ns hlp_oth mc_b_prem private_ltc_prem nh_nights nh_oop {
 replace `x'_y7 =`x'_y7 + (-months1)*`x'2 if months1<0 & noop==1
 }
 
 replace months2 = months2 + months1 if months1<0 & noop==1
 
-foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
+foreach x in oop hlp_i hlp_s hlp_k hlp_f hlp_ns hlp_oth mc_b_prem private_ltc_prem nh_nights nh_oop {
 replace `x'_y7 = `x'1 * 12 if months1==12 & noop==1
 }
 
 replace months1 = months1 - 12 if months1==12 & noop==1
 
 
-foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
+foreach x in oop hlp_i hlp_s hlp_k hlp_f hlp_ns hlp_oth mc_b_prem private_ltc_prem nh_nights nh_oop {
 replace `x'_y7 = `x'1 * 12 if months1>12 & months1!=. & noop==1
 }
 
@@ -9244,22 +9260,22 @@ drop noop
 
 gen noop = 1 if oop_y7==.
 
-foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
+foreach x in oop hlp_i hlp_s hlp_k hlp_f hlp_ns hlp_oth mc_b_prem private_ltc_prem nh_nights nh_oop {
 replace `x'_y7 = `x'2 * months2 if months2<12 & noop==1
 }
 replace months2 = months2 - 12 if months2<12 & noop==1
 
-foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
+foreach x in oop hlp_i hlp_s hlp_k hlp_f hlp_ns hlp_oth mc_b_prem private_ltc_prem nh_nights nh_oop {
 replace `x'_y7 = `x'_y7 + (-months2)*`x'3 if months2<0 & noop==1
 }
 replace months3 = months3 + months2 if months2<0 & noop==1
 
-foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
+foreach x in oop hlp_i hlp_s hlp_k hlp_f hlp_ns hlp_oth mc_b_prem private_ltc_prem nh_nights nh_oop {
 replace `x'_y7 =  `x'2 * 12 if months2==12 & noop==1
 }
 replace months2 = months2 - 12 if months2==12 & noop==1
 
-foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
+foreach x in oop hlp_i hlp_s hlp_k hlp_f hlp_ns hlp_oth mc_b_prem private_ltc_prem nh_nights nh_oop {
 replace `x'_y7 =  `x'2 * 12 if months2>12 & months2!=. & noop==1
 }
 
@@ -9271,24 +9287,24 @@ drop noop
 
 gen noop = 1 if oop_y7==.
 
-foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
+foreach x in oop hlp_i hlp_s hlp_k hlp_f hlp_ns hlp_oth mc_b_prem private_ltc_prem nh_nights nh_oop {
 replace `x'_y7 = `x'3 * months3 if months3<12 & noop==1
 }
 
 replace months3 = months3 - 12 if months3<12 & noop==1
 
-foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
+foreach x in oop hlp_i hlp_s hlp_k hlp_f hlp_ns hlp_oth mc_b_prem private_ltc_prem nh_nights nh_oop {
 replace `x'_y7 =  `x'_y7 + (-months3)*`x'4 if months3<0 & noop==1
 }
 replace months4 = months4 + months3 if months3<0 & noop==1
 
-foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
+foreach x in oop hlp_i hlp_s hlp_k hlp_f hlp_ns hlp_oth mc_b_prem private_ltc_prem nh_nights nh_oop {
 replace `x'_y7 = `x'3 * 12 if months3==12 & noop==1
 }
 
 replace months3 = months3 - 12 if months3==12 & noop==1
 
-foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
+foreach x in oop hlp_i hlp_s hlp_k hlp_f hlp_ns hlp_oth mc_b_prem private_ltc_prem nh_nights nh_oop {
 replace `x'_y7 = `x'3 * 12 if months3>12 & months3!=. & noop==1
 }
 
@@ -9305,7 +9321,7 @@ drop noop
 
 gen noop = 1 if oop_y7==.
 
-foreach x in oop hlp mc_b_prem private_ltc_prem nh_nights nh_oop {
+foreach x in oop hlp_i hlp_s hlp_k hlp_f hlp_ns hlp_oth mc_b_prem private_ltc_prem nh_nights nh_oop {
 replace `x'_y7 = `x'4 * 12 if noop==1
 }
 
@@ -9324,22 +9340,20 @@ ttest oop_5yr if final_7yr==1, by(dem_cohort)
 ttest oop_7yr if final_7yr==1, by(dem_cohort)
 
 forvalues i = 1/7 {
-
-rename hlp_y`i' informal_y`i'
+	foreach x in i s k f ns oth {
+		rename hlp_`x'_y`i' informal_`x'_y`i'
+}
 }
 
+foreach x in i s k f ns oth {
 
-gen informal_7yr = informal_y1+ informal_y2+ informal_y3+ informal_y4+ informal_y5 + informal_y6 + informal_y7
-gen informal_6yr = informal_y1+ informal_y2+ informal_y3+ informal_y4+ informal_y5 + informal_y6
-gen informal_5yr = informal_y1+ informal_y2+ informal_y3+ informal_y4+ informal_y5
-gen informal_4yr = informal_y1+ informal_y2+ informal_y3+ informal_y4
-gen informal_3yr = informal_y1+ informal_y2+ informal_y3
-gen informal_2yr = informal_y1+ informal_y2
-
-ttest informal_5yr, by(dem_cohort)
-ttest informal_5yr if final_7yr==1, by(dem_cohort)
-ttest informal_7yr if final_7yr==1, by(dem_cohort)
-
+gen informal_`x'_7yr = informal_`x'_y1+ informal_`x'_y2+ informal_`x'_y3+ informal_`x'_y4+ informal_`x'_y5 + informal_`x'_y6 + informal_`x'_y7
+gen informal_`x'_6yr = informal_`x'_y1+ informal_`x'_y2+ informal_`x'_y3+ informal_`x'_y4+ informal_`x'_y5 + informal_`x'_y6
+gen informal_`x'_5yr = informal_`x'_y1+ informal_`x'_y2+ informal_`x'_y3+ informal_`x'_y4+ informal_`x'_y5
+gen informal_`x'_4yr = informal_`x'_y1+ informal_`x'_y2+ informal_`x'_y3+ informal_`x'_y4
+gen informal_`x'_3yr = informal_`x'_y1+ informal_`x'_y2+ informal_`x'_y3
+gen informal_`x'_2yr = informal_`x'_y1+ informal_`x'_y2
+}
 save R01_annualized.dta, replace
 
 
@@ -9373,7 +9387,7 @@ save `predict'
 
 use R01_j.dta, clear
 
-merge m:1 id using R01_annualized.dta, keepus(oop_5yr oop_7yr informal_5yr informal_7yr oop_y* informal_y* mc_b_prem_y* ///
+merge m:1 id using R01_annualized.dta, keepus(oop_5yr oop_7yr informal_*5yr informal_*7yr oop_y* informal_*_y* mc_b_prem_y* ///
 private_ltc_prem_y* nh_nights_y* nh_oop_y*)
 drop _m
 
@@ -9471,8 +9485,8 @@ label var tot_paid_maid_n7 "Total Medicaid Spending Y7"
 
 label var oop_5yr "Cumulative 5yr OOP"
 label var oop_7yr "Cumulative 7yr OOP"
-label var informal_5yr "Cumulative 5yr informal"
-label var informal_7yr "Cumulative 7yr informal"
+label var informal_i_5yr "Cumulative 5yr informal"
+label var informal_i_7yr "Cumulative 7yr informal"
 
 forvalues i = 1/7 {
 rename tot_paid_maid_n`i' tot_paid_maid_y`i'
@@ -9556,7 +9570,7 @@ gen all = 1
 local ivars female white black other hospice_exit nhres_exit married_exit reschil_d_exit resspouse_exit livealone_exit adl_independent_exit adl_severe_exit medicare_exit medicareb_exit medicaid_exit champus_exit ffs_7yr ffs_6yr ffs_5yr ffs_4yr ffs_3yr ffs_2yr ffs_1yr
 
 local medcost age_at_death tot_paid_maid_y1 tot_paid_maid_y2 tot_paid_maid_y3 tot_paid_maid_y4 tot_paid_maid_y5 tot_paid_maid_y6 tot_paid_maid_y7 tot_paid_by_mc_y1 tot_paid_by_mc_y2 tot_paid_by_mc_y3 tot_paid_by_mc_y4 tot_paid_by_mc_y5 tot_paid_by_mc_y6 tot_paid_by_mc_y7 ///
-oop_y1 oop_y2 oop_y3 oop_y4 oop_y5 oop_y6 oop_y7 oop_5yr oop_7yr informal_y1 informal_y2 informal_y3 informal_y4 informal_y5 informal_y6 informal_y7 informal_5yr informal_7yr
+oop_y1 oop_y2 oop_y3 oop_y4 oop_y5 oop_y6 oop_y7 oop_5yr oop_7yr informal_i_y1 informal_i_y2 informal_i_y3 informal_i_y4 informal_i_y5 informal_i_y6 informal_i_y7 informal_i_5yr informal_i_7yr
 
 local rd: word count `ivars' `medcost' 1
 
@@ -9629,7 +9643,7 @@ keep if final_7yr==1
 local ivars female white black other hospice_exit nhres_exit married_exit reschil_d_exit resspouse_exit livealone_exit adl_independent_exit adl_severe_exit medicare_exit medicareb_exit medicaid_exit champus_exit ffs_7yr ffs_6yr ffs_5yr ffs_4yr ffs_3yr ffs_2yr ffs_1yr
 
 local medcost age_at_death tot_paid_maid_y1 tot_paid_maid_y2 tot_paid_maid_y3 tot_paid_maid_y4 tot_paid_maid_y5 tot_paid_maid_y6 tot_paid_maid_y7 tot_paid_by_mc_y1 tot_paid_by_mc_y2 tot_paid_by_mc_y3 tot_paid_by_mc_y4 tot_paid_by_mc_y5 tot_paid_by_mc_y6 tot_paid_by_mc_y7 ///
-oop_y1 oop_y2 oop_y3 oop_y4 oop_y5 oop_y6 oop_y7 oop_5yr oop_7yr informal_y1 informal_y2 informal_y3 informal_y4 informal_y5 informal_y6 informal_y7 informal_5yr informal_7yr
+oop_y1 oop_y2 oop_y3 oop_y4 oop_y5 oop_y6 oop_y7 oop_5yr oop_7yr informal_i_y1 informal_i_y2 informal_i_y3 informal_i_y4 informal_i_y5 informal_i_y6 informal_i_y7 informal_i_5yr informal_i_7yr
 
 
 local rd: word count `ivars' `medcost' 1
@@ -16367,6 +16381,187 @@ restore
 }
 
 
+H="7 year graphs of informal care"
+/*note--it takes forever to run through the whole thing, but if you don't need
+everything done it's possible to run chunks by selecting imp, commenting out 
+graphs you don't need, and/or dropping anything not needed from the varlist
+*/
+
+use "E:\data\hrs_cleaned\core_00_to_14.dta", clear
+sort id core_year
+by id: keep if _n==_N
+keep id reschil_d
+rename reschil_d reschil_d_n1
+tempfile core
+save `core'
+
+set trace off
+
+use "E:\data\serious_ill\int_data\core_ids_1yr_criteria_5.dta", clear
+sort id core_year
+by id: keep if _n==_N
+keep id wage*
+duplicates drop
+tempfile t1
+save `t1'
+
+use "E:\data\burden_dementia\final_data\R01_final.dta", clear
+merge m:1 id using `t1', nogen keep(match master)
+
+cd "E:\data\burden_dementia\logs\graphs"
+
+keep if nflag==0
+keep if ffs_84==1
+keep if final_7yr==1
+merge 1:1 id using `core', keep(match master) nogen
+
+forvalues i=1/7 {
+	gen wi_mc`i'=tot_paid_by_mc_y`i'/wage_index_2012
+}
+
+keep id tot_paid_by_mc_y* tot_paid_maid_y* oop_y* informal_*y* dem_cohort ///
+imputed_nh_costs_b_y* reschil_d_n1 married_or_part
+
+rename tot_paid_by_mc_y* mc*
+rename tot_paid_maid_y* mcaid*
+
+foreach x of varlist mcaid* {
+	replace `x'=0 if missing(`x')
+}
+
+rename (oop_y* imputed_nh_costs_b_y*) (oop* nh*)
+foreach x in _i _s _ns _k _oth {
+	rename informal`x'_y* informal`x'*
+}
+
+foreach x in mc mcaid oop informal_i informal_s informal_ns informal_k informal_oth nh {
+	forvalues i=1/7 {
+		replace `x'`i'=`x'`i'/1000
+}
+	gen cum`x'7=`x'7
+	forvalues i=6(-1)1 {
+		gen cum`x'`i'=cum`x'`=`i'+1'+`x'`i'
+}
+}
+
+keep id mc* mcaid* oop* informal* cum* dem_cohort nh* reschil_d_n1 married_or_part
+
+rename informal_i* informal*
+
+reshape long mc mcaid oop informal informal_s informal_ns informal_k informal_oth ///
+ cummc cummcaid cumoop cuminformal cuminformal_s cuminformal_ns cuminformal_k cuminformal_oth nh cumnh, ///
+i(id) j(year_before_death)
+
+replace year=-year+8
+
+label define year 1 "6-7" 2 "5-6" 3 "4-5" 4 "3-4" 5 "2-3" 6 "1-2" 7 "0-1"
+label values year year
+
+foreach x in "" cum {
+	egen `x'all=rowtotal(`x'mc `x'mcaid `x'oop `x'informal `x'nh)
+}
+
+local se
+foreach x in mc mcaid oop informal all cummc cummcaid cumoop cuminformal cumall ///
+nh cumnh {
+	local se `se' se_`x'=`x'
+}
+
+
+foreach x in cum annu {
+preserve
+collapse (mean) mc mcaid oop informal* all cummc cummcaid cumoop cuminformal* cumall ///
+nh cumnh (semean) `se', by(dem_cohort year_before_death)
+
+rename (mc mcaid oop informal* all) (annumc annumcaid annuoop annuinformal* annuall)
+
+	twoway (connected `x'informal_s year if dem_cohort==0) (connected `x'informal_ns year if dem_cohort==0), ///
+	legend(label(1 "Spouses") label(2 "Other informal helpers")) xlabel(1 "6-7" 2 "5-6" 3 "4-5" 4 "3-4" 5 "2-3" 6 "1-2" 7 "0-1")  ///
+	name(`x'_no_dem, replace) title("No Dementia")
+
+	twoway (connected `x'informal_s year if dem_cohort==1) (connected `x'informal_ns year if dem_cohort==1), ///
+	legend(label(1 "Spouses") label(2 "Other informal helpers")) xlabel(1 "6-7" 2 "5-6" 3 "4-5" 4 "3-4" 5 "2-3" 6 "1-2" 7 "0-1")  ///
+	name(`x'_dem, replace) title("Dementia")
+
+	graph combine `x'_no_dem `x'_dem, ycommon
+	graph save informal_costs_by_type_basic.gph, replace
+	graph export `x'_informal_costs_by_type_2_cat.pdf, replace
+
+
+
+
+	twoway (connected `x'informal_s year if dem_cohort==0) (connected `x'informal_k year if dem_cohort==0) ///
+	(connected `x'informal_oth year if dem_cohort==0), ///
+	legend(label(1 "Spouses") label(2 "Kids") label(3 "Other informal helpers")) ///
+	xlabel(1 "6-7" 2 "5-6" 3 "4-5" 4 "3-4" 5 "2-3" 6 "1-2" 7 "0-1")  ///
+	name(`x'_no_dem, replace) title("No Dementia")
+
+	twoway (connected `x'informal_s year if dem_cohort==1) (connected `x'informal_k year if dem_cohort==1) ///
+	(connected `x'informal_oth year if dem_cohort==1), ///
+	legend(label(1 "Spouses") label(2 "Kids") label(3 "Other informal helpers")) ///
+	xlabel(1 "6-7" 2 "5-6" 3 "4-5" 4 "3-4" 5 "2-3" 6 "1-2" 7 "0-1")  ///
+	name(`x'_dem, replace) title("Dementia")
+
+	graph combine `x'_no_dem `x'_dem, ycommon
+	graph save informal_costs_by_type_kids.gph, replace
+	graph export `x'_informal_costs_by_type_3_cat.pdf, replace
+
+
+
+
+restore
+preserve
+collapse (mean) mc mcaid oop informal* all cummc cummcaid cumoop cuminformal* cumall ///
+nh cumnh (semean) `se', by(dem_cohort year_before_death reschil_d_n1)
+
+rename (mc mcaid oop informal* all) (annumc annumcaid annuoop annuinformal* annuall)
+
+	twoway (connected `x'informal_s year if dem_cohort==0 & reschil_d_n1==1) ///
+	(connected `x'informal_k year if dem_cohort==0 & reschil_d_n1==1) ///
+	(connected `x'informal_oth year if dem_cohort==0 & reschil_d_n1==1), ///
+	legend(label(1 "Spouses") label(2 "Kids") label(3 "Other informal helpers")) ///
+	xlabel(1 "6-7" 2 "5-6" 3 "4-5" 4 "3-4" 5 "2-3" 6 "1-2" 7 "0-1")  ///
+	name(`x'_no_dem, replace) title("No Dementia")
+
+	twoway (connected `x'informal_s year if dem_cohort==1 & reschil_d_n1==1) ///
+	(connected `x'informal_k year if dem_cohort==1 & reschil_d_n1==1) ///
+	(connected `x'informal_oth year if dem_cohort==1 & reschil_d_n1==1), ///
+	legend(label(1 "Spouses") label(2 "Kids") label(3 "Other informal helpers")) ///
+	xlabel(1 "6-7" 2 "5-6" 3 "4-5" 4 "3-4" 5 "2-3" 6 "1-2" 7 "0-1")  ///
+	name(`x'_dem, replace) title("Dementia")
+
+	graph combine `x'_no_dem `x'_dem, ycommon
+	graph save informal_costs_by_type_res_kids.gph, replace
+	graph export `x'_informal_costs_by_type_res_kids.pdf, replace
+
+restore
+preserve
+collapse (mean) mc mcaid oop informal* all cummc cummcaid cumoop cuminformal* cumall ///
+nh cumnh (semean) `se', by(dem_cohort year_before_death married_or)
+
+rename (mc mcaid oop informal* all) (annumc annumcaid annuoop annuinformal* annuall)
+	
+
+	twoway (connected `x'informal_s year if dem_cohort==0 & married_or==1) (connected `x'informal_k year if dem_cohort==0 & married_or==1) ///
+	(connected `x'informal_oth year if dem_cohort==0 & married_or==1), ///
+	legend(label(1 "Spouses") label(2 "Kids") label(3 "Other informal helpers")) ///
+	xlabel(1 "6-7" 2 "5-6" 3 "4-5" 4 "3-4" 5 "2-3" 6 "1-2" 7 "0-1")  ///
+	name(`x'_no_dem, replace) title("No Dementia")
+
+	twoway (connected `x'informal_s year if dem_cohort==1 & married_or==1) ///
+	(connected `x'informal_k year if dem_cohort==1 & married_or==1) ///
+	(connected `x'informal_oth year if dem_cohort==1 & married_or==1), ///
+	legend(label(1 "Spouses") label(2 "Kids") label(3 "Other informal helpers"))  ///
+	xlabel(1 "6-7" 2 "5-6" 3 "4-5" 4 "3-4" 5 "2-3" 6 "1-2" 7 "0-1")  ///
+	name(`x'_dem, replace) title("Dementia")
+
+	graph combine `x'_no_dem `x'_dem, ycommon
+	graph save informal_costs_by_type_married.gph, replace
+	graph export `x'_informal_costs_by_type_married.pdf, replace	
+restore
+}
+
+
 H="7 year table with p-values"
 /*note--it takes forever to run through the whole thing, but if you don't need
 everything done it's possible to run chunks by selecting imp, commenting out 
@@ -17190,6 +17385,8 @@ save "`fdpath'/burden_dementia_sample_long.dta", replace
 
 
 H="changelog"
+04/26/19 - Added spouse/kid informal care to the updated dataset (in the Annual Calculations and Final Sample headers) and reran graphs (added the 7 year graphs of informal care header). Evan
+
 04/18/19 - Added baseline values to Table 1 and Final Sample headers. Evan
 
 04/16/19 - Added "Table 1" header. Evan

@@ -996,7 +996,7 @@ note("Each Year represents a HRS core interview, which occurs every 2 years. Mis
 
 
 
-H="HRS - Sample Size Table v2"
+H="HRS - Sample Size Table"
 
 /******* HRS Community Dwelling + Dementia *****************/
 
@@ -1823,16 +1823,17 @@ replace old_cohort = 0 if old_cohort==.
 
 egen total_unrestr_hbmc = count(unrestr_hbmc)
 
-
+/*Renumbering waves for new cohort */
 replace wave=1 if old_cohort==0 & wave==5
 replace wave=2 if old_cohort==0 & wave==6
+replace wave=3 if old_cohort==0 & wave==7
 
 gsort spid wave
 preserve
 keep if prob_dem==1
-by spid: gen firstdem = 1 if _n==1
-gen anydem =1
 keep if community_dwelling==1
+by spid: gen firstdem = 1 if _n==1 // first wave where dementia is observed
+gen anydem =1 // any dementia in NHATS
 keep spid wave firstdem anydem
 tempfile firstdem
 save `firstdem'
@@ -2058,6 +2059,7 @@ frmttable using `logpath'\NHATS_P01_longitudinal_`date'.doc, addtable statmat(ta
 varlabels title("NHATS 2011-2017: Following People from Incident Dementia+Community Dwelling+6m FFS") ctitles("Variables", "Year 1", "Year 2", "Year 3", "Year 4", "Year 5", "Year 6", "Year 7") sdec(0) ///
 note("People must be community dwelling and >=6m FFS at incident wave only (Year 1). Medicare HBMC not restricted by POS. Categories are Mutually Exclusive.")
 
+/*
 use `nhats', clear
 keep if community_dwelling==1
 
@@ -2091,9 +2093,10 @@ mat rownames tab1 = "Community Dwelling HBMC" "Community Dwelling HBMC: Dementia
 frmttable using `logpath'\NHATS_P01_longitudinal_`date'.doc, addtable statmat(tab1) ///
 varlabels title("NHATS 2011-2016: HBMC Per Person Wave") ctitles("Variables", "Categories", "# HBMC", "# Person Waves at Risk", "Per 1000 Person Waves") sdec(2) ///
 note("HBMC = Medicare or Self Report")
+*/
 
 
-H="NHATS - Sample Size Table v2"
+H="NHATS - Sample Size Table"
 /********* NHATS Community Dwelling + Dementia ***********/ 
 
 use "E:\nhats\data\Projects\serious_ill\int_data\serious_ill_int_dataset1.dta", replace
@@ -2605,6 +2608,319 @@ varlabels title("NHATS Community Dwelling + Dementia + 6m FFS 2011-2017: Unique 
 note("Restricted to Community Dwelling + Dementia + 6m FFS at every wave.")
 
 
+H="NHATS - Sample Comparison"
+/****** NHATS Comunnity Dwelling + Dementia + 6m FFS **********/
+
+use "E:\nhats\data\Projects\serious_ill\int_data\serious_ill_int_dataset1.dta", clear
+
+gen ffs_6m = 0
+replace ffs_6m = 1 if cont_ffs_n_mos>=6 & cont_ffs_n_mos!=.
+
+merge 1:1 bene_id index_year using "E:\data\HBMC_HRS\int_data\nhats_claims.dta"
+drop if _m==2
+
+replace hh_part_b = hh_val_b // replacing type service with value code for binary part b indicator
+replace per_part_b = val_cd_part_b
+replace prob_dem = 0 if prob_dem==.
+
+replace both_flag = 0
+replace hh_claim = 0 if hh_claim==.
+replace num_hh_claim = 0 if num_hh_claim==.
+replace per_part_b = 0 if per_part_b==.
+replace hh_part_b = 0 if hh_part_b==.
+replace both_flag = 1 if cptflag==1 
+
+local logpath "E:\data\HBMC_HRS\logs"
+local date=subinstr("$S_DATE"," ","_",.)
+
+gen all = 1
+
+gen dem_ffs = 0
+replace dem_ffs = 1 if prob_dem==1 & ffs_6m==1 
+
+gen both_hbmc = 0
+replace both_hbmc = 1 if reg_doc_homevisit==1 | both_flag==1
+
+gen unrestr_hbmc = both_hbmc
+
+gen hbmc_hh = 0
+replace hbmc_hh = 1 if both_hbmc==1 & hh_claim==1
+
+gen hbmc_nohh = 0
+replace hbmc_nohh = 1 if both_hbmc==1 & hh_claim==0
+
+gen hbmc_n = 0
+replace hbmc_n = 1 if cptflag_n>1 & cptflag_n!=.
+label var hbmc_n "Indicator of multiple Medicare HBMC in calendar year"
+
+tempfile tables 
+save `tables'
+
+gsort spid wave
+preserve
+keep if prob_dem==1
+keep if community_dwelling==1
+by spid: gen firstdem = 1 if _n==1 // first wave where dementia is observed
+gen anydem =1 // any dementia in NHATS
+keep spid wave firstdem anydem
+tempfile firstdem
+save `firstdem'
+keep if firstdem==1
+rename wave inc_wave
+duplicates drop spid, force
+tempfile anydem
+save `anydem'
+
+restore
+
+cap drop _m
+merge 1:1 spid wave using "`firstdem'", keepus(firstdem)
+cap drop _m
+merge m:1 spid using "`anydem'", keepus(anydem inc_wave) 
+
+gen firstdemhbmc = 0
+replace firstdemhbmc = 1 if firstdem==1 & both_hbmc==1
+
+
+keep if community_dwelling==1
+
+foreach x of varlist both_hbmc hbmc_n cptflag_n hh_claim hh_part_b hbmc_hh hbmc_nohh num_hh_claim per_part_b firstdem firstdemhbmc {
+replace `x' = 0 if dem_ffs==0
+}
+
+local cvars all prob_dem dem_ffs both_hbmc firstdem firstdemhbmc
+
+local full: word count `cvars'
+di "`full'"
+mat tab1=J(8,`full',.)
+local r = 1
+local c = 1
+
+
+forvalues i=2011/2017 {
+
+	foreach x of local cvars {
+	
+sum `x' if index_year==`i'
+mat tab1[`r',`c'] = r(sum)
+
+local ++c
+}
+
+local c = 1
+local ++r
+}
+preserve
+
+collapse (sum) num_hh_claim per_part_b cptflag_n, by(spid)
+tempfile coll
+save `coll'
+restore
+
+collapse (max) all prob_dem dem_ffs both_hbmc hbmc_n hh_claim hh_part_b hbmc_hh hbmc_nohh firstdem firstdemhbmc, by(spid)
+merge 1:1 spid using `coll'
+
+local c = 1
+foreach x of local cvars {
+	
+sum `x' 
+mat tab1[`r',`c'] = r(sum)
+
+local ++c
+}
+
+
+
+mat rownames tab1 ="2011" "2012" "2013" "2014" "2015" "2016" "2017" "Unique People"
+
+frmttable using `logpath'\NHATS_P01_SampleDifferences`date'.doc, replace statmat(tab1) ///
+varlabels title("NHATS Community Dwelling + Dementia + 6m FFS 2011-2017: Cross-Sectional vs Longitudinal ") ctitles("Year", "Full Sample", "Dementia (N)", "Dementia + 6m FFS", "Self Report or Claims HBMC (Cross-Sectional Sample)", "Incident Dementia + 6m FFS", "Incident Dementia + 6m FFS + HBMC (Longitudinal Sample)") sdec(0) ///
+note("Restricted to Community Dwelling + Dementia at every wave.")
+
+use `tables', clear
+
+
+/*Renumbering waves for new cohort */
+replace wave=1 if old_cohort==0 & wave==5
+replace wave=2 if old_cohort==0 & wave==6
+replace wave=3 if old_cohort==0 & wave==7
+
+gsort spid wave
+preserve
+keep if prob_dem==1
+keep if community_dwelling==1
+by spid: gen firstdem = 1 if _n==1 // first wave where dementia is observed
+gen anydem =1 // any dementia in NHATS
+keep spid wave firstdem anydem
+tempfile firstdem
+save `firstdem'
+keep if firstdem==1
+rename wave inc_wave
+duplicates drop spid, force
+tempfile anydem
+save `anydem'
+
+restore
+
+cap drop _m
+merge 1:1 spid wave using "`firstdem'", keepus(firstdem)
+cap drop _m
+merge m:1 spid using "`anydem'", keepus(anydem inc_wave) 
+keep if _m==3
+
+
+drop if wave<inc_wave
+
+gsort spid wave
+
+by spid: gen dwave = _n
+
+/*
+levelsof spid if community_dwelling==1 & wave==1, local(keep)
+
+
+gen keeplist =0
+foreach x of local keep {
+replace keeplist = 1 if spid==`x'
+}
+keep if keeplist==1
+*/
+
+gen informal = 0
+replace informal = 1 if ind_family_helper==1 | otherinformal_help_ind==1
+
+gen anyhelp = 0
+replace anyhelp = 1 if paid_help_ind==1 | informal==1
+
+label var informal "Any unpaid helpers"
+label var anyhelp "Any Paid/Unpaid Helpers"
+label var both_flag "Medicare HBMC"
+label var all "# at Risk (Unique People)"
+
+preserve
+tempfile hbmc
+keep if both_flag==1
+gen any_hbmc = 1
+keep spid any_hbmc
+duplicates drop spid, force
+save `hbmc'
+restore
+
+preserve
+tempfile hbmc2
+keep if both_hbmc==1
+gen any_bothhbmc = 1
+keep spid any_bothhbmc
+duplicates drop spid, force
+save `hbmc2'
+restore
+
+
+cap drop _m
+merge m:1 spid using "`hbmc'", keepus(any_hbmc) 
+drop _m
+merge m:1 spid using "`hbmc2'", keepus(any_bothhbmc)
+drop _m
+label var any_hbmc "Any Medicare HBMC 2011-17"
+label var any_bothhbmc "Self Report or Medicare HBMC 2011-17"
+label var reg_doc_homevisit "Self Report HBMC"
+label var both_hbmc "Self Report or Medicare HBMC"
+
+gsort spid -index_year
+
+by spid: gen death_sy = 1 if death_year==index_year
+label var death_sy "Died after ivw in the same calendar year"
+by spid: gen death_ny = 1 if (death_year>index_year & _n==1 & death_year!=.)
+label var death_ny "Last observed ivw, dies year(s) after ivw"
+local ivars death_sy death_ny nhres informal ind_paid_helper ind_no_helpers anyhelp both_flag reg_doc_homevisit any_hbmc both_hbmc any_bothhbmc all
+label var hh_part_b "Medicare HH Part B Claim"
+
+gsort spid index_year
+by spid: gen obs=_n
+by spid: gen ltf = 1 if obs==_n & obs[_n+1]==.
+
+
+/*
+frmttable using `logpath'\NHATS_P01_longitudinal_`date'.doc, addtable statmat(tab1) ///
+varlabels title("NHATS 2011-2017: Following People from Incident Dementia+Community Dwelling") ctitles("Variables", "Year 1", "Year 2", "Year 3", "Year 4", "Year 5", "Year 6", "Year 7") sdec(0) ///
+note("People must be community dwelling at incident wave only (Year 1). Medicare HBMC not restricted by POS")
+*/
+
+gen keeplist = 0
+
+levelsof spid if ffs_6m==1 & dwave==1, local(keeplist)
+
+foreach x of local keeplist {
+
+replace keeplist = 1 if spid==`x'
+}
+
+keep if keeplist==1
+
+replace both_hbmc = 0 if nhres==1
+replace hh_part_b = 0 if nhres==1 | both_hbmc==1
+replace anyhelp = 0 if nhres==1 | both_hbmc==1 | hh_part_b==1
+
+
+gen death = 0
+replace death = 1 if death_sy==1 | death_ny==1
+label var death "Died"
+
+
+gen no_support = 1
+replace no_support = 0 if nhres==1 | both_hbmc==1 | hh_part_b==1 | anyhelp==1
+
+label var ltf "Loss to followup"
+
+local ivars nhres both_hbmc hh_part_b anyhelp no_support all 
+local ivars2 death
+
+local full: word count `ivars' `ivars2'
+mat tab1=J(`full', 7,.)
+local r = 1
+local c = 1
+ 
+
+ 
+foreach x of local ivars {
+
+forvalues i = 1/7 {
+	
+sum `x' if dwave==`i'
+mat tab1[`r',`c'] = r(sum)
+
+local ++c
+}
+
+local c = 1
+local ++r
+}
+
+
+local c = 2
+
+forvalues i = 1/6 {
+	
+sum death if dwave==`i'
+mat tab1[`r',`c'] = r(sum)
+
+local ++c
+}
+
+
+
+mat rownames tab1 = `ivars' `ivars2'
+
+mat list tab1
+
+
+frmttable using `logpath'\NHATS_P01_SampleDifferences`date'.doc, addtable statmat(tab1) ///
+varlabels title("NHATS 2011-2017: Longitudinal Sample (Incident Dementia+Community Dwelling+6m FFS)") ctitles("Variables", "Year 1", "Year 2", "Year 3", "Year 4", "Year 5", "Year 6", "Year 7") sdec(0) ///
+note("People must be community dwelling and >=6m FFS at incident wave only (Year 1). Categories are Mutually Exclusive in Descending Order.")
+
+
+
+
 H="********Extras*************"
 
 
@@ -2793,190 +3109,16 @@ drop _m
 
 
 
+H="HBMC zipcode"
+
+
 H="***************************"
 
 
-H="Create IAH Flags"
-libname hrs 'E:\data\hrs_cleaned';
-libname maid 'E:\data\CMS_DUA_51675_2014\Medicaid_merged';
-libname medcare 'E:\data\CMS_DUA_51675_2014\Merged\SAS';
-
-proc import datafile="E:\data\CMS_DUA_51675_2014\Medicaid_merged\MedicaidXref2012_old.dta" out=medicaidxwalk dbms=stata replace; run;
-
-proc sql;
-create table hrs_medicaid as select a.*, b.bid_hrs_23
-from hrs.core_00_to_14 a
-inner join medicaidxwalk b
-on a.id=b.id;
-quit;
-
-data ot_file;
-set maid.hrs_max_ot_99_12;
-beg_dos = input(put(beginning_date_of_service,8.),YYMMDD8.);
-end_dos = input(put(ending_date_of_service,8.),YYMMDD8.);
-where msis_type_of_service = 13; *home health claims code;
-run;
-
-proc freq data=ot_file; tables beginning_date_of_service beg_dos / missprint; run;
-
-proc freq data=ot_file; tables msis_type_of_service / missprint; run;
-
-proc sql;
-create table hrs_medicaid_hh as select a.*, b.beg_dos, b.end_dos, b.msis_type_of_service
-from hrs_medicaid a
-inner join ot_file b
-on a.bid_hrs_23=b.bid_hrs_23; *and -90<=a.c_ivw_date-b.beg_dos<=90;
-quit;
-run;
-
-proc sort data=hrs_medicaid_hh nodupkey; by bid_hrs_23; run;
-
-/* People with at least 1 Medicaid HH claim 98-2012 */
-data hrs_medicaid_hh;
-set hrs_medicaid_hh;
-maid_hh = 1;
-run;
-
-proc export data=hrs_medicaid_hh (keep = id maid_hh) outfile="E:\data\HBMC_HRS\int_data\any_maid_hh.dta" dbms=stata replace; run;
-
-/* Number of Medicaid beneficiaries */
-proc sort data=hrs_medicaid nodupkey; by bid_hrs_23; run;
-
-proc export data=hrs_medicaid (keep = id bid_hrs_23) outfile="E:\data\HBMC_HRS\int_data\any_maid.dta" dbms=stata replace; run;
-
-
-/* Merge with Medicare crosswalk */
-
-proc sql;
-create table hrs_mcare as select a.*, b.bid_hrs_22
-from hrs.core_00_to_14 a
-inner join medcare.xref2015medicare b
-on a.id=b.hhidpn;
-quit;
-
-/* Check for cpt and pos codes in carrier file */
-
-* Split carrier file into half due to size;
-data carrier_06 (keep = bid_hrs_22 admit_date disch_date admit_year hcpcs_cd PLCRVC01-PLCRVC13);
-set medcare.pb_1998_2015;
-array dx hcpscd01--hcpscd13;
-do over dx;
-hcpcs_cd = dx;
-output;
-end;
-where admit_year<=2006;
-run;
-
-data carrier_06 (drop = PLCRVC01-PLCRVC13);
-set carrier_06;
-cptcodes1 = input(compress(hcpcs_cd,'ABCDEFGHIJKLMNOPQRSTUVWXYZ/',),8.);
-posflag = 0;
-array dx PLCRVC01-PLCRVC13;
-do over dx;
-if dx in:(12,13,14) then posflag =1;
-end;
-run;
-
-data carrier_06;
-set carrier_06;
-cptflag = 0;
-if 99341<=cptcodes1<=99350 or 99324<=cptcodes1<=99328 or 99334<=cptcodes1<=99337 then cptflag = 1;
-run; 
-
-data carrier_06;
-set carrier_06;
-where cptflag=1 or posflag = 1;
-run;
-
-proc sort data=carrier_06 nodupkey; by bid_hrs_22 admit_date disch_date; run;
-
-* other half;
-
-data carrier_15 (keep = bid_hrs_22 admit_date disch_date admit_year hcpcs_cd PLCRVC01-PLCRVC13);
-set medcare.pb_1998_2015;
-array dx hcpscd01--hcpscd13;
-do over dx;
-hcpcs_cd = dx;
-output;
-end;
-where 2007<=admit_year<=2015;
-run;
-
-data carrier_15 (drop = PLCRVC01-PLCRVC13);
-set carrier_15;
-cptcodes1 = input(compress(hcpcs_cd,'ABCDEFGHIJKLMNOPQRSTUVWXYZ/',),8.);
-posflag = 0;
-array dx PLCRVC01-PLCRVC13;
-do over dx;
-if dx in:(12,13,14) then posflag =1;
-end;
-run;
-
-data carrier_15;
-set carrier_15;
-cptflag = 0;
-if 99341<=cptcodes1<=99350 or 99324<=cptcodes1<=99328 or 99334<=cptcodes1<=99337 then cptflag = 1;
-run; 
-
-data carrier_15;
-set carrier_15;
-where cptflag=1 or posflag = 1;
-run;
-
-
-proc sort data=carrier_15 nodupkey; by bid_hrs_22 admit_date disch_date; run;
-
-data carrier2;
-set carrier_06 carrier_15;
-by bid_hrs_22;
-housecall = 1;
-run;
-
-/* Merge back with HRS dataset */
-
-proc sql;
-create table hrs_housecalls as select a.*, b.housecall
-from hrs_mcare a
-inner join carrier2 b
-on a.bid_hrs_22=b.bid_hrs_22 and -90<=a.c_ivw_date-b.admit_date<=90;
-quit;
-
-proc sort data=hrs_housecalls nodupkey; by descending c_ivw_date bid_hrs_22; run;
-
-proc export data=hrs_housecalls (keep = bid_hrs_22 id core_year housecall) outfile="E:\data\HBMC_HRS\int_data\hrs_housecalls.dta" dbms=stata replace; run;
-
-
-
-/*
-data hrs_medicaid_hh;
-set hrs_medicaid_hh;
-los = (end_dos - beg_dos) + 1;
-run;
-
-proc freq data = hrs_medicaid_hh; tables los; run;
-
-
-proc sort data=hrs_medicaid_hh nodupkey; by id beg_dos end_dos; run;
-proc sort data=hrs_medicaid_hh nodupkey; by id beg_dos; run;
-
-proc sql;
-create table total_hhdays as select distinct id, c_ivw_date,
-sum(los) as total_hh
-from hrs_medicaid_hh
-group by id, c_ivw_date;
-quit;
-
-proc sql;
-create table core_hh as select a.*, b.*
-from hrs.core_00_to_14 a
-left join total_hhdays b
-on a.id=b.id and a.c_ivw_date=b.c_ivw_date;
-quit;
-
-proc export data=core_hh outfile="E:\data\HBMC_HRS\core_0014_hbmc.dta" dbms=stata replace; run;
-
-
 H="Changelog"
+4/25/19 - Updated Medicare Part B from type of service code to value code. HRS value code flaky for 1998-2000. NHATS Part B Service code flaky for 2014+.
+Added NHATS Wave 7, and indicators for multiple HBMC. Also fixed issue with undercounting HBMC.
+
 4/05/2019 - Created new tables with modified shells to include HHA episodes and % HHA claims paid by Medicare Part B. Omari
 
 3/04/19 - Removed censored/LFU from death classification, and reran tables. Omari

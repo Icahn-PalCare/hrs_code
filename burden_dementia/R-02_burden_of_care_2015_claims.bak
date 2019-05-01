@@ -9534,9 +9534,28 @@ by id: egen mint2s=min(time_2_start)
 gen ind_baseline=mint2s==time_2_start
 gen m2d=t2d/30.42
 gen adl_dependent=!adl_independent_core
-foreach x in smoke_curr married medicaid adl_dependent srh_pf prob_dem pdem m2d {
+//replace networth inflation adjusted to 2016
+gen networth_adj2016=networth_adj2012*1.04535
+label var networth_adj2016 "Total Net worth (Rand HxTOTA), 2016$"
+foreach x in smoke_curr married medicaid adl_dependent srh_pf prob_dem pdem m2d networth_adj2016 {
 	by id: egen `x'_baseline=max(cond(ind_baseline==1,`x',.))
 }
+
+//get percent who spent more than their net worth
+gen oop_7yr_discounted=0
+local t=0
+forvalues i=1/7 {
+	replace oop_7yr_discounted=oop_7yr_discounted+oop_y`i'/1.03^`t'
+	local t=`t'+1
+}
+
+replace networth_adj2016_baseline=1 if networth_adj2016_baseline<1
+gen pct_nw_remaining=100*(networth_adj2016_baseline-oop_7yr_discounted)/networth_adj2016_baseline
+gen ind_nw_remaining=pct_nw_remaining>0
+replace pct_nw_remaining=0 if pct_nw_remaining<0
+
+label var pct_nw_remaining "Mean percentage of baseline NW remaining at death (0-100)"
+label var ind_nw_remaining "% OOP<Baseline Net Worth"
 
 /*
 carryforward age_at_death female married hseduc smoke_curr medicaid adl_dependent ///
@@ -15907,7 +15926,7 @@ cd "E:\data\burden_dementia\logs"
 age, race, hs education, female, married, medicaid, dementia, ADL  dependence, 
 SRH, smoke currently, 4+ health conditions
 */
-
+rename informal_i_* informal_*
 
 keep if ffs_84==1
 keep if final_7yr==1
@@ -15947,11 +15966,11 @@ label var cum5 "Otherwise Unattributed NH Costs"
 label var pdem_baseline "Mean probability of dementia at baseline"
 gsort id nflag
 carryforward age_at_death female married hseduc smoke_curr medicaid adl_dependent ///
-srh_pf prob_dem_baseline pdem_baseline cum* race comorb*, replace
+srh_pf prob_dem_baseline pdem_baseline cum* race comorb* networth_adj2016* *nw_remaining, replace
 
 gsort id -nflag
 carryforward age_at_death female married hseduc smoke_curr medicaid adl_dependent ///
-srh_pf prob_dem_baseline pdem_baseline cum* race comorb*, replace
+srh_pf prob_dem_baseline pdem_baseline cum* race comorb* networth_adj2016* *nw_remaining, replace
 
 
 
@@ -15963,7 +15982,9 @@ local ivars1 female married married_baseline
 local ivars2 hseduc smoke_curr smoke_curr_baseline medicaid medicaid_baseline ///
 adl_dependent adl_dependent_baseline srh_pf srh_pf_baseline comorb_ge3_y1 ///
 comorb_ge3_y7 prob_dem prob_dem_baseline 
-local cvars3 pdem pdem_baseline cumall cum1 cum2 cum3 cum4 cum5
+local cvars3 pdem pdem_baseline cumall cum1 cum2 cum3 cum4 cum5 networth_adj2016_baseline ///
+pct_nw_remaining
+local ivars3 ind_nw_remaining
 local catvars1 race
 local catvars2 //comor_c_hrs
 
@@ -15986,7 +16007,7 @@ forvalues i=1/3 {
 di "`catvars1'"
 di "`cativars1'"
 
-local rn : word count `cvars1' `ivars1' `cativars1' `ivars2' `cativars2' `cvars3' 1
+local rn : word count `cvars1' `ivars1' `cativars1' `ivars2' `cativars2' `cvars3' `cvars3' `ivars3' 1
 local r=1
 local c=1
 
@@ -15996,14 +16017,17 @@ mat stars=J(`rn',4,0)
 foreach y in "0,1" 0 1 {
 	forvalues i=1/3 {
 		foreach x of local cvars`i' {
-			sum `x' if inlist(dem_cohort,`y')
+			sum `x' if inlist(dem_cohort,`y'), d
 			mat tab[`r',`c']=r(mean)
+			mat tab [`r'+1,`c']=r(p50)
 			if "`y'"=="1" {
 				ttest `x', by(dem_cohort)
 				mat tab[`r',`c'+1]=r(p)
 				mat stars[`r',`c'+1]=(r(p)<.05)+(r(p)<.01)
 }
 			local r=`r'+1
+			if `i'==3 local r=`r'+1
+			
 }
 		foreach x of local ivars`i' {
 			sum `x' if inlist(dem_cohort,`y')
@@ -16035,13 +16059,17 @@ foreach y in "0,1" 0 1 {
 	local c=`c'+1
 }
 
-mat rownames tab=`cvars1' `ivars1' `cativars1' `ivars2' `cativars2' `cvars3' N
+mat rownames tab=`cvars1' `ivars1' `cativars1' `ivars2' `cativars2' ///
+pdem Median pdem_baseline Median cumall Median cum1 Median cum2 Median ///
+cum3 Median cum4 Median cum5 Median networth_adj2016_baseline Median  ///
+pct_nw_remaining Median `ivars3' N
 
 frmttable using "E:\data\burden_dementia\logs\table_1_`c(current_date)'.rtf", ///
 statmat(tab) title("Characteristics of Decedents, by Dementia Status") ///
 ctitles("" "Full Sample" "No Dementia" "Dementia" "P-value") varlabels ///
-sdec(2) note("Values except for age and baseline dementia taken from N1 interview" \ ///
-"Baseline dementia status taken at interview closest  years prior to death, in that order") ///
+sdec(2) note("Values except for age at death, expenditures, and baseline values taken from N1 interview" \ ///
+"Baseline status taken at interview closest to 7 years prior to death" \ ///
+"OOP discounted at 3%/year for comparison to baseline net worth only") ///
 annotate(stars) asymbol(*,**) replace
 
 
@@ -17385,7 +17413,9 @@ save "`fdpath'/burden_dementia_sample_long.dta", replace
 
 
 H="changelog"
-04/26/19 - Added spouse/kid informal care to the updated dataset and reran graphs (added the 7 year graphs of informal care header). Evan
+04/29/19 - Updated Table 1 header to include Medians and wealth info; updated Final Sample & Table 1 header to include baseline net worth and OOP v networth variables. Evan
+
+04/26/19 - Added spouse/kid informal care to the updated dataset (in the Annual Calculations and Final Sample headers) and reran graphs (added the 7 year graphs of informal care header). Evan
 
 04/18/19 - Added baseline values to Table 1 and Final Sample headers. Evan
 

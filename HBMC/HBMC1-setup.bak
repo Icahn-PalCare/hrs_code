@@ -1536,6 +1536,291 @@ note("Restricted to Community Dwelling + Dementia + 6m FFS at every wave.")
 
 
 
+H="HRS - Sample Comparison"
+
+/******* HRS Community Dwelling + Dementia *****************/
+
+use "E:\data\HBMC_HRS\int_data\hrs_p01.dta", replace
+
+cap drop _m
+merge 1:1 id core_year using "E:\data\hrs_public_2014\dementia\pdem_withvarnames_00_14.dta", keepus(pdem)
+keep if nhres==0
+cap drop _m
+
+preserve
+gsort id core_year
+
+by id: gen first_year = core_year if _n==1
+keep id first_year
+drop if first_year==.
+
+save "E:\data\HBMC_HRS\int_data\firstcore.dta", replace
+restore
+
+replace per_part_b = hh_val_b if core_year>2000
+replace hh_part_b = hh_val_p_b if core_year>2000
+
+gen dementia = 0
+replace dementia = 1 if pdem>=0.5 & pdem!=.
+
+replace both_flag = 0
+replace hh_claim = 0 if hh_claim==.
+replace num_hh_claim = 0 if num_hh_claim==.
+replace per_part_b = 0 if per_part_b==.
+replace hh_part_b = 0 if hh_part_b==.
+replace both_flag = 1 if cpt_flag==1 
+
+local logpath "E:\data\HBMC_HRS\logs"
+local date=subinstr("$S_DATE"," ","_",.)
+
+gen all = 1
+
+gen index_date = c_ivw_date
+
+drop if c_ivw_date==.
+merge 1:1 id index_date using "E:\data\HBMC_HRS\int_data\ffs_before.dta", keepus(cont_ffs_n_mos)
+drop _m
+
+gen both_hbmc = 0
+replace both_hbmc = 1 if both_flag==1
+
+
+gen hbmc_hh = 0
+replace hbmc_hh = 1 if both_hbmc==1 & hh_claim==1
+
+gen hbmc_nohh = 0
+replace hbmc_nohh = 1 if both_hbmc==1 & hh_claim==0
+
+
+gen ffs_6m = 0
+replace ffs_6m = 1 if cont_ffs_n_mos>=6 & cont_ffs_n_mos!=.
+label var ffs_6m "Has >=6m of Medicare FFS prior to ivw"
+
+gen has_medicare = 0
+replace has_medicare = 1 if bid_hrs_22!=""
+label var has_medicare "Has Medicare Claims"
+
+gen hbmc_n = 0
+replace hbmc_n = 1 if cpt_flag_n>1 & cpt_flag_n!=.
+label var hbmc_n "Indicator of multiple Medicare HBMC in calendar year"
+
+
+gen dem_ffs = 0
+replace dem_ffs = 1 if dementia==1 & ffs_6m==1
+
+preserve
+keep if dementia==1 & nhres==0
+gsort id core_year
+by id: gen firstdem = 1 if _n==1 // incident dementia
+keep if firstdem==1
+rename core_year incident_year
+tempfile firstdem
+save `firstdem'
+restore
+
+preserve
+keep if both_flag==1
+keep id
+duplicates drop
+gen any_mc_hbmc = 1
+tempfile any
+save `any'
+restore
+
+preserve
+keep if medicaid_hbmc==1
+keep id 
+duplicates drop
+gen any_md_hbmc = 1
+tempfile any2
+save `any2'
+restore
+
+
+merge m:1 id using "`firstdem'", keepus(incident_year firstdem)
+
+gen firstdemhbmc = 0
+replace firstdemhbmc = 1 if firstdem==1 & both_hbmc==1
+
+
+foreach x of varlist hh_claim both_hbmc hbmc_n cpt_flag_n hh_claim hh_part_b hbmc_hh hbmc_nohh num_hh_claim num_hh_claim per_part_b {
+replace `x' = 0 if dem_ffs==0
+}
+
+
+
+local cvars all dementia dem_ffs both_hbmc
+local full: word count `cvars'
+mat tab1=J(10,`full',.)
+local r = 1
+local c = 1
+
+forvalues i=1998(2)2014 {
+
+	foreach x of local cvars {
+	
+sum `x' if core_year==`i'
+mat tab1[`r',`c'] = r(sum)
+
+local ++c
+}
+
+local c = 1
+local ++r
+}
+preserve
+
+collapse (sum) num_hh_claim per_part_b cpt_flag_n, by(id)
+tempfile coll
+save `coll'
+restore
+
+collapse (max) all dementia dem_ffs both_hbmc hbmc_n hh_claim hh_part_b hbmc_hh hbmc_nohh, by(id)
+merge 1:1 id using `coll'
+
+local c = 1
+foreach x of local cvars {
+	
+sum `x' 
+mat tab1[`r',`c'] = r(sum)
+
+local ++c
+}
+
+
+mat rownames tab1 = "1998" "2000" "2002" "2004" "2006" "2008" "2010" "2012" "2014" "Unqiue People"
+
+frmttable using `logpath'\HRS_P01_SampleDifferences_`date'.doc, replace statmat(tab1) ///
+varlabels title("HRS 1998-2014 with Community Dwelling + Dementia: Prevalence Sample Size") ///
+ctitles("Year", "Full Sample", "Dementia (N)", "Dementia + 6m FFS", "Medicare HBMC") sdec(0) ///
+note("Restricted to Community Dwelling + Dementia at every wave. ")
+
+
+
+
+/* Identifying Incident Dementia + Community Dwelling */
+
+cap drop _m
+
+merge m:1 id using "E:\data\hrs_cleaned\death_date_2014.dta", keepus(death_year death_all)
+drop if _m==2
+drop _m
+
+gen year = core_year
+merge 1:1 id year using "E:\data\hrs_cleaned\helper_hours_2016.dta", keepus(n_i n_f)
+drop if _m==2
+drop _m
+
+
+preserve
+keep if dementia==1 & nhres==0
+gsort id core_year
+by id: gen firstdem = 1 if _n==1 // incident dementia
+keep if firstdem==1
+rename core_year incident_year
+tempfile firstdem
+save `firstdem'
+restore
+
+preserve
+keep if both_flag==1
+keep id
+duplicates drop
+gen any_mc_hbmc = 1
+tempfile any
+save `any'
+restore
+
+preserve
+keep if medicaid_hbmc==1
+keep id 
+duplicates drop
+gen any_md_hbmc = 1
+tempfile any2
+save `any2'
+restore
+
+
+merge m:1 id using "`firstdem'", keepus(incident_year)
+drop _m
+drop if core_year<incident_year
+merge m:1 id using "`any'", keepus(any_mc_hbmc)
+drop if _m==2
+drop _m
+
+merge m:1 id using "`any2'", keepus(any_md_hbmc)
+drop if _m==2
+drop _m
+
+gsort id core_year
+by id: gen dwave = _n
+
+gen informal = 0
+replace informal = 1 if n_i>0 & n_i!=.
+label var informal "Any unpaid helpers"
+
+gen formal = 0
+replace formal = 1 if n_f>0 & n_f!=.
+label var formal "Any paid helpers"
+
+gen anyhelp = 0
+replace anyhelp = 1 if formal==1 | informal==1
+label var anyhelp "Any Paid/Unpaid Helpers"
+
+gen nohelp = 0
+replace nohelp = 1 if anyhelp==0
+label var nohelp "No Helpers" 
+
+label var both_flag "Medicare HBMC in calendar year"
+label var any_mc_hbmc "Any Medicare HBMC 1998-2015"
+label var any_md_hbmc "Any Medicaid HH/HCBS 1999-2012"
+label var medicaid_hbmc "Medicaid HH/HCBS in calendar year"
+
+gen any_hbmc = 0
+replace any_hbmc = 1 if any_mc_hbmc==1 | any_md_hbmc==1
+label var any_hbmc "Any Medicare HBMC or Medicaid HH/HCBS 1998-2015"
+
+label var all "# at Risk (Unqiue People)"
+label var hh_part_b "Medicare HH claim Part B in calendar year"
+label var medicaid_hh "Medicaid HH claim in calendar year"
+gsort id -core_year
+
+by id: gen death_sy = 1 if death_year==core_year
+label var death_sy "Died after ivw in the same calendar year"
+by id: gen death_ny = 1 if (death_year>core_year & _n==1 & death_year!=.)
+label var death_ny "Last observed ivw, dies year(s) after ivw"
+
+gsort id core_year
+by id: gen obs=_n
+by id: gen ltf = 1 if obs==_n & obs[_n+1]==.
+
+
+
+local ivars death_sy death_ny nhres informal formal anyhelp nohelp both_flag hh_part_b medicaid_hh has_medicare has_medicaid medicaid_hbmc any_mc_hbmc any_md_hbmc any_hbmc all
+
+local full: word count `ivars'
+mat tab1=J(`full',9,.)
+local r=1
+local c=1
+
+foreach x of local ivars {
+	forvalues i=1/9 {
+	sum `x' if dwave==`i'
+	mat tab1[`r',`c']=r(sum)
+	local ++c
+	}
+	
+	local c = 1
+	local ++r
+	}
+	
+mat rownames tab1 = `ivars'
+
+frmttable using `logpath'\HRS_P01_longitudinal_`date'.doc, addtable statmat(tab1) ///
+varlabels title("HRS 1998-2014 with Community Dwelling + Dementia: Following People from Incident Dementia") ctitles("Variables", "Year 1", "Year 3", "Year 5", "Year 7", "Year 9", "Year 11", "Year 13", "Year 15", "Year 17") sdec(0) ///
+note("Each Year represents a HRS core interview, which occurs every 2 years. Sample is pulled from HRS 1998-2014 core interviews.")
+
+
 H="NHATS - Sample Pull"
 libname claims "E:\nhats\data\NHATS CMS DUA 28016\Merged\SAS";
 libname cumu "E:\nhats\data\NHATS CMS DUA 28016\Cumulative";

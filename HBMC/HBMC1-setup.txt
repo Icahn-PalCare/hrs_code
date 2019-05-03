@@ -2021,9 +2021,6 @@ merge 1:1 bene_id index_year using "E:\data\HBMC_HRS\int_data\nhats_claims.dta"
 drop if _m==2
 
 
-replace both_flag = 0
-replace both_flag = 1 if cptflag==1 
-
 
 local logpath "E:\data\HBMC_HRS\logs"
 local date=subinstr("$S_DATE"," ","_",.)
@@ -2034,6 +2031,13 @@ replace hh_part_b = hh_val_b // replacing type service with value code for binar
 replace per_part_b = val_cd_part_b // replacing type service with value code for binary part b indicator
 replace prob_dem = 0 if prob_dem==.
 
+replace both_flag = 0
+replace hh_claim = 0 if hh_claim==.
+replace num_hh_claim = 0 if num_hh_claim==.
+replace per_part_b = 0 if per_part_b==.
+replace hh_part_b = 0 if hh_part_b==.
+replace both_flag = 1 if cptflag==1 
+
 gen dem_ffs = 0
 replace dem_ffs = 1 if prob_dem==1 & ffs_6m==1 
 
@@ -2042,117 +2046,24 @@ replace both_hbmc = 1 if reg_doc_homevisit==1 | both_flag==1
 
 gen unrestr_hbmc = both_hbmc
 
-
-
-foreach x of varlist reg_doc_homevisit hh_part_b both_flag both_hbmc {
-replace `x' = 0 if dem_ffs==0
-}
-
-local cvars all prob_dem dem_ffs reg_doc_homevisit hh_part_b both_flag both_hbmc
-
-
-local full: word count `cvars'
-mat tab1=J(7,`full',.)
-local r = 1
-local c = 1
-
-preserve
-keep if community_dwelling==1
-
-forvalues i=2011/2017 {
-
-	foreach x of local cvars {
-	
-sum `x' if index_year==`i'
-mat tab1[`r',`c'] = r(sum)
-
-local ++c
-}
-
-local c = 1
-local ++r
-}
-
-mat rownames tab1 ="2011" "2012" "2013" "2014" "2015" "2016" "2017"
-
-
-
-frmttable using `logpath'\NHATS_P01_longitudinal_`date'.doc, replace statmat(tab1) ///
-varlabels title("Community Dwelling NHATS 2011-2017: Prevelance/Cross-Section ") ctitles("Year", "Full Sample", "Dementia (N)", "Dementia + 6m FFS", "Self Report HBMC", "Medicare HH", "Medicare HBMC", "Self-Report or Medicare HBMC") sdec(0) ///
-note("Utilization/Self Report restricted to Dementia + 6m FFS. Medicare HBMC not restricted by POS.")
-
-restore
-tempfile nhats
-save `nhats'
-
-
-/*Over time analysis */
-
-use "E:\nhats\data\Projects\serious_ill\int_data\serious_ill_int_dataset1.dta", replace
-
-keep if wave==1
-cap drop old_cohort
-gen old_cohort = 1
-label var old_cohort "Original Cohort in Wave 1"
-tempfile old
-
-save `old'
-
-use `nhats', clear
-cap drop _m
-merge m:1 spid using "`old'", keepus(old_cohort) update replace
-drop if _m==2
-drop _m
-
-replace old_cohort = 0 if old_cohort==.
-
-egen total_unrestr_hbmc = count(unrestr_hbmc)
-
 /*Renumbering waves for new cohort */
 replace wave=1 if old_cohort==0 & wave==5
 replace wave=2 if old_cohort==0 & wave==6
 replace wave=3 if old_cohort==0 & wave==7
 
-gsort spid wave
-preserve
-keep if prob_dem==1
-keep if community_dwelling==1
-by spid: gen firstdem = 1 if _n==1 // first wave where dementia is observed
-gen anydem =1 // any dementia in NHATS
-keep spid wave firstdem anydem
-tempfile firstdem
-save `firstdem'
-keep if firstdem==1
-rename wave inc_wave
-duplicates drop spid, force
-tempfile anydem
-save `anydem'
+/* Project wants to identify people with CD + 6m FFS + dementia in Wave 1 (Old cohort) or Wave 5 (New Cohort) */
 
-restore
+gen dem_cohort = 0
+replace dem_cohort = 1 if wave==1 & community_dwelling==1 & prob_dem==1
 
-cap drop _m
-merge 1:1 spid wave using "`firstdem'", keepus(firstdem)
-cap drop _m
-merge m:1 spid using "`anydem'", keepus(anydem inc_wave) 
-keep if _m==3
+levelsof spid if dem_cohort==1, local(dementia)
 
+foreach x of local dementia {
 
-drop if wave<inc_wave
-
-gsort spid wave
-
-by spid: gen dwave = _n
-
-/*
-levelsof spid if community_dwelling==1 & wave==1, local(keep)
-
-
-gen keeplist =0
-foreach x of local keep {
-replace keeplist = 1 if spid==`x'
+replace dem_cohort = 1 if spid==`x' & wave>1
 }
-keep if keeplist==1
-*/
+
+keep if dem_cohort==1
 
 gen informal = 0
 replace informal = 1 if ind_family_helper==1 | otherinformal_help_ind==1
@@ -2163,36 +2074,8 @@ replace anyhelp = 1 if paid_help_ind==1 | informal==1
 label var informal "Any unpaid helpers"
 label var anyhelp "Any Paid/Unpaid Helpers"
 label var both_flag "Medicare HBMC"
-label var all "# at Risk (Unique People)"
-
-preserve
-tempfile hbmc
-keep if both_flag==1
-gen any_hbmc = 1
-keep spid any_hbmc
-duplicates drop spid, force
-save `hbmc'
-restore
-
-preserve
-tempfile hbmc2
-keep if both_hbmc==1
-gen any_bothhbmc = 1
-keep spid any_bothhbmc
-duplicates drop spid, force
-save `hbmc2'
-restore
-
-
-cap drop _m
-merge m:1 spid using "`hbmc'", keepus(any_hbmc) 
-drop _m
-merge m:1 spid using "`hbmc2'", keepus(any_bothhbmc)
-drop _m
-label var any_hbmc "Any Medicare HBMC 2011-17"
-label var any_bothhbmc "Self Report or Medicare HBMC 2011-17"
-label var reg_doc_homevisit "Self Report HBMC"
 label var both_hbmc "Self Report or Medicare HBMC"
+label var all "# at Risk (Unique People)"
 
 gsort spid -index_year
 
@@ -2203,117 +2086,59 @@ label var death_ny "Last observed ivw, dies year(s) after ivw"
 local ivars death_sy death_ny nhres informal ind_paid_helper ind_no_helpers anyhelp both_flag reg_doc_homevisit any_hbmc both_hbmc any_bothhbmc all
 label var hh_part_b "Medicare HH Part B Claim"
 
+gen death = 0
+replace death = 1 if death_sy==1 | death_ny==1
+label var death "Died"
+
+
 gsort spid index_year
 by spid: gen obs=_n
 by spid: gen ltf = 1 if obs==_n & obs[_n+1]==.
+by spid: gen died_ltf = 1 if death[_n-1]==1
+by spid: gen ltf2 = ltf[_n-1]
 
+replace ltf2 = . if died_ltf==1
+label var ltf2 "Loss to followup"
 
+label var ltf "Loss to followup"
+label var died_ltf "Death"
+replace died_ltf = 0 if died_ltf==.
+replace all = all + died_ltf
 
-local full: word count `ivars'
-mat tab1=J(`full', 7,.)
-local r = 1
-local c = 1
- 
+gen both_hbmc2 = 0
+gen all_hbmc = both_hbmc
+replace all_hbmc = 0 if nhres==1
+label var all_hbmc "Any HBMC 2011-2017"
 
- 
-foreach x of local ivars {
-
-forvalues i = 1/7 {
-	
-sum `x' if dwave==`i'
-mat tab1[`r',`c'] = r(sum)
-
-local ++c
-}
-
-local c = 1
-local ++r
-}
-
-mat rownames tab1 = `ivars'
-
-mat list tab1
-
-frmttable using `logpath'\NHATS_P01_longitudinal_`date'.doc, addtable statmat(tab1) ///
-varlabels title("NHATS 2011-2017: Following People from Incident Dementia+Community Dwelling") ctitles("Variables", "Year 1", "Year 2", "Year 3", "Year 4", "Year 5", "Year 6", "Year 7") sdec(0) ///
-note("People must be community dwelling at incident wave only (Year 1). Medicare HBMC not restricted by POS")
-
-
-gen keeplist = 0
-
-levelsof spid if ffs_6m==1 & dwave==1, local(keeplist)
-
-foreach x of local keeplist {
-
-replace keeplist = 1 if spid==`x'
-}
-
-keep if keeplist==1
-
-
-local ivars death_sy death_ny nhres informal ind_paid_helper ind_no_helpers anyhelp both_flag reg_doc_homevisit hh_part_b any_hbmc both_hbmc any_bothhbmc all
-
-local full: word count `ivars'
-mat tab1=J(`full', 7,.)
-local r = 1
-local c = 1
- 
-
- 
-foreach x of local ivars {
-
-forvalues i = 1/7 {
-	
-sum `x' if dwave==`i'
-mat tab1[`r',`c'] = r(sum)
-
-local ++c
-}
-
-local c = 1
-local ++r
-}
-
-mat rownames tab1 = `ivars'
-
-mat list tab1
-
-frmttable using `logpath'\NHATS_P01_longitudinal_`date'.doc, addtable statmat(tab1) ///
-varlabels title("NHATS 2011-2017: Following People from Incident Dementia+Community Dwelling+6m FFS") ctitles("Variables", "Year 1", "Year 2", "Year 3", "Year 4", "Year 5", "Year 6", "Year 7") sdec(0) ///
-note("People must be community dwelling and >=6m FFS at incident wave only (Year 1). Medicare HBMC not restricted by POS.")
-
-
+by spid: replace both_hbmc2 = 1 if both_hbmc==1 | both_hbmc2[_n-1]==1
+label var both_hbmc2 "Cumulative Self Report or Claims HBMC"
+tempfile hbmc 
+save `hbmc'
 
 replace both_hbmc = 0 if nhres==1
 replace hh_part_b = 0 if nhres==1 | both_hbmc==1
 replace anyhelp = 0 if nhres==1 | both_hbmc==1 | hh_part_b==1
 
 
-gen death = 0
-replace death = 1 if death_sy==1 | death_ny==1
-label var death "Died"
-
 
 gen no_support = 1
 replace no_support = 0 if nhres==1 | both_hbmc==1 | hh_part_b==1 | anyhelp==1
 
-label var ltf "Loss to followup"
 
-local ivars nhres both_hbmc hh_part_b anyhelp no_support all 
-local ivars2 death
+local ivars died_ltf nhres both_hbmc hh_part_b anyhelp no_support all
 
-local full: word count `ivars' `ivars2'
+local full: word count `ivars' all_hbmc
 mat tab1=J(`full', 7,.)
 local r = 1
 local c = 1
  
-
+preserve
  
 foreach x of local ivars {
 
 forvalues i = 1/7 {
 	
-sum `x' if dwave==`i'
+sum `x' if wave==`i'
 mat tab1[`r',`c'] = r(sum)
 
 local ++c
@@ -2323,62 +2148,84 @@ local c = 1
 local ++r
 }
 
+replace all = 1
 
-local c = 2
+local c = 1
 
-forvalues i = 1/6 {
+
+collapse (max) all_hbmc, by(spid)
+
+
+
+sum all_hbmc
+
+mat tab1[`r',1] = r(sum)
+
+restore 
+label var all_hbmc "Any HBMC 2011-2017"
+
+mat rownames tab1 = `ivars' all_hbmc
+
+mat list tab1
+
+frmttable using `logpath'\NHATS_P01_longitudinal`date'.doc, replace statmat(tab1) ///
+varlabels title("NHATS 2011-2017: Following People from Wave 1(Original Cohort)/5(New Cohort) Dementia+Community Dwelling+6m FFS") ctitles("Variables", "Year 1", "Year 2", "Year 3", "Year 4", "Year 5", "Year 6", "Year 7") sdec(0) ///
+note("Community Dwelling + 6m FFS + Dementia at first wave only (Year 1). Categories are mututally exclusive in decending order.")
+
+use `hbmc', clear
+
+
+replace both_hbmc2 = 0 if nhres==1
+replace hh_part_b = 0 if nhres==1 | both_hbmc2==1
+replace anyhelp = 0 if nhres==1 | both_hbmc2==1 | hh_part_b==1
+
+
+
+gen no_support = 1
+replace no_support = 0 if nhres==1 | both_hbmc2==1 | hh_part_b==1 | anyhelp==1
+
+
+local ivars died_ltf nhres both_hbmc2 hh_part_b anyhelp no_support all
+
+local full: word count `ivars' all_hbmc
+mat tab1=J(`full', 7,.)
+local r = 1
+local c = 1
+ 
+preserve
+ 
+foreach x of local ivars {
+
+forvalues i = 1/7 {
 	
-sum death if dwave==`i'
+sum `x' if wave==`i'
 mat tab1[`r',`c'] = r(sum)
 
 local ++c
 }
 
+local c = 1
+local ++r
+}
 
+replace all = 1
 
-mat rownames tab1 = `ivars' `ivars2'
+local c = 1
 
-mat list tab1
+collapse (max) all_hbmc, by(spid)
 
-frmttable using `logpath'\NHATS_P01_longitudinal_`date'.doc, addtable statmat(tab1) ///
-varlabels title("NHATS 2011-2017: Following People from Incident Dementia+Community Dwelling+6m FFS") ctitles("Variables", "Year 1", "Year 2", "Year 3", "Year 4", "Year 5", "Year 6", "Year 7") sdec(0) ///
-note("People must be community dwelling and >=6m FFS at incident wave only (Year 1). Medicare HBMC not restricted by POS. Categories are Mutually Exclusive.")
+sum all_hbmc
 
-/*
-use `nhats', clear
-keep if community_dwelling==1
+mat tab1[`r',1] = r(sum)
 
-replace unrestr_hbmc = . if unrestr_hbmc==0
+restore
+label var all_hbmc "Any HBMC 2011-2017"
 
-mat tab1 = J(3,3,.)
+mat rownames tab1 = `ivars' all_hbmc
 
-sum unrestr_hbmc
-mat tab1[1,1]=r(sum)
-
-sum unrestr_hbmc if prob_dem==1
-mat tab1[2,1]=r(sum)
-
-sum unrestr_hbmc if prob_dem==1 & ffs_6m==1
-mat tab1[3,1]=r(sum) 
-
-sum all
-mat tab1[1,2]=r(sum)
-
-*sum all if prob_dem==1
-mat tab1[2,2]=r(sum)
-
-*sum all if prob_dem==1 & ffs_6m==1
-mat tab1[3,2]=r(sum) 
-
-mat tab1[1,3] = (tab1[1,1]/tab1[1,2])*1000 
-mat tab1[2,3] = (tab1[2,1]/tab1[1,2])*1000
-mat tab1[3,3] = (tab1[3,1]/tab1[1,2])*1000
-
-mat rownames tab1 = "Community Dwelling HBMC" "Community Dwelling HBMC: Dementia" "Community Dwelling HBMC: Dementia 6m FFS"
-frmttable using `logpath'\NHATS_P01_longitudinal_`date'.doc, addtable statmat(tab1) ///
-varlabels title("NHATS 2011-2016: HBMC Per Person Wave") ctitles("Variables", "Categories", "# HBMC", "# Person Waves at Risk", "Per 1000 Person Waves") sdec(2) ///
-note("HBMC = Medicare or Self Report")
-*/
+frmttable using `logpath'\NHATS_P01_longitudinal`date'.doc, addtable statmat(tab1) ///
+varlabels title("NHATS 2011-2017: Following People from Wave 1(Original Cohort)/5(New Cohort) Dementia+Community Dwelling+6m FFS") ctitles("Variables", "Year 1", "Year 2", "Year 3", "Year 4", "Year 5", "Year 6", "Year 7") sdec(0) ///
+note("Community Dwelling + 6m FFS + Dementia at first wave only (Year 1). Categories are mututally exclusive in decending order.")
 
 
 H="NHATS - Sample Size Table"
@@ -3400,24 +3247,8 @@ H="HBMC zipcode"
 H="***************************"
 
 
-H="Changelog"
-4/25/19 - Updated Medicare Part B from type of service code to value code. HRS value code flaky for 1998-2000. NHATS Part B Service code flaky for 2014+.
-Added NHATS Wave 7, and indicators for multiple HBMC. Also fixed issue with undercounting HBMC.
-
-4/05/2019 - Created new tables with modified shells to include HHA episodes and % HHA claims paid by Medicare Part B. Omari
-
-3/04/19 - Removed censored/LFU from death classification, and reran tables. Omari
-
-3/01/19 - More tweaks to Sample Size and logitudinal followup. Omari.
-
-2/26/19 - Added 6m FFS restriction to both NHATS and HRS tables.
-
-2/25/19 - Created Incident Dementia tables for HRS + NHATS to show followup data and unique people with HBMC. Omari
-
-2/22/19 - Produced Sample Size tables for NHATS and HRS. Omari
-
 H="PI Notes"
-As of 5/2/19
+------------As of 5/2/19----------------
 
 There are two tabes. The top table uses HBMC in the same year as interview.
 The bottom table carries forward HBMC from previous years, aka cumulative.
@@ -3475,3 +3306,22 @@ and I counted wave 5 as 1 year of enrollment for the new people added in the rep
 
 HRS was a bit more tricky, so I counted the first wave we observe them as their enrollment. So if someone's first
 wave is in 2002 and they are HBMC in 2006, they are counted as 5 years of follow time (2002, 2003, 2004, 2005, 2006).
+
+
+H="Changelog"
+5/03/19 - Changed Longitudinal setup from incident dementia + community dwelling to Dementia + CD + 6m FFS at 1st wave (old cohort) or 2nd wave (new cohort). Omari
+
+4/25/19 - Updated Medicare Part B from type of service code to value code. HRS value code flaky for 1998-2000. NHATS Part B Service code flaky for 2014+.
+Added NHATS Wave 7, and indicators for multiple HBMC. Also fixed issue with undercounting HBMC. Omari
+
+4/05/2019 - Created new tables with modified shells to include HHA episodes and % HHA claims paid by Medicare Part B. Omari
+
+3/04/19 - Removed censored/LFU from death classification, and reran tables. Omari
+
+3/01/19 - More tweaks to Sample Size and logitudinal followup. Omari.
+
+2/26/19 - Added 6m FFS restriction to both NHATS and HRS tables.
+
+2/25/19 - Created Incident Dementia tables for HRS + NHATS to show followup data and unique people with HBMC. Omari
+
+2/22/19 - Produced Sample Size tables for NHATS and HRS. Omari

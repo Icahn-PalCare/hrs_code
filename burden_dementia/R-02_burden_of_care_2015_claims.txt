@@ -8067,8 +8067,6 @@ cd $datapath
 use R01_i.dta, clear
 *preserve
 
-drop if dem_cohort==.
-
 gen ffs_lt_60m = 0
 replace ffs_lt_60m = 1 if ffs_60m==0
 
@@ -8101,8 +8099,8 @@ label var ffs_lt_84m "<84m continuous FFS prior to death"
 gen dropped_7yr = 0
 replace dropped_7yr = 1 if final_7yr==0 & final==1
 
-
 preserve
+
 keep if nflag==0
 
 gen all = 1
@@ -8140,104 +8138,41 @@ annotate(stars) asymbol(*,**)note("Death Date was determined by NDI, Medicare MB
 
  */
 
+gen nolink=missing(bid_hrs_22)
+gen begin=0
+gen missdem=dem_cohort==.
+replace final_7yr=!final_7yr
 
 local full1 age_lt_70 death_b4_core no_exit miss_core no_core nocore4yr hrs_lt_60m ffs_lt_60m
 local full2 final 
 local full3 age_lt_72 hrs_lt_84m ffs_lt_84m 
 local full4 final_7yr 
 
-local rd: word count 1 `full1' `full2' `full3' `full4'
+local samplevars begin age_lt_72 nolink ffs_lt_84m no_exit nocore4yr missdem miss_core hrs_lt_84m final_7yr
 
-mat tab1 = J(`rd',3,.)
+local rn : word count `samplevars'
 
-sum all
-mat tab1[1,1] = r(sum)
+mat tab=J(`rn',2,.)
+local r=1
+local c=1
 
-sum all if dem_cohort==1
-mat tab1[1,2] = r(sum)
-
-sum all if dem_cohort==0
-mat tab1[1,3] = r(sum)
-
-
-local r = 2
-
-foreach x of local full1 {
-
-sum `x'
-mat tab1[`r',1] = r(sum)
-
-sum `x' if dem_cohort==1
-mat tab1[`r',2] = r(sum)
-
-sum `x' if dem_cohort==0
-mat tab1[`r',3] = r(sum)
-
-drop if `x'==1
-local ++r
+foreach x of local samplevars {
+	sum begin if `x'!=1
+	if "`x'"!="begin" mat tab[`r',1]=`last'-r(N)
+	mat tab[`r',2]=r(N)
+	local last=r(N)
+	drop if `x'==1
+	local r=`r'+1
 }
 
-foreach x of local full2 {
+mat rownames tab=`samplevars'
 
-sum `x'
-mat tab1[`r',1] = r(sum)
-
-sum `x' if dem_cohort==1
-mat tab1[`r',2] = r(sum)
-
-sum `x' if dem_cohort==0
-mat tab1[`r',3] = r(sum)
-
-local ++r
-}
-
-foreach x of local full3 {
-
-sum `x'
-mat tab1[`r',1] = r(sum)
-
-sum `x' if dem_cohort==1
-mat tab1[`r',2] = r(sum)
-
-sum `x' if dem_cohort==0
-mat tab1[`r',3] = r(sum)
-
-drop if `x'==1
-local ++r
-}
-
-foreach x of local full4 {
-
-sum `x'
-mat tab1[`r',1] = r(sum)
-
-sum `x' if dem_cohort==1
-mat tab1[`r',2] = r(sum)
-
-sum `x' if dem_cohort==0
-mat tab1[`r',3] = r(sum)
-
-local ++r
-}
-
-
-
-
-mat rownames tab1 = all `full1' `full2' `full3' `full4'
-
-
-frmttable using `logpath'\Sample_Derivation.doc, replace statmat(tab1) ///
-varlabels title("Sample Derivation for R01 (Deceased 2004-2015, Age 72+)") ctitles("Reason for Exclusion" "All" "Dementia" "Non-Dementia") sdec(0) ///
-annotate(stars) asymbol(*,**)note("Death Date was determined by NDI, Medicare MBSF or HRS Exit in that order. Reasons for exclusion are ARE mutally exclusive.")
-
-cap log close
-
+frmttable using "E:\data\burden_dementia\logs\sample_derivation_`c(current_date)'.rtf", ///
+statmat(tab) varlabels title("Sample Derivation") sdec(0) replace
 
 restore
-keep if final==1
+keep if final_7==1
 save R01_j.dta, replace
-
-
 
 
 H="Annual Calculations"
@@ -9387,7 +9322,7 @@ save `predict'
 
 use R01_j.dta, clear
 
-merge m:1 id using R01_annualized.dta, keepus(oop_5yr oop_7yr informal_*5yr informal_*7yr oop_y* informal_*_y* mc_b_prem_y* ///
+merge m:1 id using R01_annualized.dta, keepus(oop_5yr oop_7yr informal_*5yr informal_*7yr oop_y* informal_y* mc_b_prem_y* ///
 private_ltc_prem_y* nh_nights_y* nh_oop_y*)
 drop _m
 
@@ -9485,8 +9420,8 @@ label var tot_paid_maid_n7 "Total Medicaid Spending Y7"
 
 label var oop_5yr "Cumulative 5yr OOP"
 label var oop_7yr "Cumulative 7yr OOP"
-label var informal_i_5yr "Cumulative 5yr informal"
-label var informal_i_7yr "Cumulative 7yr informal"
+label var informal_5yr "Cumulative 5yr informal"
+label var informal_7yr "Cumulative 7yr informal"
 
 forvalues i = 1/7 {
 rename tot_paid_maid_n`i' tot_paid_maid_y`i'
@@ -9536,7 +9471,7 @@ gen m2d=t2d/30.42
 gen adl_dependent=!adl_independent_core
 //replace networth inflation adjusted to 2016
 gen networth_adj2016=networth_adj2012*1.04535
-label var networth_adj2016 "Total Net worth (Rand HxTOTA), 2016$"
+label var networth_adj2016 "Total Net worth (Rand HxTOTB), 2016$"
 foreach x in smoke_curr married medicaid adl_dependent srh_pf prob_dem pdem m2d networth_adj2016 {
 	by id: egen `x'_baseline=max(cond(ind_baseline==1,`x',.))
 }
@@ -9551,7 +9486,7 @@ forvalues i=1/7 {
 //get percent with below-0 net worth
 gen ind_nw_lt0=networth_adj2016<=0
 label var ind_nw_lt0 "% SR Net Worth < 0 in wave"
-replace networth_adj2016_baseline=1 if networth_adj2016_baseline<1
+
 gen pct_nw_remaining=100*(networth_adj2016_baseline-oop_7yr_discounted)/networth_adj2016_baseline
 gen ind_nw_remaining=pct_nw_remaining>0
 replace pct_nw_remaining=0 if pct_nw_remaining<0
@@ -17415,6 +17350,8 @@ save "`fdpath'/burden_dementia_sample_long.dta", replace
 
 
 H="changelog"
+05/02/19 - Updated the sample derivation.
+
 04/29/19 - Updated Table 1 header to include Medians and wealth info; updated Final Sample & Table 1 header to include baseline net worth and OOP v networth variables. Evan
 
 04/26/19 - Added spouse/kid informal care to the updated dataset (in the Annual Calculations and Final Sample headers) and reran graphs (added the 7 year graphs of informal care header). Evan

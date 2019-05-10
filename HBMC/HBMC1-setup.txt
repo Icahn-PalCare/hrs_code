@@ -1821,6 +1821,167 @@ varlabels title("HRS 1998-2014 with Community Dwelling + Dementia: Following Peo
 note("Each Year represents a HRS core interview, which occurs every 2 years. Sample is pulled from HRS 1998-2014 core interviews.")
 
 
+H="HRS - Inclusion Numbers"
+
+/******* HRS Community Dwelling + Dementia *****************/
+
+use "E:\data\HBMC_HRS\int_data\hrs_p01.dta", replace
+
+cap drop _m
+merge 1:1 id core_year using "E:\data\hrs_public_2014\dementia\pdem_withvarnames_00_14.dta", keepus(pdem)
+keep if nhres==0
+cap drop _m
+
+preserve
+gsort id core_year
+
+by id: gen first_year = core_year if _n==1
+keep id first_year
+drop if first_year==.
+
+save "E:\data\HBMC_HRS\int_data\firstcore.dta", replace
+restore
+
+replace per_part_b = hh_val_b if core_year>2000
+replace hh_part_b = hh_val_p_b if core_year>2000
+
+gen dementia = 0
+replace dementia = 1 if pdem>=0.5 & pdem!=.
+
+replace both_flag = 0
+replace hh_claim = 0 if hh_claim==.
+replace num_hh_claim = 0 if num_hh_claim==.
+replace per_part_b = 0 if per_part_b==.
+replace hh_part_b = 0 if hh_part_b==.
+replace both_flag = 1 if cpt_flag==1 
+
+local logpath "E:\data\HBMC_HRS\logs"
+local date=subinstr("$S_DATE"," ","_",.)
+
+gen all = 1
+
+gen index_date = c_ivw_date
+
+drop if c_ivw_date==.
+merge 1:1 id index_date using "E:\data\HBMC_HRS\int_data\ffs_before.dta", keepus(cont_ffs_n_mos)
+drop _m
+
+gen both_hbmc = 0
+replace both_hbmc = 1 if both_flag==1
+
+
+gen hbmc_hh = 0
+replace hbmc_hh = 1 if both_hbmc==1 & hh_claim==1
+
+gen hbmc_nohh = 0
+replace hbmc_nohh = 1 if both_hbmc==1 & hh_claim==0
+
+
+gen ffs_6m = 0
+replace ffs_6m = 1 if cont_ffs_n_mos>=6 & cont_ffs_n_mos!=.
+label var ffs_6m "Has >=6m of Medicare FFS prior to ivw"
+
+gen has_medicare = 0
+replace has_medicare = 1 if bid_hrs_22!=""
+label var has_medicare "Has Medicare Claims"
+
+gen hbmc_n = 0
+replace hbmc_n = 1 if cpt_flag_n>1 & cpt_flag_n!=.
+label var hbmc_n "Indicator of multiple Medicare HBMC in calendar year"
+
+
+gen dem_ffs = 0
+replace dem_ffs = 1 if dementia==1 & ffs_6m==1
+
+preserve
+keep if dementia==1 & nhres==0
+gsort id core_year
+by id: gen firstdem = 1 if _n==1 // incident dementia
+keep if firstdem==1
+rename core_year incident_year
+tempfile firstdem
+save `firstdem'
+restore
+
+preserve
+keep if both_flag==1
+keep id
+duplicates drop
+gen any_mc_hbmc = 1
+tempfile any
+save `any'
+restore
+
+preserve
+keep if medicaid_hbmc==1
+keep id 
+duplicates drop
+gen any_md_hbmc = 1
+tempfile any2
+save `any2'
+restore
+
+
+merge m:1 id using "`firstdem'", keepus(incident_year firstdem)
+
+gen firstdemhbmc = 0
+replace firstdemhbmc = 1 if firstdem==1 & both_hbmc==1
+
+
+foreach x of varlist hh_claim both_hbmc hbmc_n cpt_flag_n hh_claim hh_part_b hbmc_hh hbmc_nohh num_hh_claim num_hh_claim per_part_b {
+replace `x' = 0 if dem_ffs==0
+}
+
+keep if dem_ffs==1
+duplicates drop id, force
+
+
+*collapse (max) all dementia dem_ffs, by(id)
+
+//start with the HRS sample from the above tab
+
+drop hisp
+tempfile t1
+save `t1'
+
+use "E:\data\hrs_restricted_2014\Received\Race\2014\re20141\stata\RE2014.dta", clear
+rename *, l
+merge m:1 hhid pn using "E:\data\hrs_tracking_2014\trk2014tr_r.dta", ///
+keep(match master) keepusing(gender)
+rename gender gend2
+
+gen racecat=1 if inlist(race1,3)
+replace racecat=2 if inlist(race1,4)
+replace racecat=4 if inlist(race1,2)
+replace racecat=5 if inlist(race1,1)
+replace racecat=7 if inlist(race1,7,8,9)
+replace racecat=1 if inlist(race2m1,3,4)
+replace racecat=2 if inlist(race2m1,5) 
+replace racecat=3 if inlist(race2m1,6,7) 
+replace racecat=4 if inlist(race2m1,2) 
+replace racecat=5 if inlist(race2m1,1) 
+replace racecat=6 if inrange(race2m2,1,98)
+replace racecat=7 if inlist(race2m1,97,98,99,0) & missing(racecat)
+
+label define racecat 1 "Amer. Indian/Alaska Native" 2 "Asian" 3 "Hawaiian/Pac Islander" 4 "Black" 5 "White" 6 ///
+"Multiple" 7 "Unknown/Other"
+label values racecat racecat
+
+gen hisp=inrange(hispanic1,1,5) | inlist(hispanic2m1,1,2,3,7,8,9)
+label var hisp "Hispanic"
+
+keep hhid pn racecat hisp gend2
+
+tempfile t2
+save `t2'
+
+use `t1', clear
+drop _m
+merge 1:1 hhid pn using `t2'
+replace female=gend2-1 if missing(female)
+keep if _m==3
+
+
 H="NHATS - Sample Pull"
 libname claims "E:\nhats\data\NHATS CMS DUA 28016\Merged\SAS";
 libname cumu "E:\nhats\data\NHATS CMS DUA 28016\Cumulative";
@@ -3049,6 +3210,137 @@ mat list tab1
 frmttable using `logpath'\NHATS_P01_SampleDifferences`date'.doc, addtable statmat(tab1) ///
 varlabels title("NHATS 2011-2017: Longitudinal Sample (Incident Dementia+Community Dwelling+6m FFS)") ctitles("Variables", "Year 1", "Year 2", "Year 3", "Year 4", "Year 5", "Year 6", "Year 7") sdec(0) ///
 note("People must be community dwelling and >=6m FFS at incident wave only (Year 1). Categories are Mutually Exclusive in Descending Order.")
+
+
+
+
+H="NHATS - Inclusion Table"
+/********* NHATS Community Dwelling + Dementia ***********/ 
+
+use "E:\nhats\data\Projects\serious_ill\int_data\serious_ill_int_dataset1.dta", replace
+
+keep if wave==1
+cap drop old_cohort
+gen old_cohort = 1
+label var old_cohort "Original Cohort in Wave 1"
+tempfile old
+
+save `old'
+
+use "E:\nhats\data\Projects\serious_ill\int_data\serious_ill_int_dataset1.dta", clear
+cap drop _m
+merge m:1 spid using "`old'", keepus(old_cohort) update replace
+replace old_cohort=0 if old_cohort==.
+cap drop _m
+save "E:\nhats\data\Projects\serious_ill\int_data\serious_ill_int_dataset1.dta", replace
+
+gen ffs_6m = 0
+replace ffs_6m = 1 if cont_ffs_n_mos>=6 & cont_ffs_n_mos!=.
+
+merge 1:1 bene_id index_year using "E:\data\HBMC_HRS\int_data\nhats_claims.dta"
+drop if _m==2
+keep if community_dwelling==1
+
+replace hh_part_b = hh_val_b // replacing type service with value code for binary part b indicator
+replace per_part_b = val_cd_part_b
+replace prob_dem = 0 if prob_dem==.
+
+replace both_flag = 0
+replace hh_claim = 0 if hh_claim==.
+replace num_hh_claim = 0 if num_hh_claim==.
+replace per_part_b = 0 if per_part_b==.
+replace hh_part_b = 0 if hh_part_b==.
+replace both_flag = 1 if cptflag==1 
+
+
+local logpath "E:\data\HBMC_HRS\logs"
+local date=subinstr("$S_DATE"," ","_",.)
+
+gen all = 1
+
+gen dem_ffs = 0
+replace dem_ffs = 1 if prob_dem==1 & ffs_6m==1 
+
+gen both_hbmc = 0
+replace both_hbmc = 1 if reg_doc_homevisit==1 | both_flag==1
+
+gen unrestr_hbmc = both_hbmc
+
+gen hbmc_hh = 0
+replace hbmc_hh = 1 if both_hbmc==1 & hh_claim==1
+
+gen hbmc_nohh = 0
+replace hbmc_nohh = 1 if both_hbmc==1 & hh_claim==0
+
+gen hbmc_n = 0
+replace hbmc_n = 1 if cptflag_n>1 & cptflag_n!=.
+label var hbmc_n "Indicator of multiple Medicare HBMC in calendar year"
+
+
+
+/*
+foreach x of varlist both_hbmc hh_claim hh_part_b hbmc_hh hbmc_nohh num_hh_claim per_part_b {
+replace `x' = 0 if dem_ffs==0
+}
+*/
+
+foreach x of varlist both_hbmc hbmc_n cptflag_n hh_claim hh_part_b hbmc_hh hbmc_nohh num_hh_claim per_part_b {
+replace `x' = 0 if prob_dem==0
+}
+
+
+collapse (max) dem_ffs, by(spid)
+tempfile coll
+keep if dem_ffs==1
+save `coll'
+
+use "E:\nhats\data\NHATS Sensitive\r1_sensitive\NHATS_Round_1_SP_Sen_Dem_File.dta", clear
+rename rl1* *
+tempfile t1
+save `t1'
+use "E:\nhats\data\NHATS Sensitive\r5_sensitive\NHATS_Round_5_SP_Sen_Dem_File.dta"
+rename rl5* *
+tempfile t5
+save `t5'
+use `t1', clear
+append using `t5'
+
+gen racecat=1 if yourrace4==1 | yourrace3==1
+replace racecat=2 if yourrace6==1
+replace racecat=2 if yourrace5==1
+replace racecat=3 if yourrace7==1 | yourrace6==1
+replace racecat=4 if yourrace1==1
+replace racecat=4 if yourrace2==1
+replace racecat=5 if yourrace1==1
+
+forvalues i=1/8 {
+gen r`i'=yourrace`i'==1
+}
+egen mult=rowtotal(r1-r8)
+replace racecat=6 if mult>1
+replace racecat=7 if missing(racecat)
+
+label define racecat 1 "Amer. Indian/Alaska Native" 2 "Asian" 3 "Hawaiian/Pac Islander" 4 "Black" 5 "White" 6 "Multiple" 7 "Unknown"
+label values racecat racecat
+keep spid racecat
+
+sort spid racecat
+by spid: drop if racecat==7 & _N==2
+tempfile t1
+save `t1'
+
+
+use "E:\nhats\data\nhats cleaned\sp_round_1_7.dta", clear
+merge m:1 spid using `t1'
+keep if sp_ivw==1
+keep if prob_dem==1
+duplicates drop spid, force
+cap drop _m
+
+merge 1:1 spid using "`coll'", keep(match)
+
+tab race*, m
+tab racecat, m
 
 
 
